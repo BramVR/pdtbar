@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Allocation Pulse render-output proof</title>
+  <desc id="desc">Deterministic render-once output from the built PortfolioPulse app for active and quiet allocation states.</desc>
+  <rect width="1000" height="1000" fill="#f7f7f2"/>
+  <text x="55" y="70" font-family="Menlo, Consolas, monospace" font-size="28" font-weight="700" fill="#1d2522">PortfolioPulse render-output proof</text>
+  <text x="55" y="108" font-family="Menlo, Consolas, monospace" font-size="16" fill="#5c655f">Built artifact output, not a native menu-bar screenshot</text>
+
+  <g transform="translate(55 155)">
+    <rect width="890" height="350" rx="8" fill="#ffffff" stroke="#d3d7d1"/>
+    <text x="26" y="40" font-family="Menlo, Consolas, monospace" font-size="20" font-weight="700" fill="#29312e">pressure fixture</text>
+    <text x="26" y="78" font-family="Menlo, Consolas, monospace" font-size="16" fill="#24312c">status.title=◌    status.badge=• 1</text>
+    <text x="26" y="108" font-family="Menlo, Consolas, monospace" font-size="16" fill="#24312c">card.title=Allocation pressure    rows.count=1</text>
+    <text x="26" y="138" font-family="Menlo, Consolas, monospace" font-size="16" fill="#24312c">row.0.title=NVDA concentration</text>
+    <text x="26" y="168" font-family="Menlo, Consolas, monospace" font-size="16" fill="#24312c">row.0.detail=22% of portfolio; threshold 20%</text>
+    <text x="26" y="198" font-family="Menlo, Consolas, monospace" font-size="16" fill="#24312c">allocation.title=Allocation    allocation.rows.count=2</text>
+    <text x="26" y="228" font-family="Menlo, Consolas, monospace" font-size="16" fill="#24312c">allocation.row.0=NVDA, 22% of portfolio</text>
+    <text x="26" y="258" font-family="Menlo, Consolas, monospace" font-size="16" fill="#24312c">allocation.row.1=AAPL, 18% of portfolio</text>
+  </g>
+
+  <g transform="translate(55 555)">
+    <rect width="890" height="320" rx="8" fill="#ffffff" stroke="#d3d7d1"/>
+    <text x="26" y="40" font-family="Menlo, Consolas, monospace" font-size="20" font-weight="700" fill="#29312e">quiet fixture</text>
+    <text x="26" y="78" font-family="Menlo, Consolas, monospace" font-size="16" fill="#24312c">status.title=◌    status.badge=none</text>
+    <text x="26" y="108" font-family="Menlo, Consolas, monospace" font-size="16" fill="#24312c">card.title=All quiet · Portfolio    rows.count=0</text>
+    <text x="26" y="138" font-family="Menlo, Consolas, monospace" font-size="16" fill="#24312c">allocation.title=Allocation    allocation.rows.count=2</text>
+    <text x="26" y="168" font-family="Menlo, Consolas, monospace" font-size="16" fill="#24312c">allocation.row.0=KO, 19% of portfolio</text>
+    <text x="26" y="198" font-family="Menlo, Consolas, monospace" font-size="16" fill="#24312c">allocation.row.1=PEP, 8% of portfolio</text>
+  </g>
+</svg>

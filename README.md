@@ -4,9 +4,9 @@
 
 It lives in the **macOS menu bar** and surfaces only the few things across your portfolio that actually need attention right now — quiet by default, no dashboard. The core is a **pressure engine** that turns the firehose of portfolio data into a short, ranked list of "look at this" items, which the bar renders.
 
-## Status: first fixture-backed app slice
+## Status: allocation model render slice
 
-The repo now has a native Swift menu-bar shell that renders static Pulse `Model` fixtures. It is still pre-PDT: no live portfolio access or pressure derivation is wired in yet.
+The repo now has a native Swift menu-bar shell that renders Allocation engine `Model` fixtures through Pulse. It is still pre-live-PDT: no credentialed PDT access or live auth is wired in yet.
 
 ## Run the fixture app
 

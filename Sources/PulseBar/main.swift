@@ -68,6 +68,16 @@ private func renderSummary(_ view: PulseView) -> String {
         lines.append("row.\(index).facet=\(row.facet.rawValue)")
     }
 
+    if let allocationDrillDown = view.allocationDrillDown {
+        lines.append("allocation.title=\(allocationDrillDown.title)")
+        lines.append("allocation.rows.count=\(allocationDrillDown.rows.count)")
+
+        for (index, row) in allocationDrillDown.rows.enumerated() {
+            lines.append("allocation.row.\(index).title=\(row.title)")
+            lines.append("allocation.row.\(index).detail=\(row.detail)")
+        }
+    }
+
     return lines.joined(separator: "\n")
 }
 
@@ -106,6 +116,27 @@ private final class PulseMenuBarController: NSObject {
                 detail.indentationLevel = 1
                 menu.addItem(detail)
             }
+        }
+
+        if let allocationDrillDown = view.allocationDrillDown {
+            menu.addItem(.separator())
+            let allocationItem = NSMenuItem(title: allocationDrillDown.title, action: nil, keyEquivalent: "")
+            let allocationMenu = NSMenu()
+
+            if allocationDrillDown.rows.isEmpty {
+                let empty = NSMenuItem(title: "No open holdings", action: nil, keyEquivalent: "")
+                empty.isEnabled = false
+                allocationMenu.addItem(empty)
+            } else {
+                for row in allocationDrillDown.rows {
+                    let item = NSMenuItem(title: "\(row.title) - \(row.detail)", action: nil, keyEquivalent: "")
+                    item.isEnabled = false
+                    allocationMenu.addItem(item)
+                }
+            }
+
+            menu.setSubmenu(allocationMenu, for: allocationItem)
+            menu.addItem(allocationItem)
         }
 
         menu.addItem(.separator())
