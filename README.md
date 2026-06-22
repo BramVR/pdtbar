@@ -22,6 +22,7 @@ swift run PortfolioPulse --fixture quiet --render-once
 swift run PortfolioPulse --fixture pressure --render-once
 swift run PulseFixtureChecks
 swift run PDTContractChecks
+swift run AllocationFacetChecks
 ```
 
 ## How to start
@@ -53,7 +54,8 @@ portfolio-pulse/
 │   ├── PulseCore/            # fixture-backed Model + renderer
 │   ├── PulseBar/             # native AppKit menu-bar shell
 │   ├── PulseFixtureChecks/   # focused render-state checks
-│   └── PDTContractChecks/    # focused PDT contract-ingestion checks
+│   ├── PDTContractChecks/    # focused PDT contract-ingestion checks
+│   └── AllocationFacetChecks/ # focused allocation pressure model checks
 └── src/                      # historical placeholders from docs-first setup
     ├── engine/README.md      # the pressure engine (the IP)
     └── bar/README.md         # the menu-bar renderer (the "pulse")

@@ -11,6 +11,7 @@ let package = Package(
         .executable(name: "PortfolioPulse", targets: ["PulseBar"]),
         .executable(name: "PulseFixtureChecks", targets: ["PulseFixtureChecks"]),
         .executable(name: "PDTContractChecks", targets: ["PDTContractChecks"]),
+        .executable(name: "AllocationFacetChecks", targets: ["AllocationFacetChecks"]),
         .library(name: "PulseCore", targets: ["PulseCore"])
     ],
     targets: [
@@ -25,6 +26,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "PDTContractChecks",
+            dependencies: ["PulseCore"]
+        ),
+        .executableTarget(
+            name: "AllocationFacetChecks",
             dependencies: ["PulseCore"]
         ),
         .testTarget(

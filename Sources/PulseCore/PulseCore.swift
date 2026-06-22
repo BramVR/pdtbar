@@ -1,10 +1,12 @@
 public struct PulseModel: Equatable, Sendable {
     public var statusSignal: String
     public var attentionItems: [AttentionItem]
+    public var allocationSnapshot: AllocationSnapshot?
 
-    public init(statusSignal: String, attentionItems: [AttentionItem]) {
+    public init(statusSignal: String, attentionItems: [AttentionItem], allocationSnapshot: AllocationSnapshot? = nil) {
         self.statusSignal = statusSignal
         self.attentionItems = attentionItems
+        self.allocationSnapshot = allocationSnapshot
     }
 }
 
@@ -13,12 +15,20 @@ public struct AttentionItem: Equatable, Sendable {
     public var detail: String
     public var facet: Facet
     public var severity: Severity
+    public var allocation: AllocationAttentionData?
 
-    public init(title: String, detail: String, facet: Facet, severity: Severity) {
+    public init(
+        title: String,
+        detail: String,
+        facet: Facet,
+        severity: Severity,
+        allocation: AllocationAttentionData? = nil
+    ) {
         self.title = title
         self.detail = detail
         self.facet = facet
         self.severity = severity
+        self.allocation = allocation
     }
 }
 
@@ -32,6 +42,11 @@ public enum Facet: String, Equatable, Sendable {
 public enum Severity: String, Equatable, Sendable {
     case info
     case pressure
+}
+
+public enum FacetPressureState: String, Equatable, Sendable {
+    case allQuiet
+    case activePressure
 }
 
 public struct PulseView: Equatable, Sendable {
