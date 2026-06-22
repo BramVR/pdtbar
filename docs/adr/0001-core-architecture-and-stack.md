@@ -32,3 +32,27 @@ This decision can't be finalized until we've **exercised the PDT MCP** and seen 
 - Determines whether **mcporter** is a shipped dependency or just a research tool (see `docs/reuse-notes.md`).
 - Sets the shape of `src/engine` and `src/bar` and the packaging story.
 - Lean recommendation pending data: **Option A** for minimalism in a bar-first product — but verify PDT-from-Swift feasibility first.
+
+## Evidence (PDT MCP exercised 2026-06-22 — issue #8)
+
+Full write-up and sanitized fixtures: [`../pdt/portfolio-data-source.md`](../pdt/portfolio-data-source.md).
+
+- **Nothing in PDT is reachable only via mcporter.** Every v1 facet
+  (allocation, income, big movers) is a plain MCP tool returning plain JSON —
+  no TS-only surface forces mcporter into the runtime.
+- **Shapes decode cleanly in Swift.** Money is `{value:String, currency:String}`,
+  weights are doubles, dates are ISO-8601. A `Codable` layer over the ~15
+  engine-relevant holding fields is straightforward. The only friction is
+  payload size (~195 KB / ~90 fields per holding) — handled by projecting to
+  needed fields, not a typing problem.
+- **The real work is normalization, not transport** — joins
+  (`symbolId ↔ symbolQuoteId`), FX (trading vs portfolio currency), per-holding
+  freshness, deriving raise/cut (PDT has no such field), filtering closed
+  positions. This `PortfolioDataSource` logic is pure and language-agnostic.
+
+**This is enough evidence to decide.** Feasibility is no longer the blocker; the
+choice is a packaging preference. Strengthened lean: **Option A (native Swift;
+mcporter = research/dev tool only)** — nothing in PDT needs a TS runtime and the
+shapes are Swift-decode-friendly. Choose **Option B** only to reuse the
+normalization layer as shipped TypeScript. This ADR can move to **Accepted** on
+that basis.

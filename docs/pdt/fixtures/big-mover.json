@@ -1,0 +1,82 @@
+{
+  "_meta": {
+    "scenario": "big-mover",
+    "facet": "big-movers (performance)",
+    "describes": "Nova Lithography ran +12.4% over five sessions (612.40 vs 545.00). Two ways to detect it: (a) PDT's own daily price history via pdt-list-symbol-prices (no local history needed), and (b) prior-vs-current holding snapshots via pdt-get-portfolio?date=, which also surfaces the resulting weight drift (9.4% -> 11.6%). closeAdjusted is split-safe; raw close is not.",
+    "sourceTools": [
+      "pdt-list-symbol-prices",
+      "pdt-get-portfolio-holdings (current)",
+      "pdt-get-portfolio?date=2026-06-15 (prior snapshot)"
+    ],
+    "asOf": "2026-06-22",
+    "redactions": "Fully sanitized; PDT field names/types preserved. Same fake security universe as the other fixtures.",
+    "portfolioCurrency": "EUR"
+  },
+
+  "listSymbolPrices": {
+    "_query": { "symbol_quote_id": 9001, "date_from": "2026-06-15", "date_to": "2026-06-19" },
+    "_note": "Returned newest-first by PDT. closeAdjusted = close / cumulative post-date split multipliers; equal to close here because no split occurred in-window. Window move = 612.40 / 545.00 - 1 = +12.37%.",
+    "data": [
+      { "id": 108624422456, "date": "2026-06-19", "close": "612.40", "closeAdjusted": "612.40", "closeCurrency": "EUR", "symbolQuoteId": 9001 },
+      { "id": 108522362830, "date": "2026-06-18", "close": "604.00", "closeAdjusted": "604.00", "closeCurrency": "EUR", "symbolQuoteId": 9001 },
+      { "id": 108419808876, "date": "2026-06-17", "close": "588.20", "closeAdjusted": "588.20", "closeCurrency": "EUR", "symbolQuoteId": 9001 },
+      { "id": 108317596466, "date": "2026-06-16", "close": "560.40", "closeAdjusted": "560.40", "closeCurrency": "EUR", "symbolQuoteId": 9001 },
+      { "id": 108215217136, "date": "2026-06-15", "close": "545.00", "closeAdjusted": "545.00", "closeCurrency": "EUR", "symbolQuoteId": 9001 }
+    ]
+  },
+
+  "getPortfolioHoldingsCurrent": {
+    "_query": { "date": "latest (2026-06-19 close)" },
+    "holdings": [
+      {
+        "symbolName": "Nova Lithography",
+        "isin": "NL0000000001",
+        "symbolQuoteId": 9001,
+        "currentPrice": { "value": "612.40", "currency": "EUR" },
+        "currentPriceDate": "2026-06-19T23:59:59+00:00",
+        "currentPriceLocal": { "value": "612.40", "currency": "EUR" },
+        "currentExchangeRate": 1,
+        "currentExchangeRateDate": "2026-06-19T23:59:59+00:00",
+        "currentWorth": { "value": "7348.80", "currency": "EUR" },
+        "currentWorthLocal": { "value": "7348.80", "currency": "EUR" },
+        "portfolioWeight": 0.1158,
+        "portfolioWeightRelative": 0.1166,
+        "unrealisedGains": { "value": "1208.80", "currency": "EUR" },
+        "unrealisedGainsPercentage": 0.1968,
+        "dividendsReceived": { "value": "0.00", "currency": "EUR" },
+        "brokers": [ 1 ],
+        "corporateActions": [],
+        "startsAt": "2023-02-14T09:12:00+00:00",
+        "closedAt": null
+      }
+    ]
+  },
+
+  "getPortfolioPriorSnapshot": {
+    "_query": { "date": "2026-06-15" },
+    "_note": "pdt-get-portfolio (and pdt-get-portfolio-holdings) accept a `date` for a historical snapshot. This is the prior state the engine compares against; the same shape as the current snapshot.",
+    "holdings": [
+      {
+        "symbolName": "Nova Lithography",
+        "isin": "NL0000000001",
+        "symbolQuoteId": 9001,
+        "currentPrice": { "value": "545.00", "currency": "EUR" },
+        "currentPriceDate": "2026-06-15T23:59:59+00:00",
+        "currentPriceLocal": { "value": "545.00", "currency": "EUR" },
+        "currentExchangeRate": 1,
+        "currentExchangeRateDate": "2026-06-15T23:59:59+00:00",
+        "currentWorth": { "value": "6540.00", "currency": "EUR" },
+        "currentWorthLocal": { "value": "6540.00", "currency": "EUR" },
+        "portfolioWeight": 0.0942,
+        "portfolioWeightRelative": 0.0949,
+        "unrealisedGains": { "value": "400.00", "currency": "EUR" },
+        "unrealisedGainsPercentage": 0.0651,
+        "dividendsReceived": { "value": "0.00", "currency": "EUR" },
+        "brokers": [ 1 ],
+        "corporateActions": [],
+        "startsAt": "2023-02-14T09:12:00+00:00",
+        "closedAt": null
+      }
+    ]
+  }
+}
