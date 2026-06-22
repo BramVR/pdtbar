@@ -240,6 +240,16 @@ try check(
     loadedBigMoverSnapshot == currentBigMoverSnapshot,
     "big-mover run should replace the prior snapshot with current holdings"
 )
+var duplicatePriorBigMoverSnapshot = bigMoverPriorSnapshot
+duplicatePriorBigMoverSnapshot.openHoldings.append(bigMoverPriorSnapshot.openHoldings[0])
+let duplicatePriorBigMoverModel = PressureEngine.buildModel(
+    from: currentBigMoverSnapshot,
+    priorSnapshot: duplicatePriorBigMoverSnapshot
+)
+try check(
+    duplicatePriorBigMoverModel.rankedAttentionItems.contains { $0.id == "bigMovers.move.9001" },
+    "duplicate prior quote ids should not prevent big-mover modeling"
+)
 try check(!bigMoverRun.model.allQuiet, "prior snapshot plus current fixture should not be all quiet")
 let bigMoverItem = try require(
     bigMoverRun.model.rankedAttentionItems.first { $0.facet == "bigMovers" },

@@ -595,17 +595,25 @@ public enum PressureEngine {
     private static func bigMoverItems(from snapshot: PortfolioSnapshot, priorSnapshot: PortfolioSnapshot?) -> [AttentionItem] {
         guard let priorSnapshot else { return [] }
 
-        let priorHoldings = Dictionary(uniqueKeysWithValues: priorSnapshot.openHoldings.map { ($0.quoteId, $0) })
+        let priorHoldings = priorSnapshot.openHoldings.reduce(into: [Int: NormalizedHolding]()) { holdings, holding in
+            holdings[holding.quoteId] = holdings[holding.quoteId] ?? holding
+        }
+        let moverThreshold = Decimal(string: String(bigMoverThreshold)) ?? 0
         return snapshot.openHoldings.compactMap { holding -> AttentionItem? in
             guard let priorHolding = priorHoldings[holding.quoteId],
-                  let beforeValue = Double(priorHolding.price.value),
-                  let afterValue = Double(holding.price.value),
-                  beforeValue != 0
+                  let beforeDecimal = Decimal(string: priorHolding.price.value),
+                  let afterDecimal = Decimal(string: holding.price.value),
+                  beforeDecimal != 0
             else { return nil }
 
-            let moveSize = rounded((afterValue - beforeValue) / beforeValue, places: 4)
-            guard abs(moveSize) >= bigMoverThreshold else { return nil }
+            let decimalMove = (afterDecimal - beforeDecimal) / beforeDecimal
+            let absoluteDecimalMove = decimalMove < 0 ? -decimalMove : decimalMove
+            guard absoluteDecimalMove >= moverThreshold else { return nil }
 
+            let moveSize = rounded(Double(truncating: decimalMove as NSDecimalNumber), places: 4)
+
+            let beforeValue = Double(truncating: beforeDecimal as NSDecimalNumber)
+            let afterValue = Double(truncating: afterDecimal as NSDecimalNumber)
             let score = rounded(min(1.0, abs(moveSize) / 0.20), places: 2)
             return AttentionItem(
                 id: "bigMovers.move.\(holding.quoteId)",
