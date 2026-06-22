@@ -54,8 +54,8 @@ date        "YYYY-MM-DD"
 type        ex-dividend | payment-dividend | earnings-release | earnings-call |
             shareholder-meeting | investor-day | economic | no-events-today | ...
 isEstimated Bool
-symbolId    Int            // join key (NOT symbolQuoteId)
-symbolName  String
+symbolId    Int|null       // join key (NOT symbolQuoteId); null for no-event sentinels
+symbolName  String|null    // null for no-event sentinels
 ```
 
 ## pdt-list-dividends → `{ data: [...], meta }`

@@ -227,9 +227,7 @@
 
   "listCalendarEvents": {
     "_query": { "date_from": "2026-06-22", "date_to": "2026-07-06", "note": "14-day lookahead window — empty, so no income-event pressure." },
-    "data": [
-      { "date": "2026-06-22", "type": "no-events-today", "isEstimated": false, "symbolId": null, "symbolName": null }
-    ],
+    "data": [],
     "meta": { "current_page": 1, "per_page": 25, "total": 0, "last_page": 1 }
   },
 

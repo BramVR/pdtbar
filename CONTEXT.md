@@ -30,7 +30,7 @@ Anchor terms above (**facet, pressure, attention item, the model, pulse, quiet-b
 ## Open questions (TODO — resolve in grilling, record as ADRs)
 
 - [x] **PDT data reality** — exercised 2026-06-22; see `docs/pdt/` (seam, schemas, sanitized fixtures). All v1 facets have dedicated read tools; gaps (cross-tool join key, derived raise/cut, per-holding freshness) documented.
-- [ ] **Core stack** — native Swift (reuse CodexBar/RepoBar, talk to PDT directly) vs. a thin Swift bar over a TS core (keeps mcporter). See ADR-0001.
+- [x] **Core stack** — native Swift; mcporter is research/dev only. See ADR-0001.
 - [ ] **Pressure thresholds** — the concrete signals/thresholds per facet, and how they're tuned.
 - [ ] **Bar information architecture** — what's in the status item / at the glance / behind expansion / in submenus.
 - [ ] **History store** — confirmed required (pressure = change over time); decide shape and retention. See `docs/mvp-scope.md`.
