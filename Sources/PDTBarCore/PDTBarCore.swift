@@ -148,6 +148,9 @@ public struct AttentionItem: Codable, Equatable {
     public var beforeWeight: Double?
     public var afterWeight: Double?
     public var valueCurrency: String?
+    public var eventDate: String?
+    public var amount: Money?
+    public var changePercent: Double?
     public var supportingDataSlotIDs: [String]
 
     public init(
@@ -167,6 +170,9 @@ public struct AttentionItem: Codable, Equatable {
         beforeWeight: Double? = nil,
         afterWeight: Double? = nil,
         valueCurrency: String? = nil,
+        eventDate: String? = nil,
+        amount: Money? = nil,
+        changePercent: Double? = nil,
         supportingDataSlotIDs: [String]
     ) {
         self.id = id
@@ -185,6 +191,9 @@ public struct AttentionItem: Codable, Equatable {
         self.beforeWeight = beforeWeight
         self.afterWeight = afterWeight
         self.valueCurrency = valueCurrency
+        self.eventDate = eventDate
+        self.amount = amount
+        self.changePercent = changePercent
         self.supportingDataSlotIDs = supportingDataSlotIDs
     }
 
@@ -206,6 +215,9 @@ public struct AttentionItem: Codable, Equatable {
         beforeWeight = try container.decodeIfPresent(Double.self, forKey: .beforeWeight)
         afterWeight = try container.decodeIfPresent(Double.self, forKey: .afterWeight)
         valueCurrency = try container.decodeIfPresent(String.self, forKey: .valueCurrency)
+        eventDate = try container.decodeIfPresent(String.self, forKey: .eventDate)
+        amount = try container.decodeIfPresent(Money.self, forKey: .amount)
+        changePercent = try container.decodeIfPresent(Double.self, forKey: .changePercent)
         supportingDataSlotIDs = try container.decode([String].self, forKey: .supportingDataSlotIDs)
     }
 }
@@ -284,6 +296,33 @@ public struct IncomeEventSummary: Codable, Equatable {
     public var kind: String
     public var symbolName: String
     public var estimated: Bool
+    public var symbolId: Int?
+    public var quoteId: Int?
+    public var amount: Money?
+    public var priorAmount: Money?
+    public var changePercent: Double?
+
+    public init(
+        date: String,
+        kind: String,
+        symbolName: String,
+        estimated: Bool,
+        symbolId: Int? = nil,
+        quoteId: Int? = nil,
+        amount: Money? = nil,
+        priorAmount: Money? = nil,
+        changePercent: Double? = nil
+    ) {
+        self.date = date
+        self.kind = kind
+        self.symbolName = symbolName
+        self.estimated = estimated
+        self.symbolId = symbolId
+        self.quoteId = quoteId
+        self.amount = amount
+        self.priorAmount = priorAmount
+        self.changePercent = changePercent
+    }
 }
 
 public struct BigMoversSnapshot: Codable, Equatable {
@@ -409,7 +448,12 @@ public enum MenuDescriptorRenderer {
                     rows: income.upcomingEvents.isEmpty
                         ? [MenuRow(title: "No income events", detail: "No calendar events in fixture")]
                         : income.upcomingEvents.map {
-                            MenuRow(title: $0.symbolName, detail: "\($0.kind) on \($0.date)")
+                            MenuRow(
+                                id: "income.\($0.quoteId ?? 0).\($0.kind)",
+                                role: $0.amount == nil ? "incomeEvent" : "incomeDrillDown",
+                                title: $0.symbolName,
+                                detail: incomeDetail(for: $0)
+                            )
                         }
                 ),
                 MenuSection(
@@ -438,6 +482,15 @@ public enum MenuDescriptorRenderer {
     }
 
     private static func supportDetail(for item: AttentionItem) -> String? {
+        if item.facet == "income",
+           let eventDate = item.eventDate
+        {
+            let amount = item.amount.map(display)
+            let change = item.changePercent.map { "change \(signedPercent($0))" }
+            return ([eventDate] + [amount, change].compactMap { $0 } + ["score \(decimalString(String(item.score), places: 2))"])
+                .joined(separator: "; ")
+        }
+
         if item.facet == "bigMovers",
            let beforeValue = item.beforeValue,
            let afterValue = item.afterValue,
@@ -454,6 +507,11 @@ public enum MenuDescriptorRenderer {
         }
         return "\(percent(currentWeight)) current weight; \(percent(threshold)) threshold; score \(decimalString(String(item.score), places: 2))"
     }
+
+    private static func incomeDetail(for event: IncomeEventSummary) -> String {
+        let amount = event.amount.map { "; \(display($0))" } ?? ""
+        return "\(event.kind) on \(event.date)\(amount)"
+    }
 }
 
 public enum PressureEngine {
@@ -462,7 +520,9 @@ public enum PressureEngine {
 
     public static func buildModel(from snapshot: PortfolioSnapshot, priorSnapshot: PortfolioSnapshot? = nil) -> PortfolioPulseModel {
         let rankedItems = ranked(
-            concentrationItems(from: snapshot) + bigMoverItems(from: snapshot, priorSnapshot: priorSnapshot)
+            concentrationItems(from: snapshot)
+                + incomeItems(from: snapshot)
+                + bigMoverItems(from: snapshot, priorSnapshot: priorSnapshot)
         )
         let totalValue = snapshot.totalValue
         let worstPriceAsOf = snapshot.openHoldings.map(\.priceAsOf).min()
@@ -633,6 +693,57 @@ public enum PressureEngine {
                 supportingDataSlotIDs: ["bigMovers.priorSnapshot", "bigMovers.prices"]
             )
         }
+    }
+
+    private static func incomeItems(from snapshot: PortfolioSnapshot) -> [AttentionItem] {
+        snapshot.incomeEvents
+            .filter { $0.kind == "ex-dividend" && !$0.estimated }
+            .sorted { $0.date < $1.date }
+            .enumerated()
+            .map { offset, event in
+                let identity = event.quoteId.map {
+                    HoldingIdentity(name: event.symbolName, quoteId: $0)
+                }
+                return AttentionItem(
+                    id: incomeItemID(for: event),
+                    facet: "income",
+                    rank: offset + 1,
+                    title: "\(event.symbolName) ex-dividend",
+                    detail: incomeCopy(for: event),
+                    severity: "low",
+                    score: 0.45,
+                    holdingIdentity: identity,
+                    eventDate: event.date,
+                    amount: event.amount,
+                    changePercent: event.changePercent,
+                    supportingDataSlotIDs: ["income.calendar"]
+                )
+            }
+    }
+
+    private static func incomeItemID(for event: IncomeEventSummary) -> String {
+        if let quoteId = event.quoteId {
+            return "income.ex-dividend.\(quoteId)"
+        }
+        if let symbolId = event.symbolId {
+            return "income.ex-dividend.symbol.\(symbolId)"
+        }
+        return "income.ex-dividend.\(event.symbolName)"
+    }
+
+    private static func incomeCopy(for event: IncomeEventSummary) -> String {
+        let base = "\(event.symbolName) has an ex-dividend date on \(event.date)"
+        guard let amount = event.amount else {
+            return "\(base)."
+        }
+        guard let changePercent = event.changePercent,
+              let priorAmount = event.priorAmount
+        else {
+            return "\(base); latest recorded dividend \(display(amount))."
+        }
+
+        let direction = changePercent >= 0 ? "up" : "down"
+        return "\(base); latest recorded dividend \(display(amount)), \(direction) \(percent(abs(changePercent))) from prior \(display(priorAmount))."
     }
 
     private static func concentrationScore(weight: Double, threshold: Double) -> Double {
@@ -822,6 +933,13 @@ public enum PDTFixtureDataSource {
         let totalValue = payload.meta.portfolioCurrentWorthEUR.map {
             Money(value: $0, currency: payload.meta.portfolioCurrency)
         } ?? sumWorth(holdings, currency: payload.meta.portfolioCurrency)
+        let quoteIDsBySymbolID = payload.symbolQuotes.reduce(into: [Int: Int]()) { idsBySymbolID, quote in
+            idsBySymbolID[quote.symbolId] = quote.id
+        }
+        let dividendsByQuoteID = Dictionary(
+            grouping: payload.listDividends?.data ?? [],
+            by: \.symbolQuoteId
+        )
 
         return PortfolioSnapshot(
             asOf: asOf,
@@ -830,11 +948,20 @@ public enum PDTFixtureDataSource {
             sectors: (payload.getPortfolioDistributions?.sectors ?? []).map(\.summary),
             assetTypes: (payload.getPortfolioDistributions?.assetTypes ?? []).map(\.summary),
             incomeEvents: payload.listCalendarEvents?.data.map {
-                IncomeEventSummary(
+                let quoteId = $0.symbolId.flatMap { quoteIDsBySymbolID[$0] }
+                let amount = $0.type == "ex-dividend" && !$0.isEstimated
+                    ? latestDividendAmount(for: quoteId, dividendsByQuoteID: dividendsByQuoteID)
+                    : nil
+                return IncomeEventSummary(
                     date: $0.date,
                     kind: $0.type,
                     symbolName: $0.symbolName ?? "Portfolio",
-                    estimated: $0.isEstimated
+                    estimated: $0.isEstimated,
+                    symbolId: $0.symbolId,
+                    quoteId: quoteId,
+                    amount: amount,
+                    priorAmount: nil,
+                    changePercent: nil
                 )
             } ?? [],
             dividendRowCount: payload.listDividends?.data.count ?? 0,
@@ -846,6 +973,30 @@ public enum PDTFixtureDataSource {
                 )
             } ?? []
         )
+    }
+
+    private static func latestDividendAmount(
+        for quoteId: Int?,
+        dividendsByQuoteID: [Int: [FixtureDividend]]
+    ) -> Money? {
+        guard let quoteId else {
+            return nil
+        }
+        let dividends = dividendsByQuoteID[quoteId] ?? []
+        // Correction pairs need a stable pairing key before their amounts are safe to display.
+        guard !dividends.contains(where: { (Decimal(string: $0.amount.value) ?? 0) < 0 }) else {
+            return nil
+        }
+        return dividends
+            .filter {
+                guard let amount = Decimal(string: $0.amount.value),
+                      amount > 0
+                else { return false }
+                return true
+            }
+            .sorted { $0.date > $1.date }
+            .first?
+            .amount
     }
 }
 
@@ -868,6 +1019,12 @@ private struct PDTFixturePayload: Decodable {
     var listCalendarEvents: CalendarEventsEnvelope?
     var listDividends: DividendsEnvelope?
     var listSymbolPrices: PricesEnvelope?
+    var getSymbolQuote: SymbolQuoteEnvelope?
+    var getSymbolQuotes: [SymbolQuoteEnvelope]?
+
+    var symbolQuotes: [SymbolQuoteEnvelope] {
+        (getSymbolQuote.map { [$0] } ?? []) + (getSymbolQuotes ?? [])
+    }
 
     var primaryHoldings: [FixtureHolding] {
         getPortfolioHoldings?.holdings
@@ -885,6 +1042,8 @@ private struct PDTFixturePayload: Decodable {
         case listCalendarEvents
         case listDividends
         case listSymbolPrices
+        case getSymbolQuote
+        case getSymbolQuotes
     }
 }
 
@@ -941,6 +1100,7 @@ private struct FixtureCalendarEvent: Decodable {
     var date: String
     var type: String
     var isEstimated: Bool
+    var symbolId: Int?
     var symbolName: String?
 }
 
@@ -948,7 +1108,16 @@ private struct DividendsEnvelope: Decodable {
     var data: [FixtureDividend]
 }
 
-private struct FixtureDividend: Decodable {}
+private struct FixtureDividend: Decodable {
+    var date: String
+    var amount: Money
+    var symbolQuoteId: Int
+}
+
+private struct SymbolQuoteEnvelope: Decodable {
+    var id: Int
+    var symbolId: Int
+}
 
 private struct PricesEnvelope: Decodable {
     var data: [FixturePrice]
