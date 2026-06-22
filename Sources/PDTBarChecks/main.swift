@@ -283,6 +283,125 @@ try check(
     "big-mover descriptor should render before/after support"
 )
 
+let incomeFixture = packageRoot.appending(path: "docs/pdt/fixtures/income-event.json")
+let incomeSnapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-income-check")
+defer {
+    try? FileManager.default.removeItem(at: incomeSnapshotStore.directory)
+}
+let incomeRun = try PressureRunner.run(
+    fixture: incomeFixture,
+    snapshotDirectory: incomeSnapshotStore.directory
+)
+try check(!incomeRun.model.allQuiet, "income fixture should not be all quiet")
+let incomeItem = try require(
+    incomeRun.model.rankedAttentionItems.first { $0.facet == "income" },
+    "income fixture should emit an income attention item"
+)
+try check(incomeItem.id == "income.ex-dividend.9003", "income item should key on the joined quote id")
+try check(incomeItem.severity == "low", "income item should expose severity")
+try check(abs(incomeItem.score - 0.45) < 0.001, "income item should expose score")
+try check(incomeItem.eventDate == "2026-06-24", "income item should expose the relevant date")
+try check(incomeItem.amount == Money(value: "78.00", currency: "EUR"), "income item should expose latest amount")
+try check(incomeItem.changePercent == nil, "income item should not derive change from raw payment totals")
+try check(
+    incomeItem.holdingIdentity?.name == "Helix Pharma A/S"
+        && incomeItem.holdingIdentity?.quoteId == 9003,
+    "income item should expose the normalized holding identity"
+)
+try check(
+    incomeItem.detail == "Helix Pharma A/S has an ex-dividend date on 2026-06-24; latest recorded dividend EUR 78.00.",
+    "income item copy should describe date and amount without advice"
+)
+try check(!incomeItem.detail.localizedCaseInsensitiveContains("buy"), "income copy should not prescribe buying")
+try check(!incomeItem.detail.localizedCaseInsensitiveContains("sell"), "income copy should not prescribe selling")
+try check(!incomeItem.detail.localizedCaseInsensitiveContains("should"), "income copy should not be prescriptive")
+let incomeExpansion = try require(
+    incomeRun.descriptor.sections.first { $0.id == "pulse" }?
+        .rows
+        .first { $0.id == "income.ex-dividend.9003.expansion" },
+    "descriptor should expose income expansion row"
+)
+try check(
+    incomeExpansion.detail == "2026-06-24; EUR 78.00; score 0.45",
+    "income descriptor should render date, amount, and score"
+)
+try check(
+    incomeRun.descriptor.sections
+        .first { $0.id == "income" }?
+        .rows
+        .contains {
+            $0.role == "incomeDrillDown"
+                && $0.title == "Helix Pharma A/S"
+                && $0.detail == "ex-dividend on 2026-06-24; EUR 78.00"
+        } == true,
+    "income section should expand event date and amount support"
+)
+try check(
+    incomeRun.descriptor.sections
+        .first { $0.id == "income" }?
+        .rows
+        .contains {
+            $0.id == "income.9003.payment-dividend"
+                && $0.role == "incomeEvent"
+                && $0.detail == "payment-dividend on 2026-07-10"
+        } == true,
+    "income section should not attach historical amount to unrelated calendar events"
+)
+var unmappedIncomeSnapshot = try PDTFixtureDataSource.snapshot(from: incomeFixture)
+unmappedIncomeSnapshot.incomeEvents.append(
+    IncomeEventSummary(
+        date: "2026-06-25",
+        kind: "ex-dividend",
+        symbolName: "Unmapped Income Co",
+        estimated: false,
+        symbolId: 5011
+    )
+)
+let unmappedIncomeModel = PressureEngine.buildModel(from: unmappedIncomeSnapshot)
+try check(
+    unmappedIncomeModel.rankedAttentionItems.contains {
+        $0.id == "income.ex-dividend.symbol.5011"
+            && $0.facet == "income"
+            && $0.holdingIdentity == nil
+    },
+    "income engine should not drop non-estimated ex-dividend events without quote resolution"
+)
+
+let correctionFixtureDirectory = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-income-correction-fixture")
+defer {
+    try? FileManager.default.removeItem(at: correctionFixtureDirectory.directory)
+}
+let correctionFixture = correctionFixtureDirectory.directory.appending(path: "income-correction.json")
+try Data("""
+{
+  "_meta": { "asOf": "2026-06-22", "portfolioCurrency": "EUR" },
+  "listCalendarEvents": {
+    "data": [
+      { "id": 2001, "date": "2026-06-24", "type": "ex-dividend", "isEstimated": false, "symbolId": 5010, "symbolName": "Correction Corp" }
+    ]
+  },
+  "listDividends": {
+    "data": [
+      { "id": 81000001, "date": "2026-06-22T08:13:00+00:00", "amount": { "value": "61.20", "currency": "EUR" }, "symbolQuoteId": 9010 },
+      { "id": 81000002, "date": "2026-03-30T08:20:00+00:00", "amount": { "value": "-61.20", "currency": "EUR" }, "symbolQuoteId": 9010 }
+    ]
+  },
+  "getSymbolQuotes": [
+    { "id": 9010, "symbolId": 5010 }
+  ]
+}
+""".utf8).write(to: correctionFixture)
+let correctionModel = PressureEngine.buildModel(from: try PDTFixtureDataSource.snapshot(from: correctionFixture))
+let correctionItem = try require(
+    correctionModel.rankedAttentionItems.first { $0.id == "income.ex-dividend.9010" },
+    "correction fixture should emit an income item"
+)
+try check(correctionItem.amount == nil, "income item should not expose reversed dividend corrections as real amounts")
+try check(
+    correctionItem.detail == "Correction Corp has an ex-dividend date on 2026-06-24.",
+    "income copy should omit corrected-away amounts"
+)
+
 let concentrationRun = try PressureRunner.run(
     fixture: concentrationFixture,
     snapshotDirectory: snapshotDirectory
