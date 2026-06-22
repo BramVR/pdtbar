@@ -207,6 +207,57 @@ try check(
     "malformed prior snapshot should be replaced by the current committed snapshot"
 )
 
+let bigMoverFixture = packageRoot.appending(path: "docs/pdt/fixtures/big-mover.json")
+let bigMoverStore = try SnapshotStore.temporaryTestStore()
+defer {
+    try? FileManager.default.removeItem(at: bigMoverStore.directory)
+}
+let bigMoverPriorSnapshot = try PDTFixtureDataSource.priorSnapshot(from: bigMoverFixture)
+try _ = bigMoverStore.commitCurrentSnapshot(bigMoverPriorSnapshot)
+let bigMoverRun = try PressureRunner.run(
+    fixture: bigMoverFixture,
+    snapshotDirectory: bigMoverStore.directory
+)
+try check(bigMoverRun.snapshotCommit.written, "big-mover run should update the current snapshot")
+let loadedBigMoverSnapshot = try SnapshotStore(directory: bigMoverStore.directory).loadPriorSnapshot()
+let currentBigMoverSnapshot = try PDTFixtureDataSource.snapshot(from: bigMoverFixture)
+try check(
+    loadedBigMoverSnapshot == currentBigMoverSnapshot,
+    "big-mover run should replace the prior snapshot with current holdings"
+)
+try check(!bigMoverRun.model.allQuiet, "prior snapshot plus current fixture should not be all quiet")
+let bigMoverItem = try require(
+    bigMoverRun.model.rankedAttentionItems.first { $0.facet == "bigMovers" },
+    "prior snapshot plus current fixture should emit a big-mover item"
+)
+try check(bigMoverItem.severity == "medium", "big-mover item should expose severity")
+try check(abs(bigMoverItem.score - 0.62) < 0.001, "big-mover item should expose score")
+try check(
+    bigMoverItem.holdingIdentity?.name == "Nova Lithography"
+        && bigMoverItem.holdingIdentity?.quoteId == 9001,
+    "big-mover item should expose holding identity"
+)
+try check(abs((bigMoverItem.beforeValue ?? 0) - 545.00) < 0.001, "big-mover item should expose before value")
+try check(abs((bigMoverItem.afterValue ?? 0) - 612.40) < 0.001, "big-mover item should expose after value")
+try check(abs((bigMoverItem.moveSize ?? 0) - 0.1237) < 0.0001, "big-mover item should expose move size")
+try check(
+    bigMoverItem.detail == "Nova Lithography moved +12.4% from EUR 545.00 to EUR 612.40 while portfolio weight changed 9.4% -> 11.6%.",
+    "big-mover item copy should describe before and after values without advice"
+)
+try check(!bigMoverItem.detail.localizedCaseInsensitiveContains("sell"), "big-mover copy should not prescribe selling")
+try check(!bigMoverItem.detail.localizedCaseInsensitiveContains("buy"), "big-mover copy should not prescribe buying")
+try check(!bigMoverItem.detail.localizedCaseInsensitiveContains("should"), "big-mover copy should not be prescriptive")
+let bigMoverExpansion = try require(
+    bigMoverRun.descriptor.sections.first { $0.id == "pulse" }?
+        .rows
+        .first { $0.id == "bigMovers.move.9001.expansion" },
+    "descriptor should expose big-mover expansion row"
+)
+try check(
+    bigMoverExpansion.detail == "EUR 545.00 -> EUR 612.40; move +12.4%; score 0.62",
+    "big-mover descriptor should render before/after support"
+)
+
 let concentrationRun = try PressureRunner.run(
     fixture: concentrationFixture,
     snapshotDirectory: snapshotDirectory
