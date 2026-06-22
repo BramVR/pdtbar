@@ -4,9 +4,24 @@
 
 It lives in the **macOS menu bar** and surfaces only the few things across your portfolio that actually need attention right now — quiet by default, no dashboard. The core is a **pressure engine** that turns the firehose of portfolio data into a short, ranked list of "look at this" items, which the bar renders.
 
-## Status: docs-first, pre-implementation
+## Status: first fixture-backed app slice
 
-This repo intentionally starts as **documentation + structure, with no product code yet**. The first development session is an *alignment* session, not a coding session. We figure out the hard decisions first, then build.
+The repo now has a native Swift menu-bar shell that renders static Pulse `Model` fixtures. It is still pre-PDT: no live portfolio access or pressure derivation is wired in yet.
+
+## Run the fixture app
+
+```bash
+swift run PortfolioPulse --fixture quiet
+swift run PortfolioPulse --fixture pressure
+```
+
+For deterministic fixture proof without leaving a menu-bar process running:
+
+```bash
+swift run PortfolioPulse --fixture quiet --render-once
+swift run PortfolioPulse --fixture pressure --render-once
+swift run PulseFixtureChecks
+```
 
 ## How to start
 
@@ -33,7 +48,11 @@ portfolio-pulse/
 │   │   └── 0001-core-architecture-and-stack.md   # status: Proposed (resolve in grilling)
 │   └── prompts/
 │       └── codex-kickoff.md  # paste this as the first message to your agent
-└── src/                      # placeholders — no code yet; shape settles after the stack ADR
+├── Sources/
+│   ├── PulseCore/            # fixture-backed Model + renderer
+│   ├── PulseBar/             # native AppKit menu-bar shell
+│   └── PulseFixtureChecks/   # focused render-state checks
+└── src/                      # historical placeholders from docs-first setup
     ├── engine/README.md      # the pressure engine (the IP)
     └── bar/README.md         # the menu-bar renderer (the "pulse")
 ```
