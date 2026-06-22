@@ -142,6 +142,12 @@ public struct AttentionItem: Codable, Equatable {
     public var holdingIdentity: HoldingIdentity?
     public var currentWeight: Double?
     public var threshold: Double?
+    public var beforeValue: Double?
+    public var afterValue: Double?
+    public var moveSize: Double?
+    public var beforeWeight: Double?
+    public var afterWeight: Double?
+    public var valueCurrency: String?
     public var supportingDataSlotIDs: [String]
 
     public init(
@@ -155,6 +161,12 @@ public struct AttentionItem: Codable, Equatable {
         holdingIdentity: HoldingIdentity? = nil,
         currentWeight: Double? = nil,
         threshold: Double? = nil,
+        beforeValue: Double? = nil,
+        afterValue: Double? = nil,
+        moveSize: Double? = nil,
+        beforeWeight: Double? = nil,
+        afterWeight: Double? = nil,
+        valueCurrency: String? = nil,
         supportingDataSlotIDs: [String]
     ) {
         self.id = id
@@ -167,6 +179,12 @@ public struct AttentionItem: Codable, Equatable {
         self.holdingIdentity = holdingIdentity
         self.currentWeight = currentWeight
         self.threshold = threshold
+        self.beforeValue = beforeValue
+        self.afterValue = afterValue
+        self.moveSize = moveSize
+        self.beforeWeight = beforeWeight
+        self.afterWeight = afterWeight
+        self.valueCurrency = valueCurrency
         self.supportingDataSlotIDs = supportingDataSlotIDs
     }
 
@@ -182,6 +200,12 @@ public struct AttentionItem: Codable, Equatable {
         holdingIdentity = try container.decodeIfPresent(HoldingIdentity.self, forKey: .holdingIdentity)
         currentWeight = try container.decodeIfPresent(Double.self, forKey: .currentWeight)
         threshold = try container.decodeIfPresent(Double.self, forKey: .threshold)
+        beforeValue = try container.decodeIfPresent(Double.self, forKey: .beforeValue)
+        afterValue = try container.decodeIfPresent(Double.self, forKey: .afterValue)
+        moveSize = try container.decodeIfPresent(Double.self, forKey: .moveSize)
+        beforeWeight = try container.decodeIfPresent(Double.self, forKey: .beforeWeight)
+        afterWeight = try container.decodeIfPresent(Double.self, forKey: .afterWeight)
+        valueCurrency = try container.decodeIfPresent(String.self, forKey: .valueCurrency)
         supportingDataSlotIDs = try container.decode([String].self, forKey: .supportingDataSlotIDs)
     }
 }
@@ -343,7 +367,7 @@ public enum MenuDescriptorRenderer {
                         id: "\(item.id).expansion",
                         role: "expansion",
                         title: "\(item.facet) severity \(item.severity)",
-                        detail: concentrationDetail(for: item)
+                        detail: supportDetail(for: item)
                     ),
                 ]
             }
@@ -413,7 +437,16 @@ public enum MenuDescriptorRenderer {
         )
     }
 
-    private static func concentrationDetail(for item: AttentionItem) -> String? {
+    private static func supportDetail(for item: AttentionItem) -> String? {
+        if item.facet == "bigMovers",
+           let beforeValue = item.beforeValue,
+           let afterValue = item.afterValue,
+           let moveSize = item.moveSize,
+           let currency = item.valueCurrency
+        {
+            return "\(currency) \(decimalString(String(beforeValue), places: 2)) -> \(currency) \(decimalString(String(afterValue), places: 2)); move \(signedPercent(moveSize)); score \(decimalString(String(item.score), places: 2))"
+        }
+
         guard let currentWeight = item.currentWeight,
               let threshold = item.threshold
         else {
@@ -425,11 +458,50 @@ public enum MenuDescriptorRenderer {
 
 public enum PressureEngine {
     public static let concentrationThreshold = 0.20
+    public static let bigMoverThreshold = 0.10
 
     public static func buildModel(from snapshot: PortfolioSnapshot, priorSnapshot: PortfolioSnapshot? = nil) -> PortfolioPulseModel {
-        let rankedItems = concentrationItems(from: snapshot)
+        let rankedItems = ranked(
+            concentrationItems(from: snapshot) + bigMoverItems(from: snapshot, priorSnapshot: priorSnapshot)
+        )
         let totalValue = snapshot.totalValue
         let worstPriceAsOf = snapshot.openHoldings.map(\.priceAsOf).min()
+        var supportingDataSlots = [
+            SupportingDataSlot(
+                id: "allocation.holdings",
+                facet: "allocation",
+                label: "Open holdings",
+                itemCount: snapshot.openHoldings.count
+            ),
+            SupportingDataSlot(
+                id: "allocation.sectors",
+                facet: "allocation",
+                label: "Sector breakdown",
+                itemCount: snapshot.sectors.count
+            ),
+            SupportingDataSlot(
+                id: "income.calendar",
+                facet: "income",
+                label: "Calendar events",
+                itemCount: snapshot.incomeEvents.count
+            ),
+            SupportingDataSlot(
+                id: "bigMovers.prices",
+                facet: "bigMovers",
+                label: "Price rows",
+                itemCount: snapshot.priceSeries.count
+            ),
+        ]
+        if let priorSnapshot {
+            supportingDataSlots.append(
+                SupportingDataSlot(
+                    id: "bigMovers.priorSnapshot",
+                    facet: "bigMovers",
+                    label: "Prior snapshot",
+                    itemCount: priorSnapshot.openHoldings.count
+                )
+            )
+        }
 
         return PortfolioPulseModel(
             asOf: snapshot.asOf,
@@ -477,33 +549,24 @@ public enum PressureEngine {
                     stale: false
                 )
             ),
-            supportingDataSlots: [
-                SupportingDataSlot(
-                    id: "allocation.holdings",
-                    facet: "allocation",
-                    label: "Open holdings",
-                    itemCount: snapshot.openHoldings.count
-                ),
-                SupportingDataSlot(
-                    id: "allocation.sectors",
-                    facet: "allocation",
-                    label: "Sector breakdown",
-                    itemCount: snapshot.sectors.count
-                ),
-                SupportingDataSlot(
-                    id: "income.calendar",
-                    facet: "income",
-                    label: "Calendar events",
-                    itemCount: snapshot.incomeEvents.count
-                ),
-                SupportingDataSlot(
-                    id: "bigMovers.prices",
-                    facet: "bigMovers",
-                    label: "Price rows",
-                    itemCount: snapshot.priceSeries.count
-                ),
-            ]
+            supportingDataSlots: supportingDataSlots
         )
+    }
+
+    private static func ranked(_ items: [AttentionItem]) -> [AttentionItem] {
+        items
+            .sorted {
+                if $0.score == $1.score {
+                    return $0.id < $1.id
+                }
+                return $0.score > $1.score
+            }
+            .enumerated()
+            .map { offset, item in
+                var rankedItem = item
+                rankedItem.rank = offset + 1
+                return rankedItem
+            }
     }
 
     private static func concentrationItems(from snapshot: PortfolioSnapshot) -> [AttentionItem] {
@@ -527,6 +590,49 @@ public enum PressureEngine {
                     supportingDataSlotIDs: ["allocation.holdings"]
                 )
             }
+    }
+
+    private static func bigMoverItems(from snapshot: PortfolioSnapshot, priorSnapshot: PortfolioSnapshot?) -> [AttentionItem] {
+        guard let priorSnapshot else { return [] }
+
+        let priorHoldings = priorSnapshot.openHoldings.reduce(into: [Int: NormalizedHolding]()) { holdings, holding in
+            holdings[holding.quoteId] = holdings[holding.quoteId] ?? holding
+        }
+        let moverThreshold = Decimal(string: String(bigMoverThreshold)) ?? 0
+        return snapshot.openHoldings.compactMap { holding -> AttentionItem? in
+            guard let priorHolding = priorHoldings[holding.quoteId],
+                  let beforeDecimal = Decimal(string: priorHolding.price.value),
+                  let afterDecimal = Decimal(string: holding.price.value),
+                  beforeDecimal != 0
+            else { return nil }
+
+            let decimalMove = (afterDecimal - beforeDecimal) / beforeDecimal
+            let absoluteDecimalMove = decimalMove < 0 ? -decimalMove : decimalMove
+            guard absoluteDecimalMove >= moverThreshold else { return nil }
+
+            let moveSize = rounded(Double(truncating: decimalMove as NSDecimalNumber), places: 4)
+
+            let beforeValue = Double(truncating: beforeDecimal as NSDecimalNumber)
+            let afterValue = Double(truncating: afterDecimal as NSDecimalNumber)
+            let score = rounded(min(1.0, abs(moveSize) / 0.20), places: 2)
+            return AttentionItem(
+                id: "bigMovers.move.\(holding.quoteId)",
+                facet: "bigMovers",
+                rank: 0,
+                title: "\(holding.name) moved \(signedPercent(moveSize))",
+                detail: "\(holding.name) moved \(signedPercent(moveSize)) from \(holding.price.currency) \(decimalString(String(beforeValue), places: 2)) to \(holding.price.currency) \(decimalString(String(afterValue), places: 2)) while portfolio weight changed \(percent(priorHolding.weight)) -> \(percent(holding.weight)).",
+                severity: abs(moveSize) >= 0.20 ? "high" : "medium",
+                score: score,
+                holdingIdentity: HoldingIdentity(name: holding.name, quoteId: holding.quoteId),
+                beforeValue: beforeValue,
+                afterValue: afterValue,
+                moveSize: moveSize,
+                beforeWeight: priorHolding.weight,
+                afterWeight: holding.weight,
+                valueCurrency: holding.price.currency,
+                supportingDataSlotIDs: ["bigMovers.priorSnapshot", "bigMovers.prices"]
+            )
+        }
     }
 
     private static func concentrationScore(weight: Double, threshold: Double) -> Double {
@@ -570,6 +676,11 @@ public struct SnapshotCommit: Codable, Equatable {
 }
 
 public enum PressureRunner {
+    public static func seedPriorSnapshot(fixture: URL, snapshotDirectory: URL) throws -> SnapshotCommit {
+        let priorSnapshot = try PDTFixtureDataSource.priorSnapshot(from: fixture)
+        return try SnapshotStore(directory: snapshotDirectory).commitCurrentSnapshot(priorSnapshot)
+    }
+
     public static func run(fixture: URL, snapshotDirectory: URL) throws -> PressureRunResult {
         let snapshot = try PDTFixtureDataSource.snapshot(from: fixture)
         let snapshotStore = SnapshotStore(directory: snapshotDirectory)
@@ -638,7 +749,28 @@ public struct NormalizedHolding: Codable, Equatable {
     public var quoteId: Int
     public var weight: Double
     public var worth: Money
+    public var price: Money
     public var priceAsOf: String
+
+    public init(name: String, quoteId: Int, weight: Double, worth: Money, price: Money, priceAsOf: String) {
+        self.name = name
+        self.quoteId = quoteId
+        self.weight = weight
+        self.worth = worth
+        self.price = price
+        self.priceAsOf = priceAsOf
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        quoteId = try container.decode(Int.self, forKey: .quoteId)
+        weight = try container.decode(Double.self, forKey: .weight)
+        worth = try container.decode(Money.self, forKey: .worth)
+        price = try container.decodeIfPresent(Money.self, forKey: .price)
+            ?? Money(value: "0.00", currency: worth.currency)
+        priceAsOf = try container.decode(String.self, forKey: .priceAsOf)
+    }
 }
 
 public struct PricePoint: Codable, Equatable {
@@ -650,7 +782,31 @@ public struct PricePoint: Codable, Equatable {
 public enum PDTFixtureDataSource {
     public static func snapshot(from url: URL) throws -> PortfolioSnapshot {
         let payload = try JSONDecoder().decode(PDTFixturePayload.self, from: Data(contentsOf: url))
-        let holdings = payload.primaryHoldings
+        return makeSnapshot(
+            from: payload,
+            holdings: payload.primaryHoldings,
+            asOf: payload.meta.asOf
+        )
+    }
+
+    public static func priorSnapshot(from url: URL) throws -> PortfolioSnapshot {
+        let payload = try JSONDecoder().decode(PDTFixturePayload.self, from: Data(contentsOf: url))
+        guard let prior = payload.getPortfolioPriorSnapshot else {
+            throw FixtureError.missingPriorSnapshot
+        }
+        return makeSnapshot(
+            from: payload,
+            holdings: prior.holdings,
+            asOf: prior.query?.date ?? payload.meta.asOf
+        )
+    }
+
+    private static func makeSnapshot(
+        from payload: PDTFixturePayload,
+        holdings rawHoldings: [FixtureHolding],
+        asOf: String
+    ) -> PortfolioSnapshot {
+        let holdings = rawHoldings
             .filter { $0.closedAt == nil }
             .map {
                 NormalizedHolding(
@@ -658,6 +814,7 @@ public enum PDTFixtureDataSource {
                     quoteId: $0.symbolQuoteId,
                     weight: $0.portfolioWeight,
                     worth: $0.currentWorthLocal,
+                    price: $0.currentPriceLocal,
                     priceAsOf: dayPrefix($0.currentPriceDate)
                 )
             }
@@ -667,7 +824,7 @@ public enum PDTFixtureDataSource {
         } ?? sumWorth(holdings, currency: payload.meta.portfolioCurrency)
 
         return PortfolioSnapshot(
-            asOf: payload.meta.asOf,
+            asOf: asOf,
             totalValue: totalValue,
             openHoldings: holdings,
             sectors: (payload.getPortfolioDistributions?.sectors ?? []).map(\.summary),
@@ -690,6 +847,10 @@ public enum PDTFixtureDataSource {
             } ?? []
         )
     }
+}
+
+public enum FixtureError: Error {
+    case missingPriorSnapshot
 }
 
 public func stableJSONData<T: Encodable>(_ value: T) throws -> Data {
@@ -734,13 +895,24 @@ private struct FixtureMeta: Decodable {
 }
 
 private struct HoldingsEnvelope: Decodable {
+    var query: FixtureQuery?
     var holdings: [FixtureHolding]
+
+    enum CodingKeys: String, CodingKey {
+        case query = "_query"
+        case holdings
+    }
+}
+
+private struct FixtureQuery: Decodable {
+    var date: String?
 }
 
 private struct FixtureHolding: Decodable {
     var symbolName: String
     var symbolQuoteId: Int
     var currentPriceDate: String
+    var currentPriceLocal: Money
     var currentWorthLocal: Money
     var portfolioWeight: Double
     var closedAt: String?
@@ -794,6 +966,11 @@ private func display(_ money: Money) -> String {
 
 private func percent(_ value: Double) -> String {
     "\(decimalString(String(value * 100), places: 1))%"
+}
+
+private func signedPercent(_ value: Double) -> String {
+    let sign = value >= 0 ? "+" : ""
+    return "\(sign)\(percent(value))"
 }
 
 private func decimalString(_ value: String, places: Int) -> String {

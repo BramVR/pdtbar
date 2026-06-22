@@ -28,6 +28,17 @@ do {
                 snapshotDirectory: URL(fileURLWithPath: arguments[4])
             )
         )
+    } else if arguments.count == 5,
+              arguments[0] == "seed-prior",
+              arguments[1] == "--fixture",
+              arguments[3] == "--snapshot-dir"
+    {
+        output = try stableJSONData(
+            PressureRunner.seedPriorSnapshot(
+                fixture: URL(fileURLWithPath: arguments[2]),
+                snapshotDirectory: URL(fileURLWithPath: arguments[4])
+            )
+        )
     } else {
         throw CommandError.usage
     }
@@ -36,7 +47,7 @@ do {
     FileHandle.standardOutput.write(Data("\n".utf8))
 } catch CommandError.usage {
     FileHandle.standardError.write(
-        Data("usage: pdtbar-dev <model|descriptor> --fixture <path>\n       pdtbar-dev run --fixture <path> --snapshot-dir <path>\n".utf8)
+        Data("usage: pdtbar-dev <model|descriptor> --fixture <path>\n       pdtbar-dev <run|seed-prior> --fixture <path> --snapshot-dir <path>\n".utf8)
     )
     Foundation.exit(64)
 } catch {
