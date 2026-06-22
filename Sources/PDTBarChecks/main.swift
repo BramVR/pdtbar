@@ -46,6 +46,62 @@ try check(
     "non-quiet descriptor should use the top attention item in status"
 )
 
+let legacyAttention = try JSONDecoder().decode(
+    AttentionItem.self,
+    from: Data("""
+    {
+      "id": "allocation.legacy",
+      "facet": "allocation",
+      "rank": 1,
+      "title": "Legacy allocation",
+      "severity": "medium",
+      "score": 0.5,
+      "supportingDataSlotIDs": []
+    }
+    """.utf8)
+)
+try check(legacyAttention.detail == "", "legacy attention JSON should default missing detail")
+
+let legacyMenuRow = try JSONDecoder().decode(
+    MenuRow.self,
+    from: Data("""
+    {
+      "title": "Legacy row",
+      "detail": "Descriptor row before id and role existed"
+    }
+    """.utf8)
+)
+try check(legacyMenuRow.id == "", "legacy menu row JSON should default missing id")
+try check(legacyMenuRow.role == "row", "legacy menu row JSON should default missing role")
+
+var incompleteAllocationModel = decoded
+let incompleteAllocationAttention = AttentionItem(
+    id: "allocation.incomplete",
+    facet: "allocation",
+    rank: 1,
+    title: "Nova incomplete concentration",
+    severity: "medium",
+    score: 0.5,
+    holdingIdentity: HoldingIdentity(name: "Nova Lithography", quoteId: 9001),
+    supportingDataSlotIDs: ["allocation.holdings"]
+)
+incompleteAllocationModel.allQuiet = false
+incompleteAllocationModel.attentionItems = [incompleteAllocationAttention]
+incompleteAllocationModel.rankedAttentionItems = [incompleteAllocationAttention]
+let incompleteAllocationRow = try require(
+    MenuDescriptorRenderer.render(model: incompleteAllocationModel)
+        .sections
+        .first { $0.id == "allocation" }?
+        .rows
+        .first { $0.title == "Nova Lithography" },
+    "allocation row should exist for incomplete attention metadata"
+)
+try check(
+    incompleteAllocationRow.role == "allocationHolding"
+        && incompleteAllocationRow.detail == "11.7% of portfolio",
+    "allocation drill-down should fall back when current weight or threshold is missing"
+)
+
 let concentrationFixture = packageRoot.appending(path: "docs/pdt/fixtures/concentration-pressure.json")
 let snapshotDirectory = FileManager.default.temporaryDirectory
     .appending(path: "pdtbar-checks-\(UUID().uuidString)")

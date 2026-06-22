@@ -90,6 +90,21 @@ public struct AttentionItem: Codable, Equatable {
         self.threshold = threshold
         self.supportingDataSlotIDs = supportingDataSlotIDs
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        facet = try container.decode(String.self, forKey: .facet)
+        rank = try container.decode(Int.self, forKey: .rank)
+        title = try container.decode(String.self, forKey: .title)
+        detail = try container.decodeIfPresent(String.self, forKey: .detail) ?? ""
+        severity = try container.decode(String.self, forKey: .severity)
+        score = try container.decode(Double.self, forKey: .score)
+        holdingIdentity = try container.decodeIfPresent(HoldingIdentity.self, forKey: .holdingIdentity)
+        currentWeight = try container.decodeIfPresent(Double.self, forKey: .currentWeight)
+        threshold = try container.decodeIfPresent(Double.self, forKey: .threshold)
+        supportingDataSlotIDs = try container.decode([String].self, forKey: .supportingDataSlotIDs)
+    }
 }
 
 public struct HoldingIdentity: Codable, Equatable {
@@ -220,6 +235,14 @@ public struct MenuRow: Codable, Equatable {
         self.title = title
         self.detail = detail
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(String.self, forKey: .id) ?? ""
+        role = try container.decodeIfPresent(String.self, forKey: .role) ?? "row"
+        title = try container.decode(String.self, forKey: .title)
+        detail = try container.decodeIfPresent(String.self, forKey: .detail)
+    }
 }
 
 public enum MenuDescriptorRenderer {
@@ -263,13 +286,17 @@ public enum MenuDescriptorRenderer {
                         let attention = model.rankedAttentionItems.first { item in
                             item.facet == "allocation" && item.holdingIdentity?.quoteId == holding.quoteId
                         }
+                        let drillDownDetail = attention.flatMap { item -> String? in
+                            guard let currentWeight = item.currentWeight,
+                                  let threshold = item.threshold
+                            else { return nil }
+                            return "\(percent(currentWeight)) of portfolio; concentration line \(percent(threshold))"
+                        }
                         return MenuRow(
                             id: "allocation.\(holding.quoteId)",
-                            role: attention == nil ? "allocationHolding" : "allocationDrillDown",
+                            role: drillDownDetail == nil ? "allocationHolding" : "allocationDrillDown",
                             title: holding.name,
-                            detail: attention.map {
-                                "\(percent($0.currentWeight ?? 0)) of portfolio; concentration line \(percent($0.threshold ?? 0))"
-                            } ?? "\(percent(holding.weight)) of portfolio"
+                            detail: drillDownDetail ?? "\(percent(holding.weight)) of portfolio"
                         )
                     }
                 ),
