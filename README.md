@@ -4,9 +4,17 @@
 
 It lives in the **macOS menu bar** and surfaces only the few things across your portfolio that actually need attention right now — quiet by default, no dashboard. The core is a **pressure engine** that turns the firehose of portfolio data into a short, ranked list of "look at this" items, which the bar renders.
 
-## Status: docs-first, pre-implementation
+## Status: first fixture path
 
-This repo intentionally starts as **documentation + structure, with no product code yet**. The first development session is an *alignment* session, not a coding session. We figure out the hard decisions first, then build.
+This repo now has the first Swift fixture path: sanitized PDT fixtures load into an engine model, and the model renders into a menu descriptor. Pressure rules are still intentionally quiet-first.
+
+## Developer commands
+
+```bash
+swift run pdtbar-dev model --fixture docs/pdt/fixtures/quiet-no-pressure.json
+swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.json
+swift run pdtbar-checks
+```
 
 ## How to start
 
