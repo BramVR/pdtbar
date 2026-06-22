@@ -21,6 +21,7 @@ For deterministic fixture proof without leaving a menu-bar process running:
 swift run PortfolioPulse --fixture quiet --render-once
 swift run PortfolioPulse --fixture pressure --render-once
 swift run PulseFixtureChecks
+swift run PDTContractChecks
 ```
 
 ## How to start
@@ -51,7 +52,8 @@ portfolio-pulse/
 ├── Sources/
 │   ├── PulseCore/            # fixture-backed Model + renderer
 │   ├── PulseBar/             # native AppKit menu-bar shell
-│   └── PulseFixtureChecks/   # focused render-state checks
+│   ├── PulseFixtureChecks/   # focused render-state checks
+│   └── PDTContractChecks/    # focused PDT contract-ingestion checks
 └── src/                      # historical placeholders from docs-first setup
     ├── engine/README.md      # the pressure engine (the IP)
     └── bar/README.md         # the menu-bar renderer (the "pulse")

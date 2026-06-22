@@ -10,6 +10,7 @@ let package = Package(
     products: [
         .executable(name: "PortfolioPulse", targets: ["PulseBar"]),
         .executable(name: "PulseFixtureChecks", targets: ["PulseFixtureChecks"]),
+        .executable(name: "PDTContractChecks", targets: ["PDTContractChecks"]),
         .library(name: "PulseCore", targets: ["PulseCore"])
     ],
     targets: [
@@ -20,6 +21,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "PulseFixtureChecks",
+            dependencies: ["PulseCore"]
+        ),
+        .executableTarget(
+            name: "PDTContractChecks",
             dependencies: ["PulseCore"]
         ),
         .testTarget(
