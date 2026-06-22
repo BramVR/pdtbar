@@ -57,8 +57,12 @@ public struct AttentionItem: Codable, Equatable {
     public var facet: String
     public var rank: Int
     public var title: String
+    public var detail: String
     public var severity: String
     public var score: Double
+    public var holdingIdentity: HoldingIdentity?
+    public var currentWeight: Double?
+    public var threshold: Double?
     public var supportingDataSlotIDs: [String]
 
     public init(
@@ -66,17 +70,35 @@ public struct AttentionItem: Codable, Equatable {
         facet: String,
         rank: Int,
         title: String,
+        detail: String = "",
         severity: String,
         score: Double,
+        holdingIdentity: HoldingIdentity? = nil,
+        currentWeight: Double? = nil,
+        threshold: Double? = nil,
         supportingDataSlotIDs: [String]
     ) {
         self.id = id
         self.facet = facet
         self.rank = rank
         self.title = title
+        self.detail = detail
         self.severity = severity
         self.score = score
+        self.holdingIdentity = holdingIdentity
+        self.currentWeight = currentWeight
+        self.threshold = threshold
         self.supportingDataSlotIDs = supportingDataSlotIDs
+    }
+}
+
+public struct HoldingIdentity: Codable, Equatable {
+    public var name: String
+    public var quoteId: Int
+
+    public init(name: String, quoteId: Int) {
+        self.name = name
+        self.quoteId = quoteId
     }
 }
 
@@ -165,10 +187,12 @@ public struct FreshnessSnapshot: Codable, Equatable {
 
 public struct MenuDescriptor: Codable, Equatable {
     public var statusTitle: String
+    public var statusBadge: String?
     public var sections: [MenuSection]
 
-    public init(statusTitle: String, sections: [MenuSection]) {
+    public init(statusTitle: String, statusBadge: String? = nil, sections: [MenuSection]) {
         self.statusTitle = statusTitle
+        self.statusBadge = statusBadge
         self.sections = sections
     }
 }
@@ -180,8 +204,22 @@ public struct MenuSection: Codable, Equatable {
 }
 
 public struct MenuRow: Codable, Equatable {
+    public var id: String
+    public var role: String
     public var title: String
     public var detail: String?
+
+    public init(
+        id: String = "",
+        role: String = "row",
+        title: String,
+        detail: String? = nil
+    ) {
+        self.id = id
+        self.role = role
+        self.title = title
+        self.detail = detail
+    }
 }
 
 public enum MenuDescriptorRenderer {
@@ -193,11 +231,19 @@ public enum MenuDescriptorRenderer {
         let pulseRows: [MenuRow]
         if model.allQuiet {
             pulseRows = [
-                MenuRow(title: model.allQuietSignal.title, detail: model.allQuietSignal.detail),
+                MenuRow(id: "quiet", role: "glance", title: model.allQuietSignal.title, detail: model.allQuietSignal.detail),
             ]
         } else {
-            pulseRows = model.rankedAttentionItems.map {
-                MenuRow(title: $0.title, detail: "\($0.facet) severity \($0.severity)")
+            pulseRows = model.rankedAttentionItems.flatMap { item in
+                [
+                    MenuRow(id: "\(item.id).glance", role: "glance", title: item.title, detail: item.detail),
+                    MenuRow(
+                        id: "\(item.id).expansion",
+                        role: "expansion",
+                        title: "\(item.facet) severity \(item.severity)",
+                        detail: concentrationDetail(for: item)
+                    ),
+                ]
             }
         }
 
@@ -207,13 +253,24 @@ public enum MenuDescriptorRenderer {
 
         return MenuDescriptor(
             statusTitle: "\(display(model.allQuietSignal.totalValue)) - \(statusSignal)",
+            statusBadge: model.rankedAttentionItems.isEmpty ? nil : "\(model.rankedAttentionItems.count)",
             sections: [
                 MenuSection(id: "pulse", title: "Pulse", rows: pulseRows),
                 MenuSection(
                     id: "allocation",
                     title: "Allocation",
-                    rows: allocation.topHoldings.map {
-                        MenuRow(title: $0.name, detail: "\(percent($0.weight)) of portfolio")
+                    rows: allocation.topHoldings.map { holding in
+                        let attention = model.rankedAttentionItems.first { item in
+                            item.facet == "allocation" && item.holdingIdentity?.quoteId == holding.quoteId
+                        }
+                        return MenuRow(
+                            id: "allocation.\(holding.quoteId)",
+                            role: attention == nil ? "allocationHolding" : "allocationDrillDown",
+                            title: holding.name,
+                            detail: attention.map {
+                                "\(percent($0.currentWeight ?? 0)) of portfolio; concentration line \(percent($0.threshold ?? 0))"
+                            } ?? "\(percent(holding.weight)) of portfolio"
+                        )
                     }
                 ),
                 MenuSection(
@@ -249,11 +306,22 @@ public enum MenuDescriptorRenderer {
             ]
         )
     }
+
+    private static func concentrationDetail(for item: AttentionItem) -> String? {
+        guard let currentWeight = item.currentWeight,
+              let threshold = item.threshold
+        else {
+            return "score \(decimalString(String(item.score), places: 2))"
+        }
+        return "\(percent(currentWeight)) current weight; \(percent(threshold)) threshold; score \(decimalString(String(item.score), places: 2))"
+    }
 }
 
 public enum PressureEngine {
+    public static let concentrationThreshold = 0.20
+
     public static func buildModel(from snapshot: PortfolioSnapshot) -> PortfolioPulseModel {
-        let rankedItems: [AttentionItem] = []
+        let rankedItems = concentrationItems(from: snapshot)
         let totalValue = snapshot.totalValue
 
         return PortfolioPulseModel(
@@ -325,6 +393,34 @@ public enum PressureEngine {
         )
     }
 
+    private static func concentrationItems(from snapshot: PortfolioSnapshot) -> [AttentionItem] {
+        snapshot.openHoldings
+            .filter { $0.weight > concentrationThreshold }
+            .sorted { $0.weight > $1.weight }
+            .enumerated()
+            .map { offset, holding in
+                let score = concentrationScore(weight: holding.weight, threshold: concentrationThreshold)
+                return AttentionItem(
+                    id: "allocation.concentration.\(holding.quoteId)",
+                    facet: "allocation",
+                    rank: offset + 1,
+                    title: "\(holding.name) concentration",
+                    detail: "\(holding.name) is \(percent(holding.weight)) of the portfolio, above the \(percent(concentrationThreshold)) concentration line.",
+                    severity: score >= 0.8 ? "high" : "medium",
+                    score: score,
+                    holdingIdentity: HoldingIdentity(name: holding.name, quoteId: holding.quoteId),
+                    currentWeight: holding.weight,
+                    threshold: concentrationThreshold,
+                    supportingDataSlotIDs: ["allocation.holdings"]
+                )
+            }
+    }
+
+    private static func concentrationScore(weight: Double, threshold: Double) -> Double {
+        let relativeExcess = (weight - threshold) / threshold
+        return rounded(min(1.0, 0.5 + (relativeExcess * 0.75)), places: 2)
+    }
+
     private static func maxMove(from prices: [PricePoint]) -> PriceMoveSummary? {
         let grouped = Dictionary(grouping: prices, by: \.quoteId)
         return grouped.compactMap { quoteId, points -> PriceMoveSummary? in
@@ -348,7 +444,44 @@ public enum PressureEngine {
     }
 }
 
-public struct PortfolioSnapshot: Equatable {
+public struct PressureRunResult: Codable, Equatable {
+    public var model: PortfolioPulseModel
+    public var snapshotCommit: SnapshotCommit
+    public var descriptor: MenuDescriptor
+}
+
+public struct SnapshotCommit: Codable, Equatable {
+    public var written: Bool
+    public var path: String
+    public var asOf: String
+}
+
+public enum PressureRunner {
+    public static func run(fixture: URL, snapshotDirectory: URL) throws -> PressureRunResult {
+        let snapshot = try PDTFixtureDataSource.snapshot(from: fixture)
+        let model = PressureEngine.buildModel(from: snapshot)
+        let commit = try SnapshotFileStore(directory: snapshotDirectory).write(snapshot: snapshot)
+        let descriptor = MenuDescriptorRenderer.render(model: model)
+        return PressureRunResult(model: model, snapshotCommit: commit, descriptor: descriptor)
+    }
+}
+
+public struct SnapshotFileStore {
+    public var directory: URL
+
+    public init(directory: URL) {
+        self.directory = directory
+    }
+
+    public func write(snapshot: PortfolioSnapshot) throws -> SnapshotCommit {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let target = directory.appending(path: "latest-portfolio-snapshot.json")
+        try stableJSONData(snapshot).write(to: target, options: .atomic)
+        return SnapshotCommit(written: true, path: target.path, asOf: snapshot.asOf)
+    }
+}
+
+public struct PortfolioSnapshot: Codable, Equatable {
     public var asOf: String
     public var totalValue: Money
     public var openHoldings: [NormalizedHolding]
@@ -359,7 +492,7 @@ public struct PortfolioSnapshot: Equatable {
     public var priceSeries: [PricePoint]
 }
 
-public struct NormalizedHolding: Equatable {
+public struct NormalizedHolding: Codable, Equatable {
     public var name: String
     public var quoteId: Int
     public var weight: Double
@@ -367,7 +500,7 @@ public struct NormalizedHolding: Equatable {
     public var priceAsOf: String
 }
 
-public struct PricePoint: Equatable {
+public struct PricePoint: Codable, Equatable {
     public var quoteId: Int
     public var date: String
     public var closeAdjusted: String
