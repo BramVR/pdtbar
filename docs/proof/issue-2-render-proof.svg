@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1180" viewBox="0 0 1500 1180" role="img" aria-labelledby="title desc">
+  <title id="title">PortfolioPulse fixture render proof</title>
+  <desc id="desc">Inline visual proof generated from PortfolioPulse render-once fixture output for pull request 15.</desc>
+  <rect width="1500" height="1120" fill="#f5f7fa"/>
+  <style>
+    .title { font: 700 52px -apple-system, BlinkMacSystemFont, "SF Pro Display", Helvetica, Arial, sans-serif; fill: #141b24; }
+    .copy { font: 400 26px -apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif; fill: #434c58; }
+    .small { font: 400 20px -apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif; fill: #596472; }
+    .bar { font: 700 28px -apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif; fill: #eff4f8; }
+    .mono { font: 400 25px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #e6ecf2; }
+    .cmd { fill: #91d5ff; }
+  </style>
+
+  <text class="title" x="72" y="96">PortfolioPulse fixture render proof</text>
+  <text class="copy" x="72" y="152">
+    <tspan x="72" dy="0">PR #15 visual artifact generated from the built candidate via --render-once.</tspan>
+    <tspan x="72" dy="36">Native menu-bar capture is still blocked locally by macOS TCC, so this is</tspan>
+    <tspan x="72" dy="36">render-output proof, not a simulated app screenshot.</tspan>
+  </text>
+
+  <g transform="translate(72 280)">
+    <rect width="1250" height="314" rx="18" fill="#121820" stroke="#3e4957" stroke-width="2"/>
+    <path d="M18 0h1214a18 18 0 0 1 18 18v58H0V18A18 18 0 0 1 18 0Z" fill="#222b36"/>
+    <text class="bar" x="34" y="49">Quiet fixture</text>
+    <text class="mono" x="34" y="120">
+      <tspan class="cmd">$ swift run PortfolioPulse --fixture quiet --render-once</tspan>
+      <tspan x="34" dy="38">status.title=Pulse</tspan>
+      <tspan x="34" dy="38">status.badge=none</tspan>
+      <tspan x="34" dy="38">card.title=All quiet</tspan>
+      <tspan x="34" dy="38">rows.count=0</tspan>
+    </text>
+  </g>
+
+  <g transform="translate(72 646)">
+    <rect width="1250" height="422" rx="18" fill="#121820" stroke="#3e4957" stroke-width="2"/>
+    <path d="M18 0h1214a18 18 0 0 1 18 18v58H0V18A18 18 0 0 1 18 0Z" fill="#222b36"/>
+    <text class="bar" x="34" y="49">Pressure fixture</text>
+    <text class="mono" x="34" y="120">
+      <tspan class="cmd">$ swift run PortfolioPulse --fixture pressure --render-once</tspan>
+      <tspan x="34" dy="38">status.title=Pulse</tspan>
+      <tspan x="34" dy="38">status.badge=• 1</tspan>
+      <tspan x="34" dy="38">card.title=1 pressure item</tspan>
+      <tspan x="34" dy="38">rows.count=1</tspan>
+      <tspan x="34" dy="38">row.0.title=NVDA concentration climbing</tspan>
+      <tspan x="34" dy="38">row.0.detail=22% of portfolio; up from 18%</tspan>
+      <tspan x="34" dy="38">row.0.facet=allocation</tspan>
+    </text>
+  </g>
+
+  <text class="small" x="72" y="1128">
+    <tspan x="72" dy="0">Generated locally for review artifact only; no private portfolio data, credentials,</tspan>
+    <tspan x="72" dy="28">desktop content, or model/provider identifiers included.</tspan>
+  </text>
+</svg>

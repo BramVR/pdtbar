@@ -4,6 +4,8 @@ Native menu-bar process launch: passed with `PortfolioPulse --fixture pressure`;
 
 Native screenshot capture: blocked by local macOS TCC. `peekaboo permissions status --json` reports Screen Recording and Accessibility not granted.
 
+Inline visual proof: [`issue-2-render-proof.svg`](issue-2-render-proof.svg) shows the deterministic built-artifact render output for both fixtures.
+
 Built artifact render proof:
 
 ```text
