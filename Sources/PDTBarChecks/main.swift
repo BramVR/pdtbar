@@ -214,6 +214,21 @@ defer {
 }
 let bigMoverPriorSnapshot = try PDTFixtureDataSource.priorSnapshot(from: bigMoverFixture)
 try _ = bigMoverStore.commitCurrentSnapshot(bigMoverPriorSnapshot)
+let seededBigMoverStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-seed-prior-check")
+defer {
+    try? FileManager.default.removeItem(at: seededBigMoverStore.directory)
+}
+let seededBigMoverCommit = try PressureRunner.seedPriorSnapshot(
+    fixture: bigMoverFixture,
+    snapshotDirectory: seededBigMoverStore.directory
+)
+try check(seededBigMoverCommit.written, "seed-prior should write the fixture prior snapshot")
+try check(seededBigMoverCommit.asOf == "2026-06-15", "seed-prior should report the fixture prior snapshot date")
+let loadedSeededBigMoverSnapshot = try SnapshotStore(directory: seededBigMoverStore.directory).loadPriorSnapshot()
+try check(
+    loadedSeededBigMoverSnapshot == bigMoverPriorSnapshot,
+    "seed-prior should make the fixture prior snapshot loadable"
+)
 let bigMoverRun = try PressureRunner.run(
     fixture: bigMoverFixture,
     snapshotDirectory: bigMoverStore.directory

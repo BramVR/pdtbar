@@ -668,6 +668,11 @@ public struct SnapshotCommit: Codable, Equatable {
 }
 
 public enum PressureRunner {
+    public static func seedPriorSnapshot(fixture: URL, snapshotDirectory: URL) throws -> SnapshotCommit {
+        let priorSnapshot = try PDTFixtureDataSource.priorSnapshot(from: fixture)
+        return try SnapshotStore(directory: snapshotDirectory).commitCurrentSnapshot(priorSnapshot)
+    }
+
     public static func run(fixture: URL, snapshotDirectory: URL) throws -> PressureRunResult {
         let snapshot = try PDTFixtureDataSource.snapshot(from: fixture)
         let snapshotStore = SnapshotStore(directory: snapshotDirectory)
