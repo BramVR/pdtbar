@@ -1,0 +1,126 @@
+{
+  "_meta": {
+    "scenario": "income-event",
+    "facet": "income",
+    "describes": "Three income signals PDT can surface: (1) an ex-dividend date inside the lookahead window (forward-looking, works cold), (2) a dividend payment that just landed today, and (3) a dividend RAISE that must be DERIVED by comparing this period's recorded amount-per-share against the prior period — PDT exposes no explicit raise/cut flag. Calendar events also carry earnings dates.",
+    "sourceTools": [
+      "pdt-list-calendar-events",
+      "pdt-list-dividends",
+      "pdt-get-symbol-quote"
+    ],
+    "asOf": "2026-06-22",
+    "redactions": "userId / importId / brokerId / dividend ids replaced with fake integers; source/sourceIdentifier genericised. PDT field names and types (incl. positive/negative correction pairs) preserved verbatim.",
+    "portfolioCurrency": "EUR",
+    "derivedSignalsNote": "PDT gives raw dividend rows and calendar events only. 'Cut vs raise' and 'yield change' are NOT first-class fields — the engine derives them from amount/share deltas across periods. See docs/pdt/portfolio-data-source.md gaps."
+  },
+
+  "listCalendarEvents": {
+    "_query": { "date_from": "2026-06-22", "date_to": "2026-07-13" },
+    "data": [
+      { "id": 1001, "date": "2026-06-24", "type": "ex-dividend", "isEstimated": false, "symbolId": 5003, "symbolName": "Helix Pharma A/S" },
+      { "id": 1002, "date": "2026-06-22", "type": "payment-dividend", "isEstimated": false, "symbolId": 5007, "symbolName": "Lumen Luxury" },
+      { "id": 1003, "date": "2026-07-02", "type": "ex-dividend", "isEstimated": true, "symbolId": 5009, "symbolName": "Atlas Broad Index ETF (Acc.)" },
+      { "id": 1004, "date": "2026-07-10", "type": "payment-dividend", "isEstimated": true, "symbolId": 5003, "symbolName": "Helix Pharma A/S" },
+      { "id": 1005, "date": "2026-07-09", "type": "earnings-release", "isEstimated": false, "symbolId": 5005, "symbolName": "Caldera Clinical" }
+    ],
+    "meta": { "current_page": 1, "per_page": 25, "total": 5, "last_page": 1 }
+  },
+
+  "listDividends": {
+    "_query": { "date_from": "2026-01-01", "date_to": "2026-06-22", "note": "Ordered date descending. Two Helix rows (2026-06-22 and 2025-12-19) over identical 100-share holdings let the engine derive a raise: 0.66 -> 0.78 EUR/share, +18%. The Lumen +/- pair is a correction reversal." },
+    "data": [
+      {
+        "id": 80000001,
+        "date": "2026-06-22T08:13:00+00:00",
+        "description": null,
+        "lastModifiedAt": null,
+        "amount": { "value": "78.00", "currency": "EUR" },
+        "tax": { "value": "-21.06", "currency": "EUR" },
+        "exchangeRate": "1.0000",
+        "symbolId": null,
+        "symbolQuoteId": 9003,
+        "importId": 990001,
+        "userId": 90001,
+        "createdAt": "2026-06-23T11:10:44+00:00",
+        "updatedAt": "2026-06-23T11:10:44+00:00",
+        "brokerId": 1,
+        "source": "import",
+        "sourceIdentifier": "broker-account-csv",
+        "sourceVersion": 1,
+        "externalId": null
+      },
+      {
+        "id": 80000002,
+        "date": "2026-06-22T07:40:00+00:00",
+        "description": null,
+        "lastModifiedAt": null,
+        "amount": { "value": "61.20", "currency": "EUR" },
+        "tax": { "value": "-9.18", "currency": "EUR" },
+        "exchangeRate": "1.0000",
+        "symbolId": null,
+        "symbolQuoteId": 9007,
+        "importId": 990001,
+        "userId": 90001,
+        "createdAt": "2026-06-23T11:10:44+00:00",
+        "updatedAt": "2026-06-23T11:10:44+00:00",
+        "brokerId": 1,
+        "source": "import",
+        "sourceIdentifier": "broker-account-csv",
+        "sourceVersion": 1,
+        "externalId": null
+      },
+      {
+        "id": 80000003,
+        "date": "2026-03-30T08:20:00+00:00",
+        "description": null,
+        "lastModifiedAt": null,
+        "amount": { "value": "-61.20", "currency": "EUR" },
+        "tax": { "value": "0.00", "currency": "EUR" },
+        "exchangeRate": "1.0000",
+        "symbolId": null,
+        "symbolQuoteId": 9007,
+        "importId": 989500,
+        "userId": 90001,
+        "createdAt": "2026-03-31T11:10:44+00:00",
+        "updatedAt": "2026-03-31T11:10:44+00:00",
+        "brokerId": 1,
+        "source": "import",
+        "sourceIdentifier": "broker-account-csv",
+        "sourceVersion": 1,
+        "externalId": null
+      },
+      {
+        "id": 80000004,
+        "date": "2025-12-19T08:13:00+00:00",
+        "description": null,
+        "lastModifiedAt": null,
+        "amount": { "value": "66.00", "currency": "EUR" },
+        "tax": { "value": "-17.82", "currency": "EUR" },
+        "exchangeRate": "1.0000",
+        "symbolId": null,
+        "symbolQuoteId": 9003,
+        "importId": 988000,
+        "userId": 90001,
+        "createdAt": "2025-12-20T11:10:44+00:00",
+        "updatedAt": "2025-12-20T11:10:44+00:00",
+        "brokerId": 1,
+        "source": "import",
+        "sourceIdentifier": "broker-account-csv",
+        "sourceVersion": 1,
+        "externalId": null
+      }
+    ],
+    "meta": { "current_page": 1, "per_page": 20, "total": 4, "last_page": 1 }
+  },
+
+  "getSymbolQuote": {
+    "_note": "Calendar events key on symbolId; holdings and dividends key on symbolQuoteId. This join is required to attach an event to a held position. Example resolution for Helix Pharma A/S.",
+    "id": 9003,
+    "code": "HLX",
+    "symbolId": 5003,
+    "exchangeId": 31,
+    "exchangeName": "Copenhagen Exchange",
+    "currencyId": 9,
+    "currencyCode": "DKK"
+  }
+}

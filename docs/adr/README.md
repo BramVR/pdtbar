@@ -12,5 +12,5 @@ Copy `0000-template.md`, number it sequentially, and keep it short. Statuses: `P
 
 ## Index
 
-- `0001-core-architecture-and-stack.md` — engine/bar separation + native-Swift-vs-TS-core. **Status: Proposed** (resolve in the first grilling session).
+- `0001-core-architecture-and-stack.md` — engine/bar separation + native-Swift-vs-TS-core. **Status: Accepted** (native Swift; mcporter is research/dev only).
 - _(grilling will add: pressure-thresholds, bar-information-architecture, history-store, PDT-integration, …)_
