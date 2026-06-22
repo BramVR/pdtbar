@@ -4,11 +4,45 @@ public struct PulseModel: Equatable, Sendable {
     public var statusSignal: String
     public var attentionItems: [AttentionItem]
     public var allocationSnapshot: AllocationSnapshot?
+    public var eodFreshness: EODFreshnessDisplayFact?
 
-    public init(statusSignal: String, attentionItems: [AttentionItem], allocationSnapshot: AllocationSnapshot? = nil) {
+    public init(
+        statusSignal: String,
+        attentionItems: [AttentionItem],
+        allocationSnapshot: AllocationSnapshot? = nil,
+        eodFreshness: EODFreshnessDisplayFact? = nil
+    ) {
         self.statusSignal = statusSignal
         self.attentionItems = attentionItems
         self.allocationSnapshot = allocationSnapshot
+        self.eodFreshness = eodFreshness
+    }
+}
+
+public enum EODFreshnessState: String, Equatable, Sendable {
+    case current
+    case stale
+}
+
+public struct EODFreshnessDisplayFact: Equatable, Sendable {
+    public var state: EODFreshnessState
+    public var eodDate: String
+    public var requiredEODDate: String?
+    public var title: String
+    public var detail: String
+
+    public init(
+        state: EODFreshnessState,
+        eodDate: String,
+        requiredEODDate: String?,
+        title: String,
+        detail: String
+    ) {
+        self.state = state
+        self.eodDate = eodDate
+        self.requiredEODDate = requiredEODDate
+        self.title = title
+        self.detail = detail
     }
 }
 
@@ -39,6 +73,7 @@ public enum Facet: String, Equatable, Sendable {
     case income
     case performance
     case cash
+    case freshness
 }
 
 public enum Severity: String, Equatable, Sendable {
@@ -82,9 +117,11 @@ public enum PulseRenderer {
     private static let maxGlanceRows = 3
 
     public static func render(_ model: PulseModel) -> PulseView {
-        let rows = model.attentionItems.prefix(maxGlanceRows).map { item in
+        let freshnessRows = freshnessRows(from: model.eodFreshness)
+        let pressureRows = model.attentionItems.prefix(maxGlanceRows - freshnessRows.count).map { item in
             PulseRowView(title: item.title, detail: item.detail, facet: item.facet)
         }
+        let rows = freshnessRows + pressureRows
         let pressureCount = model.attentionItems.count
         let allocationDrillDown = model.allocationSnapshot.map { snapshot in
             PulseDrillDownView(
@@ -105,14 +142,34 @@ public enum PulseRenderer {
                 badge: pressureCount > 0 ? "• \(pressureCount)" : nil
             ),
             card: PulseCardView(
-                title: cardTitle(pressureCount: pressureCount, allocationState: model.allocationSnapshot?.state),
+                title: cardTitle(
+                    pressureCount: pressureCount,
+                    allocationState: model.allocationSnapshot?.state,
+                    freshnessState: model.eodFreshness?.state
+                ),
                 rows: rows
             ),
             allocationDrillDown: allocationDrillDown
         )
     }
 
-    private static func cardTitle(pressureCount: Int, allocationState: FacetPressureState?) -> String {
+    private static func freshnessRows(from fact: EODFreshnessDisplayFact?) -> [PulseRowView] {
+        guard let fact, fact.state == .stale else { return [] }
+
+        return [
+            PulseRowView(title: fact.title, detail: fact.detail, facet: .freshness)
+        ]
+    }
+
+    private static func cardTitle(
+        pressureCount: Int,
+        allocationState: FacetPressureState?,
+        freshnessState: EODFreshnessState?
+    ) -> String {
+        if freshnessState == .stale {
+            return "Data freshness"
+        }
+
         switch (pressureCount, allocationState) {
         case (0, .some(.allQuiet)):
             return "All quiet · Portfolio"

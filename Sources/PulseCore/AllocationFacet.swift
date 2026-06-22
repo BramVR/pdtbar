@@ -46,9 +46,14 @@ public struct AllocationHoldingSnapshot: Equatable, Sendable {
 
 public struct AllocationFacet: Sendable {
     public var concentrationThresholdFraction: Decimal
+    public var requiredEODDate: String?
 
-    public init(concentrationThresholdFraction: Decimal = Decimal(20) / Decimal(100)) {
+    public init(
+        concentrationThresholdFraction: Decimal = Decimal(20) / Decimal(100),
+        requiredEODDate: String? = nil
+    ) {
         self.concentrationThresholdFraction = concentrationThresholdFraction
+        self.requiredEODDate = requiredEODDate
     }
 
     public func model(from facts: PortfolioFacts) -> PulseModel {
@@ -87,7 +92,8 @@ public struct AllocationFacet: Sendable {
                 state: items.isEmpty ? .allQuiet : .activePressure,
                 concentrationThresholdFraction: concentrationThresholdFraction,
                 holdings: snapshotHoldings
-            )
+            ),
+            eodFreshness: eodFreshness(from: facts.freshness)
         )
     }
 
@@ -107,6 +113,28 @@ public struct AllocationFacet: Sendable {
         }
 
         return (lhs.name ?? "") < (rhs.name ?? "")
+    }
+
+    private func eodFreshness(from facts: [EODFreshnessFact]) -> EODFreshnessDisplayFact? {
+        guard let latestDate = facts.map(\.date).max() else { return nil }
+
+        if let requiredEODDate, latestDate < requiredEODDate {
+            return EODFreshnessDisplayFact(
+                state: .stale,
+                eodDate: latestDate,
+                requiredEODDate: requiredEODDate,
+                title: "PDT EOD data is stale",
+                detail: "Latest PDT EOD date \(latestDate); expected \(requiredEODDate)"
+            )
+        }
+
+        return EODFreshnessDisplayFact(
+            state: .current,
+            eodDate: latestDate,
+            requiredEODDate: requiredEODDate,
+            title: "PDT EOD data is current",
+            detail: "Latest PDT EOD date \(latestDate)"
+        )
     }
 
     private func percentText(_ fraction: Decimal) -> String {

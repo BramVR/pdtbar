@@ -107,6 +107,44 @@ expect(
     "allQuiet allocation snapshot keeps non-pressure holdings available"
 )
 
+let staleFacts = PortfolioFacts(
+    baseCurrency: "USD",
+    liveHoldings: [
+        holding(ticker: "KO", name: "The Coca-Cola Company", weight: "0.19")
+    ],
+    freshness: [
+        EODFreshnessFact(source: "portfolio.eodDate", date: "2026-06-20"),
+        EODFreshnessFact(source: "holding.KO.eodDate", date: "2026-06-20")
+    ]
+)
+let staleModel = AllocationFacet(requiredEODDate: "2026-06-21").model(from: staleFacts)
+expect(
+    staleModel.eodFreshness == EODFreshnessDisplayFact(
+        state: .stale,
+        eodDate: "2026-06-20",
+        requiredEODDate: "2026-06-21",
+        title: "PDT EOD data is stale",
+        detail: "Latest PDT EOD date 2026-06-20; expected 2026-06-21"
+    ),
+    "model exposes stale EOD freshness display facts from PDT freshness dates"
+)
+
+let currentFreshnessModel = AllocationFacet(requiredEODDate: "2026-06-21").model(
+    from: PortfolioFacts(
+        baseCurrency: "USD",
+        liveHoldings: [
+            holding(ticker: "KO", name: "The Coca-Cola Company", weight: "0.19")
+        ],
+        freshness: [
+            EODFreshnessFact(source: "portfolio.eodDate", date: "2026-06-21")
+        ]
+    )
+)
+expect(
+    currentFreshnessModel.eodFreshness?.state == .current,
+    "model exposes current EOD freshness when PDT dates meet the required EOD date"
+)
+
 let pdtFixtureWithClosedConcentration = """
 {
   "portfolio": {
