@@ -17,8 +17,30 @@ public struct PortfolioPulseModel: Codable, Equatable {
     public var allQuietSignal: AllQuietSignal
     public var attentionItems: [AttentionItem]
     public var rankedAttentionItems: [AttentionItem]
+    public var portfolioGlance: PortfolioGlanceContext
     public var facetSnapshots: FacetSnapshots
     public var supportingDataSlots: [SupportingDataSlot]
+
+    public init(
+        schemaVersion: Int = 1,
+        asOf: String,
+        allQuiet: Bool,
+        allQuietSignal: AllQuietSignal,
+        rankedAttentionItems: [AttentionItem],
+        portfolioGlance: PortfolioGlanceContext,
+        facetSnapshots: FacetSnapshots,
+        supportingDataSlots: [SupportingDataSlot]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.asOf = asOf
+        self.allQuiet = allQuiet
+        self.allQuietSignal = allQuietSignal
+        self.attentionItems = rankedAttentionItems
+        self.rankedAttentionItems = rankedAttentionItems
+        self.portfolioGlance = portfolioGlance
+        self.facetSnapshots = facetSnapshots
+        self.supportingDataSlots = supportingDataSlots
+    }
 
     public init(
         schemaVersion: Int = 1,
@@ -29,14 +51,71 @@ public struct PortfolioPulseModel: Codable, Equatable {
         facetSnapshots: FacetSnapshots,
         supportingDataSlots: [SupportingDataSlot]
     ) {
-        self.schemaVersion = schemaVersion
-        self.asOf = asOf
-        self.allQuiet = allQuiet
-        self.allQuietSignal = allQuietSignal
-        self.attentionItems = rankedAttentionItems
-        self.rankedAttentionItems = rankedAttentionItems
-        self.facetSnapshots = facetSnapshots
-        self.supportingDataSlots = supportingDataSlots
+        self.init(
+            schemaVersion: schemaVersion,
+            asOf: asOf,
+            allQuiet: allQuiet,
+            allQuietSignal: allQuietSignal,
+            rankedAttentionItems: rankedAttentionItems,
+            portfolioGlance: PortfolioGlanceContext(
+                totalValue: allQuietSignal.totalValue,
+                openHoldingCount: facetSnapshots.allocation.openHoldingCount,
+                worstPriceAsOf: facetSnapshots.freshness.worstPriceAsOf
+            ),
+            facetSnapshots: facetSnapshots,
+            supportingDataSlots: supportingDataSlots
+        )
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case asOf
+        case allQuiet
+        case allQuietSignal
+        case attentionItems
+        case rankedAttentionItems
+        case portfolioGlance
+        case facetSnapshots
+        case supportingDataSlots
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        asOf = try container.decode(String.self, forKey: .asOf)
+        allQuiet = try container.decode(Bool.self, forKey: .allQuiet)
+        allQuietSignal = try container.decode(AllQuietSignal.self, forKey: .allQuietSignal)
+        facetSnapshots = try container.decode(FacetSnapshots.self, forKey: .facetSnapshots)
+        supportingDataSlots = try container.decode([SupportingDataSlot].self, forKey: .supportingDataSlots)
+        rankedAttentionItems = try container.decodeIfPresent([AttentionItem].self, forKey: .rankedAttentionItems)
+            ?? container.decode([AttentionItem].self, forKey: .attentionItems)
+        attentionItems = try container.decodeIfPresent([AttentionItem].self, forKey: .attentionItems)
+            ?? rankedAttentionItems
+        portfolioGlance = try container.decodeIfPresent(PortfolioGlanceContext.self, forKey: .portfolioGlance)
+            ?? PortfolioGlanceContext(
+                totalValue: allQuietSignal.totalValue,
+                openHoldingCount: facetSnapshots.allocation.openHoldingCount,
+                worstPriceAsOf: facetSnapshots.freshness.worstPriceAsOf
+            )
+    }
+}
+
+public struct PortfolioGlanceContext: Codable, Equatable {
+    public var totalValue: Money
+    public var openHoldingCount: Int
+    public var worstPriceAsOf: String?
+    public var priorSnapshotAsOf: String?
+
+    public init(
+        totalValue: Money,
+        openHoldingCount: Int,
+        worstPriceAsOf: String?,
+        priorSnapshotAsOf: String? = nil
+    ) {
+        self.totalValue = totalValue
+        self.openHoldingCount = openHoldingCount
+        self.worstPriceAsOf = worstPriceAsOf
+        self.priorSnapshotAsOf = priorSnapshotAsOf
     }
 }
 
@@ -347,9 +426,10 @@ public enum MenuDescriptorRenderer {
 public enum PressureEngine {
     public static let concentrationThreshold = 0.20
 
-    public static func buildModel(from snapshot: PortfolioSnapshot) -> PortfolioPulseModel {
+    public static func buildModel(from snapshot: PortfolioSnapshot, priorSnapshot: PortfolioSnapshot? = nil) -> PortfolioPulseModel {
         let rankedItems = concentrationItems(from: snapshot)
         let totalValue = snapshot.totalValue
+        let worstPriceAsOf = snapshot.openHoldings.map(\.priceAsOf).min()
 
         return PortfolioPulseModel(
             asOf: snapshot.asOf,
@@ -360,6 +440,12 @@ public enum PressureEngine {
                 totalValue: totalValue
             ),
             rankedAttentionItems: rankedItems,
+            portfolioGlance: PortfolioGlanceContext(
+                totalValue: totalValue,
+                openHoldingCount: snapshot.openHoldings.count,
+                worstPriceAsOf: worstPriceAsOf,
+                priorSnapshotAsOf: priorSnapshot?.asOf
+            ),
             facetSnapshots: FacetSnapshots(
                 allocation: AllocationSnapshot(
                     totalValue: totalValue,
@@ -387,7 +473,7 @@ public enum PressureEngine {
                     maxMove: maxMove(from: snapshot.priceSeries)
                 ),
                 freshness: FreshnessSnapshot(
-                    worstPriceAsOf: snapshot.openHoldings.map(\.priceAsOf).min(),
+                    worstPriceAsOf: worstPriceAsOf,
                     stale: false
                 )
             ),
@@ -486,27 +572,55 @@ public struct SnapshotCommit: Codable, Equatable {
 public enum PressureRunner {
     public static func run(fixture: URL, snapshotDirectory: URL) throws -> PressureRunResult {
         let snapshot = try PDTFixtureDataSource.snapshot(from: fixture)
-        let model = PressureEngine.buildModel(from: snapshot)
-        let commit = try SnapshotFileStore(directory: snapshotDirectory).write(snapshot: snapshot)
+        let snapshotStore = SnapshotStore(directory: snapshotDirectory)
+        let priorSnapshot: PortfolioSnapshot?
+        do {
+            priorSnapshot = try snapshotStore.loadPriorSnapshot()
+        } catch {
+            priorSnapshot = nil
+        }
+        let model = PressureEngine.buildModel(from: snapshot, priorSnapshot: priorSnapshot)
+        let commit = try snapshotStore.commitCurrentSnapshot(snapshot)
         let descriptor = MenuDescriptorRenderer.render(model: model)
         return PressureRunResult(model: model, snapshotCommit: commit, descriptor: descriptor)
     }
 }
 
-public struct SnapshotFileStore {
+public struct SnapshotStore {
     public var directory: URL
 
     public init(directory: URL) {
         self.directory = directory
     }
 
-    public func write(snapshot: PortfolioSnapshot) throws -> SnapshotCommit {
+    public static func temporaryTestStore(prefix: String = "pdtbar-snapshot-store") throws -> SnapshotStore {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "\(prefix)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return SnapshotStore(directory: directory)
+    }
+
+    public func loadPriorSnapshot() throws -> PortfolioSnapshot? {
+        let target = directory.appending(path: "latest-portfolio-snapshot.json")
+        guard FileManager.default.fileExists(atPath: target.path) else {
+            return nil
+        }
+        return try JSONDecoder().decode(PortfolioSnapshot.self, from: Data(contentsOf: target))
+    }
+
+    public func commitCurrentSnapshot(_ snapshot: PortfolioSnapshot) throws -> SnapshotCommit {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let target = directory.appending(path: "latest-portfolio-snapshot.json")
         try stableJSONData(snapshot).write(to: target, options: .atomic)
         return SnapshotCommit(written: true, path: target.path, asOf: snapshot.asOf)
     }
+
+    public func write(snapshot: PortfolioSnapshot) throws -> SnapshotCommit {
+        try commitCurrentSnapshot(snapshot)
+    }
 }
+
+public typealias SnapshotFileStore = SnapshotStore
 
 public struct PortfolioSnapshot: Codable, Equatable {
     public var asOf: String

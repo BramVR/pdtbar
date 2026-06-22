@@ -18,7 +18,39 @@ try check(decoded.allQuiet, "quiet fixture should set allQuiet=true")
 try check(decoded.attentionItems == [], "quiet fixture should emit no attention items")
 try check(decoded.rankedAttentionItems == [], "quiet fixture should emit no ranked attention items")
 try check(decoded.facetSnapshots.allocation.openHoldingCount == 9, "quiet fixture should load holdings")
+try check(decoded.portfolioGlance.openHoldingCount == 9, "quiet model should expose open holding count glance context")
+try check(decoded.portfolioGlance.totalValue == Money(value: "51200.00", currency: "EUR"), "quiet model should expose total value glance context")
+try check(decoded.portfolioGlance.worstPriceAsOf == "2026-06-22", "quiet model should expose price freshness glance context")
 try check(decoded.supportingDataSlots.map(\.id).contains("bigMovers.prices"), "model should expose supporting data slots")
+var legacyModelObject = try require(
+    JSONSerialization.jsonObject(with: modelJSON) as? [String: Any],
+    "model JSON should decode as an object for legacy compatibility check"
+)
+legacyModelObject.removeValue(forKey: "portfolioGlance")
+let legacyModelWithoutGlance = try JSONDecoder().decode(
+    PortfolioPulseModel.self,
+    from: JSONSerialization.data(withJSONObject: legacyModelObject, options: [.sortedKeys])
+)
+try check(
+    legacyModelWithoutGlance.portfolioGlance.openHoldingCount == 9,
+    "legacy v1 model JSON should default open holding glance context"
+)
+try check(
+    legacyModelWithoutGlance.portfolioGlance.worstPriceAsOf == "2026-06-22",
+    "legacy v1 model JSON should default freshness glance context"
+)
+let legacyConstructedModel = PortfolioPulseModel(
+    asOf: decoded.asOf,
+    allQuiet: decoded.allQuiet,
+    allQuietSignal: decoded.allQuietSignal,
+    rankedAttentionItems: decoded.rankedAttentionItems,
+    facetSnapshots: decoded.facetSnapshots,
+    supportingDataSlots: decoded.supportingDataSlots
+)
+try check(
+    legacyConstructedModel.portfolioGlance.openHoldingCount == 9,
+    "legacy model initializer should default open holding glance context"
+)
 
 let descriptor = MenuDescriptorRenderer.render(model: decoded)
 try check(
@@ -109,6 +141,71 @@ try FileManager.default.createDirectory(at: snapshotDirectory, withIntermediateD
 defer {
     try? FileManager.default.removeItem(at: snapshotDirectory)
 }
+
+let emptySnapshotStore = try SnapshotStore.temporaryTestStore()
+defer {
+    try? FileManager.default.removeItem(at: emptySnapshotStore.directory)
+}
+let missingPriorSnapshot = try emptySnapshotStore.loadPriorSnapshot()
+try check(
+    missingPriorSnapshot == nil,
+    "temp-dir SnapshotStore should load nil when no prior snapshot exists"
+)
+let quietSnapshotStore = try SnapshotStore.temporaryTestStore()
+defer {
+    try? FileManager.default.removeItem(at: quietSnapshotStore.directory)
+}
+let quietSnapshot = try PDTFixtureDataSource.snapshot(from: fixture)
+let quietCommit = try quietSnapshotStore.commitCurrentSnapshot(quietSnapshot)
+try check(quietCommit.written, "SnapshotStore should commit the current snapshot")
+try check(
+    FileManager.default.fileExists(atPath: quietCommit.path),
+    "SnapshotStore commit should write the latest snapshot file"
+)
+let loadedQuietSnapshot = try quietSnapshotStore.loadPriorSnapshot()
+try check(
+    loadedQuietSnapshot == quietSnapshot,
+    "SnapshotStore should load the committed snapshot as the prior snapshot"
+)
+let quietRunWithPrior = try PressureRunner.run(
+    fixture: fixture,
+    snapshotDirectory: quietSnapshotStore.directory
+)
+try check(quietRunWithPrior.model.allQuiet, "quiet fixture with matching prior snapshot should be all quiet")
+try check(quietRunWithPrior.model.attentionItems == [], "quiet fixture with matching prior snapshot should emit no attention items")
+try check(
+    quietRunWithPrior.model.portfolioGlance.priorSnapshotAsOf == "2026-06-22",
+    "quiet E2E model should expose matching prior snapshot context"
+)
+try check(
+    quietRunWithPrior.descriptor.statusTitle == "EUR 51,200.00 - All quiet",
+    "quiet E2E descriptor should render all quiet"
+)
+try check(
+    quietRunWithPrior.descriptor.sections.map(\.id) == ["pulse", "allocation", "income", "bigMovers", "freshness"],
+    "quiet E2E descriptor should keep drill-down sections reachable"
+)
+let malformedSnapshotStore = try SnapshotStore.temporaryTestStore()
+defer {
+    try? FileManager.default.removeItem(at: malformedSnapshotStore.directory)
+}
+try Data("{".utf8).write(
+    to: malformedSnapshotStore.directory.appending(path: "latest-portfolio-snapshot.json")
+)
+let quietRunWithMalformedPrior = try PressureRunner.run(
+    fixture: fixture,
+    snapshotDirectory: malformedSnapshotStore.directory
+)
+try check(quietRunWithMalformedPrior.model.allQuiet, "malformed prior snapshot should fall back to cold-start modeling")
+try check(
+    quietRunWithMalformedPrior.model.portfolioGlance.priorSnapshotAsOf == nil,
+    "malformed prior snapshot should not populate prior glance context"
+)
+let replacedMalformedPrior = try malformedSnapshotStore.loadPriorSnapshot()
+try check(
+    replacedMalformedPrior == quietSnapshot,
+    "malformed prior snapshot should be replaced by the current committed snapshot"
+)
 
 let concentrationRun = try PressureRunner.run(
     fixture: concentrationFixture,
