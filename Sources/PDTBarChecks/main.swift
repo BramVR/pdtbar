@@ -302,6 +302,7 @@ let scriptedLiveRun = try PressureRunner.run(
         "pdt-list-calendar-events?date_from=2026-06-23&date_to=2026-07-23": try mcpContent("""
         {
           "data": [
+            { "date": "2026-06-23", "type": "no-events-today", "isEstimated": false, "symbolId": null, "symbolName": null },
             { "date": "2026-06-24", "type": "ex-dividend", "isEstimated": false, "symbolId": 5101, "symbolName": "Live Adapter Co" }
           ]
         }
@@ -316,7 +317,7 @@ let scriptedLiveRun = try PressureRunner.run(
         "pdt-get-symbol-quote?id=9101": try mcpContent("""
         { "id": 9101, "symbolId": 5101 }
         """),
-        "pdt-list-symbol-prices?date_from=2026-06-16&date_to=2026-06-23&symbolQuoteId=9101": try mcpContent("""
+        "pdt-list-symbol-prices?date_from=2026-06-16&date_to=2026-06-23&symbol_quote_id=9101": try mcpContent("""
         {
           "data": [
             { "date": "2026-06-20", "closeAdjusted": "19.00", "symbolQuoteId": 9101 },
@@ -348,6 +349,10 @@ try check(
 try check(
     scriptedLiveRun.model.rankedAttentionItems.map(\.id).contains("income.ex-dividend.9101"),
     "live data source should join calendar events to dividend quote ids"
+)
+try check(
+    scriptedLiveRun.model.facetSnapshots.income.upcomingEvents.count == 1,
+    "live data source should filter calendar no-event sentinel rows"
 )
 try check(
     scriptedLiveRun.model.facetSnapshots.bigMovers.priceSeriesCount == 2,

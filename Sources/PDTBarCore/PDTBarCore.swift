@@ -1112,7 +1112,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             openHoldings: openHoldings,
             sectors: (distributionsEnvelope.sectors ?? []).map(\.summary),
             assetTypes: (distributionsEnvelope.assetTypes ?? []).map(\.summary),
-            incomeEvents: calendarEnvelope.data.map {
+            incomeEvents: calendarEnvelope.data.filter { $0.type != "no-events-today" }.map {
                 let quoteId = $0.symbolId.flatMap { quoteIDsBySymbolID[$0] }
                 let amount = $0.type == "ex-dividend" && !$0.isEstimated
                     ? latestLiveDividendAmount(for: quoteId, dividendsByQuoteID: dividendsByQuoteID)
@@ -1156,7 +1156,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
                 "pdt-list-symbol-prices",
                 data: toolClient.callReadTool(
                     "pdt-list-symbol-prices",
-                    arguments: priceDateRange.merging(["symbolQuoteId": String(holding.quoteId)]) { _, new in new }
+                    arguments: priceDateRange.merging(["symbol_quote_id": String(holding.quoteId)]) { _, new in new }
                 )
             )
             return prices.data.map {
