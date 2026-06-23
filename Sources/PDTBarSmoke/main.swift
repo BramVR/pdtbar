@@ -867,7 +867,7 @@ private struct PDTLiveMcporterClient: PDTLiveToolClient {
         let selector = "\(server).\(name)"
         let toolArguments = arguments
             .sorted { $0.key < $1.key }
-            .map { "\($0.key):\($0.value)" }
+            .map { "\($0.key)=\($0.value)" }
         return try run(
             URL(fileURLWithPath: "/usr/bin/env"),
             arguments: ["npx", "-y", "mcporter", "call", selector] + toolArguments,
