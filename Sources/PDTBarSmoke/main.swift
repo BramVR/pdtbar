@@ -30,6 +30,8 @@ do {
         report = try livePDTSmoke(arguments: Array(arguments.dropFirst()))
     case "scripted-pdt-connector":
         report = try scriptedPDTConnectorSmoke(arguments: Array(arguments.dropFirst()))
+    case "scripted-first-fetch":
+        report = try scriptedFirstFetchSmoke(arguments: Array(arguments.dropFirst()))
     case "logged-out-launch":
         report = try loggedOutLaunchSmoke(arguments: Array(arguments.dropFirst()))
     case "ready-launch":
@@ -53,6 +55,7 @@ do {
     usage:
       pdtbar-smoke live-pdt [--server <mcporter-server>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-pdt-connector [--artifacts <dir>]
+      pdtbar-smoke scripted-first-fetch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke logged-out-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke ready-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]
@@ -85,12 +88,22 @@ private func readyLaunchSmoke(arguments: [String]) throws -> SmokeReport {
     }
 
     let appSupportDirectory = try options.isolatedAppSupportDirectory(prefix: "ready-launch-app-support")
-    let readinessDirectory = appSupportDirectory.appending(path: "pdtbar")
-    try FileManager.default.createDirectory(at: readinessDirectory, withIntermediateDirectories: true)
-    try Data(#"{"result":"ready"}"#.utf8).write(
-        to: readinessDirectory.appending(path: "claude-readiness.json"),
-        options: .atomic
+    let responses = try scriptedPDTConnectorResponses()
+    let configuration = ScriptedPDTMCPConnectorConfiguration(
+        responses: responses.mapValues { String(decoding: $0, as: UTF8.self) },
+        asOf: "2026-03-29"
     )
+    try writeFirstFetchAppScript(configuration: configuration, appSupportDirectory: appSupportDirectory)
+    let expectedStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-ready-launch-expected")
+    defer {
+        try? FileManager.default.removeItem(at: expectedStore.directory)
+    }
+    let expectedRun = try PDTCoalescedFirstPortfolioFetch(
+        dataSource: PDTMCPConnectorDataSource(connector: configuration.connector()),
+        snapshotStore: expectedStore,
+        asOf: configuration.asOf
+    ).fetch()
+    let firstFetchSnapshot = appSupportDirectory.appending(path: "pdtbar/state/latest-portfolio-snapshot.json")
     let fixtureSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "ready-launch-fixture-sentinel")
     let fixtureSnapshot = fixtureSnapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
     let process = Process()
@@ -105,18 +118,23 @@ private func readyLaunchSmoke(arguments: [String]) throws -> SmokeReport {
     ]) { _, new in new }
     try process.run()
     defer {
-        if process.isRunning {
-            process.terminate()
-            process.waitUntilExit()
-        }
+        terminate(process)
     }
-    Thread.sleep(forTimeInterval: options.timeout)
+    let snapshotWritten = waitForFile(firstFetchSnapshot, timeout: options.timeout)
     guard process.isRunning else {
         process.waitUntilExit()
         return SmokeReport(
             name: "ready-launch",
             status: SmokeStatus.failed,
             detail: "scripted ready app exited before the smoke timeout",
+            artifacts: [artifactPath(appSupportDirectory)]
+        )
+    }
+    guard snapshotWritten else {
+        return SmokeReport(
+            name: "ready-launch",
+            status: SmokeStatus.failed,
+            detail: "scripted ready launch did not complete the first portfolio fetch",
             artifacts: [artifactPath(appSupportDirectory)]
         )
     }
@@ -133,14 +151,13 @@ private func readyLaunchSmoke(arguments: [String]) throws -> SmokeReport {
         return SmokeReport(
             name: "ready-launch",
             status: SmokeStatus.skipped,
-            detail: "scripted ready app stayed running and ignored fixture env; macOS Accessibility permission missing for first-fetch menu inspection",
-            artifacts: [artifactPath(appSupportDirectory)]
+            detail: "scripted ready app completed first fetch and ignored fixture env; macOS Accessibility permission missing for pulse menu inspection",
+            artifacts: [artifactPath(firstFetchSnapshot)]
         )
     }
 
-    let descriptor = ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio)
-    let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
-    let expectedTargets = requiredSetupMenuTargets(in: surface)
+    let surface = MenuBarSurfaceRenderer.render(descriptor: expectedRun.descriptor)
+    let expectedTargets = requiredPulseMenuTargets(in: surface)
     let expectedMenuIdentifiers = Set(expectedTargets.map(\.accessibilityIdentifier))
     let appElement = AXUIElementCreateApplication(process.processIdentifier)
     guard let statusElement = waitForAccessibilityElement(
@@ -185,7 +202,7 @@ private func readyLaunchSmoke(arguments: [String]) throws -> SmokeReport {
         return SmokeReport(
             name: "ready-launch",
             status: SmokeStatus.failed,
-            detail: "scripted ready launch did not reach first-fetch cleanly after \(openedMenu.attempts.joined(separator: ", ")); missing selectors: \(missingLabels); forbidden login text: \(forbiddenTexts.sorted().joined(separator: ", "))",
+            detail: "scripted ready launch did not publish the first pulse cleanly after \(openedMenu.attempts.joined(separator: ", ")); missing selectors: \(missingLabels); forbidden login text: \(forbiddenTexts.sorted().joined(separator: ", "))",
             artifacts: [artifactPath(evidence)]
         )
     }
@@ -193,8 +210,8 @@ private func readyLaunchSmoke(arguments: [String]) throws -> SmokeReport {
     return SmokeReport(
         name: "ready-launch",
         status: SmokeStatus.passed,
-        detail: "scripted Claude/PDT readiness skipped logged-out UI and rendered the first-fetch state without consuming fixture state",
-        artifacts: [artifactPath(evidence)]
+        detail: "scripted Claude/PDT readiness skipped logged-out UI, completed first fetch, and rendered the first real pulse without consuming fixture state",
+        artifacts: [artifactPath(evidence), artifactPath(firstFetchSnapshot)]
     )
 }
 
@@ -386,6 +403,218 @@ private func scriptedPDTConnectorSmoke(arguments: [String]) throws -> SmokeRepor
         status: SmokeStatus.passed,
         detail: "scripted Claude PDT connector checked required v1 read tools, called each read tool exactly once for a coalesced fetch, and rendered through PressureRunner with redacted proof",
         artifacts: [artifactPath(proof)]
+    )
+}
+
+private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
+    let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
+    guard FileManager.default.isExecutableFile(atPath: app.path) else {
+        return SmokeReport(
+            name: "scripted-first-fetch",
+            status: SmokeStatus.failed,
+            detail: "app executable missing; run swift build --product pdtbar first or pass --app <path>",
+            artifacts: []
+        )
+    }
+
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let proof = artifacts.appending(path: "pdtbar-scripted-first-fetch-proof.json")
+    let responses = try scriptedPDTConnectorResponses()
+    let responseStrings = responses.mapValues { String(decoding: $0, as: UTF8.self) }
+    let completeConfiguration = ScriptedPDTMCPConnectorConfiguration(
+        responses: responseStrings,
+        asOf: "2026-03-29"
+    )
+    let expectedStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-scripted-first-fetch-expected")
+    defer {
+        try? FileManager.default.removeItem(at: expectedStore.directory)
+    }
+    let expectedRun = try PDTCoalescedFirstPortfolioFetch(
+        dataSource: PDTMCPConnectorDataSource(connector: completeConfiguration.connector()),
+        snapshotStore: expectedStore,
+        asOf: completeConfiguration.asOf
+    ).fetch()
+    let expectedSurface = MenuBarSurfaceRenderer.render(descriptor: expectedRun.descriptor)
+
+    let missingConfiguration = ScriptedPDTMCPConnectorConfiguration(
+        availableTools: PDTReadTools.requiredV1.filter { $0 != "pdt-list-dividends" },
+        responses: responseStrings,
+        asOf: "2026-03-29"
+    )
+    let missingDirectStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-scripted-first-fetch-missing")
+    defer {
+        try? FileManager.default.removeItem(at: missingDirectStore.directory)
+    }
+    let missingDirectBlocked: Bool
+    do {
+        _ = try PDTCoalescedFirstPortfolioFetch(
+            dataSource: PDTMCPConnectorDataSource(connector: missingConfiguration.connector()),
+            snapshotStore: missingDirectStore,
+            asOf: missingConfiguration.asOf
+        ).fetch()
+        missingDirectBlocked = false
+    } catch PDTMCPConnectorError.missingRequiredReadTools(let missing) {
+        missingDirectBlocked = missing == ["pdt-list-dividends"]
+            && !FileManager.default.fileExists(
+                atPath: missingDirectStore.directory.appending(path: "latest-portfolio-snapshot.json").path
+            )
+    }
+
+    let successAppSupport = try options.isolatedAppSupportDirectory(prefix: "scripted-first-fetch-success-app-support")
+    try writeFirstFetchAppScript(
+        configuration: completeConfiguration,
+        appSupportDirectory: successAppSupport
+    )
+    let successFixtureSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "scripted-first-fetch-success-fixture-sentinel")
+    let successFixtureSnapshot = successFixtureSnapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
+    let successStateDirectory = successAppSupport.appending(path: "pdtbar/state")
+    let successSnapshot = successStateDirectory.appending(path: "latest-portfolio-snapshot.json")
+    let successProcess = try launchFirstFetchApp(
+        app,
+        appSupportDirectory: successAppSupport,
+        fixtureSnapshotDirectory: successFixtureSnapshotDirectory
+    )
+    defer {
+        terminate(successProcess)
+    }
+    let successSnapshotWritten = waitForFile(successSnapshot, timeout: options.timeout)
+    guard successProcess.isRunning,
+          successSnapshotWritten,
+          !FileManager.default.fileExists(atPath: successFixtureSnapshot.path)
+    else {
+        return SmokeReport(
+            name: "scripted-first-fetch",
+            status: SmokeStatus.failed,
+            detail: "complete scripted first fetch did not stay running, write isolated state, or avoid fixture state",
+            artifacts: [artifactPath(successAppSupport), artifactPath(successFixtureSnapshotDirectory)]
+        )
+    }
+    let publishedSnapshot = try JSONDecoder().decode(
+        PortfolioSnapshot.self,
+        from: Data(contentsOf: successSnapshot)
+    )
+    let accessibilityChecked = AXIsProcessTrusted()
+    var successAXVisible = false
+    var axArtifacts: [String] = []
+    if accessibilityChecked {
+        let appElement = AXUIElementCreateApplication(successProcess.processIdentifier)
+        if let statusElement = waitForAccessibilityElement(
+            in: appElement,
+            identifier: expectedSurface.status.accessibilityIdentifier,
+            timeout: options.timeout
+        ) {
+            let targets = requiredPulseMenuTargets(in: expectedSurface)
+            let openedMenu = openStatusMenu(
+                statusElement,
+                appElement: appElement,
+                expectedMenuIdentifiers: Set(targets.map(\.accessibilityIdentifier)),
+                timeout: options.timeout
+            )
+            if let snapshot = openedMenu.snapshot {
+                let evidence = artifacts.appending(path: "pdtbar-scripted-first-fetch-success-ax.json")
+                try writeAccessibilityEvidence(
+                    snapshot: snapshot,
+                    expected: targets,
+                    statusIdentifier: expectedSurface.status.accessibilityIdentifier,
+                    statusText: accessibilityTexts(in: statusElement),
+                    output: evidence
+                )
+                axArtifacts.append(artifactPath(evidence))
+                successAXVisible = Set(targets.map(\.accessibilityIdentifier)).isSubset(of: snapshot.identifiers)
+            }
+        }
+    }
+    terminate(successProcess)
+
+    let failureAppSupport = try options.isolatedAppSupportDirectory(prefix: "scripted-first-fetch-failure-app-support")
+    try writeFirstFetchAppScript(
+        configuration: missingConfiguration,
+        appSupportDirectory: failureAppSupport
+    )
+    let failureFixtureSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "scripted-first-fetch-failure-fixture-sentinel")
+    let failureFixtureSnapshot = failureFixtureSnapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
+    let failureSnapshot = failureAppSupport.appending(path: "pdtbar/state/latest-portfolio-snapshot.json")
+    let failureProcess = try launchFirstFetchApp(
+        app,
+        appSupportDirectory: failureAppSupport,
+        fixtureSnapshotDirectory: failureFixtureSnapshotDirectory
+    )
+    defer {
+        terminate(failureProcess)
+    }
+    Thread.sleep(forTimeInterval: options.timeout)
+    let missingToolPreventedPublication = failureProcess.isRunning
+        && missingDirectBlocked
+        && !FileManager.default.fileExists(atPath: failureSnapshot.path)
+        && !FileManager.default.fileExists(atPath: failureFixtureSnapshot.path)
+    var failureAXVisible = false
+    if accessibilityChecked {
+        let expectedFailureSurface = MenuBarSurfaceRenderer.render(
+            descriptor: ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed)
+        )
+        let appElement = AXUIElementCreateApplication(failureProcess.processIdentifier)
+        if let statusElement = waitForAccessibilityElement(
+            in: appElement,
+            identifier: expectedFailureSurface.status.accessibilityIdentifier,
+            timeout: options.timeout
+        ) {
+            let targets = requiredSetupMenuTargets(in: expectedFailureSurface)
+            let openedMenu = openStatusMenu(
+                statusElement,
+                appElement: appElement,
+                expectedMenuIdentifiers: Set(targets.map(\.accessibilityIdentifier)),
+                timeout: options.timeout
+            )
+            if let snapshot = openedMenu.snapshot {
+                let evidence = artifacts.appending(path: "pdtbar-scripted-first-fetch-failure-ax.json")
+                try writeAccessibilityEvidence(
+                    snapshot: snapshot,
+                    expected: targets,
+                    statusIdentifier: expectedFailureSurface.status.accessibilityIdentifier,
+                    statusText: accessibilityTexts(in: statusElement),
+                    output: evidence
+                )
+                axArtifacts.append(artifactPath(evidence))
+                failureAXVisible = Set(targets.map(\.accessibilityIdentifier)).isSubset(of: snapshot.identifiers)
+            }
+        }
+    }
+
+    let proofPayload = ScriptedFirstFetchProof(
+        snapshotPath: artifactPath(successSnapshot),
+        snapshotWritten: successSnapshotWritten,
+        snapshotAsOf: publishedSnapshot.asOf,
+        openHoldingCount: publishedSnapshot.openHoldings.count,
+        expectedRenderedSectionIDs: expectedRun.descriptor.sections.map(\.id),
+        missingRequiredToolBlockedPublication: missingToolPreventedPublication,
+        accessibilityChecked: accessibilityChecked,
+        successPulseVisibleThroughAccessibility: successAXVisible,
+        failureVisibleThroughAccessibility: failureAXVisible,
+        rawPortfolioPayloadsRedacted: true
+    )
+    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+
+    guard successSnapshotWritten,
+          publishedSnapshot.openHoldings.count > 0,
+          expectedRun.descriptor.sections.map(\.id).contains("pulse"),
+          missingToolPreventedPublication,
+          !accessibilityChecked || (successAXVisible && failureAXVisible)
+    else {
+        return SmokeReport(
+            name: "scripted-first-fetch",
+            status: SmokeStatus.failed,
+            detail: "scripted first-fetch did not prove complete publication and required-tool blocking",
+            artifacts: [artifactPath(proof)] + axArtifacts
+        )
+    }
+
+    return SmokeReport(
+        name: "scripted-first-fetch",
+        status: SmokeStatus.passed,
+        detail: "complete scripted first fetch wrote isolated state and produced the pulse descriptor; missing required tool wrote no snapshot and published no pulse",
+        artifacts: [artifactPath(proof)] + axArtifacts
     )
 }
 
@@ -867,6 +1096,19 @@ private struct ScriptedPDTConnectorProof: Codable {
     var rawPortfolioPayloadsRedacted: Bool
 }
 
+private struct ScriptedFirstFetchProof: Codable {
+    var snapshotPath: String
+    var snapshotWritten: Bool
+    var snapshotAsOf: String
+    var openHoldingCount: Int
+    var expectedRenderedSectionIDs: [String]
+    var missingRequiredToolBlockedPublication: Bool
+    var accessibilityChecked: Bool
+    var successPulseVisibleThroughAccessibility: Bool
+    var failureVisibleThroughAccessibility: Bool
+    var rawPortfolioPayloadsRedacted: Bool
+}
+
 private struct ScriptedPDTConnectorScenarioResult: Codable {
     var name: String
     var passed: Bool
@@ -1117,6 +1359,59 @@ private func artifactPath(_ url: URL) -> String {
 private func modificationDate(of url: URL) -> Date? {
     let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
     return attributes?[.modificationDate] as? Date
+}
+
+private func waitForFile(_ url: URL, timeout: TimeInterval) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    repeat {
+        if FileManager.default.fileExists(atPath: url.path) {
+            return true
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+    } while Date() < deadline
+    return FileManager.default.fileExists(atPath: url.path)
+}
+
+private func writeFirstFetchAppScript(
+    configuration: ScriptedPDTMCPConnectorConfiguration,
+    appSupportDirectory: URL
+) throws {
+    let directory = appSupportDirectory.appending(path: "pdtbar")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try Data(#"{"result":"ready"}"#.utf8).write(
+        to: directory.appending(path: "claude-readiness.json"),
+        options: .atomic
+    )
+    try stableJSONData(configuration).write(
+        to: directory.appending(path: "scripted-pdt-mcp.json"),
+        options: .atomic
+    )
+}
+
+private func launchFirstFetchApp(
+    _ app: URL,
+    appSupportDirectory: URL,
+    fixtureSnapshotDirectory: URL
+) throws -> Process {
+    let process = Process()
+    process.executableURL = app
+    process.arguments = []
+    var environment = ProcessInfo.processInfo.environment
+    environment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
+    process.environment = environment.merging([
+        "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
+        "PDTBAR_FIXTURE": defaultFixture.path,
+        "PDTBAR_SNAPSHOT_DIR": fixtureSnapshotDirectory.path,
+    ]) { _, new in new }
+    try process.run()
+    return process
+}
+
+private func terminate(_ process: Process) {
+    if process.isRunning {
+        process.terminate()
+    }
+    process.waitUntilExit()
 }
 
 private func fixtureStatusTitle(for fixture: URL) throws -> String {

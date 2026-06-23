@@ -6,6 +6,7 @@ Normal deterministic gate:
 swift build
 swift run pdtbar-checks
 swift run pdtbar-smoke scripted-pdt-connector
+swift run pdtbar-smoke scripted-first-fetch
 # Optional once Tests/ exists; currently exits with "no tests found".
 swift test
 ```
@@ -22,6 +23,22 @@ required v1 PDT read tools are available, verifies only those tools are called,
 and proves each required read tool is called exactly once for the coalesced
 fetch. The proof artifact reports selectors/counts/scenario status only; no raw
 portfolio payloads, values, account identifiers, or live data are written.
+
+Scripted first-fetch e2e:
+
+```bash
+swift build --product pdtbar
+swift run pdtbar-smoke scripted-first-fetch
+```
+
+This uses isolated app-support directories and no live Claude credentials. It
+seeds a scripted Claude-ready state plus scripted PDT MCP responses, launches the
+no-argument app path, and verifies the first complete fetch writes
+`latest-portfolio-snapshot.json` under isolated app state before the pulse
+descriptor is considered publishable. It also launches a required-tool-missing
+scenario and verifies no first snapshot or pulse is published. Proof artifacts
+contain paths, selectors, status text, counts, and booleans only; no raw live
+portfolio payloads, account identifiers, or secrets are written.
 
 Read-only live PDT pulse smoke:
 
@@ -64,10 +81,11 @@ Accessibility permission, it also opens the menu and verifies `Not connected`,
 clean `skipped` with the exact missing permission caveat after proving launch
 liveness and fixture isolation.
 
-The ready launch smoke uses the same no-argument app path with an isolated
-scripted `claude-readiness.json` result. It verifies the existing Claude/PDT-ready
-path skips the logged-out menu, renders `Fetching portfolio`, avoids fixture
-state, and writes only selector/status proof under `.build/pdtbar-smoke-artifacts/`.
+The ready launch smoke uses the same no-argument app path with isolated scripted
+Claude/PDT readiness and scripted PDT MCP responses. It verifies the existing
+Claude/PDT-ready path skips the logged-out menu, completes the first fetch,
+writes isolated first-fetch state, renders the first pulse, avoids fixture state,
+and writes only selector/status proof under `.build/pdtbar-smoke-artifacts/`.
 No live Claude credentials or portfolio payloads are used.
 
 This launches the fixture-mode app, routes it through an isolated snapshot

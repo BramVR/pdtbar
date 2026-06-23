@@ -43,7 +43,37 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             let state = ClaudeLaunchFlow.state(afterReadinessProbe: probe.check())
             installMenuBarItem(ClaudeLaunchFlow.descriptor(for: state))
+            if state == .fetchingPortfolio {
+                startFirstPortfolioFetch()
+            }
         }
+    }
+
+    private func startFirstPortfolioFetch() {
+        Task { @MainActor in
+            do {
+                let configuration = try scriptedPDTConnectorConfiguration()
+                let fetch = try PDTCoalescedFirstPortfolioFetch(
+                    dataSource: PDTMCPConnectorDataSource(connector: configuration.connector()),
+                    snapshotStore: SnapshotStore(directory: firstFetchStateDirectory()),
+                    asOf: configuration.asOf
+                )
+                installMenuBarItem(try fetch.fetch().descriptor)
+            } catch {
+                FileHandle.standardError.write(Data("pdtbar: first fetch failed: \(error)\n".utf8))
+                installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed))
+            }
+        }
+    }
+
+    private func scriptedPDTConnectorConfiguration() throws -> ScriptedPDTMCPConnectorConfiguration {
+        let url = appSupportDirectory().appending(path: "pdtbar/scripted-pdt-mcp.json")
+        let data = try Data(contentsOf: url)
+        return try JSONDecoder().decode(ScriptedPDTMCPConnectorConfiguration.self, from: data)
+    }
+
+    private func firstFetchStateDirectory() -> URL {
+        appSupportDirectory().appending(path: "pdtbar/state")
     }
 
     private func fixtureSnapshotDirectory() throws -> URL {
