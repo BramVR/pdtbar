@@ -922,15 +922,49 @@ public struct SnapshotCommit: Codable, Equatable {
     public var asOf: String
 }
 
+public protocol PortfolioDataSource {
+    func snapshot(asOf: String?) throws -> PortfolioSnapshot
+}
+
+public extension PortfolioDataSource {
+    func snapshot() throws -> PortfolioSnapshot {
+        try snapshot(asOf: nil)
+    }
+}
+
+public protocol PortfolioPriorSnapshotDataSource {
+    func priorSnapshot(asOf: String?) throws -> PortfolioSnapshot
+}
+
+public extension PortfolioPriorSnapshotDataSource {
+    func priorSnapshot() throws -> PortfolioSnapshot {
+        try priorSnapshot(asOf: nil)
+    }
+}
+
 public enum PressureRunner {
-    public static func seedPriorSnapshot(fixture: URL, snapshotDirectory: URL) throws -> SnapshotCommit {
-        let priorSnapshot = try PDTFixtureDataSource.priorSnapshot(from: fixture)
-        return try SnapshotStore(directory: snapshotDirectory).commitCurrentSnapshot(priorSnapshot)
+    public static func seedPriorSnapshot(
+        dataSource: any PortfolioPriorSnapshotDataSource,
+        snapshotStore: SnapshotStore,
+        asOf: String? = nil
+    ) throws -> SnapshotCommit {
+        let priorSnapshot = try dataSource.priorSnapshot(asOf: asOf)
+        return try snapshotStore.commitCurrentSnapshot(priorSnapshot)
     }
 
-    public static func run(fixture: URL, snapshotDirectory: URL) throws -> PressureRunResult {
-        let snapshot = try PDTFixtureDataSource.snapshot(from: fixture)
-        let snapshotStore = SnapshotStore(directory: snapshotDirectory)
+    public static func seedPriorSnapshot(fixture: URL, snapshotDirectory: URL) throws -> SnapshotCommit {
+        try seedPriorSnapshot(
+            dataSource: PDTFixtureDataSource(fixture: fixture),
+            snapshotStore: SnapshotStore(directory: snapshotDirectory)
+        )
+    }
+
+    public static func run(
+        dataSource: any PortfolioDataSource,
+        snapshotStore: SnapshotStore,
+        asOf: String? = nil
+    ) throws -> PressureRunResult {
+        let snapshot = try dataSource.snapshot(asOf: asOf)
         let priorSnapshot: PortfolioSnapshot?
         do {
             priorSnapshot = try snapshotStore.loadPriorSnapshot()
@@ -941,6 +975,13 @@ public enum PressureRunner {
         let commit = try snapshotStore.commitCurrentSnapshot(snapshot)
         let descriptor = MenuDescriptorRenderer.render(model: model)
         return PressureRunResult(model: model, snapshotCommit: commit, descriptor: descriptor)
+    }
+
+    public static func run(fixture: URL, snapshotDirectory: URL) throws -> PressureRunResult {
+        try run(
+            dataSource: PDTFixtureDataSource(fixture: fixture),
+            snapshotStore: SnapshotStore(directory: snapshotDirectory)
+        )
     }
 }
 
@@ -1026,17 +1067,31 @@ public struct PricePoint: Codable, Equatable {
     public var closeAdjusted: String
 }
 
-public enum PDTFixtureDataSource {
-    public static func snapshot(from url: URL) throws -> PortfolioSnapshot {
+public struct PDTFixtureDataSource: PortfolioDataSource, PortfolioPriorSnapshotDataSource {
+    public var fixture: URL
+
+    public init(fixture: URL) {
+        self.fixture = fixture
+    }
+
+    public func snapshot(asOf: String? = nil) throws -> PortfolioSnapshot {
+        try Self.snapshot(from: fixture, asOf: asOf)
+    }
+
+    public func priorSnapshot(asOf: String? = nil) throws -> PortfolioSnapshot {
+        try Self.priorSnapshot(from: fixture, asOf: asOf)
+    }
+
+    public static func snapshot(from url: URL, asOf: String? = nil) throws -> PortfolioSnapshot {
         let payload = try JSONDecoder().decode(PDTFixturePayload.self, from: Data(contentsOf: url))
         return makeSnapshot(
             from: payload,
             holdings: payload.primaryHoldings,
-            asOf: payload.meta.asOf
+            asOf: asOf ?? payload.meta.asOf
         )
     }
 
-    public static func priorSnapshot(from url: URL) throws -> PortfolioSnapshot {
+    public static func priorSnapshot(from url: URL, asOf: String? = nil) throws -> PortfolioSnapshot {
         let payload = try JSONDecoder().decode(PDTFixturePayload.self, from: Data(contentsOf: url))
         guard let prior = payload.getPortfolioPriorSnapshot else {
             throw FixtureError.missingPriorSnapshot
@@ -1044,7 +1099,7 @@ public enum PDTFixtureDataSource {
         return makeSnapshot(
             from: payload,
             holdings: prior.holdings,
-            asOf: prior.query?.date ?? payload.meta.asOf
+            asOf: asOf ?? prior.query?.date ?? payload.meta.asOf
         )
     }
 
