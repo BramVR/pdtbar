@@ -169,14 +169,16 @@ private func livePDTSmoke(arguments: [String]) throws -> SmokeReport {
         rawPortfolioValuesRedacted: true
     )
     try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+    let pulseRows = surface.sections.first { $0.id == "pulse" }?.rows ?? []
     guard result.snapshotCommit.written,
           !surface.status.accessibilityIdentifier.isEmpty,
-          surface.sections.contains(where: { $0.id == "pulse" })
+          !pulseRows.isEmpty,
+          result.model.facetSnapshots.allocation.openHoldingCount > 0
     else {
         return SmokeReport(
             name: "live-pdt",
             status: SmokeStatus.failed,
-            detail: "live PDT read succeeded, but did not reach the pulse descriptor surface",
+            detail: "live PDT read succeeded, but did not produce open holdings and pulse rows",
             artifacts: [artifactPath(proof)]
         )
     }
