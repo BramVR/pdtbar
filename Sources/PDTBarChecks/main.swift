@@ -610,6 +610,179 @@ try check(
     "descriptor should expose allocation drill-down for the item"
 )
 
+let thresholdFixtureDirectory = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-allocation-threshold-fixture")
+defer {
+    try? FileManager.default.removeItem(at: thresholdFixtureDirectory.directory)
+}
+let thresholdFixture = thresholdFixtureDirectory.directory.appending(path: "allocation-threshold.json")
+try Data("""
+{
+  "_meta": { "asOf": "2026-06-22", "portfolioCurrency": "EUR" },
+  "getPortfolioHoldings": {
+    "holdings": [
+      {
+        "symbolName": "Threshold Holding",
+        "symbolQuoteId": 9201,
+        "currentPriceDate": "2026-06-22T23:59:59+00:00",
+        "currentPriceLocal": { "value": "100.00", "currency": "EUR" },
+        "currentWorth": { "value": "2000.00", "currency": "EUR" },
+        "currentWorthLocal": { "value": "2000.00", "currency": "EUR" },
+        "portfolioWeight": 0.20,
+        "closedAt": null
+      },
+      {
+        "symbolName": "Quiet Holding",
+        "symbolQuoteId": 9202,
+        "currentPriceDate": "2026-06-22T23:59:59+00:00",
+        "currentPriceLocal": { "value": "80.00", "currency": "EUR" },
+        "currentWorth": { "value": "1800.00", "currency": "EUR" },
+        "currentWorthLocal": { "value": "1800.00", "currency": "EUR" },
+        "portfolioWeight": 0.18,
+        "closedAt": null
+      }
+    ]
+  }
+}
+""".utf8).write(to: thresholdFixture)
+let thresholdModel = PressureEngine.buildModel(from: try PDTFixtureDataSource.snapshot(from: thresholdFixture))
+try check(!thresholdModel.allQuiet, "holding at the 20% allocation line should create pressure")
+try check(
+    thresholdModel.rankedAttentionItems.map(\.id) == ["allocation.concentration.9201"],
+    "holding at or above 20% should emit one concentration item"
+)
+try check(
+    thresholdModel.rankedAttentionItems.first?.currentWeight == 0.20,
+    "threshold concentration item should expose its allocation ranking input"
+)
+try check(
+    thresholdModel.rankedAttentionItems.first?.detail
+        == "Threshold Holding is 20.0% of the portfolio, at the 20.0% concentration line.",
+    "threshold concentration copy should describe equality accurately"
+)
+
+let rankingFixtureDirectory = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-allocation-ranking-fixture")
+defer {
+    try? FileManager.default.removeItem(at: rankingFixtureDirectory.directory)
+}
+let rankingFixture = rankingFixtureDirectory.directory.appending(path: "allocation-ranking.json")
+try Data("""
+{
+  "_meta": { "asOf": "2026-06-22", "portfolioCurrency": "EUR" },
+  "getPortfolioHoldings": {
+    "holdings": [
+      {
+        "symbolName": "Alpha Equal Concentration",
+        "symbolQuoteId": 9301,
+        "currentPriceDate": "2026-06-22T23:59:59+00:00",
+        "currentPriceLocal": { "value": "100.00", "currency": "EUR" },
+        "currentWorth": { "value": "2500.00", "currency": "EUR" },
+        "currentWorthLocal": { "value": "2500.00", "currency": "EUR" },
+        "portfolioWeight": 0.25,
+        "closedAt": null
+      },
+      {
+        "symbolName": "Beta Equal Concentration",
+        "symbolQuoteId": 9302,
+        "currentPriceDate": "2026-06-22T23:59:59+00:00",
+        "currentPriceLocal": { "value": "100.00", "currency": "EUR" },
+        "currentWorth": { "value": "2500.00", "currency": "EUR" },
+        "currentWorthLocal": { "value": "2500.00", "currency": "EUR" },
+        "portfolioWeight": 0.25,
+        "closedAt": null
+      },
+      {
+        "symbolName": "Zeta Slightly Heavier",
+        "symbolQuoteId": 9303,
+        "currentPriceDate": "2026-06-22T23:59:59+00:00",
+        "currentPriceLocal": { "value": "100.00", "currency": "EUR" },
+        "currentWorth": { "value": "2510.00", "currency": "EUR" },
+        "currentWorthLocal": { "value": "2510.00", "currency": "EUR" },
+        "portfolioWeight": 0.251,
+        "closedAt": null
+      },
+      {
+        "symbolName": "Omega Heaviest",
+        "symbolQuoteId": 9304,
+        "currentPriceDate": "2026-06-22T23:59:59+00:00",
+        "currentPriceLocal": { "value": "100.00", "currency": "EUR" },
+        "currentWorth": { "value": "3100.00", "currency": "EUR" },
+        "currentWorthLocal": { "value": "3100.00", "currency": "EUR" },
+        "portfolioWeight": 0.31,
+        "closedAt": null
+      }
+    ]
+  }
+}
+""".utf8).write(to: rankingFixture)
+let rankingModel = PressureEngine.buildModel(from: try PDTFixtureDataSource.snapshot(from: rankingFixture))
+try check(
+    rankingModel.rankedAttentionItems.map(\.holdingIdentity?.name) == [
+        "Omega Heaviest",
+        "Zeta Slightly Heavier",
+        "Alpha Equal Concentration",
+        "Beta Equal Concentration",
+    ],
+    "multiple concentration items should rank by raw weight before stable name fallback"
+)
+try check(
+    rankingModel.facetSnapshots.allocation.topHoldings.map(\.name) == [
+        "Omega Heaviest",
+        "Zeta Slightly Heavier",
+        "Alpha Equal Concentration",
+        "Beta Equal Concentration",
+    ],
+    "allocation snapshot should use the same stable ranking inputs"
+)
+
+let closedConcentrationFixtureDirectory = try SnapshotStore.temporaryTestStore(
+    prefix: "pdtbar-allocation-closed-fixture"
+)
+defer {
+    try? FileManager.default.removeItem(at: closedConcentrationFixtureDirectory.directory)
+}
+let closedConcentrationFixture = closedConcentrationFixtureDirectory.directory
+    .appending(path: "allocation-closed.json")
+try Data("""
+{
+  "_meta": { "asOf": "2026-06-22", "portfolioCurrency": "EUR" },
+  "getPortfolioHoldings": {
+    "holdings": [
+      {
+        "symbolName": "Closed Concentration",
+        "symbolQuoteId": 9401,
+        "currentPriceDate": "2026-06-22T23:59:59+00:00",
+        "currentPriceLocal": { "value": "100.00", "currency": "EUR" },
+        "currentWorth": { "value": "8000.00", "currency": "EUR" },
+        "currentWorthLocal": { "value": "8000.00", "currency": "EUR" },
+        "portfolioWeight": 0.80,
+        "closedAt": "2026-06-20T10:00:00+00:00"
+      },
+      {
+        "symbolName": "Open Quiet Holding",
+        "symbolQuoteId": 9402,
+        "currentPriceDate": "2026-06-22T23:59:59+00:00",
+        "currentPriceLocal": { "value": "100.00", "currency": "EUR" },
+        "currentWorth": { "value": "1900.00", "currency": "EUR" },
+        "currentWorthLocal": { "value": "1900.00", "currency": "EUR" },
+        "portfolioWeight": 0.19,
+        "closedAt": null
+      }
+    ]
+  }
+}
+""".utf8).write(to: closedConcentrationFixture)
+let closedConcentrationModel = PressureEngine.buildModel(
+    from: try PDTFixtureDataSource.snapshot(from: closedConcentrationFixture)
+)
+try check(
+    closedConcentrationModel.allQuiet,
+    "closed high-weight holdings should not create allocation pressure"
+)
+try check(
+    closedConcentrationModel.facetSnapshots.allocation.topHoldings.map(\.name) == ["Open Quiet Holding"],
+    "allocation snapshot should exclude closed holdings"
+)
+
 for fixture in allFixtures {
     let snapshot = try PDTFixtureDataSource.snapshot(from: fixture)
     let model = PressureEngine.buildModel(from: snapshot)
