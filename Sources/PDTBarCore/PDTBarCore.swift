@@ -482,11 +482,34 @@ public struct MenuRow: Codable, Equatable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decodeIfPresent(String.self, forKey: .id) ?? ""
-        role = try container.decodeIfPresent(MenuRowRole.self, forKey: .role) ?? .row
+        role = try Self.role(
+            rawValue: container.decodeIfPresent(String.self, forKey: .role),
+            id: id
+        )
         accessibilityIdentifier = try container.decodeIfPresent(String.self, forKey: .accessibilityIdentifier)
             ?? Self.defaultAccessibilityIdentifier(for: id)
         title = try container.decode(String.self, forKey: .title)
         detail = try container.decodeIfPresent(String.self, forKey: .detail)
+    }
+
+    private static func role(rawValue: String?, id: String) -> MenuRowRole {
+        guard let rawValue else {
+            return .row
+        }
+        if rawValue == "glance", id == "quiet" {
+            return .pulseQuiet
+        }
+        if let role = MenuRowRole(rawValue: rawValue) {
+            return role
+        }
+        switch rawValue {
+        case "glance":
+            return .pulseAttention
+        case "expansion":
+            return .pulseAttentionExpansion
+        default:
+            return .row
+        }
     }
 
     private static func defaultAccessibilityIdentifier(for id: String) -> String {

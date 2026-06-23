@@ -145,6 +145,17 @@ let legacyMenuRow = try JSONDecoder().decode(
 )
 try check(legacyMenuRow.id == "", "legacy menu row JSON should default missing id")
 try check(legacyMenuRow.role == .row, "legacy menu row JSON should default missing role")
+let legacyQuietMenuRow = try JSONDecoder().decode(
+    MenuRow.self,
+    from: Data("""
+    {
+      "id": "quiet",
+      "role": "glance",
+      "title": "All quiet"
+    }
+    """.utf8)
+)
+try check(legacyQuietMenuRow.role == .pulseQuiet, "legacy quiet glance row should decode as typed quiet role")
 
 var incompleteAllocationModel = decoded
 let incompleteAllocationAttention = AttentionItem(
