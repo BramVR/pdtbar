@@ -126,6 +126,58 @@ try check(
     "quiet freshness rows should expose stable ids"
 )
 
+let zeroWorthFixtureDirectory = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-zero-worth-fixture")
+defer {
+    try? FileManager.default.removeItem(at: zeroWorthFixtureDirectory.directory)
+}
+let zeroWorthFixture = zeroWorthFixtureDirectory.directory.appending(path: "zero-worth-open-holding.json")
+try Data("""
+{
+  "_meta": { "asOf": "2026-06-22", "portfolioCurrency": "EUR" },
+  "getPortfolioHoldings": {
+    "holdings": [
+      {
+        "symbolName": "Live Holding",
+        "symbolQuoteId": 9101,
+        "currentPriceDate": "2026-06-21T23:59:59+00:00",
+        "currentPriceLocal": { "value": "155.74", "currency": "EUR" },
+        "currentWorth": { "value": "1557.42", "currency": "EUR" },
+        "currentWorthLocal": { "value": "1557.42", "currency": "EUR" },
+        "portfolioWeight": 0.1557,
+        "closedAt": null
+      },
+      {
+        "symbolName": "Zero Worth Open Holding",
+        "symbolQuoteId": 9102,
+        "currentPriceDate": "2026-06-20T23:59:59+00:00",
+        "currentPriceLocal": { "value": "10.00", "currency": "EUR" },
+        "currentWorth": { "value": "0.00", "currency": "EUR" },
+        "currentWorthLocal": { "value": "0.00", "currency": "EUR" },
+        "portfolioWeight": 0.0443,
+        "closedAt": null
+      }
+    ]
+  }
+}
+""".utf8).write(to: zeroWorthFixture)
+let zeroWorthSnapshot = try PDTFixtureDataSource.snapshot(from: zeroWorthFixture)
+try check(
+    zeroWorthSnapshot.openHoldings.map(\.name) == ["Live Holding"],
+    "zero currentWorth holdings should be excluded from live portfolio facts"
+)
+try check(
+    zeroWorthSnapshot.openHoldings.first?.worth == Money(value: "1557.42", currency: "EUR"),
+    "PDT Money objects should parse into currency-aware facts"
+)
+try check(
+    zeroWorthSnapshot.openHoldings.first?.weight == 0.1557,
+    "portfolioWeight should remain a fraction"
+)
+try check(
+    zeroWorthSnapshot.openHoldings.first?.priceAsOf == "2026-06-21",
+    "currentPriceDate should expose EOD freshness day"
+)
+
 var nonQuietModel = decoded
 let attention = AttentionItem(
     id: "allocation.nova",

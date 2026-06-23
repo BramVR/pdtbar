@@ -1204,7 +1204,7 @@ public struct PDTFixtureDataSource: PortfolioDataSource, PortfolioPriorSnapshotD
         asOf: String
     ) -> PortfolioSnapshot {
         let holdings = rawHoldings
-            .filter { $0.closedAt == nil }
+            .filter { $0.closedAt == nil && $0.hasLiveWorth }
             .map {
                 NormalizedHolding(
                     name: $0.symbolName,
@@ -1358,9 +1358,25 @@ private struct FixtureHolding: Decodable {
     var symbolQuoteId: Int
     var currentPriceDate: String
     var currentPriceLocal: Money
+    var currentWorth: Money?
     var currentWorthLocal: Money
     var portfolioWeight: Double
     var closedAt: String?
+}
+
+private extension FixtureHolding {
+    var hasLiveWorth: Bool {
+        !currentWorthLocal.isZero && !(currentWorth?.isZero ?? false)
+    }
+}
+
+private extension Money {
+    var isZero: Bool {
+        guard let amount = Decimal(string: value, locale: Locale(identifier: "en_US_POSIX")) else {
+            return false
+        }
+        return amount == 0
+    }
 }
 
 private struct DistributionsEnvelope: Decodable {
