@@ -870,8 +870,13 @@ private struct PDTLiveMcporterClient: PDTLiveToolClient {
             .map { "\($0.key)=\($0.value)" }
         return try run(
             URL(fileURLWithPath: "/usr/bin/env"),
-            arguments: ["npx", "-y", "mcporter", "call", selector] + toolArguments,
-            timeout: timeout
+            arguments: [
+                "npx", "-y", "mcporter", "call",
+                "--no-oauth",
+                "--timeout", String(Int(timeout * 1000)),
+                selector,
+            ] + toolArguments,
+            timeout: timeout + 1.0
         ).stdout
     }
 }
