@@ -1626,9 +1626,6 @@ private func extractedMCPPayloadData(from object: Any) -> Data? {
                       let text = item["text"] as? String,
                       let textData = text.data(using: .utf8)
                 else { continue }
-                if let nested = try? extractedMCPPayloadData(from: textData) {
-                    return nested
-                }
                 return textData
             }
         }

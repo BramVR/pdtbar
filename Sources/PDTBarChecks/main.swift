@@ -265,7 +265,7 @@ defer {
 }
 let scriptedLiveRun = try PressureRunner.run(
     dataSource: PDTLiveDataSource(toolClient: ScriptedPDTLiveToolClient(responses: [
-        "pdt-get-portfolio-holdings": Data("""
+        "pdt-get-portfolio-holdings": try mcpContent("""
         {
           "holdings": [
             {
@@ -288,8 +288,8 @@ let scriptedLiveRun = try PressureRunner.run(
             }
           ]
         }
-        """.utf8),
-        "pdt-get-portfolio-distributions": Data("""
+        """),
+        "pdt-get-portfolio-distributions": try mcpResult("""
         {
           "sectors": [
             { "categoryName": "Technology", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
@@ -298,32 +298,32 @@ let scriptedLiveRun = try PressureRunner.run(
             { "categoryName": "Stock", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
           ]
         }
-        """.utf8),
-        "pdt-list-calendar-events": Data("""
+        """),
+        "pdt-list-calendar-events": try mcpContent("""
         {
           "data": [
             { "date": "2026-06-24", "type": "ex-dividend", "isEstimated": false, "symbolId": 5101, "symbolName": "Live Adapter Co" }
           ]
         }
-        """.utf8),
-        "pdt-list-dividends": Data("""
+        """),
+        "pdt-list-dividends": try mcpResult("""
         {
           "data": [
             { "date": "2026-06-20T08:13:00+00:00", "amount": { "value": "8.00", "currency": "EUR" }, "symbolQuoteId": 9101 }
           ]
         }
-        """.utf8),
-        "pdt-get-symbol-quote?id=9101": Data("""
+        """),
+        "pdt-get-symbol-quote?id=9101": try mcpContent("""
         { "id": 9101, "symbolId": 5101 }
-        """.utf8),
-        "pdt-list-symbol-prices?symbolQuoteId=9101": Data("""
+        """),
+        "pdt-list-symbol-prices?symbolQuoteId=9101": try mcpContent("""
         {
           "data": [
             { "date": "2026-06-20", "closeAdjusted": "19.00", "symbolQuoteId": 9101 },
             { "date": "2026-06-22", "closeAdjusted": "20.00", "symbolQuoteId": 9101 }
           ]
         }
-        """.utf8),
+        """),
     ])),
     snapshotStore: scriptedLiveStore,
     asOf: "2026-06-23"
@@ -717,4 +717,26 @@ private struct ScriptedPDTLiveToolClient: PDTLiveToolClient {
         }
         return response
     }
+}
+
+private func mcpContent(_ json: String) throws -> Data {
+    try JSONSerialization.data(
+        withJSONObject: [
+            "content": [
+                [
+                    "type": "text",
+                    "text": json,
+                ],
+            ],
+        ],
+        options: [.sortedKeys]
+    )
+}
+
+private func mcpResult(_ json: String) throws -> Data {
+    let payload = try JSONSerialization.jsonObject(with: Data(json.utf8))
+    return try JSONSerialization.data(
+        withJSONObject: ["result": payload],
+        options: [.sortedKeys]
+    )
 }
