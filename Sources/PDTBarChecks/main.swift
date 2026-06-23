@@ -299,18 +299,18 @@ let scriptedLiveRun = try PressureRunner.run(
           ]
         }
         """),
-        "pdt-list-calendar-events?date_from=2026-06-23&date_to=2026-07-23": try mcpContent("""
+        "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28": try mcpContent("""
         {
           "data": [
-            { "date": "2026-06-23", "type": "no-events-today", "isEstimated": false, "symbolId": null, "symbolName": null },
-            { "date": "2026-06-24", "type": "ex-dividend", "isEstimated": false, "symbolId": 5101, "symbolName": "Live Adapter Co" }
+            { "date": "2026-03-29", "type": "no-events-today", "isEstimated": false, "symbolId": null, "symbolName": null },
+            { "date": "2026-03-30", "type": "ex-dividend", "isEstimated": false, "symbolId": 5101, "symbolName": "Live Adapter Co" }
           ]
         }
         """),
-        "pdt-list-dividends?date_from=2025-06-18&date_to=2026-07-23&page=1&per_page=250": try mcpResult("""
+        "pdt-list-dividends?date_from=2025-03-24&date_to=2026-04-28&page=1&per_page=250": try mcpResult("""
         {
           "data": [
-            { "date": "2026-06-20T08:13:00+00:00", "amount": { "value": "8.00", "currency": "EUR" }, "symbolQuoteId": 9101 }
+            { "date": "2026-03-28T08:13:00+00:00", "amount": { "value": "8.00", "currency": "EUR" }, "symbolQuoteId": 9101 }
           ],
           "meta": { "last_page": 1 }
         }
@@ -318,17 +318,17 @@ let scriptedLiveRun = try PressureRunner.run(
         "pdt-get-symbol-quote?id=9101": try mcpContent("""
         { "id": 9101, "symbolId": 5101 }
         """),
-        "pdt-list-symbol-prices?date_from=2026-06-16&date_to=2026-06-23&symbol_quote_id=9101": try mcpContent("""
+        "pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9101": try mcpContent("""
         {
           "data": [
-            { "date": "2026-06-20", "closeAdjusted": "19.00", "symbolQuoteId": 9101 },
-            { "date": "2026-06-22", "closeAdjusted": "20.00", "symbolQuoteId": 9101 }
+            { "date": "2026-03-27", "closeAdjusted": "19.00", "symbolQuoteId": 9101 },
+            { "date": "2026-03-29", "closeAdjusted": "20.00", "symbolQuoteId": 9101 }
           ]
         }
         """),
     ])),
     snapshotStore: scriptedLiveStore,
-    asOf: "2026-06-23"
+    asOf: "2026-03-29"
 )
 try check(scriptedLiveRun.snapshotCommit.written, "live data source run should write only isolated snapshot state")
 try check(
@@ -367,6 +367,16 @@ try check(
     FileManager.default.fileExists(atPath: scriptedLiveRun.snapshotCommit.path),
     "live data source should commit a snapshot inside the passed store"
 )
+do {
+    _ = try PDTLiveDataSource(toolClient: ScriptedPDTLiveToolClient(responses: [
+        "pdt-get-portfolio-holdings": try mcpContent("""
+        authentication required; please login with cached credentials before calling PDT
+        """),
+    ])).snapshot(asOf: "2026-03-29")
+    throw CheckFailure("exit-zero live PDT auth payload should not decode as a snapshot")
+} catch let error as PDTLiveDataSourceError {
+    try check(error.shouldSkipLiveSmoke, "exit-zero live PDT auth payload should be classified as a skip")
+}
 let quietRunWithPrior = try PressureRunner.run(
     fixture: fixture,
     snapshotDirectory: quietSnapshotStore.directory

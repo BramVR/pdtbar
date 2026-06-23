@@ -143,6 +143,21 @@ private func livePDTSmoke(arguments: [String]) throws -> SmokeReport {
             detail: "configured PDT server timed out during read-only smoke; local access may be unavailable",
             artifacts: []
         )
+    } catch let error as PDTLiveDataSourceError {
+        guard !error.shouldSkipLiveSmoke else {
+            return SmokeReport(
+                name: "live-pdt",
+                status: SmokeStatus.skipped,
+                detail: "configured PDT server returned an auth/offline response; cached credentials or local access may be missing",
+                artifacts: []
+            )
+        }
+        return SmokeReport(
+            name: "live-pdt",
+            status: SmokeStatus.failed,
+            detail: "live PDT response was not decodable as the expected read-only tool shape",
+            artifacts: []
+        )
     }
 
     let surface = MenuBarSurfaceRenderer.render(descriptor: result.descriptor)

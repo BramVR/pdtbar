@@ -1043,11 +1043,23 @@ public protocol PDTLiveToolClient {
 
 public enum PDTLiveDataSourceError: Error, CustomStringConvertible {
     case malformedToolResult(String)
+    case unavailableToolResult(String)
+
+    public var shouldSkipLiveSmoke: Bool {
+        switch self {
+        case .unavailableToolResult:
+            true
+        case .malformedToolResult:
+            false
+        }
+    }
 
     public var description: String {
         switch self {
         case .malformedToolResult(let tool):
             "live PDT tool \(tool) did not return the expected read-only JSON shape"
+        case .unavailableToolResult(let tool):
+            "live PDT tool \(tool) reported missing auth or unavailable local access"
         }
     }
 }
@@ -1650,15 +1662,45 @@ private struct FixturePrice: Decodable {
 }
 
 private func decodeLiveTool<T: Decodable>(_ tool: String, data: Data) throws -> T {
+    var diagnosticPayloads = [String(data: data, encoding: .utf8)].compactMap { $0 }
     if let payloadData = try? extractedMCPPayloadData(from: data),
        let decoded = try? JSONDecoder().decode(T.self, from: payloadData)
     {
         return decoded
+    } else if let payloadData = try? extractedMCPPayloadData(from: data),
+              let diagnostic = String(data: payloadData, encoding: .utf8)
+    {
+        diagnosticPayloads.append(diagnostic)
     }
     if let decoded = try? JSONDecoder().decode(T.self, from: data) {
         return decoded
     }
+    if diagnosticPayloads.contains(where: liveToolPayloadLooksUnavailable) {
+        throw PDTLiveDataSourceError.unavailableToolResult(tool)
+    }
     throw PDTLiveDataSourceError.malformedToolResult(tool)
+}
+
+private func liveToolPayloadLooksUnavailable(_ value: String) -> Bool {
+    let lower = value.lowercased()
+    return [
+        "not authenticated",
+        "authentication required",
+        "oauth",
+        "missing credential",
+        "credentials not found",
+        "login required",
+        "please login",
+        "unauthorized",
+        "forbidden",
+        "offline",
+        "connection refused",
+        "failed to connect",
+        "could not connect",
+        "econnrefused",
+        "server not found",
+        "server unavailable",
+    ].contains { lower.contains($0) }
 }
 
 private func extractedMCPPayloadData(from data: Data) throws -> Data? {
@@ -1716,8 +1758,10 @@ private func currentDayString() -> String {
 
 private func dayString(_ day: String, addingDays days: Int) -> String {
     let formatter = dayFormatter()
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
     guard let date = formatter.date(from: day),
-          let shifted = Calendar(identifier: .gregorian).date(byAdding: .day, value: days, to: date)
+          let shifted = calendar.date(byAdding: .day, value: days, to: date)
     else {
         return day
     }
