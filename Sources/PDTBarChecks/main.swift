@@ -299,14 +299,14 @@ let scriptedLiveRun = try PressureRunner.run(
           ]
         }
         """),
-        "pdt-list-calendar-events": try mcpContent("""
+        "pdt-list-calendar-events?date_from=2026-06-23&date_to=2026-07-23": try mcpContent("""
         {
           "data": [
             { "date": "2026-06-24", "type": "ex-dividend", "isEstimated": false, "symbolId": 5101, "symbolName": "Live Adapter Co" }
           ]
         }
         """),
-        "pdt-list-dividends": try mcpResult("""
+        "pdt-list-dividends?date_from=2025-06-18&date_to=2026-07-23": try mcpResult("""
         {
           "data": [
             { "date": "2026-06-20T08:13:00+00:00", "amount": { "value": "8.00", "currency": "EUR" }, "symbolQuoteId": 9101 }

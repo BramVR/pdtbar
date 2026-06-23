@@ -147,7 +147,6 @@ private func livePDTSmoke(arguments: [String]) throws -> SmokeReport {
 
     let surface = MenuBarSurfaceRenderer.render(descriptor: result.descriptor)
     let proofPayload = LivePDTPulseProof(
-        server: server,
         snapshotWritten: result.snapshotCommit.written,
         statusAccessibilityIdentifier: surface.status.accessibilityIdentifier,
         sectionIDs: surface.sections.map(\.id),
@@ -523,7 +522,6 @@ private struct AccessibilityEvidence: Codable {
 }
 
 private struct LivePDTPulseProof: Codable {
-    var server: String
     var snapshotWritten: Bool
     var statusAccessibilityIdentifier: String
     var sectionIDs: [String]

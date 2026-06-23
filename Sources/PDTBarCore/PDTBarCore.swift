@@ -1060,6 +1060,15 @@ public struct PDTLiveDataSource: PortfolioDataSource {
     }
 
     public func snapshot(asOf: String? = nil) throws -> PortfolioSnapshot {
+        let snapshotAsOf = asOf ?? currentDayString()
+        let incomeDateRange = [
+            "date_from": snapshotAsOf,
+            "date_to": dayString(snapshotAsOf, addingDays: 30),
+        ]
+        let dividendDateRange = [
+            "date_from": dayString(snapshotAsOf, addingDays: -370),
+            "date_to": incomeDateRange["date_to"] ?? snapshotAsOf,
+        ]
         let holdingsEnvelope: LiveHoldingsEnvelope = try decodeLiveTool(
             "pdt-get-portfolio-holdings",
             data: toolClient.callReadTool("pdt-get-portfolio-holdings", arguments: [:])
@@ -1070,11 +1079,11 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         )
         let calendarEnvelope: LiveCalendarEventsEnvelope = try decodeLiveTool(
             "pdt-list-calendar-events",
-            data: toolClient.callReadTool("pdt-list-calendar-events", arguments: [:])
+            data: toolClient.callReadTool("pdt-list-calendar-events", arguments: incomeDateRange)
         )
         let dividendsEnvelope: LiveDividendsEnvelope = try decodeLiveTool(
             "pdt-list-dividends",
-            data: toolClient.callReadTool("pdt-list-dividends", arguments: [:])
+            data: toolClient.callReadTool("pdt-list-dividends", arguments: dividendDateRange)
         )
 
         let openHoldings = holdingsEnvelope.holdings
@@ -1098,7 +1107,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         let priceSeries = try livePriceSeries(for: openHoldings)
 
         return PortfolioSnapshot(
-            asOf: asOf ?? currentDayString(),
+            asOf: snapshotAsOf,
             totalValue: sumWorth(openHoldings, currency: currency),
             openHoldings: openHoldings,
             sectors: (distributionsEnvelope.sectors ?? []).map(\.summary),
@@ -1663,12 +1672,30 @@ private func latestLiveDividendAmount(
 }
 
 private func currentDayString() -> String {
+    dayString(from: Date())
+}
+
+private func dayString(_ day: String, addingDays days: Int) -> String {
+    let formatter = dayFormatter()
+    guard let date = formatter.date(from: day),
+          let shifted = Calendar(identifier: .gregorian).date(byAdding: .day, value: days, to: date)
+    else {
+        return day
+    }
+    return dayString(from: shifted)
+}
+
+private func dayString(from date: Date) -> String {
+    dayFormatter().string(from: date)
+}
+
+private func dayFormatter() -> DateFormatter {
     let formatter = DateFormatter()
     formatter.calendar = Calendar(identifier: .gregorian)
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.timeZone = TimeZone(secondsFromGMT: 0)
     formatter.dateFormat = "yyyy-MM-dd"
-    return formatter.string(from: Date())
+    return formatter
 }
 
 private func display(_ money: Money) -> String {
