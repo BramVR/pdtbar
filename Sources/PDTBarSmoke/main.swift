@@ -627,13 +627,21 @@ private func format(point: CGPoint) -> String {
 }
 
 private func accessibilityChildren(of element: AXUIElement) -> [AXUIElement] {
-    var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, "AXChildren" as CFString, &value) == .success,
-          let children = value as? [AXUIElement]
-    else {
-        return []
+    var elements: [AXUIElement] = []
+    for attribute in ["AXChildren", "AXExtrasMenuBar"] {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+              let axValue = value
+        else {
+            continue
+        }
+        if let children = axValue as? [AXUIElement] {
+            elements.append(contentsOf: children)
+        } else if CFGetTypeID(axValue) == AXUIElementGetTypeID() {
+            elements.append(axValue as! AXUIElement)
+        }
     }
-    return children
+    return elements
 }
 
 private func writeAccessibilityEvidence(
