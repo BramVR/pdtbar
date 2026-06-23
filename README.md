@@ -6,7 +6,7 @@ It lives in the **macOS menu bar** and surfaces only the few things across your 
 
 ## Status: Claude setup + fixture path
 
-This repo now has the first Swift launch paths: no-argument app launch probes Claude/PDT readiness before setup UI, scripted-ready launches move directly to first fetch, and explicit fixture mode loads sanitized PDT fixtures into the engine, descriptor, and native macOS menu-bar app. Pressure rules are still intentionally quiet-first.
+This repo now has the first Swift launch paths: no-argument app launch probes Claude/PDT readiness before setup UI, scripted-ready launches complete the first PDT MCP fetch before publishing a pulse, and explicit fixture mode loads sanitized PDT fixtures into the engine, descriptor, and native macOS menu-bar app. Pressure rules are still intentionally quiet-first.
 
 ## Developer commands
 
@@ -15,6 +15,7 @@ swift run pdtbar-dev model --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift run pdtbar-checks
 swift run pdtbar-smoke scripted-pdt-connector
+swift run pdtbar-smoke scripted-first-fetch
 swift run pdtbar-smoke live-pdt
 swift run pdtbar-smoke logged-out-launch
 swift run pdtbar-smoke ready-launch

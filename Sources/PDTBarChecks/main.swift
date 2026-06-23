@@ -121,6 +121,11 @@ try check(
     probeFailedDescriptor.sections.flatMap(\.rows).map(\.title).contains("Could not check Claude"),
     "probe failure state should explain that readiness could not be checked"
 )
+let fetchFailedDescriptor = ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed)
+try check(
+    fetchFailedDescriptor.sections.flatMap(\.rows).map(\.title) == ["Could not fetch portfolio"],
+    "first-fetch failure should not publish a portfolio pulse"
+)
 try check(
     setupDescriptor.sections.map(\.id) == ["claudeSetup"],
     "logged-out real launch should render a Claude-only setup section"
@@ -550,16 +555,55 @@ try check(
     "coalesced scripted connector fetch should call every required v1 read tool exactly once"
 )
 try check(scriptedConnector.availabilityChecks == 1, "scripted connector fetch should check required tool availability once")
+let scriptedConnectorConfiguration = ScriptedPDTMCPConnectorConfiguration(
+    responses: scriptedConnectorResponses.mapValues { String(decoding: $0, as: UTF8.self) },
+    asOf: "2026-03-29"
+)
+let configuredConnector = try scriptedConnectorConfiguration.connector()
+try check(
+    configuredConnector.availableTools == Set(PDTReadTools.requiredV1),
+    "scripted connector config should default to the complete required read-tool list"
+)
+let configuredFetchStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-configured-first-fetch-check")
+defer {
+    try? FileManager.default.removeItem(at: configuredFetchStore.directory)
+}
+let configuredFirstFetch = try PDTCoalescedFirstPortfolioFetch(
+    dataSource: PDTMCPConnectorDataSource(connector: configuredConnector),
+    snapshotStore: configuredFetchStore,
+    asOf: scriptedConnectorConfiguration.asOf
+).fetch()
+try check(
+    configuredFirstFetch.snapshotCommit.written
+        && FileManager.default.fileExists(atPath: configuredFirstFetch.snapshotCommit.path),
+    "complete configured first fetch should write latest-portfolio-snapshot.json before publishing"
+)
+try check(
+    configuredFirstFetch.descriptor.sections.map(\.id).contains("pulse"),
+    "complete configured first fetch should publish a pulse descriptor from normalized data"
+)
 let missingToolConnector = ScriptedPDTMCPConnector(
     availableTools: Set(PDTReadTools.requiredV1.filter { $0 != "pdt-list-dividends" }),
     responses: scriptedConnectorResponses
 )
+let missingToolStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-missing-tool-first-fetch-check")
+defer {
+    try? FileManager.default.removeItem(at: missingToolStore.directory)
+}
 do {
-    _ = try PDTMCPConnectorDataSource(connector: missingToolConnector).snapshot(asOf: "2026-03-29")
+    _ = try PDTCoalescedFirstPortfolioFetch(
+        dataSource: PDTMCPConnectorDataSource(connector: missingToolConnector),
+        snapshotStore: missingToolStore,
+        asOf: "2026-03-29"
+    ).fetch()
     throw CheckFailure("missing read tool should block scripted connector fetch")
 } catch PDTMCPConnectorError.missingRequiredReadTools(let missing) {
     try check(missing == ["pdt-list-dividends"], "missing read tool error should name the unavailable v1 tool")
     try check(missingToolConnector.calls.isEmpty, "missing read tool should block before any tool call")
+    try check(
+        !FileManager.default.fileExists(atPath: missingToolStore.directory.appending(path: "latest-portfolio-snapshot.json").path),
+        "missing read tool should not write a first-fetch snapshot"
+    )
 }
 let setupErrorConnector = ScriptedPDTMCPConnector(
     responses: scriptedConnectorResponses,

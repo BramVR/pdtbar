@@ -644,6 +644,7 @@ public enum ClaudeLaunchState: Equatable {
     case loggedOut
     case probeFailed
     case fetchingPortfolio
+    case portfolioFetchFailed
 }
 
 public enum ClaudeLaunchFlow {
@@ -716,6 +717,23 @@ public enum ClaudeLaunchFlow {
                                 id: "portfolioFetch.status",
                                 role: .fetchStatus,
                                 title: "Fetching portfolio"
+                            ),
+                        ]
+                    ),
+                ]
+            )
+        case .portfolioFetchFailed:
+            return MenuDescriptor(
+                statusTitle: "Could not fetch portfolio",
+                sections: [
+                    MenuSection(
+                        id: "portfolioFetch",
+                        title: "Portfolio",
+                        rows: [
+                            MenuRow(
+                                id: "portfolioFetch.failed",
+                                role: .fetchStatus,
+                                title: "Could not fetch portfolio"
                             ),
                         ]
                     ),
@@ -1425,6 +1443,36 @@ public final class ScriptedPDTMCPConnector: PDTMCPConnector {
             throw PDTMCPConnectorError.missingScriptedResponse(key)
         }
         return response
+    }
+}
+
+public enum ScriptedPDTMCPConnectorConfigurationError: Error, Equatable {
+    case emptyResponses
+}
+
+public struct ScriptedPDTMCPConnectorConfiguration: Codable, Equatable {
+    public var availableTools: [String]?
+    public var responses: [String: String]
+    public var asOf: String?
+
+    public init(
+        availableTools: [String]? = nil,
+        responses: [String: String],
+        asOf: String? = nil
+    ) {
+        self.availableTools = availableTools
+        self.responses = responses
+        self.asOf = asOf
+    }
+
+    public func connector() throws -> ScriptedPDTMCPConnector {
+        guard !responses.isEmpty else {
+            throw ScriptedPDTMCPConnectorConfigurationError.emptyResponses
+        }
+        return ScriptedPDTMCPConnector(
+            availableTools: Set(availableTools ?? PDTReadTools.requiredV1),
+            responses: responses.mapValues { Data($0.utf8) }
+        )
     }
 }
 
