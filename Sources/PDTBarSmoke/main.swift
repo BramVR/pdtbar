@@ -121,8 +121,8 @@ private func livePDTSmoke(arguments: [String]) throws -> SmokeReport {
             ),
             snapshotStore: snapshotStore
         )
-    } catch let CommandError.commandFailed(_, stderr) {
-        guard livePDTFailureShouldSkip(stderr) else {
+    } catch let CommandError.commandFailed(_, stdout, stderr) {
+        guard livePDTFailureShouldSkip([stdout, stderr].joined(separator: "\n")) else {
             return SmokeReport(
                 name: "live-pdt",
                 status: SmokeStatus.failed,
@@ -914,7 +914,7 @@ private func run(_ executable: URL, arguments: [String], timeout: TimeInterval) 
         .appending(path: "pdtbar-smoke-\(UUID().uuidString).stderr")
     guard fileManager.createFile(atPath: stdoutURL.path, contents: nil),
           fileManager.createFile(atPath: stderrURL.path, contents: nil) else {
-        throw CommandError.commandFailed(executable.lastPathComponent, "failed to create temporary output files")
+        throw CommandError.commandFailed(executable.lastPathComponent, "", "failed to create temporary output files")
     }
     var openHandles: [FileHandle] = []
     defer {
@@ -948,7 +948,11 @@ private func run(_ executable: URL, arguments: [String], timeout: TimeInterval) 
     let out = try Data(contentsOf: stdoutURL)
     let err = try Data(contentsOf: stderrURL)
     guard process.terminationStatus == 0 else {
-        throw CommandError.commandFailed(executable.lastPathComponent, String(data: err, encoding: .utf8) ?? "")
+        throw CommandError.commandFailed(
+            executable.lastPathComponent,
+            String(data: out, encoding: .utf8) ?? "",
+            String(data: err, encoding: .utf8) ?? ""
+        )
     }
     return CommandResult(stdout: out, stderr: err)
 }
@@ -1043,7 +1047,7 @@ private func writeReport(_ report: SmokeReport) throws {
 private enum CommandError: Error, CustomStringConvertible {
     case usage
     case timedOut(String)
-    case commandFailed(String, String)
+    case commandFailed(String, String, String)
 
     var description: String {
         switch self {
@@ -1051,8 +1055,8 @@ private enum CommandError: Error, CustomStringConvertible {
             return "usage"
         case let .timedOut(command):
             return "\(command) timed out"
-        case let .commandFailed(command, stderr):
-            return "\(command) failed: \(stderr)"
+        case let .commandFailed(command, stdout, stderr):
+            return "\(command) failed: \([stdout, stderr].filter { !$0.isEmpty }.joined(separator: "\n"))"
         }
     }
 }
