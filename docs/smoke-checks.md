@@ -7,6 +7,7 @@ swift build
 swift run pdtbar-checks
 swift run pdtbar-smoke scripted-pdt-connector
 swift run pdtbar-smoke scripted-first-fetch
+swift run pdtbar-smoke scripted-returning-launch
 # Optional once Tests/ exists; currently exits with "no tests found".
 swift test
 ```
@@ -39,6 +40,22 @@ descriptor is considered publishable. It also launches a required-tool-missing
 scenario and verifies no first snapshot or pulse is published. Proof artifacts
 contain paths, selectors, status text, counts, and booleans only; no raw live
 portfolio payloads, account identifiers, or secrets are written.
+
+Scripted returning-launch e2e:
+
+```bash
+swift build --product pdtbar
+swift run pdtbar-smoke scripted-returning-launch
+```
+
+This uses isolated app-support directories and no live Claude credentials. It
+seeds a previous complete local snapshot, launches the no-argument app path with
+a delayed scripted refresh, and verifies the cached pulse stays visible while the
+refresh is in progress. It then verifies complete refreshed data replaces the
+snapshot and pulse only after the scripted fetch finishes. A second
+transient-failure launch proves the previous snapshot stays in place and the
+menu shows `Could not fetch portfolio` plus `Try again`. Proof artifacts contain
+paths, selectors, status text, as-of dates, and booleans only.
 
 Read-only live PDT pulse smoke:
 

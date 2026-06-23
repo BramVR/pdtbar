@@ -123,8 +123,23 @@ try check(
 )
 let fetchFailedDescriptor = ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed)
 try check(
-    fetchFailedDescriptor.sections.flatMap(\.rows).map(\.title) == ["Could not fetch portfolio"],
-    "first-fetch failure should not publish a portfolio pulse"
+    fetchFailedDescriptor.sections.flatMap(\.rows).map(\.title) == ["Could not fetch portfolio", "Try again"],
+    "first-fetch failure should show a retry action without publishing a portfolio pulse"
+)
+let cachedRefreshDescriptor = ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio, cachedPulse: descriptor)
+try check(
+    cachedRefreshDescriptor.statusTitle == descriptor.statusTitle
+        && cachedRefreshDescriptor.sections.map(\.id).contains("pulse")
+        && cachedRefreshDescriptor.sections.flatMap(\.rows).map(\.title).contains("Refreshing portfolio"),
+    "returning launch should keep the cached pulse visible while a refresh is running"
+)
+let cachedFailureDescriptor = ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed, cachedPulse: descriptor)
+try check(
+    cachedFailureDescriptor.statusTitle == descriptor.statusTitle
+        && cachedFailureDescriptor.sections.map(\.id).contains("pulse")
+        && cachedFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Could not fetch portfolio")
+        && cachedFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Try again"),
+    "returning launch fetch failure should preserve the cached pulse and expose retry"
 )
 try check(
     setupDescriptor.sections.map(\.id) == ["claudeSetup"],
@@ -622,6 +637,18 @@ do {
     _ = try PDTMCPConnectorDataSource(connector: transientErrorConnector).snapshot(asOf: "2026-03-29")
     throw CheckFailure("transient failure should propagate from scripted connector")
 } catch PDTMCPConnectorError.transientFailure {
+}
+let transientConfiguration = ScriptedPDTMCPConnectorConfiguration(
+    responses: scriptedConnectorResponses.mapValues { String(decoding: $0, as: UTF8.self) },
+    asOf: "2026-03-29",
+    failure: "transientFailure",
+    failureMessage: "Claude call timed out"
+)
+do {
+    _ = try PDTMCPConnectorDataSource(connector: transientConfiguration.connector()).snapshot(asOf: "2026-03-29")
+    throw CheckFailure("scripted connector configuration should represent transient refresh failure")
+} catch PDTMCPConnectorError.transientFailure(let message) {
+    try check(message == "Claude call timed out", "scripted transient failure should keep its configured message")
 }
 var malformedResponses = scriptedConnectorResponses
 malformedResponses["pdt-get-portfolio-holdings"] = Data("{".utf8)

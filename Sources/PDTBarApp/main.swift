@@ -2,10 +2,17 @@ import AppKit
 import Foundation
 import PDTBarCore
 
+private struct PortfolioFetchOutcome: @unchecked Sendable {
+    var descriptor: MenuDescriptor?
+    var errorDescription: String?
+}
+
 @MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let options: PDTBarLaunchOptions
     private var statusItem: NSStatusItem?
+    private var cachedPulseDescriptor: MenuDescriptor?
+    private var portfolioFetchInFlight = false
 
     init(options: PDTBarLaunchOptions) {
         self.options = options
@@ -23,7 +30,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private func launch() throws {
         switch options.mode {
         case .claudeFirst:
-            installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .probingClaude))
+            cachedPulseDescriptor = loadCachedPulseDescriptor()
+            installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .probingClaude, cachedPulse: cachedPulseDescriptor))
             startClaudeReadinessProbe()
         case let .fixture(fixture):
             let dataSource = PDTFixtureDataSource(fixture: fixture)
@@ -42,7 +50,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         Task { @MainActor in
             let state = ClaudeLaunchFlow.state(afterReadinessProbe: probe.check())
-            installMenuBarItem(ClaudeLaunchFlow.descriptor(for: state))
+            installMenuBarItem(ClaudeLaunchFlow.descriptor(for: state, cachedPulse: cachedPulseDescriptor))
             if state == .fetchingPortfolio {
                 startFirstPortfolioFetch()
             }
@@ -50,20 +58,49 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startFirstPortfolioFetch() {
-        Task { @MainActor in
-            do {
-                let configuration = try scriptedPDTConnectorConfiguration()
-                let fetch = try PDTCoalescedFirstPortfolioFetch(
-                    dataSource: PDTMCPConnectorDataSource(connector: configuration.connector()),
-                    snapshotStore: SnapshotStore(directory: firstFetchStateDirectory()),
-                    asOf: configuration.asOf
-                )
-                installMenuBarItem(try fetch.fetch().descriptor)
-            } catch {
-                FileHandle.standardError.write(Data("pdtbar: first fetch failed: \(error)\n".utf8))
-                installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed))
-            }
+        guard !portfolioFetchInFlight else {
+            return
         }
+        portfolioFetchInFlight = true
+        installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio, cachedPulse: cachedPulseDescriptor))
+        do {
+            let configuration = try scriptedPDTConnectorConfiguration()
+            let snapshotStore = SnapshotStore(directory: firstFetchStateDirectory())
+            DispatchQueue.global(qos: .userInitiated).async {
+                let outcome: PortfolioFetchOutcome
+                do {
+                    let fetch = try PDTCoalescedFirstPortfolioFetch(
+                        dataSource: PDTMCPConnectorDataSource(connector: configuration.connector()),
+                        snapshotStore: snapshotStore,
+                        asOf: configuration.asOf
+                    )
+                    outcome = PortfolioFetchOutcome(descriptor: try fetch.fetch().descriptor, errorDescription: nil)
+                } catch {
+                    outcome = PortfolioFetchOutcome(descriptor: nil, errorDescription: "\(error)")
+                }
+                DispatchQueue.main.async { [weak self] in
+                    self?.finishFirstPortfolioFetch(outcome)
+                }
+            }
+        } catch {
+            finishFirstPortfolioFetch(PortfolioFetchOutcome(descriptor: nil, errorDescription: "\(error)"))
+        }
+    }
+
+    private func finishFirstPortfolioFetch(_ outcome: PortfolioFetchOutcome) {
+        portfolioFetchInFlight = false
+        if let descriptor = outcome.descriptor {
+            cachedPulseDescriptor = descriptor
+            installMenuBarItem(descriptor)
+            return
+        }
+        let errorDescription = outcome.errorDescription ?? "unknown error"
+        FileHandle.standardError.write(Data("pdtbar: first fetch failed: \(errorDescription)\n".utf8))
+        installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed, cachedPulse: cachedPulseDescriptor))
+    }
+
+    @objc private func retryPortfolioFetch(_ sender: NSMenuItem) {
+        startFirstPortfolioFetch()
     }
 
     private func scriptedPDTConnectorConfiguration() throws -> ScriptedPDTMCPConnectorConfiguration {
@@ -74,6 +111,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func firstFetchStateDirectory() -> URL {
         appSupportDirectory().appending(path: "pdtbar/state")
+    }
+
+    private func loadCachedPulseDescriptor() -> MenuDescriptor? {
+        try? PressureRunner.cachedPulseDescriptor(
+            snapshotStore: SnapshotStore(directory: firstFetchStateDirectory())
+        )
     }
 
     private func fixtureSnapshotDirectory() throws -> URL {
@@ -120,6 +163,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 if !row.accessibilityIdentifier.isEmpty {
                     item.identifier = NSUserInterfaceItemIdentifier(row.accessibilityIdentifier)
                     item.setAccessibilityIdentifier(row.accessibilityIdentifier)
+                }
+                if row.role == .fetchRetry {
+                    item.target = self
+                    item.action = #selector(retryPortfolioFetch(_:))
                 }
                 menu.addItem(item)
             }
