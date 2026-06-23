@@ -483,6 +483,9 @@ private func openStatusMenu(
     timeout: TimeInterval
 ) -> OpenMenuResult {
     var attempts: [String] = []
+    let messagingTimeout = Float(max(timeout, 0.1))
+    _ = AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
+    _ = AXUIElementSetMessagingTimeout(statusElement, messagingTimeout)
     let actions = accessibilityActionNames(of: statusElement)
     for action in [kAXPressAction as String, kAXShowMenuAction as String] {
         let result = AXUIElementPerformAction(statusElement, action as CFString)
