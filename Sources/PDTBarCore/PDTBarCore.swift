@@ -495,6 +495,101 @@ public struct MenuRow: Codable, Equatable {
     }
 }
 
+public struct MenuBarSurface: Codable, Equatable {
+    public var status: MenuBarStatusSurface
+    public var sections: [MenuBarSectionSurface]
+
+    public init(status: MenuBarStatusSurface, sections: [MenuBarSectionSurface]) {
+        self.status = status
+        self.sections = sections
+    }
+}
+
+public struct MenuBarStatusSurface: Codable, Equatable {
+    public var title: String
+    public var badge: String?
+    public var menuBarTitle: String
+    public var accessibilityIdentifier: String
+    public var accessibilityLabel: String
+    public var toolTip: String
+
+    public init(
+        title: String,
+        badge: String?,
+        menuBarTitle: String,
+        accessibilityIdentifier: String,
+        accessibilityLabel: String,
+        toolTip: String
+    ) {
+        self.title = title
+        self.badge = badge
+        self.menuBarTitle = menuBarTitle
+        self.accessibilityIdentifier = accessibilityIdentifier
+        self.accessibilityLabel = accessibilityLabel
+        self.toolTip = toolTip
+    }
+}
+
+public struct MenuBarSectionSurface: Codable, Equatable {
+    public var id: String
+    public var title: String
+    public var accessibilityIdentifier: String
+    public var rows: [MenuBarRowSurface]
+
+    public init(id: String, title: String, accessibilityIdentifier: String, rows: [MenuBarRowSurface]) {
+        self.id = id
+        self.title = title
+        self.accessibilityIdentifier = accessibilityIdentifier
+        self.rows = rows
+    }
+}
+
+public struct MenuBarRowSurface: Codable, Equatable {
+    public var id: String
+    public var role: MenuRowRole
+    public var title: String
+    public var accessibilityIdentifier: String
+
+    public init(id: String, role: MenuRowRole, title: String, accessibilityIdentifier: String) {
+        self.id = id
+        self.role = role
+        self.title = title
+        self.accessibilityIdentifier = accessibilityIdentifier
+    }
+}
+
+public enum MenuBarSurfaceRenderer {
+    public static func render(descriptor: MenuDescriptor) -> MenuBarSurface {
+        let statusTitle = descriptor.statusBadge.map { "\(descriptor.statusTitle) [\($0)]" }
+            ?? descriptor.statusTitle
+        return MenuBarSurface(
+            status: MenuBarStatusSurface(
+                title: descriptor.statusTitle,
+                badge: descriptor.statusBadge,
+                menuBarTitle: statusTitle,
+                accessibilityIdentifier: descriptor.statusAccessibilityIdentifier,
+                accessibilityLabel: "PDTBar \(statusTitle)",
+                toolTip: "PDTBar \(statusTitle)"
+            ),
+            sections: descriptor.sections.map { section in
+                MenuBarSectionSurface(
+                    id: section.id,
+                    title: section.title,
+                    accessibilityIdentifier: section.accessibilityIdentifier,
+                    rows: section.rows.map { row in
+                        MenuBarRowSurface(
+                            id: row.id,
+                            role: row.role,
+                            title: row.detail.map { "\(row.title) - \($0)" } ?? row.title,
+                            accessibilityIdentifier: row.accessibilityIdentifier
+                        )
+                    }
+                )
+            }
+        )
+    }
+}
+
 public enum MenuDescriptorRenderer {
     public static func render(model: PortfolioPulseModel) -> MenuDescriptor {
         let allocation = model.facetSnapshots.allocation

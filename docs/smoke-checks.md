@@ -24,16 +24,17 @@ Local/release packaged-app smoke:
 
 ```bash
 swift build --product pdtbar
-swift run pdtbar-smoke packaged-app --fixture docs/pdt/fixtures/quiet-no-pressure.json
+swift run pdtbar-smoke packaged-app --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/quiet-snapshot
 ```
 
-This launches the fixture-mode app and verifies it stays running. It does not
-need live PDT credentials.
+This launches the fixture-mode app, routes it through an isolated snapshot
+directory, verifies `latest-portfolio-snapshot.json` was written, and verifies
+the app stays running. It does not need live PDT credentials.
 
 Peekaboo-only local UI proof:
 
 ```bash
-swift run pdtbar-smoke peekaboo --fixture docs/pdt/fixtures/quiet-no-pressure.json
+swift run pdtbar-smoke peekaboo --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/peekaboo-snapshot
 ```
 
 The Peekaboo smoke checks CLI availability and TCC permissions first. If Screen
