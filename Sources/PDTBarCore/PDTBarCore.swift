@@ -814,7 +814,7 @@ public enum PressureEngine {
                     totalValue: totalValue,
                     openHoldingCount: snapshot.openHoldings.count,
                     topHoldings: snapshot.openHoldings
-                        .sorted { $0.weight > $1.weight }
+                        .sorted(by: ranksByAllocation)
                         .prefix(5)
                         .map {
                             HoldingSummary(
@@ -846,12 +846,7 @@ public enum PressureEngine {
 
     private static func ranked(_ items: [AttentionItem]) -> [AttentionItem] {
         items
-            .sorted {
-                if $0.score == $1.score {
-                    return $0.id < $1.id
-                }
-                return $0.score > $1.score
-            }
+            .sorted(by: ranksBefore)
             .enumerated()
             .map { offset, item in
                 var rankedItem = item
@@ -860,10 +855,33 @@ public enum PressureEngine {
             }
     }
 
+    private static func ranksBefore(_ lhs: AttentionItem, _ rhs: AttentionItem) -> Bool {
+        if lhs.score != rhs.score {
+            return lhs.score > rhs.score
+        }
+        if lhs.facet == "allocation",
+           rhs.facet == "allocation",
+           let lhsWeight = lhs.currentWeight,
+           let rhsWeight = rhs.currentWeight,
+           lhsWeight != rhsWeight
+        {
+            return lhsWeight > rhsWeight
+        }
+        if lhs.facet == "allocation",
+           rhs.facet == "allocation",
+           let lhsName = lhs.holdingIdentity?.name,
+           let rhsName = rhs.holdingIdentity?.name,
+           lhsName != rhsName
+        {
+            return lhsName < rhsName
+        }
+        return lhs.id < rhs.id
+    }
+
     private static func concentrationItems(from snapshot: PortfolioSnapshot) -> [AttentionItem] {
         snapshot.openHoldings
-            .filter { $0.weight > concentrationThreshold }
-            .sorted { $0.weight > $1.weight }
+            .filter { $0.weight >= concentrationThreshold }
+            .sorted(by: ranksByAllocation)
             .enumerated()
             .map { offset, holding in
                 let score = concentrationScore(weight: holding.weight, threshold: concentrationThreshold)
@@ -872,7 +890,7 @@ public enum PressureEngine {
                     facet: "allocation",
                     rank: offset + 1,
                     title: "\(holding.name) concentration",
-                    detail: "\(holding.name) is \(percent(holding.weight)) of the portfolio, above the \(percent(concentrationThreshold)) concentration line.",
+                    detail: concentrationDetail(for: holding),
                     severity: score >= 0.8 ? "high" : "medium",
                     score: score,
                     holdingIdentity: HoldingIdentity(name: holding.name, quoteId: holding.quoteId),
@@ -881,6 +899,21 @@ public enum PressureEngine {
                     supportingDataSlotIDs: ["allocation.holdings"]
                 )
             }
+    }
+
+    private static func concentrationDetail(for holding: NormalizedHolding) -> String {
+        let relation = holding.weight == concentrationThreshold ? "at" : "above"
+        return "\(holding.name) is \(percent(holding.weight)) of the portfolio, \(relation) the \(percent(concentrationThreshold)) concentration line."
+    }
+
+    private static func ranksByAllocation(_ lhs: NormalizedHolding, _ rhs: NormalizedHolding) -> Bool {
+        if lhs.weight != rhs.weight {
+            return lhs.weight > rhs.weight
+        }
+        if lhs.name != rhs.name {
+            return lhs.name < rhs.name
+        }
+        return lhs.quoteId < rhs.quoteId
     }
 
     private static func bigMoverItems(from snapshot: PortfolioSnapshot, priorSnapshot: PortfolioSnapshot?) -> [AttentionItem] {
