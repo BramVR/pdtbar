@@ -574,7 +574,7 @@ public enum MenuDescriptorRenderer {
                         ]
                         : income.upcomingEvents.map {
                             MenuRow(
-                                id: "income.\($0.quoteId ?? 0).\($0.kind)",
+                                id: incomeRowID(for: $0),
                                 role: $0.amount == nil ? .incomeEvent : .incomeDrillDown,
                                 title: $0.symbolName,
                                 detail: incomeDetail(for: $0)
@@ -640,6 +640,13 @@ public enum MenuDescriptorRenderer {
     private static func incomeDetail(for event: IncomeEventSummary) -> String {
         let amount = event.amount.map { "; \(display($0))" } ?? ""
         return "\(event.kind) on \(event.date)\(amount)"
+    }
+
+    private static func incomeRowID(for event: IncomeEventSummary) -> String {
+        let identity = event.quoteId.map { "quote.\($0)" }
+            ?? event.symbolId.map { "symbol.\($0)" }
+            ?? "portfolio"
+        return "income.\(identity).\(event.kind).\(event.date)"
     }
 }
 

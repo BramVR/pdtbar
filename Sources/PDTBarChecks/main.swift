@@ -384,11 +384,15 @@ try check(
     incomeDrillDownRow?.detail == "ex-dividend on 2026-06-24; EUR 78.00",
     "income section should expand event date and amount support"
 )
-let incomePaymentRow = incomeRows.first { $0.id == "income.9003.payment-dividend" }
+let incomePaymentRow = incomeRows.first { $0.id == "income.quote.9003.payment-dividend.2026-07-10" }
 try check(
     incomePaymentRow?.role == .incomeEvent
         && incomePaymentRow?.detail == "payment-dividend on 2026-07-10",
     "income section should not attach historical amount to unrelated calendar events"
+)
+try check(
+    Set(incomeRows.map(\.id)).count == incomeRows.count,
+    "income section should expose unique row ids"
 )
 var unmappedIncomeSnapshot = try PDTFixtureDataSource.snapshot(from: incomeFixture)
 unmappedIncomeSnapshot.incomeEvents.append(
@@ -513,6 +517,10 @@ for fixture in allFixtures {
         "\(fixture.lastPathComponent) should expose stable section ids and accessibility ids"
     )
     let renderedRows = descriptor.sections.flatMap(\.rows)
+    try check(
+        Set(renderedRows.map(\.id)).count == renderedRows.count,
+        "\(fixture.lastPathComponent) should expose unique row ids"
+    )
     try check(
         renderedRows.allSatisfy { !$0.id.isEmpty && $0.accessibilityIdentifier == "pdtbar.row.\($0.id)" },
         "\(fixture.lastPathComponent) should expose stable row ids and accessibility ids"
