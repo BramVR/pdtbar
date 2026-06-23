@@ -14,6 +14,7 @@ This repo now has the first Swift launch paths: no-argument app launch probes Cl
 swift run pdtbar-dev model --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift run pdtbar-checks
+swift run pdtbar-smoke scripted-pdt-connector
 swift run pdtbar-smoke live-pdt
 swift run pdtbar-smoke logged-out-launch
 swift run pdtbar-smoke ready-launch

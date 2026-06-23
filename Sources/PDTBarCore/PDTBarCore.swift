@@ -1315,6 +1315,154 @@ public protocol PDTLiveToolClient {
     func callReadTool(_ name: String, arguments: [String: String]) throws -> Data
 }
 
+public enum PDTReadTools {
+    public static let requiredV1 = [
+        "pdt-get-portfolio-holdings",
+        "pdt-get-portfolio-distributions",
+        "pdt-list-calendar-events",
+        "pdt-list-dividends",
+        "pdt-list-symbol-prices",
+        "pdt-get-symbol-quote",
+    ]
+
+    public static func missingRequiredV1Tools(in availableTools: Set<String>) -> [String] {
+        requiredV1.filter { !availableTools.contains($0) }
+    }
+}
+
+public protocol PDTMCPConnector {
+    func availableReadTools() throws -> Set<String>
+    func callReadTool(_ name: String, arguments: [String: String]) throws -> Data
+}
+
+public enum PDTMCPConnectorError: Error, CustomStringConvertible, Equatable {
+    case missingRequiredReadTools([String])
+    case setupUnavailable(String)
+    case transientFailure(String)
+    case nonReadTool(String)
+    case missingScriptedResponse(String)
+
+    public var description: String {
+        switch self {
+        case .missingRequiredReadTools(let tools):
+            "PDT MCP connector missing required read tools: \(tools.joined(separator: ", "))"
+        case .setupUnavailable(let message):
+            "PDT MCP connector setup unavailable: \(message)"
+        case .transientFailure(let message):
+            "PDT MCP connector transient failure: \(message)"
+        case .nonReadTool(let tool):
+            "PDT MCP connector refused non-v1 read tool: \(tool)"
+        case .missingScriptedResponse(let key):
+            "PDT MCP connector missing scripted response for \(key)"
+        }
+    }
+}
+
+public struct PDTMCPConnectorDataSource: PortfolioDataSource {
+    public var connector: any PDTMCPConnector
+
+    public init(connector: any PDTMCPConnector) {
+        self.connector = connector
+    }
+
+    public func snapshot(asOf: String? = nil) throws -> PortfolioSnapshot {
+        let missing = PDTReadTools.missingRequiredV1Tools(in: try connector.availableReadTools())
+        guard missing.isEmpty else {
+            throw PDTMCPConnectorError.missingRequiredReadTools(missing)
+        }
+        return try PDTLiveDataSource(toolClient: PDTMCPConnectorToolClient(connector: connector)).snapshot(asOf: asOf)
+    }
+}
+
+public struct PDTMCPConnectorToolClient: PDTLiveToolClient {
+    public var connector: any PDTMCPConnector
+
+    public init(connector: any PDTMCPConnector) {
+        self.connector = connector
+    }
+
+    public func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
+        guard PDTReadTools.requiredV1.contains(name) else {
+            throw PDTMCPConnectorError.nonReadTool(name)
+        }
+        return try connector.callReadTool(name, arguments: arguments)
+    }
+}
+
+public final class ScriptedPDTMCPConnector: PDTMCPConnector {
+    public var availableTools: Set<String>
+    public var responses: [String: Data]
+    public var failure: PDTMCPConnectorError?
+    public private(set) var availabilityChecks = 0
+    public private(set) var calls: [String] = []
+
+    public init(
+        availableTools: Set<String> = Set(PDTReadTools.requiredV1),
+        responses: [String: Data],
+        failure: PDTMCPConnectorError? = nil
+    ) {
+        self.availableTools = availableTools
+        self.responses = responses
+        self.failure = failure
+    }
+
+    public func availableReadTools() throws -> Set<String> {
+        availabilityChecks += 1
+        return availableTools
+    }
+
+    public func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
+        calls.append(name)
+        if let failure {
+            throw failure
+        }
+        let suffix = arguments
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "&")
+        let key = suffix.isEmpty ? name : "\(name)?\(suffix)"
+        guard let response = responses[key] ?? responses[name] else {
+            throw PDTMCPConnectorError.missingScriptedResponse(key)
+        }
+        return response
+    }
+}
+
+public final class PDTCoalescedFirstPortfolioFetch {
+    private let lock = NSLock()
+    private var result: PressureRunResult?
+    private let dataSource: any PortfolioDataSource
+    private let snapshotStore: SnapshotStore
+    private let asOf: String?
+
+    public init(
+        dataSource: any PortfolioDataSource,
+        snapshotStore: SnapshotStore,
+        asOf: String? = nil
+    ) {
+        self.dataSource = dataSource
+        self.snapshotStore = snapshotStore
+        self.asOf = asOf
+    }
+
+    public func fetch() throws -> PressureRunResult {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        if let result {
+            return result
+        }
+        let freshResult = try PressureRunner.run(
+            dataSource: dataSource,
+            snapshotStore: snapshotStore,
+            asOf: asOf
+        )
+        result = freshResult
+        return freshResult
+    }
+}
+
 public enum PDTLiveDataSourceError: Error, CustomStringConvertible {
     case malformedToolResult(String)
     case unavailableToolResult(String)

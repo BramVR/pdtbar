@@ -5,9 +5,23 @@ Normal deterministic gate:
 ```bash
 swift build
 swift run pdtbar-checks
+swift run pdtbar-smoke scripted-pdt-connector
 # Optional once Tests/ exists; currently exits with "no tests found".
 swift test
 ```
+
+Scripted Claude PDT connector e2e:
+
+```bash
+swift run pdtbar-smoke scripted-pdt-connector
+```
+
+This uses no live Claude credentials. It drives the connector-backed
+`PortfolioDataSource` path with live-shaped scripted MCP responses, checks all
+required v1 PDT read tools are available, verifies only those tools are called,
+and proves each required read tool is called exactly once for the coalesced
+fetch. The proof artifact reports selectors/counts/scenario status only; no raw
+portfolio payloads, values, account identifiers, or live data are written.
 
 Read-only live PDT pulse smoke:
 
