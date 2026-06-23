@@ -750,6 +750,7 @@ public enum MenuDescriptorRenderer {
 public enum PressureEngine {
     public static let concentrationThreshold = 0.20
     public static let bigMoverThreshold = 0.10
+    private static let freshnessBusinessDayGrace = 1
 
     public static func buildModel(from snapshot: PortfolioSnapshot, priorSnapshot: PortfolioSnapshot? = nil) -> PortfolioPulseModel {
         let rankedItems = ranked(
@@ -759,6 +760,7 @@ public enum PressureEngine {
         )
         let totalValue = snapshot.totalValue
         let worstPriceAsOf = snapshot.openHoldings.map(\.priceAsOf).min()
+        let freshnessStale = isFreshnessStale(worstPriceAsOf: worstPriceAsOf, asOf: snapshot.asOf)
         var supportingDataSlots = [
             SupportingDataSlot(
                 id: "allocation.holdings",
@@ -838,11 +840,56 @@ public enum PressureEngine {
                 ),
                 freshness: FreshnessSnapshot(
                     worstPriceAsOf: worstPriceAsOf,
-                    stale: false
+                    stale: freshnessStale
                 )
             ),
             supportingDataSlots: supportingDataSlots
         )
+    }
+
+    private static func isFreshnessStale(worstPriceAsOf: String?, asOf: String) -> Bool {
+        guard let worstPriceAsOf,
+              let priceDate = dayDate(from: worstPriceAsOf),
+              let asOfDate = dayDate(from: asOf),
+              priceDate < asOfDate
+        else {
+            return false
+        }
+        return businessDays(after: priceDate, through: asOfDate) > freshnessBusinessDayGrace
+    }
+
+    private static func businessDays(after start: Date, through end: Date) -> Int {
+        let calendar = freshnessCalendar
+        var date = calendar.date(byAdding: .day, value: 1, to: start)
+        var count = 0
+        while let current = date, current <= end {
+            let weekday = calendar.component(.weekday, from: current)
+            if weekday != 1 && weekday != 7 {
+                count += 1
+            }
+            date = calendar.date(byAdding: .day, value: 1, to: current)
+        }
+        return count
+    }
+
+    private static func dayDate(from value: String) -> Date? {
+        let parts = value.prefix(10).split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return freshnessCalendar.date(
+            from: DateComponents(
+                calendar: freshnessCalendar,
+                timeZone: freshnessCalendar.timeZone,
+                year: parts[0],
+                month: parts[1],
+                day: parts[2]
+            )
+        )
+    }
+
+    private static var freshnessCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        return calendar
     }
 
     private static func ranked(_ items: [AttentionItem]) -> [AttentionItem] {

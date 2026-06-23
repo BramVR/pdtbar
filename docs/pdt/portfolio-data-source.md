@@ -142,8 +142,10 @@ logic**, which is the key input to ADR-0001 below.
   per-exchange close). The Cash holding alone was dated *today*.
 - `currentExchangeRateDate` is tracked separately from `currentPriceDate`.
 - Engine rule: `freshness.worstPriceAsOf = min(currentPriceDate over open
-  holdings)`; flag `stale` when that is older than N market days. Render a quiet
-  "prices as of \<date>" line rather than implying real-time data.
+  holdings)`. Fixture-backed v1 flags `stale` when that is older than the
+  one-business-day grace; this is a proxy until normalized holdings carry
+  per-exchange market calendars. Render a quiet "prices as of \<date>" line
+  rather than implying real-time data.
 
 ## 5. Fixtures captured (acceptance criteria)
 
