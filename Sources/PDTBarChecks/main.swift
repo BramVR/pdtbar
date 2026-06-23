@@ -105,6 +105,14 @@ try check(
     ClaudeLaunchFlow.state(afterReadinessProbe: .ready) == .fetchingPortfolio,
     "ready Claude/PDT probe should transition toward first fetch"
 )
+try check(
+    ClaudeLaunchFlow.state(afterReadinessProbe: .missingClaudeLogin) == .missingClaudeLogin,
+    "missing Claude login probe should transition to a retryable signed-out setup state"
+)
+try check(
+    ClaudeLaunchFlow.state(afterReadinessProbe: .missingPDTMCP) == .missingPDTMCP,
+    "missing PDT MCP probe should transition to a retryable PDT setup state"
+)
 let firstFetchDescriptor = ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio)
 try check(
     firstFetchDescriptor.sections.flatMap(\.rows).map(\.title) == ["Fetching portfolio"],
@@ -159,6 +167,30 @@ try check(
     missingClaudeDescriptor.sections.flatMap(\.rows).map(\.title) == ["Claude Desktop not found", "Log in with Claude"],
     "failed login handoff should render missing-Claude setup state with a retryable login action"
 )
+let missingLoginDescriptor = ClaudeLaunchFlow.descriptor(for: .missingClaudeLogin)
+try check(
+    missingLoginDescriptor.sections.flatMap(\.rows).map(\.title) == ["Not connected", "Log in with Claude", "Check again"],
+    "missing Claude login should render signed-out setup copy with a readiness retry action"
+)
+try check(
+    missingLoginDescriptor.sections.flatMap(\.rows).last?.role == .setupRetry,
+    "missing Claude login Check again row should rerun readiness instead of login handoff"
+)
+let missingPDTMCPDescriptor = ClaudeLaunchFlow.descriptor(for: .missingPDTMCP)
+try check(
+    missingPDTMCPDescriptor.sections.flatMap(\.rows).map(\.title) == ["Add the PDT MCP server in Claude Desktop", "Check again"],
+    "missing PDT MCP should render product-facing setup copy with a readiness retry action"
+)
+try check(
+    missingPDTMCPDescriptor.sections.flatMap(\.rows).last?.role == .setupRetry,
+    "missing PDT MCP Check again row should rerun readiness instead of login handoff"
+)
+let readinessProbeGate = ClaudeReadinessProbeGate()
+try check(readinessProbeGate.begin(), "readiness probe gate should allow the first setup probe")
+try check(!readinessProbeGate.begin(), "readiness probe gate should reject duplicate concurrent setup probes")
+readinessProbeGate.finish()
+try check(readinessProbeGate.begin(), "readiness probe gate should allow Check again after the prior probe finishes")
+readinessProbeGate.finish()
 let descriptorObject = try require(
     JSONSerialization.jsonObject(with: try stableJSONData(descriptor)) as? [String: Any],
     "descriptor JSON should encode as an object"

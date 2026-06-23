@@ -7,6 +7,7 @@ swift build
 swift run pdtbar-checks
 swift run pdtbar-smoke scripted-pdt-connector
 swift run pdtbar-smoke scripted-login-handoff
+swift run pdtbar-smoke scripted-setup-retry
 swift run pdtbar-smoke scripted-first-fetch
 swift run pdtbar-smoke scripted-returning-launch
 # Optional once Tests/ exists; currently exits with "no tests found".
@@ -37,9 +38,25 @@ This uses isolated app-support directories, a scripted local handoff executable,
 and no live Claude credentials. It launches the logged-out menu, verifies the
 handoff script is not called before the user-initiated `Log in with Claude`
 menu action, then proves success shows `Opening Claude Desktop` while the
-handoff is in flight and failure renders `Claude Desktop not found` with a
-retryable login action. The proof artifact contains selector/click booleans
-only; no credentials, account identifiers, or portfolio payloads are written.
+handoff is in flight and returns to a signed-out state with `Check again`.
+Failure renders `Claude Desktop not found` with a retryable login action. The
+proof artifact contains selector/click booleans only; no credentials, account
+identifiers, or portfolio payloads are written.
+
+Scripted setup retry e2e:
+
+```bash
+swift build --product pdtbar
+swift run pdtbar-smoke scripted-setup-retry
+```
+
+This uses isolated app-support directories, scripted readiness files, and no
+live Claude credentials. It verifies missing Claude login renders `Not
+connected`, `Log in with Claude`, and `Check again`; missing PDT MCP renders
+`Add the PDT MCP server in Claude Desktop` and `Check again`; and clicking
+`Check again` reruns readiness once before the scripted first fetch. The proof
+artifact contains selectors, probe counts, status booleans, and redacted
+first-fetch state only.
 
 Scripted first-fetch e2e:
 

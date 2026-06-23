@@ -36,6 +36,8 @@ do {
         report = try scriptedReturningLaunchSmoke(arguments: Array(arguments.dropFirst()))
     case "scripted-login-handoff":
         report = try scriptedLoginHandoffSmoke(arguments: Array(arguments.dropFirst()))
+    case "scripted-setup-retry":
+        report = try scriptedSetupRetrySmoke(arguments: Array(arguments.dropFirst()))
     case "logged-out-launch":
         report = try loggedOutLaunchSmoke(arguments: Array(arguments.dropFirst()))
     case "ready-launch":
@@ -62,6 +64,7 @@ do {
       pdtbar-smoke scripted-first-fetch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-returning-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-login-handoff [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
+      pdtbar-smoke scripted-setup-retry [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke logged-out-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke ready-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]
@@ -433,6 +436,31 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         statusIdentifier: "pdtbar.status",
         timeout: options.timeout
     )
+    let successRetrySurface = MenuBarSurfaceRenderer.render(
+        descriptor: ClaudeLaunchFlow.descriptor(for: .missingClaudeLogin)
+    )
+    let successRetryTargets = requiredSetupMenuTargets(in: successRetrySurface)
+    let successRetryIDs = Set(successRetryTargets.map(\.accessibilityIdentifier))
+    var successSetupRetryVisible = false
+    if let returnedStatus = waitForAccessibilityElement(
+        in: successAppElement,
+        identifier: successRetrySurface.status.accessibilityIdentifier,
+        timeout: options.timeout
+    ) {
+        let openedMenu = openStatusMenu(
+            returnedStatus,
+            appElement: successAppElement,
+            expectedMenuIdentifiers: successRetryIDs,
+            timeout: options.timeout
+        )
+        let menuSnapshot = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
+            successRetryIDs,
+            in: successAppElement,
+            timeout: options.timeout
+        )
+        successSetupRetryVisible = successRetryIDs.isSubset(of: menuSnapshot.identifiers)
+            && menuSnapshot.texts.contains("Check again")
+    }
     terminate(successProcess)
 
     let failureAppSupport = try options.isolatedAppSupportDirectory(prefix: "scripted-login-handoff-failure-app-support")
@@ -525,6 +553,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         successProgressVisible: progressVisible,
         successCompleted: successCompleted,
         successReturnedToLoggedOut: returnedToLoggedOut,
+        successSetupRetryVisible: successSetupRetryVisible,
         failureIdleBeforeClick: failureWasIdleBeforeClick,
         failureClickAttempt: failureClick,
         failureScriptInvoked: failureScriptInvoked,
@@ -541,6 +570,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
           progressVisible,
           successCompleted,
           returnedToLoggedOut,
+          successSetupRetryVisible,
           failureWasIdleBeforeClick,
           failureClick != nil,
           failureScriptInvoked,
@@ -551,7 +581,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         return SmokeReport(
             name: "scripted-login-handoff",
             status: SmokeStatus.failed,
-            detail: "scripted login handoff did not prove user-initiated success, progress, and missing-Claude failure states",
+            detail: "scripted login handoff did not prove user-initiated success, retryable signed-out state, progress, and missing-Claude failure states",
             artifacts: [artifactPath(proof)]
         )
     }
@@ -559,7 +589,90 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
     return SmokeReport(
         name: "scripted-login-handoff",
         status: SmokeStatus.passed,
-        detail: "Log in with Claude invoked the scripted handoff only after menu click, showed Opening Claude Desktop, and rendered missing-Claude state on handoff failure",
+        detail: "Log in with Claude invoked the scripted handoff only after menu click, showed Opening Claude Desktop, returned to a retryable signed-out state, and rendered missing-Claude state on handoff failure",
+        artifacts: [artifactPath(proof)]
+    )
+}
+
+private func scriptedSetupRetrySmoke(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
+    let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
+    guard FileManager.default.isExecutableFile(atPath: app.path) else {
+        return SmokeReport(
+            name: "scripted-setup-retry",
+            status: SmokeStatus.failed,
+            detail: "app executable missing; run swift build --product pdtbar first or pass --app <path>",
+            artifacts: []
+        )
+    }
+
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let proof = artifacts.appending(path: "pdtbar-scripted-setup-retry-proof.json")
+    let missingLoginDescriptor = ClaudeLaunchFlow.descriptor(for: .missingClaudeLogin)
+    let missingPDTMCPDescriptor = ClaudeLaunchFlow.descriptor(for: .missingPDTMCP)
+    let gate = ClaudeReadinessProbeGate()
+    let gateFirstBegin = gate.begin()
+    let gateRejectedDuplicate = !gate.begin()
+    gate.finish()
+    let gateRetryBegin = gate.begin()
+    gate.finish()
+
+    var proofPayload = ScriptedSetupRetryProof(
+        missingLoginRows: missingLoginDescriptor.sections.flatMap(\.rows).map(\.title),
+        missingPDTMCPRows: missingPDTMCPDescriptor.sections.flatMap(\.rows).map(\.title),
+        gateRejectedDuplicateProbe: gateFirstBegin && gateRejectedDuplicate && gateRetryBegin,
+        scenarios: [],
+        rawClaudeCredentialsUsed: false,
+        rawPortfolioPayloadsRedacted: true
+    )
+
+    guard AXIsProcessTrusted() else {
+        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+        return SmokeReport(
+            name: "scripted-setup-retry",
+            status: SmokeStatus.skipped,
+            detail: "macOS Accessibility permission missing for Check again menu-click proof; descriptor and duplicate-probe gate proof written",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+
+    let missingLoginScenario = try scriptedSetupRetryScenario(
+        name: "missing-claude-login",
+        initialReadiness: "missingClaudeLogin",
+        descriptor: missingLoginDescriptor,
+        expectedTexts: ["Not connected", "Log in with Claude", "Check again"],
+        options: options,
+        app: app,
+        artifacts: artifacts
+    )
+    let missingPDTMCPScenario = try scriptedSetupRetryScenario(
+        name: "missing-pdt-mcp",
+        initialReadiness: "missingPDTMCP",
+        descriptor: missingPDTMCPDescriptor,
+        expectedTexts: ["Add the PDT MCP server in Claude Desktop", "Check again"],
+        options: options,
+        app: app,
+        artifacts: artifacts
+    )
+    proofPayload.scenarios = [missingLoginScenario, missingPDTMCPScenario]
+    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+
+    guard proofPayload.gateRejectedDuplicateProbe,
+          proofPayload.scenarios.allSatisfy(\.passed)
+    else {
+        return SmokeReport(
+            name: "scripted-setup-retry",
+            status: SmokeStatus.failed,
+            detail: "scripted setup retry did not prove both missing setup states and Check again readiness retry",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+
+    return SmokeReport(
+        name: "scripted-setup-retry",
+        status: SmokeStatus.passed,
+        detail: "missing Claude login and missing PDT MCP rendered retryable setup states; Check again reran readiness once and reached first fetch with redacted scripted data",
         artifacts: [artifactPath(proof)]
     )
 }
@@ -1575,6 +1688,27 @@ private struct ScriptedFirstFetchProof: Codable {
     var rawPortfolioPayloadsRedacted: Bool
 }
 
+private struct ScriptedSetupRetryProof: Codable {
+    var missingLoginRows: [String]
+    var missingPDTMCPRows: [String]
+    var gateRejectedDuplicateProbe: Bool
+    var scenarios: [ScriptedSetupRetryScenarioProof]
+    var rawClaudeCredentialsUsed: Bool
+    var rawPortfolioPayloadsRedacted: Bool
+}
+
+private struct ScriptedSetupRetryScenarioProof: Codable {
+    var name: String
+    var initialStatusVisible: Bool
+    var initialMenuVisible: Bool
+    var retryClickAttempt: String?
+    var readinessProbeCount: Int
+    var firstFetchSnapshotWritten: Bool
+    var firstFetchAsOf: String?
+    var fixtureSnapshotWritten: Bool
+    var passed: Bool
+}
+
 private struct ScriptedReturningLaunchProof: Codable {
     var seededSnapshotPath: String
     var staleSnapshotAsOf: String
@@ -1596,6 +1730,7 @@ private struct ScriptedLoginHandoffProof: Codable {
     var successProgressVisible: Bool
     var successCompleted: Bool
     var successReturnedToLoggedOut: Bool
+    var successSetupRetryVisible: Bool
     var failureIdleBeforeClick: Bool
     var failureClickAttempt: String?
     var failureScriptInvoked: Bool
@@ -1942,6 +2077,121 @@ private func snapshotAsOf(_ url: URL) -> String? {
     return snapshot.asOf
 }
 
+private func scriptedSetupRetryScenario(
+    name: String,
+    initialReadiness: String,
+    descriptor: MenuDescriptor,
+    expectedTexts: Set<String>,
+    options: SmokeOptions,
+    app: URL,
+    artifacts: URL
+) throws -> ScriptedSetupRetryScenarioProof {
+    let appSupportDirectory = try options.isolatedAppSupportDirectory(prefix: "scripted-setup-retry-\(name)-app-support")
+    let fixtureSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "scripted-setup-retry-\(name)-fixture-sentinel")
+    let fixtureSnapshot = fixtureSnapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
+    let probeLog = appSupportDirectory.appending(path: "pdtbar/readiness-probes.log")
+    try writeReadinessScript(result: initialReadiness, appSupportDirectory: appSupportDirectory)
+    let process = try launchSetupRetryApp(
+        app,
+        appSupportDirectory: appSupportDirectory,
+        fixtureSnapshotDirectory: fixtureSnapshotDirectory,
+        probeLog: probeLog
+    )
+    defer {
+        terminate(process)
+    }
+
+    let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
+    let expectedTargets = requiredSetupMenuTargets(in: surface)
+    let expectedIDs = Set(expectedTargets.map(\.accessibilityIdentifier))
+    let appElement = AXUIElementCreateApplication(process.processIdentifier)
+    let initialStatusVisible = waitForStatusText(
+        descriptor.statusTitle,
+        in: appElement,
+        statusIdentifier: surface.status.accessibilityIdentifier,
+        timeout: options.timeout
+    )
+    var initialMenuVisible = false
+    var retryClickAttempt: String?
+    if let status = waitForAccessibilityElement(
+        in: appElement,
+        identifier: surface.status.accessibilityIdentifier,
+        timeout: options.timeout
+    ) {
+        let openedMenu = openStatusMenu(
+            status,
+            appElement: appElement,
+            expectedMenuIdentifiers: expectedIDs,
+            timeout: options.timeout
+        )
+        let menuSnapshot = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
+            expectedIDs,
+            in: appElement,
+            timeout: options.timeout
+        )
+        let evidence = artifacts.appending(path: "pdtbar-scripted-setup-retry-\(name)-ax.json")
+        try writeAccessibilityEvidence(
+            snapshot: menuSnapshot,
+            expected: expectedTargets,
+            statusIdentifier: surface.status.accessibilityIdentifier,
+            statusText: accessibilityTexts(in: status),
+            output: evidence
+        )
+        initialMenuVisible = expectedIDs.isSubset(of: menuSnapshot.identifiers)
+            && expectedTexts.isSubset(of: menuSnapshot.texts)
+
+        let configuration = ScriptedPDTMCPConnectorConfiguration(
+            responses: try scriptedPDTConnectorResponses().mapValues { String(decoding: $0, as: UTF8.self) },
+            asOf: "2026-03-29"
+        )
+        try writeFirstFetchAppScript(configuration: configuration, appSupportDirectory: appSupportDirectory)
+        retryClickAttempt = pressMenuRow(
+            statusElement: status,
+            appElement: appElement,
+            rowIdentifier: "pdtbar.row.claudeSetup.retry",
+            expectedMenuIdentifiers: expectedIDs,
+            timeout: options.timeout
+        )
+    }
+
+    let firstFetchSnapshot = appSupportDirectory.appending(path: "pdtbar/state/latest-portfolio-snapshot.json")
+    let firstFetchSnapshotWritten = waitForSnapshotAsOf(
+        firstFetchSnapshot,
+        asOf: "2026-03-29",
+        timeout: options.timeout + 3.0
+    )
+    let firstFetchAsOf = snapshotAsOf(firstFetchSnapshot)
+    let probeCount = readinessProbeCount(in: probeLog)
+    let fixtureSnapshotWritten = FileManager.default.fileExists(atPath: fixtureSnapshot.path)
+    return ScriptedSetupRetryScenarioProof(
+        name: name,
+        initialStatusVisible: initialStatusVisible,
+        initialMenuVisible: initialMenuVisible,
+        retryClickAttempt: retryClickAttempt,
+        readinessProbeCount: probeCount,
+        firstFetchSnapshotWritten: firstFetchSnapshotWritten,
+        firstFetchAsOf: firstFetchAsOf,
+        fixtureSnapshotWritten: fixtureSnapshotWritten,
+        passed: initialStatusVisible
+            && initialMenuVisible
+            && retryClickAttempt != nil
+            && probeCount == 2
+            && firstFetchSnapshotWritten
+            && firstFetchAsOf == "2026-03-29"
+            && !fixtureSnapshotWritten
+    )
+}
+
+private func writeReadinessScript(result: String, appSupportDirectory: URL) throws {
+    let directory = appSupportDirectory.appending(path: "pdtbar")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let payload = #"{"result":"\#(result)"}"#
+    try Data(payload.utf8).write(
+        to: directory.appending(path: "claude-readiness.json"),
+        options: .atomic
+    )
+}
+
 private func writeFirstFetchAppScript(
     configuration: ScriptedPDTMCPConnectorConfiguration,
     appSupportDirectory: URL
@@ -1956,6 +2206,27 @@ private func writeFirstFetchAppScript(
         to: directory.appending(path: "scripted-pdt-mcp.json"),
         options: .atomic
     )
+}
+
+private func launchSetupRetryApp(
+    _ app: URL,
+    appSupportDirectory: URL,
+    fixtureSnapshotDirectory: URL,
+    probeLog: URL
+) throws -> Process {
+    let process = Process()
+    process.executableURL = app
+    process.arguments = []
+    var environment = ProcessInfo.processInfo.environment
+    environment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
+    process.environment = environment.merging([
+        "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
+        "PDTBAR_FIXTURE": defaultFixture.path,
+        "PDTBAR_SNAPSHOT_DIR": fixtureSnapshotDirectory.path,
+        "PDTBAR_CLAUDE_READINESS_LOG": probeLog.path,
+    ]) { _, new in new }
+    try process.run()
+    return process
 }
 
 private func launchFirstFetchApp(
@@ -1975,6 +2246,16 @@ private func launchFirstFetchApp(
     ]) { _, new in new }
     try process.run()
     return process
+}
+
+private func readinessProbeCount(in log: URL) -> Int {
+    guard let content = try? String(contentsOf: log, encoding: .utf8) else {
+        return 0
+    }
+    return content
+        .split(separator: "\n")
+        .filter { $0 == "probe" }
+        .count
 }
 
 private func launchLoginHandoffApp(
