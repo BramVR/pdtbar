@@ -55,6 +55,44 @@ try check(
 
 let descriptor = MenuDescriptorRenderer.render(model: decoded)
 let launchSurface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
+let noArgumentLaunch = try PDTBarLaunchOptionParser.parse(
+    arguments: [],
+    environment: [
+        "PDTBAR_APP_SUPPORT_DIR": "/tmp/pdtbar-checks-app-support",
+        "PDTBAR_FIXTURE": fixture.path,
+    ]
+)
+try check(
+    noArgumentLaunch.mode == .claudeFirst,
+    "no-argument launch should enter real Claude-first mode, not fixture mode"
+)
+try check(
+    noArgumentLaunch.snapshotDirectory == nil,
+    "no-argument launch should not inherit fixture snapshot state"
+)
+try check(
+    noArgumentLaunch.appSupportDirectory == URL(fileURLWithPath: "/tmp/pdtbar-checks-app-support"),
+    "no-argument launch should allow isolated real app state"
+)
+let fixtureLaunch = try PDTBarLaunchOptionParser.parse(arguments: ["--fixture", fixture.path], environment: [:])
+try check(
+    fixtureLaunch.mode == .fixture(fixture),
+    "fixture launch should require explicit --fixture"
+)
+try check(
+    fixtureLaunch.snapshotDirectory == nil,
+    "fixture launch should not require real app state"
+)
+let setupDescriptor = ClaudeSetupMenuDescriptor.loggedOut()
+let setupSurface = MenuBarSurfaceRenderer.render(descriptor: setupDescriptor)
+try check(
+    setupDescriptor.sections.map(\.id) == ["claudeSetup"],
+    "logged-out real launch should render a Claude-only setup section"
+)
+try check(
+    setupSurface.sections.flatMap(\.rows).map(\.title) == ["Not connected", "Log in with Claude"],
+    "logged-out real launch should render Claude setup status and login rows"
+)
 let descriptorObject = try require(
     JSONSerialization.jsonObject(with: try stableJSONData(descriptor)) as? [String: Any],
     "descriptor JSON should encode as an object"

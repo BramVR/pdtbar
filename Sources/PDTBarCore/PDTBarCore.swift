@@ -421,6 +421,8 @@ public struct MenuSection: Codable, Equatable {
 
 public enum MenuRowRole: String, Codable, Equatable {
     case row
+    case setupStatus
+    case setupLogin
     case pulseQuiet
     case pulseAttention
     case pulseAttentionExpansion
@@ -555,6 +557,102 @@ public struct MenuBarRowSurface: Codable, Equatable {
         self.role = role
         self.title = title
         self.accessibilityIdentifier = accessibilityIdentifier
+    }
+}
+
+public enum PDTBarLaunchMode: Equatable {
+    case claudeFirst
+    case fixture(URL)
+}
+
+public struct PDTBarLaunchOptions: Equatable {
+    public var mode: PDTBarLaunchMode
+    public var snapshotDirectory: URL?
+    public var appSupportDirectory: URL?
+
+    public init(
+        mode: PDTBarLaunchMode,
+        snapshotDirectory: URL? = nil,
+        appSupportDirectory: URL? = nil
+    ) {
+        self.mode = mode
+        self.snapshotDirectory = snapshotDirectory
+        self.appSupportDirectory = appSupportDirectory
+    }
+}
+
+public enum PDTBarLaunchOptionError: Error, Equatable {
+    case usage
+}
+
+public enum PDTBarLaunchOptionParser {
+    public static func parse(
+        arguments: [String],
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> PDTBarLaunchOptions {
+        var fixture: URL?
+        var snapshotDirectory: URL?
+        var appSupportDirectory: URL?
+        var index = 0
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--fixture" where index + 1 < arguments.count:
+                fixture = URL(fileURLWithPath: arguments[index + 1])
+                index += 2
+            case "--snapshot-dir" where index + 1 < arguments.count:
+                snapshotDirectory = URL(fileURLWithPath: arguments[index + 1])
+                index += 2
+            case "--app-support-dir" where index + 1 < arguments.count:
+                appSupportDirectory = URL(fileURLWithPath: arguments[index + 1])
+                index += 2
+            default:
+                throw PDTBarLaunchOptionError.usage
+            }
+        }
+
+        appSupportDirectory = appSupportDirectory
+            ?? environment["PDTBAR_APP_SUPPORT_DIR"].map { URL(fileURLWithPath: $0) }
+
+        if let fixture {
+            let configuredSnapshotDirectory = snapshotDirectory
+                ?? environment["PDTBAR_SNAPSHOT_DIR"].map { URL(fileURLWithPath: $0) }
+            return PDTBarLaunchOptions(
+                mode: .fixture(fixture),
+                snapshotDirectory: configuredSnapshotDirectory,
+                appSupportDirectory: appSupportDirectory
+            )
+        }
+
+        guard snapshotDirectory == nil else {
+            throw PDTBarLaunchOptionError.usage
+        }
+        return PDTBarLaunchOptions(mode: .claudeFirst, appSupportDirectory: appSupportDirectory)
+    }
+}
+
+public enum ClaudeSetupMenuDescriptor {
+    public static func loggedOut() -> MenuDescriptor {
+        MenuDescriptor(
+            statusTitle: "Not connected",
+            sections: [
+                MenuSection(
+                    id: "claudeSetup",
+                    title: "Claude",
+                    rows: [
+                        MenuRow(
+                            id: "claudeSetup.status",
+                            role: .setupStatus,
+                            title: "Not connected"
+                        ),
+                        MenuRow(
+                            id: "claudeSetup.login",
+                            role: .setupLogin,
+                            title: "Log in with Claude"
+                        ),
+                    ]
+                ),
+            ]
+        )
     }
 }
 

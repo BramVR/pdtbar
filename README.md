@@ -4,9 +4,9 @@
 
 It lives in the **macOS menu bar** and surfaces only the few things across your portfolio that actually need attention right now — quiet by default, no dashboard. The core is a **pressure engine** that turns the firehose of portfolio data into a short, ranked list of "look at this" items, which the bar renders.
 
-## Status: first fixture path
+## Status: Claude setup + fixture path
 
-This repo now has the first Swift fixture path: sanitized PDT fixtures load into an engine model, render into a menu descriptor, and launch a native macOS menu-bar app in fixture mode. Pressure rules are still intentionally quiet-first.
+This repo now has the first Swift launch paths: no-argument app launch renders a Claude-first setup menu, and explicit fixture mode loads sanitized PDT fixtures into the engine, descriptor, and native macOS menu-bar app. Pressure rules are still intentionally quiet-first.
 
 ## Developer commands
 
@@ -15,6 +15,7 @@ swift run pdtbar-dev model --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift run pdtbar-checks
 swift run pdtbar-smoke live-pdt
+swift run pdtbar-smoke logged-out-launch
 swift build --product pdtbar
 swift run pdtbar-smoke packaged-app --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/manual-snapshot
 swift run pdtbar-smoke real-user-pulse --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/real-user-pulse
