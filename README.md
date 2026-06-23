@@ -16,6 +16,7 @@ swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.js
 swift run pdtbar-checks
 swift build --product pdtbar
 swift run pdtbar-smoke packaged-app --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/manual-snapshot
+swift run pdtbar-smoke real-user-pulse --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/real-user-pulse
 ```
 
 Smoke gate details: [`docs/smoke-checks.md`](docs/smoke-checks.md).

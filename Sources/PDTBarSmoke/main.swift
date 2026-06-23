@@ -1,3 +1,4 @@
+import ApplicationServices
 import Foundation
 import PDTBarCore
 
@@ -31,6 +32,8 @@ do {
         report = try packagedAppSmoke(arguments: Array(arguments.dropFirst()))
     case "peekaboo":
         report = try peekabooSmoke(arguments: Array(arguments.dropFirst()))
+    case "real-user-pulse":
+        report = try realUserPulseSmoke(arguments: Array(arguments.dropFirst()))
     case "fixture-proof":
         report = try fixtureProof(arguments: Array(arguments.dropFirst()))
     default:
@@ -45,6 +48,7 @@ do {
       pdtbar-smoke live-pdt
       pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]
       pdtbar-smoke peekaboo [--peekaboo <path>] [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>]
+      pdtbar-smoke real-user-pulse [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke fixture-proof [--fixture <path>] [--output <path>]
 
     """.utf8))
@@ -269,6 +273,115 @@ private func peekabooSmoke(arguments: [String]) throws -> SmokeReport {
     )
 }
 
+private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
+    guard AXIsProcessTrusted() else {
+        return SmokeReport(
+            name: "real-user-pulse",
+            status: SmokeStatus.skipped,
+            detail: "macOS Accessibility permission missing for real-user pulse e2e; grant Accessibility in System Settings > Privacy & Security > Accessibility to the app running this command, then rerun",
+            artifacts: []
+        )
+    }
+
+    let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
+    let fixture = options.fixture ?? defaultFixture
+    let descriptor = MenuDescriptorRenderer.render(
+        model: PressureEngine.buildModel(from: try PDTFixtureDataSource(fixture: fixture).snapshot())
+    )
+    let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
+    let expectedTargets = requiredQuietPulseMenuTargets(in: surface)
+    let expectedMenuIdentifiers = Set(expectedTargets.map(\.accessibilityIdentifier))
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+
+    let preflightSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "real-user-pulse-preflight")
+    let appReport = try packagedAppSmoke(arguments: [
+        "--app", app.path,
+        "--fixture", fixture.path,
+        "--snapshot-dir", preflightSnapshotDirectory.path,
+        "--timeout", String(options.timeout),
+    ])
+    guard appReport.status == SmokeStatus.passed else {
+        return appReport
+    }
+
+    let process = Process()
+    let snapshotDirectory = try options.isolatedSnapshotDirectory(prefix: "real-user-pulse-app")
+    process.executableURL = app
+    process.arguments = ["--fixture", fixture.path, "--snapshot-dir", snapshotDirectory.path]
+    process.environment = ProcessInfo.processInfo.environment.merging(["PDTBAR_FIXTURE_MODE": "1"]) { _, new in new }
+    try process.run()
+    defer {
+        if process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+        }
+    }
+    Thread.sleep(forTimeInterval: 1.0)
+
+    let appElement = AXUIElementCreateApplication(process.processIdentifier)
+    guard let statusElement = waitForAccessibilityElement(
+        in: appElement,
+        identifier: surface.status.accessibilityIdentifier,
+        timeout: options.timeout
+    ) else {
+        return SmokeReport(
+            name: "real-user-pulse",
+            status: SmokeStatus.failed,
+            detail: "fixture-mode app launched, but Accessibility could not find status item \(surface.status.accessibilityIdentifier)",
+            artifacts: []
+        )
+    }
+    let statusText = accessibilityTexts(in: statusElement)
+    guard statusText.contains(surface.status.menuBarTitle) || statusText.contains(surface.status.accessibilityLabel) else {
+        return SmokeReport(
+            name: "real-user-pulse",
+            status: SmokeStatus.failed,
+            detail: "fixture-mode app exposed status item \(surface.status.accessibilityIdentifier), but not visible all-quiet status \(surface.status.menuBarTitle)",
+            artifacts: []
+        )
+    }
+    let openedMenu = openStatusMenu(
+        statusElement,
+        appElement: appElement,
+        expectedMenuIdentifiers: expectedMenuIdentifiers,
+        timeout: options.timeout
+    )
+    let menuSnapshot = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
+        expectedMenuIdentifiers,
+        in: appElement,
+        timeout: options.timeout
+    )
+    let evidence = artifacts.appending(path: "pdtbar-real-user-pulse-ax.json")
+    try writeAccessibilityEvidence(
+        snapshot: menuSnapshot,
+        expected: expectedTargets,
+        statusIdentifier: surface.status.accessibilityIdentifier,
+        statusText: statusText,
+        output: evidence
+    )
+    let missingTargets = expectedTargets.filter { !menuSnapshot.identifiers.contains($0.accessibilityIdentifier) }
+    guard missingTargets.isEmpty else {
+        let missingLabels = missingTargets
+            .map { "\($0.accessibilityIdentifier) (\($0.title))" }
+            .joined(separator: ", ")
+        return SmokeReport(
+            name: "real-user-pulse",
+            status: SmokeStatus.failed,
+            detail: "could not verify opened fixture-mode pulse menu after \(openedMenu.attempts.joined(separator: ", ")); missing expected quiet fixture targets: \(missingLabels)",
+            artifacts: [artifactPath(evidence)]
+        )
+    }
+
+    return SmokeReport(
+        name: "real-user-pulse",
+        status: SmokeStatus.passed,
+        detail: "launched fixture-mode app, opened menu-bar pulse through \(openedMenu.successfulAttempt ?? "Accessibility"), and verified quiet fixture status plus pulse/allocation/income/big-mover/freshness selectors",
+        artifacts: [artifactPath(evidence)]
+    )
+}
+
 private func fixtureProof(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
     let fixture = options.fixture ?? defaultFixture
@@ -283,6 +396,279 @@ private func fixtureProof(arguments: [String]) throws -> SmokeReport {
         detail: "rendered fixture descriptor proof for \(fixture.lastPathComponent)",
         artifacts: [artifactPath(output)]
     )
+}
+
+private struct QuietPulseTarget {
+    var accessibilityIdentifier: String
+    var title: String
+}
+
+private func requiredQuietPulseMenuTargets(in surface: MenuBarSurface) -> [QuietPulseTarget] {
+    var targets: [QuietPulseTarget] = []
+    let requiredSectionIDs = ["pulse", "allocation", "income", "bigMovers", "freshness"]
+    for sectionID in requiredSectionIDs {
+        guard let section = surface.sections.first(where: { $0.id == sectionID }) else {
+            targets.append(QuietPulseTarget(accessibilityIdentifier: "missing.section.\(sectionID)", title: sectionID))
+            continue
+        }
+        targets.append(QuietPulseTarget(accessibilityIdentifier: section.accessibilityIdentifier, title: section.title))
+        if let firstRow = section.rows.first {
+            targets.append(QuietPulseTarget(
+                accessibilityIdentifier: firstRow.accessibilityIdentifier,
+                title: firstRow.title
+            ))
+        }
+    }
+
+    return targets
+}
+
+private struct AccessibilitySnapshot: Codable {
+    var identifiers: Set<String>
+    var texts: Set<String>
+}
+
+private struct OpenMenuResult {
+    var snapshot: AccessibilitySnapshot?
+    var successfulAttempt: String?
+    var attempts: [String]
+}
+
+private struct AccessibilityEvidence: Codable {
+    var statusIdentifier: String
+    var statusText: [String]
+    var expected: [QuietPulseTargetEvidence]
+    var observedIdentifiers: [String]
+    var observedTexts: [String]
+}
+
+private struct QuietPulseTargetEvidence: Codable {
+    var accessibilityIdentifier: String
+    var title: String
+}
+
+private func waitForAccessibilityElement(
+    in root: AXUIElement,
+    identifier: String,
+    timeout: TimeInterval
+) -> AXUIElement? {
+    let deadline = Date().addingTimeInterval(timeout)
+    repeat {
+        if let element = findAccessibilityElement(in: root, identifier: identifier) {
+            return element
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+    } while Date() < deadline
+    return nil
+}
+
+private func waitForAccessibilityIdentifiers(
+    _ identifiers: Set<String>,
+    in root: AXUIElement,
+    timeout: TimeInterval
+) -> AccessibilitySnapshot {
+    let deadline = Date().addingTimeInterval(timeout)
+    var latest = accessibilitySnapshot(in: root)
+    while !identifiers.isSubset(of: latest.identifiers) && Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.1)
+        latest = accessibilitySnapshot(in: root)
+    }
+    return latest
+}
+
+private func openStatusMenu(
+    _ statusElement: AXUIElement,
+    appElement: AXUIElement,
+    expectedMenuIdentifiers: Set<String>,
+    timeout: TimeInterval
+) -> OpenMenuResult {
+    var attempts: [String] = []
+    let messagingTimeout = Float(max(timeout, 0.1))
+    _ = AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
+    _ = AXUIElementSetMessagingTimeout(statusElement, messagingTimeout)
+    let actions = accessibilityActionNames(of: statusElement)
+    for action in [kAXPressAction as String, kAXShowMenuAction as String] {
+        let result = AXUIElementPerformAction(statusElement, action as CFString)
+        attempts.append("\(action)=\(result)")
+        if result == .success || actions.contains(action) {
+            let snapshot = waitForAccessibilityIdentifiers(
+                expectedMenuIdentifiers,
+                in: appElement,
+                timeout: min(timeout, 1.5)
+            )
+            if expectedMenuIdentifiers.isSubset(of: snapshot.identifiers) {
+                return OpenMenuResult(snapshot: snapshot, successfulAttempt: action, attempts: attempts)
+            }
+        }
+    }
+
+    if let center = accessibilityCenter(of: statusElement) {
+        click(point: center)
+        attempts.append("coordinateClick=\(format(point: center))")
+        let snapshot = waitForAccessibilityIdentifiers(
+            expectedMenuIdentifiers,
+            in: appElement,
+            timeout: timeout
+        )
+        if expectedMenuIdentifiers.isSubset(of: snapshot.identifiers) {
+            return OpenMenuResult(snapshot: snapshot, successfulAttempt: "coordinate click", attempts: attempts)
+        }
+        return OpenMenuResult(snapshot: snapshot, successfulAttempt: nil, attempts: attempts)
+    }
+
+    attempts.append("coordinateClick=no AXPosition/AXSize")
+    return OpenMenuResult(snapshot: nil, successfulAttempt: nil, attempts: attempts)
+}
+
+private func findAccessibilityElement(in root: AXUIElement, identifier: String) -> AXUIElement? {
+    var stack = [root]
+    var visited = 0
+    while let element = stack.popLast(), visited < 500 {
+        visited += 1
+        if accessibilityString(element, "AXIdentifier") == identifier {
+            return element
+        }
+        stack.append(contentsOf: accessibilityChildren(of: element))
+    }
+    return nil
+}
+
+private func accessibilitySnapshot(in root: AXUIElement) -> AccessibilitySnapshot {
+    var snapshot = AccessibilitySnapshot(identifiers: [], texts: [])
+    var stack = [root]
+    var visited = 0
+    while let element = stack.popLast(), visited < 800 {
+        visited += 1
+        if let identifier = accessibilityString(element, "AXIdentifier"), !identifier.isEmpty {
+            snapshot.identifiers.insert(identifier)
+        }
+        for text in accessibilityTexts(in: element) {
+            snapshot.texts.insert(text)
+        }
+        stack.append(contentsOf: accessibilityChildren(of: element))
+    }
+    return snapshot
+}
+
+private func accessibilityTexts(in element: AXUIElement) -> Set<String> {
+    let attributes = ["AXTitle", "AXDescription", "AXHelp", "AXValue"]
+    return Set(attributes.compactMap { accessibilityString(element, $0) }.filter { !$0.isEmpty })
+}
+
+private func accessibilityString(_ element: AXUIElement, _ attribute: String) -> String? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else {
+        return nil
+    }
+    return value as? String
+}
+
+private func accessibilityActionNames(of element: AXUIElement) -> Set<String> {
+    var names: CFArray?
+    guard AXUIElementCopyActionNames(element, &names) == .success,
+          let actions = names as? [String]
+    else {
+        return []
+    }
+    return Set(actions)
+}
+
+private func accessibilityCenter(of element: AXUIElement) -> CGPoint? {
+    guard let position = accessibilityCGPoint(element, "AXPosition"),
+          let size = accessibilityCGSize(element, "AXSize")
+    else {
+        return nil
+    }
+    return CGPoint(x: position.x + (size.width / 2), y: position.y + (size.height / 2))
+}
+
+private func accessibilityCGPoint(_ element: AXUIElement, _ attribute: String) -> CGPoint? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+          let axValue = value,
+          CFGetTypeID(axValue) == AXValueGetTypeID(),
+          AXValueGetType(axValue as! AXValue) == .cgPoint
+    else {
+        return nil
+    }
+    var point = CGPoint.zero
+    guard AXValueGetValue(axValue as! AXValue, .cgPoint, &point) else {
+        return nil
+    }
+    return point
+}
+
+private func accessibilityCGSize(_ element: AXUIElement, _ attribute: String) -> CGSize? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+          let axValue = value,
+          CFGetTypeID(axValue) == AXValueGetTypeID(),
+          AXValueGetType(axValue as! AXValue) == .cgSize
+    else {
+        return nil
+    }
+    var size = CGSize.zero
+    guard AXValueGetValue(axValue as! AXValue, .cgSize, &size) else {
+        return nil
+    }
+    return size
+}
+
+private func click(point: CGPoint) {
+    let source = CGEventSource(stateID: .hidSystemState)
+    let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)
+    let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
+    down?.post(tap: .cghidEventTap)
+    Thread.sleep(forTimeInterval: 0.05)
+    up?.post(tap: .cghidEventTap)
+}
+
+private func format(point: CGPoint) -> String {
+    let x = String(format: "%.1f", point.x)
+    let y = String(format: "%.1f", point.y)
+    return "\(x),\(y)"
+}
+
+private func accessibilityChildren(of element: AXUIElement) -> [AXUIElement] {
+    var elements: [AXUIElement] = []
+    for attribute in ["AXChildren", "AXExtrasMenuBar"] {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+              let axValue = value
+        else {
+            continue
+        }
+        if let children = axValue as? [AXUIElement] {
+            elements.append(contentsOf: children)
+        } else if CFGetTypeID(axValue) == AXUIElementGetTypeID() {
+            elements.append(axValue as! AXUIElement)
+        }
+    }
+    return elements
+}
+
+private func writeAccessibilityEvidence(
+    snapshot: AccessibilitySnapshot,
+    expected: [QuietPulseTarget],
+    statusIdentifier: String,
+    statusText: Set<String>,
+    output: URL
+) throws {
+    let evidence = AccessibilityEvidence(
+        statusIdentifier: statusIdentifier,
+        statusText: statusText.sorted(),
+        expected: expected.map {
+            QuietPulseTargetEvidence(
+                accessibilityIdentifier: $0.accessibilityIdentifier,
+                title: $0.title
+            )
+        },
+        observedIdentifiers: snapshot.identifiers.sorted(),
+        observedTexts: snapshot.texts.sorted()
+    )
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    try encoder.encode(evidence).write(to: output)
 }
 
 private func artifactPath(_ url: URL) -> String {
@@ -361,6 +747,14 @@ private struct SmokeOptions {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
     }
+
+    func isolatedSnapshotDirectory(prefix: String) throws -> URL {
+        let base = snapshotDirectory ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        let directory = base.appending(path: "\(prefix)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
 }
 
 private struct CommandResult {
@@ -370,8 +764,27 @@ private struct CommandResult {
 
 private func run(_ executable: URL, arguments: [String], timeout: TimeInterval) throws -> CommandResult {
     let process = Process()
-    let stdout = Pipe()
-    let stderr = Pipe()
+    let fileManager = FileManager.default
+    let stdoutURL = FileManager.default.temporaryDirectory
+        .appending(path: "pdtbar-smoke-\(UUID().uuidString).stdout")
+    let stderrURL = FileManager.default.temporaryDirectory
+        .appending(path: "pdtbar-smoke-\(UUID().uuidString).stderr")
+    guard fileManager.createFile(atPath: stdoutURL.path, contents: nil),
+          fileManager.createFile(atPath: stderrURL.path, contents: nil) else {
+        throw CommandError.commandFailed(executable.lastPathComponent, "failed to create temporary output files")
+    }
+    var openHandles: [FileHandle] = []
+    defer {
+        for handle in openHandles {
+            try? handle.close()
+        }
+        try? fileManager.removeItem(at: stdoutURL)
+        try? fileManager.removeItem(at: stderrURL)
+    }
+    let stdout = try FileHandle(forWritingTo: stdoutURL)
+    openHandles.append(stdout)
+    let stderr = try FileHandle(forWritingTo: stderrURL)
+    openHandles.append(stderr)
     process.executableURL = executable
     process.arguments = arguments
     process.standardOutput = stdout
@@ -386,8 +799,11 @@ private func run(_ executable: URL, arguments: [String], timeout: TimeInterval) 
         process.waitUntilExit()
         throw CommandError.timedOut(executable.lastPathComponent)
     }
-    let out = stdout.fileHandleForReading.readDataToEndOfFile()
-    let err = stderr.fileHandleForReading.readDataToEndOfFile()
+    try? stdout.close()
+    try? stderr.close()
+    openHandles.removeAll()
+    let out = try Data(contentsOf: stdoutURL)
+    let err = try Data(contentsOf: stderrURL)
     guard process.terminationStatus == 0 else {
         throw CommandError.commandFailed(executable.lastPathComponent, String(data: err, encoding: .utf8) ?? "")
     }

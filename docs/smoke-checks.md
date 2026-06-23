@@ -31,6 +31,20 @@ This launches the fixture-mode app, routes it through an isolated snapshot
 directory, verifies `latest-portfolio-snapshot.json` was written, and verifies
 the app stays running. It does not need live PDT credentials.
 
+Real-user pulse e2e:
+
+```bash
+swift build --product pdtbar
+swift run pdtbar-smoke real-user-pulse --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/real-user-pulse
+```
+
+This launches the real fixture-mode app, opens the menu-bar pulse through
+macOS Accessibility, and verifies the quiet fixture path from the visible all-quiet status
+through the pulse, allocation, income, big-mover, and freshness sections using
+the descriptor's stable accessibility identifiers. If macOS Accessibility
+permission is missing, it exits successfully with `skipped` and reports that
+exact TCC permission to grant.
+
 Peekaboo-only local UI proof:
 
 ```bash
