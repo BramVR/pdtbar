@@ -53,6 +53,7 @@ try check(
 )
 
 let descriptor = MenuDescriptorRenderer.render(model: decoded)
+let launchSurface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
 let descriptorObject = try require(
     JSONSerialization.jsonObject(with: try stableJSONData(descriptor)) as? [String: Any],
     "descriptor JSON should encode as an object"
@@ -66,6 +67,32 @@ try check(descriptor.sections.map(\.id) == ["pulse", "allocation", "income", "bi
 try check(
     descriptor.statusAccessibilityIdentifier == "pdtbar.status",
     "descriptor should expose a stable status accessibility identifier"
+)
+try check(
+    launchSurface.status.title == "EUR 51,200.00 - All quiet",
+    "fixture launch surface should render the descriptor status title"
+)
+try check(
+    launchSurface.status.badge == nil,
+    "quiet fixture launch surface should preserve an empty descriptor badge"
+)
+try check(
+    launchSurface.status.accessibilityIdentifier == "pdtbar.status",
+    "fixture launch surface should preserve the status accessibility identifier"
+)
+try check(
+    launchSurface.sections.map(\.accessibilityIdentifier) == descriptor.sections.map(\.accessibilityIdentifier),
+    "fixture launch surface should preserve descriptor section selectors"
+)
+try check(
+    launchSurface.sections.flatMap(\.rows).map(\.accessibilityIdentifier)
+        == descriptor.sections.flatMap(\.rows).map(\.accessibilityIdentifier),
+    "fixture launch surface should preserve descriptor row selectors"
+)
+try check(
+    launchSurface.sections.first { $0.id == "pulse" }?.rows.first?.title
+        == "All quiet - No ranked attention items from the fixture.",
+    "fixture launch surface should render row title and detail for AppKit menu rows"
 )
 try check(
     descriptor.sections.map(\.accessibilityIdentifier) == [
@@ -504,6 +531,20 @@ try check(!concentrationItem.detail.localizedCaseInsensitiveContains("sell"), "c
 try check(!concentrationItem.detail.localizedCaseInsensitiveContains("buy"), "copy should not prescribe buying")
 try check(!concentrationItem.detail.localizedCaseInsensitiveContains("should"), "copy should not be prescriptive")
 try check(concentrationRun.descriptor.statusBadge == "1", "descriptor should expose a badge")
+let concentrationSurface = MenuBarSurfaceRenderer.render(descriptor: concentrationRun.descriptor)
+try check(
+    concentrationSurface.status.badge == "1",
+    "fixture launch surface should render non-quiet descriptor badge"
+)
+try check(
+    concentrationSurface.status.menuBarTitle == "\(concentrationRun.descriptor.statusTitle) [1]",
+    "fixture launch surface should render descriptor badge in the app-visible status title"
+)
+try check(
+    concentrationSurface.sections.first { $0.id == "pulse" }?.rows.map(\.role)
+        == [.pulseAttention, .pulseAttentionExpansion],
+    "fixture launch surface should include pulse drill-down entries"
+)
 try check(
     concentrationRun.descriptor.sections.first?.rows.map(\.role) == [.pulseAttention, .pulseAttentionExpansion],
     "descriptor should expose pulse attention and expansion rows"

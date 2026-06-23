@@ -43,8 +43,8 @@ do {
     FileHandle.standardError.write(Data("""
     usage:
       pdtbar-smoke live-pdt
-      pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--timeout <seconds>]
-      pdtbar-smoke peekaboo [--peekaboo <path>] [--app <path>] [--fixture <path>] [--artifacts <dir>]
+      pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]
+      pdtbar-smoke peekaboo [--peekaboo <path>] [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>]
       pdtbar-smoke fixture-proof [--fixture <path>] [--output <path>]
 
     """.utf8))
@@ -138,8 +138,11 @@ private func packagedAppSmoke(arguments: [String]) throws -> SmokeReport {
     }
 
     let process = Process()
+    let snapshotDirectory = try options.resolvedSnapshotDirectory()
+    let snapshot = snapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
+    let previousSnapshotModifiedAt = modificationDate(of: snapshot)
     process.executableURL = app
-    process.arguments = ["--fixture", fixture.path]
+    process.arguments = ["--fixture", fixture.path, "--snapshot-dir", snapshotDirectory.path]
     process.environment = ProcessInfo.processInfo.environment.merging(["PDTBAR_FIXTURE_MODE": "1"]) { _, new in new }
     try process.run()
     Thread.sleep(forTimeInterval: options.timeout)
@@ -150,13 +153,38 @@ private func packagedAppSmoke(arguments: [String]) throws -> SmokeReport {
     process.waitUntilExit()
 
     let timeoutDescription = String(format: "%.1f", options.timeout)
+    guard running else {
+        return SmokeReport(
+            name: "packaged-app",
+            status: SmokeStatus.failed,
+            detail: "fixture-mode app exited before the smoke timeout",
+            artifacts: []
+        )
+    }
+    guard FileManager.default.fileExists(atPath: snapshot.path) else {
+        return SmokeReport(
+            name: "packaged-app",
+            status: SmokeStatus.failed,
+            detail: "fixture-mode app stayed running for \(timeoutDescription)s but did not write latest-portfolio-snapshot.json",
+            artifacts: [artifactPath(snapshotDirectory)]
+        )
+    }
+    if let previousSnapshotModifiedAt,
+       let currentSnapshotModifiedAt = modificationDate(of: snapshot),
+       currentSnapshotModifiedAt <= previousSnapshotModifiedAt
+    {
+        return SmokeReport(
+            name: "packaged-app",
+            status: SmokeStatus.failed,
+            detail: "fixture-mode app stayed running for \(timeoutDescription)s but did not refresh latest-portfolio-snapshot.json",
+            artifacts: [artifactPath(snapshot)]
+        )
+    }
     return SmokeReport(
         name: "packaged-app",
-        status: running ? SmokeStatus.passed : SmokeStatus.failed,
-        detail: running
-            ? "fixture-mode app launched and stayed running for \(timeoutDescription)s"
-            : "fixture-mode app exited before the smoke timeout",
-        artifacts: []
+        status: SmokeStatus.passed,
+        detail: "fixture-mode app launched with isolated snapshot dir, wrote latest-portfolio-snapshot.json, and stayed running for \(timeoutDescription)s",
+        artifacts: [artifactPath(snapshot)]
     )
 }
 
@@ -190,10 +218,12 @@ private func peekabooSmoke(arguments: [String]) throws -> SmokeReport {
         )
     }
 
+    let preflightSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "peekaboo-preflight")
     let appReport = try packagedAppSmoke(arguments: [
         "--app", (options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")).path,
         "--fixture", (options.fixture ?? defaultFixture).path,
-        "--timeout", "0.5",
+        "--snapshot-dir", preflightSnapshotDirectory.path,
+        "--timeout", "2.0",
     ])
     guard appReport.status == SmokeStatus.passed else {
         return appReport
@@ -206,8 +236,9 @@ private func peekabooSmoke(arguments: [String]) throws -> SmokeReport {
     try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
 
     let process = Process()
+    let snapshotDirectory = try options.resolvedSnapshotDirectory()
     process.executableURL = app
-    process.arguments = ["--fixture", fixture.path]
+    process.arguments = ["--fixture", fixture.path, "--snapshot-dir", snapshotDirectory.path]
     process.environment = ProcessInfo.processInfo.environment.merging(["PDTBAR_FIXTURE_MODE": "1"]) { _, new in new }
     try process.run()
     defer {
@@ -234,7 +265,7 @@ private func peekabooSmoke(arguments: [String]) throws -> SmokeReport {
         name: "peekaboo",
         status: SmokeStatus.passed,
         detail: "Peekaboo inspected fixture-mode menu bar text and captured a screenshot",
-        artifacts: [screenshot.path]
+        artifacts: [artifactPath(screenshot)]
     )
 }
 
@@ -250,8 +281,25 @@ private func fixtureProof(arguments: [String]) throws -> SmokeReport {
         name: "fixture-proof",
         status: SmokeStatus.passed,
         detail: "rendered fixture descriptor proof for \(fixture.lastPathComponent)",
-        artifacts: [output.path]
+        artifacts: [artifactPath(output)]
     )
+}
+
+private func artifactPath(_ url: URL) -> String {
+    let root = packageRoot.standardizedFileURL.path
+    let path = url.standardizedFileURL.path
+    if path == root {
+        return "."
+    }
+    if path.hasPrefix("\(root)/") {
+        return String(path.dropFirst(root.count + 1))
+    }
+    return path
+}
+
+private func modificationDate(of url: URL) -> Date? {
+    let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+    return attributes?[.modificationDate] as? Date
 }
 
 private func fixtureStatusTitle(for fixture: URL) throws -> String {
@@ -265,6 +313,7 @@ private struct SmokeOptions {
     var peekaboo: URL?
     var artifacts: URL?
     var output: URL?
+    var snapshotDirectory: URL?
     var timeout: TimeInterval = 2.0
 
     init(arguments: [String]) throws {
@@ -286,6 +335,9 @@ private struct SmokeOptions {
             case "--output" where index + 1 < arguments.count:
                 output = URL(fileURLWithPath: arguments[index + 1])
                 index += 2
+            case "--snapshot-dir" where index + 1 < arguments.count:
+                snapshotDirectory = URL(fileURLWithPath: arguments[index + 1])
+                index += 2
             case "--timeout" where index + 1 < arguments.count:
                 timeout = TimeInterval(arguments[index + 1]) ?? 2.0
                 index += 2
@@ -293,6 +345,21 @@ private struct SmokeOptions {
                 throw CommandError.usage
             }
         }
+    }
+
+    func resolvedSnapshotDirectory() throws -> URL {
+        if let snapshotDirectory {
+            try FileManager.default.createDirectory(at: snapshotDirectory, withIntermediateDirectories: true)
+            return snapshotDirectory
+        }
+        return try temporarySnapshotDirectory(prefix: "snapshots")
+    }
+
+    func temporarySnapshotDirectory(prefix: String) throws -> URL {
+        let directory = packageRoot
+            .appending(path: ".build/pdtbar-smoke-artifacts/\(prefix)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
 }
 

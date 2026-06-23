@@ -6,7 +6,7 @@ It lives in the **macOS menu bar** and surfaces only the few things across your 
 
 ## Status: first fixture path
 
-This repo now has the first Swift fixture path: sanitized PDT fixtures load into an engine model, and the model renders into a menu descriptor. Pressure rules are still intentionally quiet-first.
+This repo now has the first Swift fixture path: sanitized PDT fixtures load into an engine model, render into a menu descriptor, and launch a native macOS menu-bar app in fixture mode. Pressure rules are still intentionally quiet-first.
 
 ## Developer commands
 
@@ -15,7 +15,7 @@ swift run pdtbar-dev model --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift run pdtbar-checks
 swift build --product pdtbar
-swift run pdtbar-smoke packaged-app --fixture docs/pdt/fixtures/quiet-no-pressure.json
+swift run pdtbar-smoke packaged-app --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/manual-snapshot
 ```
 
 Smoke gate details: [`docs/smoke-checks.md`](docs/smoke-checks.md).

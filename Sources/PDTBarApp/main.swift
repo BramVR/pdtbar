@@ -28,38 +28,34 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func loadDescriptor() throws -> MenuDescriptor {
         let dataSource = PDTFixtureDataSource(fixture: options.fixture)
-        if let snapshotDirectory = options.snapshotDirectory {
-            return try PressureRunner.run(
-                dataSource: dataSource,
-                snapshotStore: SnapshotStore(directory: snapshotDirectory)
-            ).descriptor
-        }
-        let snapshot = try dataSource.snapshot()
-        return MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: snapshot))
+        return try PressureRunner.run(
+            dataSource: dataSource,
+            snapshotStore: SnapshotStore(directory: options.snapshotDirectory ?? defaultSnapshotDirectory())
+        ).descriptor
     }
 
     private func installMenuBarItem(_ descriptor: MenuDescriptor) {
+        let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = descriptor.statusTitle
-        item.button?.identifier = NSUserInterfaceItemIdentifier(descriptor.statusAccessibilityIdentifier)
-        item.button?.toolTip = "PDTBar \(descriptor.statusTitle)"
-        item.button?.setAccessibilityLabel("PDTBar \(descriptor.statusTitle)")
-        item.button?.setAccessibilityIdentifier(descriptor.statusAccessibilityIdentifier)
-        item.menu = makeMenu(from: descriptor)
+        item.button?.title = surface.status.menuBarTitle
+        item.button?.identifier = NSUserInterfaceItemIdentifier(surface.status.accessibilityIdentifier)
+        item.button?.toolTip = surface.status.toolTip
+        item.button?.setAccessibilityLabel(surface.status.accessibilityLabel)
+        item.button?.setAccessibilityIdentifier(surface.status.accessibilityIdentifier)
+        item.menu = makeMenu(from: surface)
         statusItem = item
     }
 
-    private func makeMenu(from descriptor: MenuDescriptor) -> NSMenu {
+    private func makeMenu(from surface: MenuBarSurface) -> NSMenu {
         let menu = NSMenu()
-        for section in descriptor.sections {
+        for section in surface.sections {
             let heading = NSMenuItem(title: section.title, action: nil, keyEquivalent: "")
             heading.identifier = NSUserInterfaceItemIdentifier(section.accessibilityIdentifier)
             heading.setAccessibilityIdentifier(section.accessibilityIdentifier)
             heading.isEnabled = false
             menu.addItem(heading)
             for row in section.rows {
-                let title = row.detail.map { "\(row.title) - \($0)" } ?? row.title
-                let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                let item = NSMenuItem(title: row.title, action: nil, keyEquivalent: "")
                 if !row.accessibilityIdentifier.isEmpty {
                     item.identifier = NSUserInterfaceItemIdentifier(row.accessibilityIdentifier)
                     item.setAccessibilityIdentifier(row.accessibilityIdentifier)
@@ -90,17 +86,25 @@ private func parseOptions(_ arguments: [String]) throws -> AppOptions {
         }
     }
 
+    let configuredSnapshotDirectory = snapshotDirectory
+        ?? ProcessInfo.processInfo.environment["PDTBAR_SNAPSHOT_DIR"].map { URL(fileURLWithPath: $0) }
     if let fixture {
-        return AppOptions(fixture: fixture, snapshotDirectory: snapshotDirectory)
+        return AppOptions(fixture: fixture, snapshotDirectory: configuredSnapshotDirectory)
     }
     if let fixturePath = ProcessInfo.processInfo.environment["PDTBAR_FIXTURE"] {
-        return AppOptions(fixture: URL(fileURLWithPath: fixturePath), snapshotDirectory: snapshotDirectory)
+        return AppOptions(fixture: URL(fileURLWithPath: fixturePath), snapshotDirectory: configuredSnapshotDirectory)
     }
     throw CommandError.usage
 }
 
 private enum CommandError: Error {
     case usage
+}
+
+private func defaultSnapshotDirectory() -> URL {
+    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        ?? FileManager.default.temporaryDirectory
+    return base.appending(path: "pdtbar/snapshots")
 }
 
 do {
