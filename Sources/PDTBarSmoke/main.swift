@@ -279,7 +279,7 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         return SmokeReport(
             name: "real-user-pulse",
             status: SmokeStatus.skipped,
-            detail: "macOS Accessibility permission missing for real-user pulse e2e",
+            detail: "macOS Accessibility permission missing for real-user pulse e2e; grant Accessibility in System Settings > Privacy & Security > Accessibility to the app running this command, then rerun",
             artifacts: []
         )
     }
