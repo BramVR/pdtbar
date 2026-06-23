@@ -13,25 +13,36 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
-            let descriptor = try loadDescriptor()
-            installMenuBarItem(descriptor)
+            try launch()
         } catch {
             FileHandle.standardError.write(Data("pdtbar: \(error)\n".utf8))
             NSApplication.shared.terminate(nil)
         }
     }
 
-    private func loadDescriptor() throws -> MenuDescriptor {
+    private func launch() throws {
         switch options.mode {
         case .claudeFirst:
-            _ = ClaudeSetupStateStore(appSupportDirectory: appSupportDirectory()).load()
-            return ClaudeSetupMenuDescriptor.loggedOut()
+            installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .probingClaude))
+            startClaudeReadinessProbe()
         case let .fixture(fixture):
             let dataSource = PDTFixtureDataSource(fixture: fixture)
-            return try PressureRunner.run(
+            let descriptor = try PressureRunner.run(
                 dataSource: dataSource,
                 snapshotStore: SnapshotStore(directory: try fixtureSnapshotDirectory())
             ).descriptor
+            installMenuBarItem(descriptor)
+        }
+    }
+
+    private func startClaudeReadinessProbe() {
+        let probe = ScriptedClaudeReadinessProbe(
+            appSupportDirectory: appSupportDirectory(),
+            environment: ProcessInfo.processInfo.environment
+        )
+        Task { @MainActor in
+            let state = ClaudeLaunchFlow.state(afterReadinessProbe: probe.check())
+            installMenuBarItem(ClaudeLaunchFlow.descriptor(for: state))
         }
     }
 
@@ -51,14 +62,19 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installMenuBarItem(_ descriptor: MenuDescriptor) {
         let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        let item: NSStatusItem
+        if let statusItem {
+            item = statusItem
+        } else {
+            item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            statusItem = item
+        }
         item.button?.title = surface.status.menuBarTitle
         item.button?.identifier = NSUserInterfaceItemIdentifier(surface.status.accessibilityIdentifier)
         item.button?.toolTip = surface.status.toolTip
         item.button?.setAccessibilityLabel(surface.status.accessibilityLabel)
         item.button?.setAccessibilityIdentifier(surface.status.accessibilityIdentifier)
         item.menu = makeMenu(from: surface)
-        statusItem = item
     }
 
     private func makeMenu(from surface: MenuBarSurface) -> NSMenu {
@@ -84,23 +100,42 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-private struct ClaudeSetupStateStore {
+private struct ScriptedClaudeReadinessProbe {
     var appSupportDirectory: URL
+    var environment: [String: String]
 
-    func load() -> ClaudeSetupState? {
-        let url = appSupportDirectory.appending(path: "pdtbar/claude-setup.json")
+    func check() -> ClaudeReadinessProbeResult {
+        if let scripted = environment["PDTBAR_CLAUDE_READINESS"] {
+            return parse(scripted) ?? .failed
+        }
+        let url = appSupportDirectory.appending(path: "pdtbar/claude-readiness.json")
         guard FileManager.default.fileExists(atPath: url.path) else {
-            return nil
+            return .notReady
         }
-        guard let data = try? Data(contentsOf: url) else {
-            return nil
+        guard let data = try? Data(contentsOf: url),
+              let script = try? JSONDecoder().decode(Script.self, from: data)
+        else {
+            return .failed
         }
-        return try? JSONDecoder().decode(ClaudeSetupState.self, from: data)
+        return parse(script.result) ?? .failed
     }
-}
 
-private struct ClaudeSetupState: Decodable {
-    var connected: Bool
+    private func parse(_ value: String) -> ClaudeReadinessProbeResult? {
+        switch value {
+        case "ready":
+            return .ready
+        case "notReady", "missingSetup", "loggedOut":
+            return .notReady
+        case "failed", "failure":
+            return .failed
+        default:
+            return nil
+        }
+    }
+
+    private struct Script: Decodable {
+        var result: String
+    }
 }
 
 private func defaultAppSupportDirectory() -> URL {

@@ -421,8 +421,11 @@ public struct MenuSection: Codable, Equatable {
 
 public enum MenuRowRole: String, Codable, Equatable {
     case row
+    case setupProbe
     case setupStatus
     case setupLogin
+    case setupFailure
+    case fetchStatus
     case pulseQuiet
     case pulseAttention
     case pulseAttentionExpansion
@@ -627,6 +630,98 @@ public enum PDTBarLaunchOptionParser {
             throw PDTBarLaunchOptionError.usage
         }
         return PDTBarLaunchOptions(mode: .claudeFirst, appSupportDirectory: appSupportDirectory)
+    }
+}
+
+public enum ClaudeReadinessProbeResult: Equatable {
+    case ready
+    case notReady
+    case failed
+}
+
+public enum ClaudeLaunchState: Equatable {
+    case probingClaude
+    case loggedOut
+    case probeFailed
+    case fetchingPortfolio
+}
+
+public enum ClaudeLaunchFlow {
+    public static func state(afterReadinessProbe result: ClaudeReadinessProbeResult?) -> ClaudeLaunchState {
+        guard let result else {
+            return .probingClaude
+        }
+        switch result {
+        case .ready:
+            return .fetchingPortfolio
+        case .notReady:
+            return .loggedOut
+        case .failed:
+            return .probeFailed
+        }
+    }
+
+    public static func descriptor(for state: ClaudeLaunchState) -> MenuDescriptor {
+        switch state {
+        case .probingClaude:
+            return MenuDescriptor(
+                statusTitle: "Checking Claude",
+                sections: [
+                    MenuSection(
+                        id: "claudeSetup",
+                        title: "Claude",
+                        rows: [
+                            MenuRow(
+                                id: "claudeSetup.probing",
+                                role: .setupProbe,
+                                title: "Checking Claude setup"
+                            ),
+                        ]
+                    ),
+                ]
+            )
+        case .loggedOut:
+            return ClaudeSetupMenuDescriptor.loggedOut()
+        case .probeFailed:
+            return MenuDescriptor(
+                statusTitle: "Could not check Claude",
+                sections: [
+                    MenuSection(
+                        id: "claudeSetup",
+                        title: "Claude",
+                        rows: [
+                            MenuRow(
+                                id: "claudeSetup.probeFailed",
+                                role: .setupFailure,
+                                title: "Could not check Claude"
+                            ),
+                            MenuRow(
+                                id: "claudeSetup.login",
+                                role: .setupLogin,
+                                title: "Log in with Claude"
+                            ),
+                        ]
+                    ),
+                ]
+            )
+        case .fetchingPortfolio:
+            return MenuDescriptor(
+                statusTitle: "Fetching portfolio",
+                sections: [
+                    MenuSection(
+                        id: "portfolioFetch",
+                        title: "Portfolio",
+                        rows: [
+                            MenuRow(
+                                id: "portfolioFetch.status",
+                                role: .fetchStatus,
+                                title: "Fetching portfolio"
+                            ),
+                        ]
+                    ),
+                ]
+            )
+        }
     }
 }
 
