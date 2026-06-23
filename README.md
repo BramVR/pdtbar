@@ -16,6 +16,7 @@ swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.js
 swift run pdtbar-checks
 swift run pdtbar-smoke scripted-pdt-connector
 swift run pdtbar-smoke scripted-login-handoff
+swift run pdtbar-smoke scripted-setup-retry
 swift run pdtbar-smoke scripted-first-fetch
 swift run pdtbar-smoke scripted-returning-launch
 swift run pdtbar-smoke live-pdt

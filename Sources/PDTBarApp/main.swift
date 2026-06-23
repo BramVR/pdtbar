@@ -14,6 +14,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var cachedPulseDescriptor: MenuDescriptor?
     private var portfolioFetchInFlight = false
+    private let claudeReadinessProbeGate = ClaudeReadinessProbeGate()
 
     init(options: PDTBarLaunchOptions) {
         self.options = options
@@ -48,15 +49,26 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startClaudeReadinessProbe() {
+        guard claudeReadinessProbeGate.begin() else {
+            return
+        }
+        installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .probingClaude, cachedPulse: cachedPulseDescriptor))
         let probe = ScriptedClaudeReadinessProbe(
             appSupportDirectory: appSupportDirectory(),
             environment: ProcessInfo.processInfo.environment
         )
-        Task { @MainActor in
-            let state = ClaudeLaunchFlow.state(afterReadinessProbe: probe.check())
-            installMenuBarItem(ClaudeLaunchFlow.descriptor(for: state, cachedPulse: cachedPulseDescriptor))
-            if state == .fetchingPortfolio {
-                startFirstPortfolioFetch()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = probe.check()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else {
+                    return
+                }
+                self.claudeReadinessProbeGate.finish()
+                let state = ClaudeLaunchFlow.state(afterReadinessProbe: result)
+                self.installMenuBarItem(ClaudeLaunchFlow.descriptor(for: state, cachedPulse: self.cachedPulseDescriptor))
+                if state == .fetchingPortfolio {
+                    self.startFirstPortfolioFetch()
+                }
             }
         }
     }
@@ -107,13 +119,17 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         startFirstPortfolioFetch()
     }
 
+    @objc private func retryClaudeReadiness(_ sender: NSMenuItem) {
+        startClaudeReadinessProbe()
+    }
+
     @objc private func loginWithClaude(_ sender: NSMenuItem) {
         installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .openingClaude))
         loginHandoff.openOrFocus { [weak self] result in
             DispatchQueue.main.async {
                 switch result {
                 case .success:
-                    self?.installMenuBarItem(ClaudeSetupMenuDescriptor.loggedOut())
+                    self?.installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .missingClaudeLogin))
                 case .failure(let error):
                     FileHandle.standardError.write(Data("pdtbar: Claude handoff failed: \(error)\n".utf8))
                     self?.installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .missingClaude))
@@ -186,6 +202,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 if row.role == .fetchRetry {
                     item.target = self
                     item.action = #selector(retryPortfolioFetch(_:))
+                }
+                if row.role == .setupRetry {
+                    item.target = self
+                    item.action = #selector(retryClaudeReadiness(_:))
                 }
                 if row.role == .setupLogin {
                     item.target = self
@@ -276,6 +296,7 @@ private struct ScriptedClaudeReadinessProbe {
     var environment: [String: String]
 
     func check() -> ClaudeReadinessProbeResult {
+        recordProbe()
         if let scripted = environment["PDTBAR_CLAUDE_READINESS"] {
             return parse(scripted) ?? .failed
         }
@@ -288,15 +309,44 @@ private struct ScriptedClaudeReadinessProbe {
         else {
             return .failed
         }
+        if let delay = script.delaySeconds, delay > 0 {
+            Thread.sleep(forTimeInterval: delay)
+        }
         return parse(script.result) ?? .failed
+    }
+
+    private func recordProbe() {
+        guard let log = environment["PDTBAR_CLAUDE_READINESS_LOG"], !log.isEmpty else {
+            return
+        }
+        let url = URL(fileURLWithPath: log)
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        guard let handle = try? FileHandle(forWritingTo: url) else {
+            return
+        }
+        defer {
+            try? handle.close()
+        }
+        _ = try? handle.seekToEnd()
+        _ = try? handle.write(contentsOf: Data("probe\n".utf8))
     }
 
     private func parse(_ value: String) -> ClaudeReadinessProbeResult? {
         switch value {
         case "ready":
             return .ready
-        case "notReady", "missingSetup", "loggedOut":
+        case "notReady":
             return .notReady
+        case "missingClaudeLogin", "loggedOut":
+            return .missingClaudeLogin
+        case "missingPDTMCP", "missingPdtMcp", "missingPDTMCPServer", "missingPDTServer", "missingSetup":
+            return .missingPDTMCP
         case "failed", "failure":
             return .failed
         default:
@@ -306,6 +356,7 @@ private struct ScriptedClaudeReadinessProbe {
 
     private struct Script: Decodable {
         var result: String
+        var delaySeconds: Double?
     }
 }
 

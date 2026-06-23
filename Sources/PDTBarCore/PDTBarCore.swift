@@ -424,6 +424,7 @@ public enum MenuRowRole: String, Codable, Equatable {
     case setupProbe
     case setupStatus
     case setupLogin
+    case setupRetry
     case setupFailure
     case fetchStatus
     case fetchRetry
@@ -637,7 +638,34 @@ public enum PDTBarLaunchOptionParser {
 public enum ClaudeReadinessProbeResult: Equatable {
     case ready
     case notReady
+    case missingClaudeLogin
+    case missingPDTMCP
     case failed
+}
+
+public final class ClaudeReadinessProbeGate {
+    private let lock = NSLock()
+    private var inFlight = false
+
+    public init() {}
+
+    public func begin() -> Bool {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        guard !inFlight else {
+            return false
+        }
+        inFlight = true
+        return true
+    }
+
+    public func finish() {
+        lock.lock()
+        inFlight = false
+        lock.unlock()
+    }
 }
 
 public enum ClaudeLaunchState: Equatable {
@@ -645,6 +673,8 @@ public enum ClaudeLaunchState: Equatable {
     case loggedOut
     case openingClaude
     case missingClaude
+    case missingClaudeLogin
+    case missingPDTMCP
     case probeFailed
     case fetchingPortfolio
     case portfolioFetchFailed
@@ -660,6 +690,10 @@ public enum ClaudeLaunchFlow {
             return .fetchingPortfolio
         case .notReady:
             return .loggedOut
+        case .missingClaudeLogin:
+            return .missingClaudeLogin
+        case .missingPDTMCP:
+            return .missingPDTMCP
         case .failed:
             return .probeFailed
         }
@@ -695,7 +729,7 @@ public enum ClaudeLaunchFlow {
                     cachedPulse,
                     rows: portfolioFetchFailureRows()
                 )
-            case .loggedOut, .openingClaude, .missingClaude, .probeFailed:
+            case .loggedOut, .openingClaude, .missingClaude, .missingClaudeLogin, .missingPDTMCP, .probeFailed:
                 break
             }
         }
@@ -739,6 +773,10 @@ public enum ClaudeLaunchFlow {
             )
         case .missingClaude:
             return ClaudeSetupMenuDescriptor.missingClaude()
+        case .missingClaudeLogin:
+            return ClaudeSetupMenuDescriptor.missingClaudeLogin()
+        case .missingPDTMCP:
+            return ClaudeSetupMenuDescriptor.missingPDTMCP()
         case .probeFailed:
             return MenuDescriptor(
                 statusTitle: "Could not check Claude",
@@ -865,6 +903,59 @@ public enum ClaudeSetupMenuDescriptor {
                             id: "claudeSetup.login",
                             role: .setupLogin,
                             title: "Log in with Claude"
+                        ),
+                    ]
+                ),
+            ]
+        )
+    }
+
+    public static func missingClaudeLogin() -> MenuDescriptor {
+        MenuDescriptor(
+            statusTitle: "Not connected",
+            sections: [
+                MenuSection(
+                    id: "claudeSetup",
+                    title: "Claude",
+                    rows: [
+                        MenuRow(
+                            id: "claudeSetup.status",
+                            role: .setupStatus,
+                            title: "Not connected"
+                        ),
+                        MenuRow(
+                            id: "claudeSetup.login",
+                            role: .setupLogin,
+                            title: "Log in with Claude"
+                        ),
+                        MenuRow(
+                            id: "claudeSetup.retry",
+                            role: .setupRetry,
+                            title: "Check again"
+                        ),
+                    ]
+                ),
+            ]
+        )
+    }
+
+    public static func missingPDTMCP() -> MenuDescriptor {
+        MenuDescriptor(
+            statusTitle: "Add the PDT MCP server in Claude Desktop",
+            sections: [
+                MenuSection(
+                    id: "claudeSetup",
+                    title: "Claude",
+                    rows: [
+                        MenuRow(
+                            id: "claudeSetup.missingPDTMCP",
+                            role: .setupFailure,
+                            title: "Add the PDT MCP server in Claude Desktop"
+                        ),
+                        MenuRow(
+                            id: "claudeSetup.retry",
+                            role: .setupRetry,
+                            title: "Check again"
                         ),
                     ]
                 ),
