@@ -345,45 +345,153 @@ public struct FreshnessSnapshot: Codable, Equatable {
 public struct MenuDescriptor: Codable, Equatable {
     public var statusTitle: String
     public var statusBadge: String?
+    public var statusAccessibilityIdentifier: String
     public var sections: [MenuSection]
 
-    public init(statusTitle: String, statusBadge: String? = nil, sections: [MenuSection]) {
+    public init(
+        statusTitle: String,
+        statusBadge: String? = nil,
+        statusAccessibilityIdentifier: String = "pdtbar.status",
+        sections: [MenuSection]
+    ) {
         self.statusTitle = statusTitle
         self.statusBadge = statusBadge
+        self.statusAccessibilityIdentifier = statusAccessibilityIdentifier
         self.sections = sections
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case statusTitle
+        case statusBadge
+        case statusAccessibilityIdentifier
+        case sections
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        statusTitle = try container.decode(String.self, forKey: .statusTitle)
+        statusBadge = try container.decodeIfPresent(String.self, forKey: .statusBadge)
+        statusAccessibilityIdentifier = try container.decodeIfPresent(String.self, forKey: .statusAccessibilityIdentifier)
+            ?? "pdtbar.status"
+        sections = try container.decode([MenuSection].self, forKey: .sections)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(statusTitle, forKey: .statusTitle)
+        if let statusBadge {
+            try container.encode(statusBadge, forKey: .statusBadge)
+        } else {
+            try container.encodeNil(forKey: .statusBadge)
+        }
+        try container.encode(statusAccessibilityIdentifier, forKey: .statusAccessibilityIdentifier)
+        try container.encode(sections, forKey: .sections)
     }
 }
 
 public struct MenuSection: Codable, Equatable {
     public var id: String
     public var title: String
+    public var accessibilityIdentifier: String
     public var rows: [MenuRow]
+
+    public init(id: String, title: String, accessibilityIdentifier: String? = nil, rows: [MenuRow]) {
+        self.id = id
+        self.title = title
+        self.accessibilityIdentifier = accessibilityIdentifier ?? "pdtbar.section.\(id)"
+        self.rows = rows
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case accessibilityIdentifier
+        case rows
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        accessibilityIdentifier = try container.decodeIfPresent(String.self, forKey: .accessibilityIdentifier)
+            ?? "pdtbar.section.\(id)"
+        rows = try container.decode([MenuRow].self, forKey: .rows)
+    }
+}
+
+public enum MenuRowRole: String, Codable, Equatable {
+    case row
+    case pulseQuiet
+    case pulseAttention
+    case pulseAttentionExpansion
+    case allocationHolding
+    case allocationDrillDown
+    case incomeEmpty
+    case incomeEvent
+    case incomeDrillDown
+    case bigMoverSummary
+    case freshnessSummary
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        if let role = MenuRowRole(rawValue: value) {
+            self = role
+            return
+        }
+        switch value {
+        case "glance":
+            self = .pulseAttention
+        case "expansion":
+            self = .pulseAttentionExpansion
+        default:
+            self = .row
+        }
+    }
 }
 
 public struct MenuRow: Codable, Equatable {
     public var id: String
-    public var role: String
+    public var role: MenuRowRole
+    public var accessibilityIdentifier: String
     public var title: String
     public var detail: String?
 
     public init(
         id: String = "",
-        role: String = "row",
+        role: MenuRowRole = .row,
+        accessibilityIdentifier: String? = nil,
         title: String,
         detail: String? = nil
     ) {
         self.id = id
         self.role = role
+        self.accessibilityIdentifier = accessibilityIdentifier ?? Self.defaultAccessibilityIdentifier(for: id)
         self.title = title
         self.detail = detail
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case role
+        case accessibilityIdentifier
+        case title
+        case detail
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decodeIfPresent(String.self, forKey: .id) ?? ""
-        role = try container.decodeIfPresent(String.self, forKey: .role) ?? "row"
+        let decodedRole = try container.decodeIfPresent(MenuRowRole.self, forKey: .role) ?? .row
+        role = id == "quiet" && decodedRole == .pulseAttention ? .pulseQuiet : decodedRole
+        accessibilityIdentifier = try container.decodeIfPresent(String.self, forKey: .accessibilityIdentifier)
+            ?? Self.defaultAccessibilityIdentifier(for: id)
         title = try container.decode(String.self, forKey: .title)
         detail = try container.decodeIfPresent(String.self, forKey: .detail)
+    }
+
+    private static func defaultAccessibilityIdentifier(for id: String) -> String {
+        id.isEmpty ? "" : "pdtbar.row.\(id)"
     }
 }
 
@@ -396,15 +504,25 @@ public enum MenuDescriptorRenderer {
         let pulseRows: [MenuRow]
         if model.allQuiet {
             pulseRows = [
-                MenuRow(id: "quiet", role: "glance", title: model.allQuietSignal.title, detail: model.allQuietSignal.detail),
+                MenuRow(
+                    id: "pulse.quiet",
+                    role: .pulseQuiet,
+                    title: model.allQuietSignal.title,
+                    detail: model.allQuietSignal.detail
+                ),
             ]
         } else {
             pulseRows = model.rankedAttentionItems.flatMap { item in
                 [
-                    MenuRow(id: "\(item.id).glance", role: "glance", title: item.title, detail: item.detail),
+                    MenuRow(
+                        id: "\(item.id).glance",
+                        role: .pulseAttention,
+                        title: item.title,
+                        detail: item.detail
+                    ),
                     MenuRow(
                         id: "\(item.id).expansion",
-                        role: "expansion",
+                        role: .pulseAttentionExpansion,
                         title: "\(item.facet) severity \(item.severity)",
                         detail: supportDetail(for: item)
                     ),
@@ -436,7 +554,7 @@ public enum MenuDescriptorRenderer {
                         }
                         return MenuRow(
                             id: "allocation.\(holding.quoteId)",
-                            role: drillDownDetail == nil ? "allocationHolding" : "allocationDrillDown",
+                            role: drillDownDetail == nil ? .allocationHolding : .allocationDrillDown,
                             title: holding.name,
                             detail: drillDownDetail ?? "\(percent(holding.weight)) of portfolio"
                         )
@@ -446,11 +564,18 @@ public enum MenuDescriptorRenderer {
                     id: "income",
                     title: "Income",
                     rows: income.upcomingEvents.isEmpty
-                        ? [MenuRow(title: "No income events", detail: "No calendar events in fixture")]
+                        ? [
+                            MenuRow(
+                                id: "income.empty",
+                                role: .incomeEmpty,
+                                title: "No income events",
+                                detail: "No calendar events in fixture"
+                            ),
+                        ]
                         : income.upcomingEvents.map {
                             MenuRow(
-                                id: "income.\($0.quoteId ?? 0).\($0.kind)",
-                                role: $0.amount == nil ? "incomeEvent" : "incomeDrillDown",
+                                id: incomeRowID(for: $0),
+                                role: $0.amount == nil ? .incomeEvent : .incomeDrillDown,
                                 title: $0.symbolName,
                                 detail: incomeDetail(for: $0)
                             )
@@ -461,6 +586,8 @@ public enum MenuDescriptorRenderer {
                     title: "Big movers",
                     rows: [
                         MenuRow(
+                            id: "bigMovers.summary",
+                            role: .bigMoverSummary,
                             title: bigMovers.maxMove.map { "Quote \($0.quoteId)" } ?? "No big movers",
                             detail: bigMovers.maxMove.map { "\(percent($0.percentChange)) over fixture window" }
                                 ?? "\(bigMovers.priceSeriesCount) price rows checked"
@@ -472,6 +599,8 @@ public enum MenuDescriptorRenderer {
                     title: "Freshness",
                     rows: [
                         MenuRow(
+                            id: "freshness.summary",
+                            role: .freshnessSummary,
                             title: model.facetSnapshots.freshness.worstPriceAsOf ?? "Unknown price date",
                             detail: model.facetSnapshots.freshness.stale ? "Stale" : "Fresh"
                         ),
@@ -511,6 +640,13 @@ public enum MenuDescriptorRenderer {
     private static func incomeDetail(for event: IncomeEventSummary) -> String {
         let amount = event.amount.map { "; \(display($0))" } ?? ""
         return "\(event.kind) on \(event.date)\(amount)"
+    }
+
+    private static func incomeRowID(for event: IncomeEventSummary) -> String {
+        let identity = event.quoteId.map { "quote.\($0)" }
+            ?? event.symbolId.map { "symbol.\($0)" }
+            ?? "portfolio"
+        return "income.\(identity).\(event.kind).\(event.date)"
     }
 }
 

@@ -53,11 +53,51 @@ try check(
 )
 
 let descriptor = MenuDescriptorRenderer.render(model: decoded)
+let descriptorObject = try require(
+    JSONSerialization.jsonObject(with: try stableJSONData(descriptor)) as? [String: Any],
+    "descriptor JSON should encode as an object"
+)
 try check(
     descriptor.statusTitle == "EUR 51,200.00 - All quiet",
     "quiet fixture descriptor should render the all-quiet status"
 )
+try check(descriptorObject.keys.contains("statusBadge"), "descriptor JSON should explicitly encode statusBadge")
 try check(descriptor.sections.map(\.id) == ["pulse", "allocation", "income", "bigMovers", "freshness"], "descriptor should expose drill-down sections")
+try check(
+    descriptor.statusAccessibilityIdentifier == "pdtbar.status",
+    "descriptor should expose a stable status accessibility identifier"
+)
+try check(
+    descriptor.sections.map(\.accessibilityIdentifier) == [
+        "pdtbar.section.pulse",
+        "pdtbar.section.allocation",
+        "pdtbar.section.income",
+        "pdtbar.section.bigMovers",
+        "pdtbar.section.freshness",
+    ],
+    "descriptor should expose stable section accessibility identifiers"
+)
+let quietPulseRow = try require(
+    descriptor.sections.first { $0.id == "pulse" }?.rows.first { $0.id == "pulse.quiet" },
+    "quiet descriptor should expose the pulse quiet row by stable id"
+)
+try check(quietPulseRow.role == .pulseQuiet, "quiet pulse row should expose a typed role")
+try check(
+    quietPulseRow.accessibilityIdentifier == "pdtbar.row.pulse.quiet",
+    "quiet pulse row should expose a stable accessibility identifier"
+)
+try check(
+    descriptor.sections.first { $0.id == "income" }?.rows.map(\.id) == ["income.empty"],
+    "quiet income rows should expose stable ids"
+)
+try check(
+    descriptor.sections.first { $0.id == "bigMovers" }?.rows.map(\.id) == ["bigMovers.summary"],
+    "quiet big-mover rows should expose stable ids"
+)
+try check(
+    descriptor.sections.first { $0.id == "freshness" }?.rows.map(\.id) == ["freshness.summary"],
+    "quiet freshness rows should expose stable ids"
+)
 
 var nonQuietModel = decoded
 let attention = AttentionItem(
@@ -104,7 +144,18 @@ let legacyMenuRow = try JSONDecoder().decode(
     """.utf8)
 )
 try check(legacyMenuRow.id == "", "legacy menu row JSON should default missing id")
-try check(legacyMenuRow.role == "row", "legacy menu row JSON should default missing role")
+try check(legacyMenuRow.role == .row, "legacy menu row JSON should default missing role")
+let legacyQuietMenuRow = try JSONDecoder().decode(
+    MenuRow.self,
+    from: Data("""
+    {
+      "id": "quiet",
+      "role": "glance",
+      "title": "All quiet"
+    }
+    """.utf8)
+)
+try check(legacyQuietMenuRow.role == .pulseQuiet, "legacy quiet glance row should decode as typed quiet role")
 
 var incompleteAllocationModel = decoded
 let incompleteAllocationAttention = AttentionItem(
@@ -129,7 +180,7 @@ let incompleteAllocationRow = try require(
     "allocation row should exist for incomplete attention metadata"
 )
 try check(
-    incompleteAllocationRow.role == "allocationHolding"
+    incompleteAllocationRow.role == .allocationHolding
         && incompleteAllocationRow.detail == "11.7% of portfolio",
     "allocation drill-down should fall back when current weight or threshold is missing"
 )
@@ -325,27 +376,23 @@ try check(
     incomeExpansion.detail == "2026-06-24; EUR 78.00; score 0.45",
     "income descriptor should render date, amount, and score"
 )
+let incomeRows = incomeRun.descriptor.sections.first { $0.id == "income" }?.rows ?? []
+let incomeDrillDownRow = incomeRows.first {
+    $0.role == .incomeDrillDown && $0.title == "Helix Pharma A/S"
+}
 try check(
-    incomeRun.descriptor.sections
-        .first { $0.id == "income" }?
-        .rows
-        .contains {
-            $0.role == "incomeDrillDown"
-                && $0.title == "Helix Pharma A/S"
-                && $0.detail == "ex-dividend on 2026-06-24; EUR 78.00"
-        } == true,
+    incomeDrillDownRow?.detail == "ex-dividend on 2026-06-24; EUR 78.00",
     "income section should expand event date and amount support"
 )
+let incomePaymentRow = incomeRows.first { $0.id == "income.quote.9003.payment-dividend.2026-07-10" }
 try check(
-    incomeRun.descriptor.sections
-        .first { $0.id == "income" }?
-        .rows
-        .contains {
-            $0.id == "income.9003.payment-dividend"
-                && $0.role == "incomeEvent"
-                && $0.detail == "payment-dividend on 2026-07-10"
-        } == true,
+    incomePaymentRow?.role == .incomeEvent
+        && incomePaymentRow?.detail == "payment-dividend on 2026-07-10",
     "income section should not attach historical amount to unrelated calendar events"
+)
+try check(
+    Set(incomeRows.map(\.id)).count == incomeRows.count,
+    "income section should expose unique row ids"
 )
 var unmappedIncomeSnapshot = try PDTFixtureDataSource.snapshot(from: incomeFixture)
 unmappedIncomeSnapshot.incomeEvents.append(
@@ -445,18 +492,15 @@ try check(!concentrationItem.detail.localizedCaseInsensitiveContains("buy"), "co
 try check(!concentrationItem.detail.localizedCaseInsensitiveContains("should"), "copy should not be prescriptive")
 try check(concentrationRun.descriptor.statusBadge == "1", "descriptor should expose a badge")
 try check(
-    concentrationRun.descriptor.sections.first?.rows.map(\.role) == ["glance", "expansion"],
-    "descriptor should expose glance and expansion rows"
+    concentrationRun.descriptor.sections.first?.rows.map(\.role) == [.pulseAttention, .pulseAttentionExpansion],
+    "descriptor should expose pulse attention and expansion rows"
 )
+let allocationRows = concentrationRun.descriptor.sections.first { $0.id == "allocation" }?.rows ?? []
+let allocationDrillDownRow = allocationRows.first {
+    $0.role == .allocationDrillDown && $0.title == "Nova Lithography"
+}
 try check(
-    concentrationRun.descriptor.sections
-        .first { $0.id == "allocation" }?
-        .rows
-        .contains {
-            $0.role == "allocationDrillDown"
-                && $0.title == "Nova Lithography"
-                && $0.detail == "24.2% of portfolio; concentration line 20.0%"
-        } == true,
+    allocationDrillDownRow?.detail == "24.2% of portfolio; concentration line 20.0%",
     "descriptor should expose allocation drill-down for the item"
 )
 
@@ -467,6 +511,24 @@ for fixture in allFixtures {
     let decoded = try JSONDecoder().decode(PortfolioPulseModel.self, from: modelJSON)
     let descriptor = MenuDescriptorRenderer.render(model: decoded)
     try check(!descriptor.sections.isEmpty, "\(fixture.lastPathComponent) should render menu sections")
+    try check(descriptor.statusAccessibilityIdentifier == "pdtbar.status", "\(fixture.lastPathComponent) should expose status accessibility id")
+    try check(
+        descriptor.sections.allSatisfy { !$0.id.isEmpty && $0.accessibilityIdentifier == "pdtbar.section.\($0.id)" },
+        "\(fixture.lastPathComponent) should expose stable section ids and accessibility ids"
+    )
+    let renderedRows = descriptor.sections.flatMap(\.rows)
+    try check(
+        Set(renderedRows.map(\.id)).count == renderedRows.count,
+        "\(fixture.lastPathComponent) should expose unique row ids"
+    )
+    try check(
+        renderedRows.allSatisfy { !$0.id.isEmpty && $0.accessibilityIdentifier == "pdtbar.row.\($0.id)" },
+        "\(fixture.lastPathComponent) should expose stable row ids and accessibility ids"
+    )
+    try check(
+        renderedRows.allSatisfy { $0.role != .row },
+        "\(fixture.lastPathComponent) should expose typed row roles"
+    )
     try check(decoded.supportingDataSlots.count == 4, "\(fixture.lastPathComponent) should include supporting slots")
     try check(!decoded.facetSnapshots.allocation.totalValue.value.contains(","), "\(fixture.lastPathComponent) should keep Money.value canonical")
 }

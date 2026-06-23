@@ -40,8 +40,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private func installMenuBarItem(_ descriptor: MenuDescriptor) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.title = descriptor.statusTitle
+        item.button?.identifier = NSUserInterfaceItemIdentifier(descriptor.statusAccessibilityIdentifier)
         item.button?.toolTip = "PDTBar \(descriptor.statusTitle)"
         item.button?.setAccessibilityLabel("PDTBar \(descriptor.statusTitle)")
+        item.button?.setAccessibilityIdentifier(descriptor.statusAccessibilityIdentifier)
         item.menu = makeMenu(from: descriptor)
         statusItem = item
     }
@@ -50,11 +52,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         for section in descriptor.sections {
             let heading = NSMenuItem(title: section.title, action: nil, keyEquivalent: "")
+            heading.identifier = NSUserInterfaceItemIdentifier(section.accessibilityIdentifier)
+            heading.setAccessibilityIdentifier(section.accessibilityIdentifier)
             heading.isEnabled = false
             menu.addItem(heading)
             for row in section.rows {
                 let title = row.detail.map { "\(row.title) - \($0)" } ?? row.title
-                menu.addItem(NSMenuItem(title: title, action: nil, keyEquivalent: ""))
+                let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                if !row.accessibilityIdentifier.isEmpty {
+                    item.identifier = NSUserInterfaceItemIdentifier(row.accessibilityIdentifier)
+                    item.setAccessibilityIdentifier(row.accessibilityIdentifier)
+                }
+                menu.addItem(item)
             }
             menu.addItem(.separator())
         }
