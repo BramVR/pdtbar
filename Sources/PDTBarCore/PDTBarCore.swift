@@ -1066,28 +1066,86 @@ public enum PDTLiveDataSourceError: Error, CustomStringConvertible {
 
 public enum PDTLiveUnavailableClassifier {
     public static func shouldSkip(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return false
+        }
+        if let data = trimmed.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data)
+        {
+            return unavailableTexts(in: object).contains(where: containsUnavailablePhrase)
+        }
+        return containsUnavailablePhrase(trimmed)
+    }
+
+    private static func containsUnavailablePhrase(_ value: String) -> Bool {
         let lower = value.lowercased()
-        return [
-            "not authenticated",
-            "authentication required",
-            "oauth",
-            "missing credential",
-            "credentials not found",
-            "login required",
-            "please login",
-            "not logged in",
-            "token expired",
-            "session expired",
-            "unauthorized",
-            "forbidden",
-            "offline",
-            "connection refused",
-            "failed to connect",
-            "could not connect",
-            "econnrefused",
-            "server not found",
-            "server unavailable",
-        ].contains { lower.contains($0) }
+        return unavailablePhrases.contains { lower.contains($0) }
+    }
+
+    private static let unavailablePhrases = [
+        "not authenticated",
+        "authentication required",
+        "oauth",
+        "missing credential",
+        "credentials not found",
+        "login required",
+        "please login",
+        "not logged in",
+        "token expired",
+        "session expired",
+        "unauthorized",
+        "forbidden",
+        "offline",
+        "connection refused",
+        "failed to connect",
+        "could not connect",
+        "econnrefused",
+        "server not found",
+        "server unavailable",
+    ]
+
+    private static let errorTextKeys = Set([
+        "error",
+        "message",
+        "detail",
+        "details",
+        "description",
+        "status",
+        "code",
+    ])
+
+    private static func unavailableTexts(in object: Any, forceErrorContext: Bool = false) -> [String] {
+        if let string = object as? String {
+            if forceErrorContext {
+                return [string]
+            }
+            if let data = string.data(using: .utf8),
+               let nested = try? JSONSerialization.jsonObject(with: data)
+            {
+                return unavailableTexts(in: nested)
+            }
+            return []
+        }
+        if let array = object as? [Any] {
+            return forceErrorContext ? array.flatMap { unavailableTexts(in: $0, forceErrorContext: true) } : []
+        }
+        guard let dictionary = object as? [String: Any] else {
+            return []
+        }
+
+        let isError = forceErrorContext || dictionary["isError"] as? Bool == true || dictionary["is_error"] as? Bool == true
+        var texts: [String] = []
+        for (key, value) in dictionary {
+            if errorTextKeys.contains(key) {
+                texts.append(contentsOf: unavailableTexts(in: value, forceErrorContext: true))
+            } else if key == "content", isError {
+                texts.append(contentsOf: unavailableTexts(in: value, forceErrorContext: true))
+            } else if isError && (key == "text" || key == "title") {
+                texts.append(contentsOf: unavailableTexts(in: value, forceErrorContext: true))
+            }
+        }
+        return texts
     }
 }
 

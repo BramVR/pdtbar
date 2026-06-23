@@ -369,7 +369,7 @@ try check(
 )
 do {
     _ = try PDTLiveDataSource(toolClient: ScriptedPDTLiveToolClient(responses: [
-        "pdt-get-portfolio-holdings": try mcpContent("""
+        "pdt-get-portfolio-holdings": try mcpErrorContent("""
         authentication required; please login with cached credentials before calling PDT
         """),
     ])).snapshot(asOf: "2026-03-29")
@@ -744,12 +744,21 @@ private struct ScriptedPDTLiveToolClient: PDTLiveToolClient {
 }
 
 private func mcpContent(_ json: String) throws -> Data {
+    try mcpContent(json, isError: false)
+}
+
+private func mcpErrorContent(_ text: String) throws -> Data {
+    try mcpContent(text, isError: true)
+}
+
+private func mcpContent(_ text: String, isError: Bool) throws -> Data {
     try JSONSerialization.data(
         withJSONObject: [
+            "isError": isError,
             "content": [
                 [
                     "type": "text",
-                    "text": json,
+                    "text": text,
                 ],
             ],
         ],
