@@ -422,70 +422,71 @@ let scriptedLiveStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-liv
 defer {
     try? FileManager.default.removeItem(at: scriptedLiveStore.directory)
 }
+let scriptedConnectorResponses = [
+    "pdt-get-portfolio-holdings": try mcpContent("""
+    {
+      "holdings": [
+        {
+          "symbolName": "Live Adapter Co",
+          "symbolQuoteId": 9101,
+          "currentPriceDate": "2026-06-22T22:00:00+00:00",
+          "currentPriceLocal": { "value": "20.00", "currency": "EUR" },
+          "currentWorthLocal": { "value": "250.00", "currency": "EUR" },
+          "portfolioWeight": 0.25,
+          "closedAt": null
+        },
+        {
+          "symbolName": "Closed Adapter Co",
+          "symbolQuoteId": 9102,
+          "currentPriceDate": "2026-06-22T22:00:00+00:00",
+          "currentPriceLocal": { "value": "0.00", "currency": "EUR" },
+          "currentWorthLocal": { "value": "0.00", "currency": "EUR" },
+          "portfolioWeight": 0.0,
+          "closedAt": "2026-06-01T00:00:00+00:00"
+        }
+      ]
+    }
+    """),
+    "pdt-get-portfolio-distributions": try mcpResult("""
+    {
+      "sectors": [
+        { "categoryName": "Technology", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
+      ],
+      "assetTypes": [
+        { "categoryName": "Stock", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
+      ]
+    }
+    """),
+    "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28": try mcpContent("""
+    {
+      "data": [
+        { "date": "2026-03-29", "type": "no-events-today", "isEstimated": false, "symbolId": null, "symbolName": null },
+        { "date": "2026-03-30", "type": "ex-dividend", "isEstimated": false, "symbolId": 5101, "symbolName": "Live Adapter Co" }
+      ]
+    }
+    """),
+    "pdt-list-dividends?date_from=2025-03-24&date_to=2026-04-28&page=1&per_page=250": try mcpResult("""
+    {
+      "data": [
+        { "date": "2026-03-28T08:13:00+00:00", "amount": { "value": "8.00", "currency": "EUR" }, "symbolQuoteId": 9101 }
+      ],
+      "meta": { "last_page": 1 }
+    }
+    """),
+    "pdt-get-symbol-quote?id=9101": try mcpContent("""
+    { "id": 9101, "symbolId": 5101 }
+    """),
+    "pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9101": try mcpContent("""
+    {
+      "data": [
+        { "date": "2026-03-27", "closeAdjusted": "19.00", "symbolQuoteId": 9101 },
+        { "date": "2026-03-29", "closeAdjusted": "20.00", "symbolQuoteId": 9101 }
+      ]
+    }
+    """),
+]
 let scriptedLiveRun = try PressureRunner.run(
-    dataSource: PDTLiveDataSource(toolClient: ScriptedPDTLiveToolClient(responses: [
-        "pdt-get-portfolio-holdings": try mcpContent("""
-        {
-          "holdings": [
-            {
-              "symbolName": "Live Adapter Co",
-              "symbolQuoteId": 9101,
-              "currentPriceDate": "2026-06-22T22:00:00+00:00",
-              "currentPriceLocal": { "value": "20.00", "currency": "EUR" },
-              "currentWorthLocal": { "value": "250.00", "currency": "EUR" },
-              "portfolioWeight": 0.25,
-              "closedAt": null
-            },
-            {
-              "symbolName": "Closed Adapter Co",
-              "symbolQuoteId": 9102,
-              "currentPriceDate": "2026-06-22T22:00:00+00:00",
-              "currentPriceLocal": { "value": "0.00", "currency": "EUR" },
-              "currentWorthLocal": { "value": "0.00", "currency": "EUR" },
-              "portfolioWeight": 0.0,
-              "closedAt": "2026-06-01T00:00:00+00:00"
-            }
-          ]
-        }
-        """),
-        "pdt-get-portfolio-distributions": try mcpResult("""
-        {
-          "sectors": [
-            { "categoryName": "Technology", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
-          ],
-          "assetTypes": [
-            { "categoryName": "Stock", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
-          ]
-        }
-        """),
-        "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28": try mcpContent("""
-        {
-          "data": [
-            { "date": "2026-03-29", "type": "no-events-today", "isEstimated": false, "symbolId": null, "symbolName": null },
-            { "date": "2026-03-30", "type": "ex-dividend", "isEstimated": false, "symbolId": 5101, "symbolName": "Live Adapter Co" }
-          ]
-        }
-        """),
-        "pdt-list-dividends?date_from=2025-03-24&date_to=2026-04-28&page=1&per_page=250": try mcpResult("""
-        {
-          "data": [
-            { "date": "2026-03-28T08:13:00+00:00", "amount": { "value": "8.00", "currency": "EUR" }, "symbolQuoteId": 9101 }
-          ],
-          "meta": { "last_page": 1 }
-        }
-        """),
-        "pdt-get-symbol-quote?id=9101": try mcpContent("""
-        { "id": 9101, "symbolId": 5101 }
-        """),
-        "pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9101": try mcpContent("""
-        {
-          "data": [
-            { "date": "2026-03-27", "closeAdjusted": "19.00", "symbolQuoteId": 9101 },
-            { "date": "2026-03-29", "closeAdjusted": "20.00", "symbolQuoteId": 9101 }
-          ]
-        }
-        """),
-    ])),
+    dataSource: PDTLiveDataSource(toolClient: ScriptedPDTLiveToolClient(responses: scriptedConnectorResponses)),
     snapshotStore: scriptedLiveStore,
     asOf: "2026-03-29"
 )
@@ -526,6 +527,68 @@ try check(
     FileManager.default.fileExists(atPath: scriptedLiveRun.snapshotCommit.path),
     "live data source should commit a snapshot inside the passed store"
 )
+let connectorStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-scripted-connector-check")
+defer {
+    try? FileManager.default.removeItem(at: connectorStore.directory)
+}
+let scriptedConnector = ScriptedPDTMCPConnector(responses: scriptedConnectorResponses)
+let coalescedConnectorFetch = PDTCoalescedFirstPortfolioFetch(
+    dataSource: PDTMCPConnectorDataSource(connector: scriptedConnector),
+    snapshotStore: connectorStore,
+    asOf: "2026-03-29"
+)
+let firstConnectorFetch = try coalescedConnectorFetch.fetch()
+let secondConnectorFetch = try coalescedConnectorFetch.fetch()
+try check(firstConnectorFetch == secondConnectorFetch, "coalesced scripted connector fetch should return the first result")
+let connectorCallCounts = Dictionary(grouping: scriptedConnector.calls, by: { $0 }).mapValues(\.count)
+try check(
+    Set(scriptedConnector.calls).isSubset(of: Set(PDTReadTools.requiredV1)),
+    "scripted connector path should call only required v1 read tools"
+)
+try check(
+    PDTReadTools.requiredV1.allSatisfy { connectorCallCounts[$0] == 1 },
+    "coalesced scripted connector fetch should call every required v1 read tool exactly once"
+)
+try check(scriptedConnector.availabilityChecks == 1, "scripted connector fetch should check required tool availability once")
+let missingToolConnector = ScriptedPDTMCPConnector(
+    availableTools: Set(PDTReadTools.requiredV1.filter { $0 != "pdt-list-dividends" }),
+    responses: scriptedConnectorResponses
+)
+do {
+    _ = try PDTMCPConnectorDataSource(connector: missingToolConnector).snapshot(asOf: "2026-03-29")
+    throw CheckFailure("missing read tool should block scripted connector fetch")
+} catch PDTMCPConnectorError.missingRequiredReadTools(let missing) {
+    try check(missing == ["pdt-list-dividends"], "missing read tool error should name the unavailable v1 tool")
+    try check(missingToolConnector.calls.isEmpty, "missing read tool should block before any tool call")
+}
+let setupErrorConnector = ScriptedPDTMCPConnector(
+    responses: scriptedConnectorResponses,
+    failure: .setupUnavailable("Claude Desktop needs PDT setup")
+)
+do {
+    _ = try PDTMCPConnectorDataSource(connector: setupErrorConnector).snapshot(asOf: "2026-03-29")
+    throw CheckFailure("setup unavailable should propagate from scripted connector")
+} catch PDTMCPConnectorError.setupUnavailable {
+}
+let transientErrorConnector = ScriptedPDTMCPConnector(
+    responses: scriptedConnectorResponses,
+    failure: .transientFailure("Claude call timed out")
+)
+do {
+    _ = try PDTMCPConnectorDataSource(connector: transientErrorConnector).snapshot(asOf: "2026-03-29")
+    throw CheckFailure("transient failure should propagate from scripted connector")
+} catch PDTMCPConnectorError.transientFailure {
+}
+var malformedResponses = scriptedConnectorResponses
+malformedResponses["pdt-get-portfolio-holdings"] = Data("{".utf8)
+do {
+    _ = try PDTMCPConnectorDataSource(
+        connector: ScriptedPDTMCPConnector(responses: malformedResponses)
+    ).snapshot(asOf: "2026-03-29")
+    throw CheckFailure("malformed scripted payload should not produce a snapshot")
+} catch PDTLiveDataSourceError.malformedToolResult(let tool) {
+    try check(tool == "pdt-get-portfolio-holdings", "malformed payload should report the failing read tool")
+}
 do {
     _ = try PDTLiveDataSource(toolClient: ScriptedPDTLiveToolClient(responses: [
         "pdt-get-portfolio-holdings": try mcpErrorContent("""

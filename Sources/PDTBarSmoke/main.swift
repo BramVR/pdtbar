@@ -28,6 +28,8 @@ do {
     switch command {
     case "live-pdt":
         report = try livePDTSmoke(arguments: Array(arguments.dropFirst()))
+    case "scripted-pdt-connector":
+        report = try scriptedPDTConnectorSmoke(arguments: Array(arguments.dropFirst()))
     case "logged-out-launch":
         report = try loggedOutLaunchSmoke(arguments: Array(arguments.dropFirst()))
     case "ready-launch":
@@ -50,6 +52,7 @@ do {
     FileHandle.standardError.write(Data("""
     usage:
       pdtbar-smoke live-pdt [--server <mcporter-server>] [--artifacts <dir>] [--timeout <seconds>]
+      pdtbar-smoke scripted-pdt-connector [--artifacts <dir>]
       pdtbar-smoke logged-out-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke ready-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]
@@ -68,15 +71,6 @@ do {
     ))
     Foundation.exit(1)
 }
-
-private let requiredLivePDTTools = [
-    "pdt-get-portfolio-holdings",
-    "pdt-get-portfolio-distributions",
-    "pdt-list-calendar-events",
-    "pdt-list-dividends",
-    "pdt-list-symbol-prices",
-    "pdt-get-symbol-quote",
-]
 
 private func readyLaunchSmoke(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
@@ -332,6 +326,69 @@ private func loggedOutLaunchSmoke(arguments: [String]) throws -> SmokeReport {
     )
 }
 
+private func scriptedPDTConnectorSmoke(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let proof = artifacts.appending(path: "pdtbar-scripted-pdt-connector-proof.json")
+    let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-scripted-pdt-connector")
+    defer {
+        try? FileManager.default.removeItem(at: snapshotStore.directory)
+    }
+
+    let responses = try scriptedPDTConnectorResponses()
+    let connector = ScriptedPDTMCPConnector(responses: responses)
+    let coalescedFetch = PDTCoalescedFirstPortfolioFetch(
+        dataSource: PDTMCPConnectorDataSource(connector: connector),
+        snapshotStore: snapshotStore,
+        asOf: "2026-03-29"
+    )
+    let firstRun = try coalescedFetch.fetch()
+    let secondRun = try coalescedFetch.fetch()
+    let callCounts = Dictionary(grouping: connector.calls, by: { $0 }).mapValues(\.count)
+    let calledOnlyRequiredTools = Set(connector.calls).isSubset(of: Set(PDTReadTools.requiredV1))
+    let requiredToolsCalledOnce = PDTReadTools.requiredV1.allSatisfy { callCounts[$0] == 1 }
+    let scenarioResults = try scriptedPDTConnectorScenarioResults(responses: responses)
+    let proofPayload = ScriptedPDTConnectorProof(
+        requiredReadTools: PDTReadTools.requiredV1,
+        availabilityChecks: connector.availabilityChecks,
+        callCounts: PDTReadTools.requiredV1.reduce(into: [String: Int]()) { counts, tool in
+            counts[tool] = callCounts[tool] ?? 0
+        },
+        calledOnlyRequiredReadTools: calledOnlyRequiredTools,
+        coalescedSecondFetchReusedFirstResult: firstRun == secondRun,
+        snapshotWritten: firstRun.snapshotCommit.written,
+        openHoldingCount: firstRun.model.facetSnapshots.allocation.openHoldingCount,
+        renderedSectionIDs: firstRun.descriptor.sections.map(\.id),
+        scenarios: scenarioResults,
+        rawPortfolioPayloadsRedacted: true
+    )
+    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+
+    guard connector.availabilityChecks == 1,
+          calledOnlyRequiredTools,
+          requiredToolsCalledOnce,
+          firstRun == secondRun,
+          firstRun.snapshotCommit.written,
+          firstRun.model.facetSnapshots.allocation.openHoldingCount > 0,
+          scenarioResults.allSatisfy(\.passed)
+    else {
+        return SmokeReport(
+            name: "scripted-pdt-connector",
+            status: SmokeStatus.failed,
+            detail: "scripted PDT connector did not prove required read-tool availability, exact coalesced call counts, or all scripted response states",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+
+    return SmokeReport(
+        name: "scripted-pdt-connector",
+        status: SmokeStatus.passed,
+        detail: "scripted Claude PDT connector checked required v1 read tools, called each read tool exactly once for a coalesced fetch, and rendered through PressureRunner with redacted proof",
+        artifacts: [artifactPath(proof)]
+    )
+}
+
 private func livePDTSmoke(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
     let environment = ProcessInfo.processInfo.environment
@@ -339,7 +396,7 @@ private func livePDTSmoke(arguments: [String]) throws -> SmokeReport {
         let schemaData = try Data(contentsOf: URL(fileURLWithPath: schemaPath))
         let object = try JSONSerialization.jsonObject(with: schemaData)
         let schemaToolNames = toolNames(in: object)
-        let missingTools = requiredLivePDTTools.filter { tool in
+        let missingTools = PDTReadTools.requiredV1.filter { tool in
             !schemaToolNames.contains(tool)
         }
         guard missingTools.isEmpty else {
@@ -797,6 +854,25 @@ private struct LivePDTPulseProof: Codable {
     var rawPortfolioValuesRedacted: Bool
 }
 
+private struct ScriptedPDTConnectorProof: Codable {
+    var requiredReadTools: [String]
+    var availabilityChecks: Int
+    var callCounts: [String: Int]
+    var calledOnlyRequiredReadTools: Bool
+    var coalescedSecondFetchReusedFirstResult: Bool
+    var snapshotWritten: Bool
+    var openHoldingCount: Int
+    var renderedSectionIDs: [String]
+    var scenarios: [ScriptedPDTConnectorScenarioResult]
+    var rawPortfolioPayloadsRedacted: Bool
+}
+
+private struct ScriptedPDTConnectorScenarioResult: Codable {
+    var name: String
+    var passed: Bool
+    var detail: String
+}
+
 private struct PulseTargetEvidence: Codable {
     var accessibilityIdentifier: String
     var title: String
@@ -1133,6 +1209,141 @@ private struct SmokeOptions {
 private struct CommandResult {
     var stdout: Data
     var stderr: Data
+}
+
+private func scriptedPDTConnectorScenarioResults(
+    responses: [String: Data]
+) throws -> [ScriptedPDTConnectorScenarioResult] {
+    var results: [ScriptedPDTConnectorScenarioResult] = []
+
+    let missingToolConnector = ScriptedPDTMCPConnector(
+        availableTools: Set(PDTReadTools.requiredV1.filter { $0 != "pdt-list-dividends" }),
+        responses: responses
+    )
+    do {
+        _ = try PDTMCPConnectorDataSource(connector: missingToolConnector).snapshot(asOf: "2026-03-29")
+        results.append(.init(name: "missing-tool", passed: false, detail: "snapshot unexpectedly succeeded"))
+    } catch PDTMCPConnectorError.missingRequiredReadTools(let missing) {
+        results.append(.init(
+            name: "missing-tool",
+            passed: missing == ["pdt-list-dividends"] && missingToolConnector.calls.isEmpty,
+            detail: "missing=\(missing.joined(separator: ",")); calls=\(missingToolConnector.calls.count)"
+        ))
+    }
+
+    for (name, failure) in [
+        ("auth-setup-error", PDTMCPConnectorError.setupUnavailable("Claude Desktop needs PDT setup")),
+        ("transient-failure", PDTMCPConnectorError.transientFailure("Claude call timed out")),
+    ] {
+        do {
+            _ = try PDTMCPConnectorDataSource(
+                connector: ScriptedPDTMCPConnector(responses: responses, failure: failure)
+            ).snapshot(asOf: "2026-03-29")
+            results.append(.init(name: name, passed: false, detail: "snapshot unexpectedly succeeded"))
+        } catch let error as PDTMCPConnectorError {
+            results.append(.init(name: name, passed: error == failure, detail: error.description))
+        }
+    }
+
+    var malformedResponses = responses
+    malformedResponses["pdt-get-portfolio-holdings"] = Data("{".utf8)
+    do {
+        _ = try PDTMCPConnectorDataSource(
+            connector: ScriptedPDTMCPConnector(responses: malformedResponses)
+        ).snapshot(asOf: "2026-03-29")
+        results.append(.init(name: "malformed-payload", passed: false, detail: "snapshot unexpectedly succeeded"))
+    } catch PDTLiveDataSourceError.malformedToolResult(let tool) {
+        results.append(.init(
+            name: "malformed-payload",
+            passed: tool == "pdt-get-portfolio-holdings",
+            detail: tool
+        ))
+    }
+
+    return results
+}
+
+private func scriptedPDTConnectorResponses() throws -> [String: Data] {
+    [
+        "pdt-get-portfolio-holdings": try mcpContent("""
+        {
+          "holdings": [
+            {
+              "symbolName": "Scripted Adapter Co",
+              "symbolQuoteId": 9101,
+              "currentPriceDate": "2026-03-29T22:00:00+00:00",
+              "currentPriceLocal": { "value": "20.00", "currency": "EUR" },
+              "currentWorthLocal": { "value": "250.00", "currency": "EUR" },
+              "portfolioWeight": 0.25,
+              "closedAt": null
+            }
+          ]
+        }
+        """),
+        "pdt-get-portfolio-distributions": try mcpResult("""
+        {
+          "sectors": [
+            { "categoryName": "Technology", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
+          ],
+          "assetTypes": [
+            { "categoryName": "Stock", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
+          ]
+        }
+        """),
+        "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28": try mcpContent("""
+        {
+          "data": [
+            { "date": "2026-03-30", "type": "ex-dividend", "isEstimated": false, "symbolId": 5101, "symbolName": "Scripted Adapter Co" }
+          ]
+        }
+        """),
+        "pdt-list-dividends?date_from=2025-03-24&date_to=2026-04-28&page=1&per_page=250": try mcpResult("""
+        {
+          "data": [
+            { "date": "2026-03-28T08:13:00+00:00", "amount": { "value": "8.00", "currency": "EUR" }, "symbolQuoteId": 9101 }
+          ],
+          "meta": { "last_page": 1 }
+        }
+        """),
+        "pdt-get-symbol-quote?id=9101": try mcpContent("""
+        { "id": 9101, "symbolId": 5101 }
+        """),
+        "pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9101": try mcpContent("""
+        {
+          "data": [
+            { "date": "2026-03-27", "closeAdjusted": "19.00", "symbolQuoteId": 9101 },
+            { "date": "2026-03-29", "closeAdjusted": "20.00", "symbolQuoteId": 9101 }
+          ]
+        }
+        """),
+    ]
+}
+
+private func mcpContent(_ json: String) throws -> Data {
+    try mcpContent(json, isError: false)
+}
+
+private func mcpContent(_ text: String, isError: Bool) throws -> Data {
+    try JSONSerialization.data(
+        withJSONObject: [
+            "isError": isError,
+            "content": [
+                [
+                    "type": "text",
+                    "text": text,
+                ],
+            ],
+        ],
+        options: [.sortedKeys]
+    )
+}
+
+private func mcpResult(_ json: String) throws -> Data {
+    let payload = try JSONSerialization.jsonObject(with: Data(json.utf8))
+    return try JSONSerialization.data(
+        withJSONObject: ["result": payload],
+        options: [.sortedKeys]
+    )
 }
 
 private struct PDTLiveMcporterClient: PDTLiveToolClient {
