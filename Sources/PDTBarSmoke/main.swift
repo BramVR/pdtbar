@@ -286,11 +286,10 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
 
     let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
     let fixture = options.fixture ?? defaultFixture
-    let descriptor = MenuDescriptorRenderer.render(
-        model: PressureEngine.buildModel(from: try PDTFixtureDataSource(fixture: fixture).snapshot())
-    )
-    let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
-    let expectedTargets = requiredQuietPulseMenuTargets(in: surface)
+    let expectedSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "real-user-pulse-expected")
+    let expectedScenario = try fixturePulseScenario(fixture: fixture, snapshotDirectory: expectedSnapshotDirectory)
+    let surface = MenuBarSurfaceRenderer.render(descriptor: expectedScenario.run.descriptor)
+    let expectedTargets = requiredPulseMenuTargets(in: surface)
     let expectedMenuIdentifiers = Set(expectedTargets.map(\.accessibilityIdentifier))
     let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
     try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
@@ -306,8 +305,11 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         return appReport
     }
 
-    let process = Process()
     let snapshotDirectory = try options.isolatedSnapshotDirectory(prefix: "real-user-pulse-app")
+    if expectedScenario.seededPrior != nil {
+        _ = try PressureRunner.seedPriorSnapshot(fixture: fixture, snapshotDirectory: snapshotDirectory)
+    }
+    let process = Process()
     process.executableURL = app
     process.arguments = ["--fixture", fixture.path, "--snapshot-dir", snapshotDirectory.path]
     process.environment = ProcessInfo.processInfo.environment.merging(["PDTBAR_FIXTURE_MODE": "1"]) { _, new in new }
@@ -338,7 +340,7 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         return SmokeReport(
             name: "real-user-pulse",
             status: SmokeStatus.failed,
-            detail: "fixture-mode app exposed status item \(surface.status.accessibilityIdentifier), but not visible all-quiet status \(surface.status.menuBarTitle)",
+            detail: "fixture-mode app exposed status item \(surface.status.accessibilityIdentifier), but not visible expected status \(surface.status.menuBarTitle)",
             artifacts: []
         )
     }
@@ -369,15 +371,16 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         return SmokeReport(
             name: "real-user-pulse",
             status: SmokeStatus.failed,
-            detail: "could not verify opened fixture-mode pulse menu after \(openedMenu.attempts.joined(separator: ", ")); missing expected quiet fixture targets: \(missingLabels)",
+            detail: "could not verify opened fixture-mode pulse menu after \(openedMenu.attempts.joined(separator: ", ")); missing expected fixture targets: \(missingLabels)",
             artifacts: [artifactPath(evidence)]
         )
     }
 
+    let priorDetail = expectedScenario.seededPrior.map { "; seeded prior snapshot \($0.asOf)" } ?? ""
     return SmokeReport(
         name: "real-user-pulse",
         status: SmokeStatus.passed,
-        detail: "launched fixture-mode app, opened menu-bar pulse through \(openedMenu.successfulAttempt ?? "Accessibility"), and verified quiet fixture status plus pulse/allocation/income/big-mover/freshness selectors",
+        detail: "launched fixture-mode app with isolated state\(priorDetail), opened menu-bar pulse through \(openedMenu.successfulAttempt ?? "Accessibility"), and verified status plus pulse/allocation/income/big-mover/freshness selectors for \(fixture.lastPathComponent)",
         artifacts: [artifactPath(evidence)]
     )
 }
@@ -398,25 +401,38 @@ private func fixtureProof(arguments: [String]) throws -> SmokeReport {
     )
 }
 
-private struct QuietPulseTarget {
+private struct PulseScenario {
+    var run: PressureRunResult
+    var seededPrior: SnapshotCommit?
+}
+
+private func fixturePulseScenario(fixture: URL, snapshotDirectory: URL) throws -> PulseScenario {
+    let seededPrior: SnapshotCommit?
+    do {
+        seededPrior = try PressureRunner.seedPriorSnapshot(fixture: fixture, snapshotDirectory: snapshotDirectory)
+    } catch FixtureError.missingPriorSnapshot {
+        seededPrior = nil
+    }
+    let run = try PressureRunner.run(fixture: fixture, snapshotDirectory: snapshotDirectory)
+    return PulseScenario(run: run, seededPrior: seededPrior)
+}
+
+private struct PulseTarget {
     var accessibilityIdentifier: String
     var title: String
 }
 
-private func requiredQuietPulseMenuTargets(in surface: MenuBarSurface) -> [QuietPulseTarget] {
-    var targets: [QuietPulseTarget] = []
+private func requiredPulseMenuTargets(in surface: MenuBarSurface) -> [PulseTarget] {
+    var targets: [PulseTarget] = []
     let requiredSectionIDs = ["pulse", "allocation", "income", "bigMovers", "freshness"]
     for sectionID in requiredSectionIDs {
         guard let section = surface.sections.first(where: { $0.id == sectionID }) else {
-            targets.append(QuietPulseTarget(accessibilityIdentifier: "missing.section.\(sectionID)", title: sectionID))
+            targets.append(PulseTarget(accessibilityIdentifier: "missing.section.\(sectionID)", title: sectionID))
             continue
         }
-        targets.append(QuietPulseTarget(accessibilityIdentifier: section.accessibilityIdentifier, title: section.title))
-        if let firstRow = section.rows.first {
-            targets.append(QuietPulseTarget(
-                accessibilityIdentifier: firstRow.accessibilityIdentifier,
-                title: firstRow.title
-            ))
+        targets.append(PulseTarget(accessibilityIdentifier: section.accessibilityIdentifier, title: section.title))
+        for row in section.rows {
+            targets.append(PulseTarget(accessibilityIdentifier: row.accessibilityIdentifier, title: row.title))
         }
     }
 
@@ -437,12 +453,12 @@ private struct OpenMenuResult {
 private struct AccessibilityEvidence: Codable {
     var statusIdentifier: String
     var statusText: [String]
-    var expected: [QuietPulseTargetEvidence]
+    var expected: [PulseTargetEvidence]
     var observedIdentifiers: [String]
     var observedTexts: [String]
 }
 
-private struct QuietPulseTargetEvidence: Codable {
+private struct PulseTargetEvidence: Codable {
     var accessibilityIdentifier: String
     var title: String
 }
@@ -649,7 +665,7 @@ private func accessibilityChildren(of element: AXUIElement) -> [AXUIElement] {
 
 private func writeAccessibilityEvidence(
     snapshot: AccessibilitySnapshot,
-    expected: [QuietPulseTarget],
+    expected: [PulseTarget],
     statusIdentifier: String,
     statusText: Set<String>,
     output: URL
@@ -658,7 +674,7 @@ private func writeAccessibilityEvidence(
         statusIdentifier: statusIdentifier,
         statusText: statusText.sorted(),
         expected: expected.map {
-            QuietPulseTargetEvidence(
+            PulseTargetEvidence(
                 accessibilityIdentifier: $0.accessibilityIdentifier,
                 title: $0.title
             )

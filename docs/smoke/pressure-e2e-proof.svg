@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="520" viewBox="0 0 920 520">
+  <rect width="920" height="520" fill="#f7f8fb"/>
+  <rect x="32" y="32" width="856" height="456" rx="8" fill="#ffffff" stroke="#c7cfdb"/>
+  <text x="64" y="88" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="30" font-weight="700" fill="#172033">PDTBar pressure e2e proof</text>
+  <text x="64" y="126" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" fill="#526071">PR #37 · real fixture-mode app · macOS Accessibility AXPress</text>
+
+  <g font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+    <rect x="64" y="166" width="792" height="66" rx="8" fill="#ecfdf5" stroke="#7dd3a7"/>
+    <text x="92" y="206" font-size="18" font-weight="700" fill="#176a3a">Concentration pressure</text>
+    <text x="360" y="206" font-size="15" fill="#28583b">status, badge, top attention item, expansion, allocation drill-down</text>
+    <text x="806" y="206" font-size="18" font-weight="700" text-anchor="end" fill="#176a3a">PASS</text>
+
+    <rect x="64" y="252" width="792" height="66" rx="8" fill="#eef6ff" stroke="#93c5fd"/>
+    <text x="92" y="292" font-size="18" font-weight="700" fill="#185a9d">Income event</text>
+    <text x="360" y="292" font-size="15" fill="#2d5a87">income attention item, expansion, income drill-down</text>
+    <text x="806" y="292" font-size="18" font-weight="700" text-anchor="end" fill="#185a9d">PASS</text>
+
+    <rect x="64" y="338" width="792" height="66" rx="8" fill="#fff7ed" stroke="#fdba74"/>
+    <text x="92" y="378" font-size="18" font-weight="700" fill="#9a4b12">Big mover</text>
+    <text x="360" y="378" font-size="15" fill="#77451f">seeded prior snapshot, top attention item, expansion, big-mover support</text>
+    <text x="806" y="378" font-size="18" font-weight="700" text-anchor="end" fill="#9a4b12">PASS</text>
+
+    <text x="64" y="444" font-size="15" fill="#526071">All runs used isolated snapshot directories and sanitized fixtures; no live portfolio data or credentials.</text>
+  </g>
+</svg>
