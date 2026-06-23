@@ -36,14 +36,19 @@ Real-user pulse e2e:
 ```bash
 swift build --product pdtbar
 swift run pdtbar-smoke real-user-pulse --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/real-user-pulse
+swift run pdtbar-smoke real-user-pulse --fixture docs/pdt/fixtures/concentration-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/real-user-pulse-concentration
+swift run pdtbar-smoke real-user-pulse --fixture docs/pdt/fixtures/income-event.json --snapshot-dir .build/pdtbar-smoke-artifacts/real-user-pulse-income
+swift run pdtbar-smoke real-user-pulse --fixture docs/pdt/fixtures/big-mover.json --snapshot-dir .build/pdtbar-smoke-artifacts/real-user-pulse-big-mover
 ```
 
 This launches the real fixture-mode app, opens the menu-bar pulse through
-macOS Accessibility, and verifies the quiet fixture path from the visible all-quiet status
-through the pulse, allocation, income, big-mover, and freshness sections using
-the descriptor's stable accessibility identifiers. If macOS Accessibility
-permission is missing, it exits successfully with `skipped` and reports that
-exact TCC permission to grant.
+macOS Accessibility, and verifies fixture status plus pulse, allocation, income,
+big-mover, and freshness rows using the descriptor's stable accessibility
+identifiers. Fixtures with a prior snapshot, such as `big-mover.json`, seed that
+prior into an isolated smoke snapshot directory before launch; cold-start and
+seeded-prior runs do not read or write the user's real app state. If macOS
+Accessibility permission is missing, it exits successfully with `skipped` and
+reports that exact TCC permission to grant.
 
 Peekaboo-only local UI proof:
 
