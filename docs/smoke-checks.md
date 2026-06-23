@@ -38,6 +38,7 @@ Local/release packaged-app smoke:
 ```bash
 swift build --product pdtbar
 swift run pdtbar-smoke logged-out-launch
+swift run pdtbar-smoke ready-launch
 swift run pdtbar-smoke packaged-app --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/quiet-snapshot
 ```
 
@@ -48,6 +49,12 @@ Accessibility permission, it also opens the menu and verifies `Not connected`,
 `Log in with Claude`, and `Quit PDTBar`. Without Accessibility, it reports a
 clean `skipped` with the exact missing permission caveat after proving launch
 liveness and fixture isolation.
+
+The ready launch smoke uses the same no-argument app path with an isolated
+scripted `claude-readiness.json` result. It verifies the existing Claude/PDT-ready
+path skips the logged-out menu, renders `Fetching portfolio`, avoids fixture
+state, and writes only selector/status proof under `.build/pdtbar-smoke-artifacts/`.
+No live Claude credentials or portfolio payloads are used.
 
 This launches the fixture-mode app, routes it through an isolated snapshot
 directory, verifies `latest-portfolio-snapshot.json` was written, and verifies

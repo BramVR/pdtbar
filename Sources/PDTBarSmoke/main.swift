@@ -30,6 +30,8 @@ do {
         report = try livePDTSmoke(arguments: Array(arguments.dropFirst()))
     case "logged-out-launch":
         report = try loggedOutLaunchSmoke(arguments: Array(arguments.dropFirst()))
+    case "ready-launch":
+        report = try readyLaunchSmoke(arguments: Array(arguments.dropFirst()))
     case "packaged-app":
         report = try packagedAppSmoke(arguments: Array(arguments.dropFirst()))
     case "peekaboo":
@@ -49,6 +51,7 @@ do {
     usage:
       pdtbar-smoke live-pdt [--server <mcporter-server>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke logged-out-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
+      pdtbar-smoke ready-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]
       pdtbar-smoke peekaboo [--peekaboo <path>] [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>]
       pdtbar-smoke real-user-pulse [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
@@ -75,6 +78,132 @@ private let requiredLivePDTTools = [
     "pdt-get-symbol-quote",
 ]
 
+private func readyLaunchSmoke(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
+    let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
+    guard FileManager.default.isExecutableFile(atPath: app.path) else {
+        return SmokeReport(
+            name: "ready-launch",
+            status: SmokeStatus.failed,
+            detail: "app executable missing; run swift build --product pdtbar first or pass --app <path>",
+            artifacts: []
+        )
+    }
+
+    let appSupportDirectory = try options.isolatedAppSupportDirectory(prefix: "ready-launch-app-support")
+    let readinessDirectory = appSupportDirectory.appending(path: "pdtbar")
+    try FileManager.default.createDirectory(at: readinessDirectory, withIntermediateDirectories: true)
+    try Data(#"{"result":"ready"}"#.utf8).write(
+        to: readinessDirectory.appending(path: "claude-readiness.json"),
+        options: .atomic
+    )
+    let fixtureSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "ready-launch-fixture-sentinel")
+    let fixtureSnapshot = fixtureSnapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
+    let process = Process()
+    process.executableURL = app
+    process.arguments = []
+    var environment = ProcessInfo.processInfo.environment
+    environment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
+    process.environment = environment.merging([
+        "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
+        "PDTBAR_FIXTURE": defaultFixture.path,
+        "PDTBAR_SNAPSHOT_DIR": fixtureSnapshotDirectory.path,
+    ]) { _, new in new }
+    try process.run()
+    defer {
+        if process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+        }
+    }
+    Thread.sleep(forTimeInterval: options.timeout)
+    guard process.isRunning else {
+        process.waitUntilExit()
+        return SmokeReport(
+            name: "ready-launch",
+            status: SmokeStatus.failed,
+            detail: "scripted ready app exited before the smoke timeout",
+            artifacts: [artifactPath(appSupportDirectory)]
+        )
+    }
+    guard !FileManager.default.fileExists(atPath: fixtureSnapshot.path) else {
+        return SmokeReport(
+            name: "ready-launch",
+            status: SmokeStatus.failed,
+            detail: "scripted ready launch consumed fixture environment and wrote fixture snapshot state",
+            artifacts: [artifactPath(fixtureSnapshot)]
+        )
+    }
+
+    guard AXIsProcessTrusted() else {
+        return SmokeReport(
+            name: "ready-launch",
+            status: SmokeStatus.skipped,
+            detail: "scripted ready app stayed running and ignored fixture env; macOS Accessibility permission missing for first-fetch menu inspection",
+            artifacts: [artifactPath(appSupportDirectory)]
+        )
+    }
+
+    let descriptor = ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio)
+    let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
+    let expectedTargets = requiredSetupMenuTargets(in: surface)
+    let expectedMenuIdentifiers = Set(expectedTargets.map(\.accessibilityIdentifier))
+    let appElement = AXUIElementCreateApplication(process.processIdentifier)
+    guard let statusElement = waitForAccessibilityElement(
+        in: appElement,
+        identifier: surface.status.accessibilityIdentifier,
+        timeout: options.timeout
+    ) else {
+        return SmokeReport(
+            name: "ready-launch",
+            status: SmokeStatus.failed,
+            detail: "scripted ready app launched, but Accessibility could not find status item \(surface.status.accessibilityIdentifier)",
+            artifacts: [artifactPath(appSupportDirectory)]
+        )
+    }
+    let openedMenu = openStatusMenu(
+        statusElement,
+        appElement: appElement,
+        expectedMenuIdentifiers: expectedMenuIdentifiers,
+        timeout: options.timeout
+    )
+    let menuSnapshot = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
+        expectedMenuIdentifiers,
+        in: appElement,
+        timeout: options.timeout
+    )
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let evidence = artifacts.appending(path: "pdtbar-ready-launch-ax.json")
+    try writeAccessibilityEvidence(
+        snapshot: menuSnapshot,
+        expected: expectedTargets,
+        statusIdentifier: surface.status.accessibilityIdentifier,
+        statusText: accessibilityTexts(in: statusElement),
+        output: evidence
+    )
+    let missingTargets = expectedTargets.filter { !menuSnapshot.identifiers.contains($0.accessibilityIdentifier) }
+    let forbiddenTexts = Set(["Not connected", "Log in with Claude"]).intersection(menuSnapshot.texts)
+    guard missingTargets.isEmpty && forbiddenTexts.isEmpty else {
+        let missingLabels = missingTargets
+            .map { "\($0.accessibilityIdentifier) (\($0.title))" }
+            .joined(separator: ", ")
+        return SmokeReport(
+            name: "ready-launch",
+            status: SmokeStatus.failed,
+            detail: "scripted ready launch did not reach first-fetch cleanly after \(openedMenu.attempts.joined(separator: ", ")); missing selectors: \(missingLabels); forbidden login text: \(forbiddenTexts.sorted().joined(separator: ", "))",
+            artifacts: [artifactPath(evidence)]
+        )
+    }
+
+    return SmokeReport(
+        name: "ready-launch",
+        status: SmokeStatus.passed,
+        detail: "scripted Claude/PDT readiness skipped logged-out UI and rendered the first-fetch state without consuming fixture state",
+        artifacts: [artifactPath(evidence)]
+    )
+}
+
 private func loggedOutLaunchSmoke(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
     let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
@@ -99,7 +228,9 @@ private func loggedOutLaunchSmoke(arguments: [String]) throws -> SmokeReport {
     let process = Process()
     process.executableURL = app
     process.arguments = []
-    process.environment = ProcessInfo.processInfo.environment.merging([
+    var environment = ProcessInfo.processInfo.environment
+    environment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
+    process.environment = environment.merging([
         "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
         "PDTBAR_FIXTURE": defaultFixture.path,
         "PDTBAR_SNAPSHOT_DIR": fixtureSnapshotDirectory.path,

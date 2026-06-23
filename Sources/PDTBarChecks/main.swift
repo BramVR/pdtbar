@@ -85,6 +85,42 @@ try check(
 )
 let setupDescriptor = ClaudeSetupMenuDescriptor.loggedOut()
 let setupSurface = MenuBarSurfaceRenderer.render(descriptor: setupDescriptor)
+let probingDescriptor = ClaudeLaunchFlow.descriptor(for: .probingClaude)
+let probingSurface = MenuBarSurfaceRenderer.render(descriptor: probingDescriptor)
+try check(
+    ClaudeLaunchFlow.state(afterReadinessProbe: nil) == .probingClaude,
+    "real launch should enter an explicit Claude probing state before setup UI"
+)
+try check(
+    probingDescriptor.statusTitle == "Checking Claude",
+    "Claude probing state should have distinct status copy"
+)
+try check(
+    probingSurface.sections.flatMap(\.rows).map(\.title) == ["Checking Claude setup"],
+    "Claude probing state should not show login UI yet"
+)
+try check(
+    ClaudeLaunchFlow.state(afterReadinessProbe: .ready) == .fetchingPortfolio,
+    "ready Claude/PDT probe should transition toward first fetch"
+)
+let firstFetchDescriptor = ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio)
+try check(
+    firstFetchDescriptor.sections.flatMap(\.rows).map(\.title) == ["Fetching portfolio"],
+    "first-fetch state should render without the logged-out menu"
+)
+try check(
+    !firstFetchDescriptor.sections.flatMap(\.rows).map(\.title).contains("Log in with Claude"),
+    "ready launch should skip visible login UI"
+)
+try check(
+    ClaudeLaunchFlow.state(afterReadinessProbe: .failed) == .probeFailed,
+    "probe failures should be represented as an explicit launch state"
+)
+let probeFailedDescriptor = ClaudeLaunchFlow.descriptor(for: .probeFailed)
+try check(
+    probeFailedDescriptor.sections.flatMap(\.rows).map(\.title).contains("Could not check Claude"),
+    "probe failure state should explain that readiness could not be checked"
+)
 try check(
     setupDescriptor.sections.map(\.id) == ["claudeSetup"],
     "logged-out real launch should render a Claude-only setup section"
