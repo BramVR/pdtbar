@@ -37,8 +37,17 @@ Local/release packaged-app smoke:
 
 ```bash
 swift build --product pdtbar
+swift run pdtbar-smoke logged-out-launch
 swift run pdtbar-smoke packaged-app --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/quiet-snapshot
 ```
+
+The logged-out launch smoke starts the app with no arguments, seeds unusable
+Claude state in an isolated app-support directory, injects fixture environment
+variables as a guard, and verifies the app does not enter fixture mode. With macOS
+Accessibility permission, it also opens the menu and verifies `Not connected`,
+`Log in with Claude`, and `Quit PDTBar`. Without Accessibility, it reports a
+clean `skipped` with the exact missing permission caveat after proving launch
+liveness and fixture isolation.
 
 This launches the fixture-mode app, routes it through an isolated snapshot
 directory, verifies `latest-portfolio-snapshot.json` was written, and verifies

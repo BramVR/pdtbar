@@ -28,6 +28,8 @@ do {
     switch command {
     case "live-pdt":
         report = try livePDTSmoke(arguments: Array(arguments.dropFirst()))
+    case "logged-out-launch":
+        report = try loggedOutLaunchSmoke(arguments: Array(arguments.dropFirst()))
     case "packaged-app":
         report = try packagedAppSmoke(arguments: Array(arguments.dropFirst()))
     case "peekaboo":
@@ -46,6 +48,7 @@ do {
     FileHandle.standardError.write(Data("""
     usage:
       pdtbar-smoke live-pdt [--server <mcporter-server>] [--artifacts <dir>] [--timeout <seconds>]
+      pdtbar-smoke logged-out-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]
       pdtbar-smoke peekaboo [--peekaboo <path>] [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>]
       pdtbar-smoke real-user-pulse [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
@@ -71,6 +74,132 @@ private let requiredLivePDTTools = [
     "pdt-list-symbol-prices",
     "pdt-get-symbol-quote",
 ]
+
+private func loggedOutLaunchSmoke(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
+    let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
+    guard FileManager.default.isExecutableFile(atPath: app.path) else {
+        return SmokeReport(
+            name: "logged-out-launch",
+            status: SmokeStatus.failed,
+            detail: "app executable missing; run swift build --product pdtbar first or pass --app <path>",
+            artifacts: []
+        )
+    }
+
+    let appSupportDirectory = try options.isolatedAppSupportDirectory(prefix: "logged-out-launch-app-support")
+    let setupStateDirectory = appSupportDirectory.appending(path: "pdtbar")
+    try FileManager.default.createDirectory(at: setupStateDirectory, withIntermediateDirectories: true)
+    try Data("{".utf8).write(
+        to: setupStateDirectory.appending(path: "claude-setup.json"),
+        options: .atomic
+    )
+    let fixtureSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "logged-out-fixture-sentinel")
+    let fixtureSnapshot = fixtureSnapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
+    let process = Process()
+    process.executableURL = app
+    process.arguments = []
+    process.environment = ProcessInfo.processInfo.environment.merging([
+        "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
+        "PDTBAR_FIXTURE": defaultFixture.path,
+        "PDTBAR_SNAPSHOT_DIR": fixtureSnapshotDirectory.path,
+    ]) { _, new in new }
+    try process.run()
+    defer {
+        if process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+        }
+    }
+    Thread.sleep(forTimeInterval: options.timeout)
+    guard process.isRunning else {
+        process.waitUntilExit()
+        return SmokeReport(
+            name: "logged-out-launch",
+            status: SmokeStatus.failed,
+            detail: "no-argument app exited before the smoke timeout",
+            artifacts: [artifactPath(appSupportDirectory)]
+        )
+    }
+    guard !FileManager.default.fileExists(atPath: fixtureSnapshot.path) else {
+        return SmokeReport(
+            name: "logged-out-launch",
+            status: SmokeStatus.failed,
+            detail: "no-argument app consumed fixture environment and wrote fixture snapshot state",
+            artifacts: [artifactPath(fixtureSnapshot)]
+        )
+    }
+
+    guard AXIsProcessTrusted() else {
+        return SmokeReport(
+            name: "logged-out-launch",
+            status: SmokeStatus.skipped,
+            detail: "no-argument app stayed running with isolated app support and ignored fixture env; macOS Accessibility permission missing for setup menu inspection",
+            artifacts: [artifactPath(appSupportDirectory)]
+        )
+    }
+
+    let descriptor = ClaudeSetupMenuDescriptor.loggedOut()
+    let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
+    let expectedTargets = requiredSetupMenuTargets(in: surface)
+    let expectedMenuIdentifiers = Set(expectedTargets.map(\.accessibilityIdentifier))
+    let appElement = AXUIElementCreateApplication(process.processIdentifier)
+    guard let statusElement = waitForAccessibilityElement(
+        in: appElement,
+        identifier: surface.status.accessibilityIdentifier,
+        timeout: options.timeout
+    ) else {
+        return SmokeReport(
+            name: "logged-out-launch",
+            status: SmokeStatus.failed,
+            detail: "no-argument app launched, but Accessibility could not find status item \(surface.status.accessibilityIdentifier)",
+            artifacts: [artifactPath(appSupportDirectory)]
+        )
+    }
+    let openedMenu = openStatusMenu(
+        statusElement,
+        appElement: appElement,
+        expectedMenuIdentifiers: expectedMenuIdentifiers,
+        timeout: options.timeout
+    )
+    let menuSnapshot = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
+        expectedMenuIdentifiers,
+        in: appElement,
+        timeout: options.timeout
+    )
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let evidence = artifacts.appending(path: "pdtbar-logged-out-launch-ax.json")
+    try writeAccessibilityEvidence(
+        snapshot: menuSnapshot,
+        expected: expectedTargets,
+        statusIdentifier: surface.status.accessibilityIdentifier,
+        statusText: accessibilityTexts(in: statusElement),
+        output: evidence
+    )
+    let expectedTexts = Set(["Not connected", "Log in with Claude", "Quit PDTBar"])
+    let missingTargets = expectedTargets.filter { !menuSnapshot.identifiers.contains($0.accessibilityIdentifier) }
+    let missingTexts = expectedTexts.subtracting(menuSnapshot.texts)
+    guard missingTargets.isEmpty && missingTexts.isEmpty else {
+        let missingLabels = missingTargets
+            .map { "\($0.accessibilityIdentifier) (\($0.title))" }
+            .joined(separator: ", ")
+        let missingCopy = missingTexts.sorted().joined(separator: ", ")
+        return SmokeReport(
+            name: "logged-out-launch",
+            status: SmokeStatus.failed,
+            detail: "could not verify logged-out setup menu after \(openedMenu.attempts.joined(separator: ", ")); missing selectors: \(missingLabels); missing text: \(missingCopy)",
+            artifacts: [artifactPath(evidence)]
+        )
+    }
+
+    return SmokeReport(
+        name: "logged-out-launch",
+        status: SmokeStatus.passed,
+        detail: "no-argument app launched real Claude-first setup with isolated app support, ignored fixture env, and rendered Not connected, Log in with Claude, and Quit PDTBar",
+        artifacts: [artifactPath(evidence)]
+    )
+}
 
 private func livePDTSmoke(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
@@ -501,6 +630,15 @@ private func requiredPulseMenuTargets(in surface: MenuBarSurface) -> [PulseTarge
     return targets
 }
 
+private func requiredSetupMenuTargets(in surface: MenuBarSurface) -> [PulseTarget] {
+    surface.sections.flatMap { section in
+        [PulseTarget(accessibilityIdentifier: section.accessibilityIdentifier, title: section.title)]
+            + section.rows.map {
+                PulseTarget(accessibilityIdentifier: $0.accessibilityIdentifier, title: $0.title)
+            }
+    }
+}
+
 private struct AccessibilitySnapshot: Codable {
     var identifiers: Set<String>
     var texts: Set<String>
@@ -786,6 +924,7 @@ private struct SmokeOptions {
     var artifacts: URL?
     var output: URL?
     var snapshotDirectory: URL?
+    var appSupportDirectory: URL?
     var server: String?
     var timeout: TimeInterval = 2.0
     var timeoutWasProvided = false
@@ -811,6 +950,9 @@ private struct SmokeOptions {
                 index += 2
             case "--snapshot-dir" where index + 1 < arguments.count:
                 snapshotDirectory = URL(fileURLWithPath: arguments[index + 1])
+                index += 2
+            case "--app-support-dir" where index + 1 < arguments.count:
+                appSupportDirectory = URL(fileURLWithPath: arguments[index + 1])
                 index += 2
             case "--server" where index + 1 < arguments.count:
                 server = arguments[index + 1]
@@ -842,6 +984,14 @@ private struct SmokeOptions {
 
     func isolatedSnapshotDirectory(prefix: String) throws -> URL {
         let base = snapshotDirectory ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        let directory = base.appending(path: "\(prefix)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    func isolatedAppSupportDirectory(prefix: String) throws -> URL {
+        let base = appSupportDirectory ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         let directory = base.appending(path: "\(prefix)-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

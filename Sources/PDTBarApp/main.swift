@@ -2,17 +2,12 @@ import AppKit
 import Foundation
 import PDTBarCore
 
-private struct AppOptions {
-    var fixture: URL
-    var snapshotDirectory: URL?
-}
-
 @MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let options: AppOptions
+    private let options: PDTBarLaunchOptions
     private var statusItem: NSStatusItem?
 
-    init(options: AppOptions) {
+    init(options: PDTBarLaunchOptions) {
         self.options = options
     }
 
@@ -27,11 +22,31 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func loadDescriptor() throws -> MenuDescriptor {
-        let dataSource = PDTFixtureDataSource(fixture: options.fixture)
-        return try PressureRunner.run(
-            dataSource: dataSource,
-            snapshotStore: SnapshotStore(directory: options.snapshotDirectory ?? defaultSnapshotDirectory())
-        ).descriptor
+        switch options.mode {
+        case .claudeFirst:
+            _ = ClaudeSetupStateStore(appSupportDirectory: appSupportDirectory()).load()
+            return ClaudeSetupMenuDescriptor.loggedOut()
+        case let .fixture(fixture):
+            let dataSource = PDTFixtureDataSource(fixture: fixture)
+            return try PressureRunner.run(
+                dataSource: dataSource,
+                snapshotStore: SnapshotStore(directory: try fixtureSnapshotDirectory())
+            ).descriptor
+        }
+    }
+
+    private func fixtureSnapshotDirectory() throws -> URL {
+        if let snapshotDirectory = options.snapshotDirectory {
+            return snapshotDirectory
+        }
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "pdtbar-fixture-snapshots-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func appSupportDirectory() -> URL {
+        options.appSupportDirectory ?? defaultAppSupportDirectory()
     }
 
     private func installMenuBarItem(_ descriptor: MenuDescriptor) {
@@ -69,46 +84,32 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-private func parseOptions(_ arguments: [String]) throws -> AppOptions {
-    var fixture: URL?
-    var snapshotDirectory: URL?
-    var index = 0
-    while index < arguments.count {
-        switch arguments[index] {
-        case "--fixture" where index + 1 < arguments.count:
-            fixture = URL(fileURLWithPath: arguments[index + 1])
-            index += 2
-        case "--snapshot-dir" where index + 1 < arguments.count:
-            snapshotDirectory = URL(fileURLWithPath: arguments[index + 1])
-            index += 2
-        default:
-            throw CommandError.usage
+private struct ClaudeSetupStateStore {
+    var appSupportDirectory: URL
+
+    func load() -> ClaudeSetupState? {
+        let url = appSupportDirectory.appending(path: "pdtbar/claude-setup.json")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return nil
         }
+        guard let data = try? Data(contentsOf: url) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(ClaudeSetupState.self, from: data)
     }
-
-    let configuredSnapshotDirectory = snapshotDirectory
-        ?? ProcessInfo.processInfo.environment["PDTBAR_SNAPSHOT_DIR"].map { URL(fileURLWithPath: $0) }
-    if let fixture {
-        return AppOptions(fixture: fixture, snapshotDirectory: configuredSnapshotDirectory)
-    }
-    if let fixturePath = ProcessInfo.processInfo.environment["PDTBAR_FIXTURE"] {
-        return AppOptions(fixture: URL(fileURLWithPath: fixturePath), snapshotDirectory: configuredSnapshotDirectory)
-    }
-    throw CommandError.usage
 }
 
-private enum CommandError: Error {
-    case usage
+private struct ClaudeSetupState: Decodable {
+    var connected: Bool
 }
 
-private func defaultSnapshotDirectory() -> URL {
-    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+private func defaultAppSupportDirectory() -> URL {
+    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
         ?? FileManager.default.temporaryDirectory
-    return base.appending(path: "pdtbar/snapshots")
 }
 
 do {
-    let options = try parseOptions(Array(CommandLine.arguments.dropFirst()))
+    let options = try PDTBarLaunchOptionParser.parse(arguments: Array(CommandLine.arguments.dropFirst()))
     let app = NSApplication.shared
     let delegate = AppDelegate(options: options)
     app.delegate = delegate
@@ -118,7 +119,7 @@ do {
     }
 } catch {
     FileHandle.standardError.write(
-        Data("usage: pdtbar --fixture <path> [--snapshot-dir <path>]\n".utf8)
+        Data("usage: pdtbar [--app-support-dir <path>] | --fixture <path> [--snapshot-dir <path>]\n".utf8)
     )
     Foundation.exit(64)
 }
