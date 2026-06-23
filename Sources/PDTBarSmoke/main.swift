@@ -240,7 +240,7 @@ private func peekabooSmoke(arguments: [String]) throws -> SmokeReport {
     try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
 
     let process = Process()
-    let snapshotDirectory = try options.isolatedSnapshotDirectory(prefix: "real-user-pulse-app")
+    let snapshotDirectory = try options.resolvedSnapshotDirectory()
     process.executableURL = app
     process.arguments = ["--fixture", fixture.path, "--snapshot-dir", snapshotDirectory.path]
     process.environment = ProcessInfo.processInfo.environment.merging(["PDTBAR_FIXTURE_MODE": "1"]) { _, new in new }
@@ -307,7 +307,7 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
     }
 
     let process = Process()
-    let snapshotDirectory = try options.resolvedSnapshotDirectory()
+    let snapshotDirectory = try options.isolatedSnapshotDirectory(prefix: "real-user-pulse-app")
     process.executableURL = app
     process.arguments = ["--fixture", fixture.path, "--snapshot-dir", snapshotDirectory.path]
     process.environment = ProcessInfo.processInfo.environment.merging(["PDTBAR_FIXTURE_MODE": "1"]) { _, new in new }
