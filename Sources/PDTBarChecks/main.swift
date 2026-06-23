@@ -54,7 +54,7 @@ try check(
 
 let descriptor = MenuDescriptorRenderer.render(model: decoded)
 let descriptorObject = try require(
-    JSONSerialization.jsonObject(with: stableJSONData(descriptor)) as? [String: Any],
+    JSONSerialization.jsonObject(with: try stableJSONData(descriptor)) as? [String: Any],
     "descriptor JSON should encode as an object"
 )
 try check(
