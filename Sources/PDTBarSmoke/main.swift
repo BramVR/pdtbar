@@ -745,22 +745,27 @@ private struct CommandResult {
 
 private func run(_ executable: URL, arguments: [String], timeout: TimeInterval) throws -> CommandResult {
     let process = Process()
+    let fileManager = FileManager.default
     let stdoutURL = FileManager.default.temporaryDirectory
         .appending(path: "pdtbar-smoke-\(UUID().uuidString).stdout")
     let stderrURL = FileManager.default.temporaryDirectory
         .appending(path: "pdtbar-smoke-\(UUID().uuidString).stderr")
-    FileManager.default.createFile(atPath: stdoutURL.path, contents: nil)
-    FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
-    var stdout: FileHandle?
-    var stderr: FileHandle?
-    defer {
-        try? stdout?.close()
-        try? stderr?.close()
-        try? FileManager.default.removeItem(at: stdoutURL)
-        try? FileManager.default.removeItem(at: stderrURL)
+    guard fileManager.createFile(atPath: stdoutURL.path, contents: nil),
+          fileManager.createFile(atPath: stderrURL.path, contents: nil) else {
+        throw CommandError.commandFailed(executable.lastPathComponent, "failed to create temporary output files")
     }
-    stdout = try FileHandle(forWritingTo: stdoutURL)
-    stderr = try FileHandle(forWritingTo: stderrURL)
+    var openHandles: [FileHandle] = []
+    defer {
+        for handle in openHandles {
+            try? handle.close()
+        }
+        try? fileManager.removeItem(at: stdoutURL)
+        try? fileManager.removeItem(at: stderrURL)
+    }
+    let stdout = try FileHandle(forWritingTo: stdoutURL)
+    openHandles.append(stdout)
+    let stderr = try FileHandle(forWritingTo: stderrURL)
+    openHandles.append(stderr)
     process.executableURL = executable
     process.arguments = arguments
     process.standardOutput = stdout
@@ -775,8 +780,9 @@ private func run(_ executable: URL, arguments: [String], timeout: TimeInterval) 
         process.waitUntilExit()
         throw CommandError.timedOut(executable.lastPathComponent)
     }
-    try? stdout?.close()
-    try? stderr?.close()
+    try? stdout.close()
+    try? stderr.close()
+    openHandles.removeAll()
     let out = try Data(contentsOf: stdoutURL)
     let err = try Data(contentsOf: stderrURL)
     guard process.terminationStatus == 0 else {
