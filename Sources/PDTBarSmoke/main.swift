@@ -27,7 +27,7 @@ do {
     let report: SmokeReport
     switch command {
     case "live-pdt":
-        report = try livePDTSmoke()
+        report = try livePDTSmoke(arguments: Array(arguments.dropFirst()))
     case "packaged-app":
         report = try packagedAppSmoke(arguments: Array(arguments.dropFirst()))
     case "peekaboo":
@@ -45,7 +45,7 @@ do {
 } catch CommandError.usage {
     FileHandle.standardError.write(Data("""
     usage:
-      pdtbar-smoke live-pdt
+      pdtbar-smoke live-pdt [--server <mcporter-server>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]
       pdtbar-smoke peekaboo [--peekaboo <path>] [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>]
       pdtbar-smoke real-user-pulse [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
@@ -63,68 +63,130 @@ do {
     Foundation.exit(1)
 }
 
-private func livePDTSmoke() throws -> SmokeReport {
+private let requiredLivePDTTools = [
+    "pdt-get-portfolio-holdings",
+    "pdt-get-portfolio-distributions",
+    "pdt-list-calendar-events",
+    "pdt-list-dividends",
+    "pdt-list-symbol-prices",
+    "pdt-get-symbol-quote",
+]
+
+private func livePDTSmoke(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
     let environment = ProcessInfo.processInfo.environment
-    guard environment["PDTBAR_LIVE_PDT_SMOKE"] == "1" else {
+    if let schemaPath = environment["PDTBAR_LIVE_PDT_SCHEMA_JSON"], !schemaPath.isEmpty {
+        let schemaData = try Data(contentsOf: URL(fileURLWithPath: schemaPath))
+        let object = try JSONSerialization.jsonObject(with: schemaData)
+        let schemaToolNames = toolNames(in: object)
+        let missingTools = requiredLivePDTTools.filter { tool in
+            !schemaToolNames.contains(tool)
+        }
+        guard missingTools.isEmpty else {
+            return SmokeReport(
+                name: "live-pdt",
+                status: SmokeStatus.failed,
+                detail: "schema missing required PDT read tools: \(missingTools.joined(separator: ", "))",
+                artifacts: [schemaPath]
+            )
+        }
+    }
+
+    let server = try discoverLivePDTServer(options: options)
+    guard let server else {
         return SmokeReport(
             name: "live-pdt",
             status: SmokeStatus.skipped,
-            detail: "set PDTBAR_LIVE_PDT_SMOKE=1 and PDTBAR_LIVE_PDT_SCHEMA_JSON=/path/to/mcporter-schema.json to run the opt-in live contract smoke",
-            artifacts: []
-        )
-    }
-    guard let schemaPath = environment["PDTBAR_LIVE_PDT_SCHEMA_JSON"], !schemaPath.isEmpty else {
-        return SmokeReport(
-            name: "live-pdt",
-            status: SmokeStatus.failed,
-            detail: "PDTBAR_LIVE_PDT_SCHEMA_JSON is required; create it with: npx -y mcporter list <pdt-server> --schema --json > /tmp/pdt-schema.json",
+            detail: "no configured mcporter PDT server exposes the required read tools; set PDTBAR_LIVE_PDT_SERVER or configure/auth a PDT server, then rerun",
             artifacts: []
         )
     }
 
-    let schemaData = try Data(contentsOf: URL(fileURLWithPath: schemaPath))
-    let object = try JSONSerialization.jsonObject(with: schemaData)
-    let schemaToolNames = toolNames(in: object)
-    let requiredTools = [
-        "pdt-get-portfolio-holdings",
-        "pdt-get-portfolio-distributions",
-        "pdt-list-calendar-events",
-        "pdt-list-dividends",
-        "pdt-list-symbol-prices",
-        "pdt-get-symbol-quote",
-    ]
-    let missingTools = requiredTools.filter { tool in
-        !schemaToolNames.contains(tool)
+    let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-live-pdt-smoke")
+    defer {
+        try? FileManager.default.removeItem(at: snapshotStore.directory)
     }
-    guard missingTools.isEmpty else {
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let proof = artifacts.appending(path: "pdtbar-live-pdt-pulse-proof.json")
+    let liveTimeout = options.timeoutWasProvided ? options.timeout : 60.0
+    let result: PressureRunResult
+    do {
+        result = try PressureRunner.run(
+            dataSource: PDTLiveDataSource(
+                toolClient: PDTLiveMcporterClient(
+                    server: server,
+                    timeout: liveTimeout
+                )
+            ),
+            snapshotStore: snapshotStore
+        )
+    } catch let CommandError.commandFailed(_, stdout, stderr) {
+        guard PDTLiveUnavailableClassifier.shouldSkip([stdout, stderr].joined(separator: "\n")) else {
+            return SmokeReport(
+                name: "live-pdt",
+                status: SmokeStatus.failed,
+                detail: "configured PDT server returned a read-tool error; live smoke did not prove the PortfolioDataSource path",
+                artifacts: []
+            )
+        }
+        return SmokeReport(
+            name: "live-pdt",
+            status: SmokeStatus.skipped,
+            detail: "configured PDT server did not complete read-only tool calls; credentials or local server access may be missing",
+            artifacts: []
+        )
+    } catch CommandError.timedOut {
+        return SmokeReport(
+            name: "live-pdt",
+            status: SmokeStatus.skipped,
+            detail: "configured PDT server timed out during read-only smoke; local access may be unavailable",
+            artifacts: []
+        )
+    } catch let error as PDTLiveDataSourceError {
+        guard !error.shouldSkipLiveSmoke else {
+            return SmokeReport(
+                name: "live-pdt",
+                status: SmokeStatus.skipped,
+                detail: "configured PDT server returned an auth/offline response; cached credentials or local access may be missing",
+                artifacts: []
+            )
+        }
         return SmokeReport(
             name: "live-pdt",
             status: SmokeStatus.failed,
-            detail: "schema missing required PDT tools: \(missingTools.joined(separator: ", "))",
-            artifacts: [schemaPath]
+            detail: "live PDT response was not decodable as the expected read-only tool shape",
+            artifacts: []
         )
     }
 
-    let incomeSnapshot = try PDTFixtureDataSource(
-        fixture: packageRoot.appending(path: "docs/pdt/fixtures/income-event.json")
-    ).snapshot()
-    let mappedIncomeEvent = incomeSnapshot.incomeEvents.first {
-        $0.symbolId == 5003 && $0.quoteId == 9003
-    }
-    guard mappedIncomeEvent != nil else {
+    let surface = MenuBarSurfaceRenderer.render(descriptor: result.descriptor)
+    let proofPayload = LivePDTPulseProof(
+        snapshotWritten: result.snapshotCommit.written,
+        statusAccessibilityIdentifier: surface.status.accessibilityIdentifier,
+        sectionIDs: surface.sections.map(\.id),
+        rowCount: surface.sections.flatMap(\.rows).count,
+        rawPortfolioValuesRedacted: true
+    )
+    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+    let pulseRows = surface.sections.first { $0.id == "pulse" }?.rows ?? []
+    guard result.snapshotCommit.written,
+          !surface.status.accessibilityIdentifier.isEmpty,
+          !pulseRows.isEmpty,
+          result.model.facetSnapshots.allocation.openHoldingCount > 0
+    else {
         return SmokeReport(
             name: "live-pdt",
             status: SmokeStatus.failed,
-            detail: "normalized mapping check failed for sanitized symbolId to quoteId fixture",
-            artifacts: [schemaPath]
+            detail: "live PDT read succeeded, but did not produce open holdings and pulse rows",
+            artifacts: [artifactPath(proof)]
         )
     }
-
     return SmokeReport(
         name: "live-pdt",
         status: SmokeStatus.passed,
-        detail: "live PDT schema exposes required read tools; sanitized fixture mapping proves symbolId to quoteId normalization without private portfolio assertions",
-        artifacts: [schemaPath]
+        detail: "read-only live PDT data reached PressureRunner and rendered a pulse descriptor with isolated snapshot state; private portfolio values redacted from proof",
+        artifacts: [artifactPath(proof)]
     )
 }
 
@@ -458,6 +520,14 @@ private struct AccessibilityEvidence: Codable {
     var observedTexts: [String]
 }
 
+private struct LivePDTPulseProof: Codable {
+    var snapshotWritten: Bool
+    var statusAccessibilityIdentifier: String
+    var sectionIDs: [String]
+    var rowCount: Int
+    var rawPortfolioValuesRedacted: Bool
+}
+
 private struct PulseTargetEvidence: Codable {
     var accessibilityIdentifier: String
     var title: String
@@ -716,7 +786,9 @@ private struct SmokeOptions {
     var artifacts: URL?
     var output: URL?
     var snapshotDirectory: URL?
+    var server: String?
     var timeout: TimeInterval = 2.0
+    var timeoutWasProvided = false
 
     init(arguments: [String]) throws {
         var index = 0
@@ -740,8 +812,12 @@ private struct SmokeOptions {
             case "--snapshot-dir" where index + 1 < arguments.count:
                 snapshotDirectory = URL(fileURLWithPath: arguments[index + 1])
                 index += 2
+            case "--server" where index + 1 < arguments.count:
+                server = arguments[index + 1]
+                index += 2
             case "--timeout" where index + 1 < arguments.count:
                 timeout = TimeInterval(arguments[index + 1]) ?? 2.0
+                timeoutWasProvided = true
                 index += 2
             default:
                 throw CommandError.usage
@@ -778,6 +854,37 @@ private struct CommandResult {
     var stderr: Data
 }
 
+private struct PDTLiveMcporterClient: PDTLiveToolClient {
+    var server: String
+    var timeout: TimeInterval
+
+    func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
+        let selector = "\(server).\(name)"
+        let toolArguments = arguments
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+        return try run(
+            URL(fileURLWithPath: "/usr/bin/env"),
+            arguments: [
+                "npx", "-y", "mcporter", "call",
+                "--no-oauth",
+                "--timeout", String(Int(timeout * 1000)),
+                selector,
+            ] + toolArguments,
+            timeout: timeout + 1.0
+        ).stdout
+    }
+}
+
+private func discoverLivePDTServer(options: SmokeOptions) throws -> String? {
+    if let server = options.server ?? ProcessInfo.processInfo.environment["PDTBAR_LIVE_PDT_SERVER"],
+       !server.isEmpty
+    {
+        return server
+    }
+    return nil
+}
+
 private func run(_ executable: URL, arguments: [String], timeout: TimeInterval) throws -> CommandResult {
     let process = Process()
     let fileManager = FileManager.default
@@ -787,7 +894,7 @@ private func run(_ executable: URL, arguments: [String], timeout: TimeInterval) 
         .appending(path: "pdtbar-smoke-\(UUID().uuidString).stderr")
     guard fileManager.createFile(atPath: stdoutURL.path, contents: nil),
           fileManager.createFile(atPath: stderrURL.path, contents: nil) else {
-        throw CommandError.commandFailed(executable.lastPathComponent, "failed to create temporary output files")
+        throw CommandError.commandFailed(executable.lastPathComponent, "", "failed to create temporary output files")
     }
     var openHandles: [FileHandle] = []
     defer {
@@ -821,7 +928,11 @@ private func run(_ executable: URL, arguments: [String], timeout: TimeInterval) 
     let out = try Data(contentsOf: stdoutURL)
     let err = try Data(contentsOf: stderrURL)
     guard process.terminationStatus == 0 else {
-        throw CommandError.commandFailed(executable.lastPathComponent, String(data: err, encoding: .utf8) ?? "")
+        throw CommandError.commandFailed(
+            executable.lastPathComponent,
+            String(data: out, encoding: .utf8) ?? "",
+            String(data: err, encoding: .utf8) ?? ""
+        )
     }
     return CommandResult(stdout: out, stderr: err)
 }
@@ -850,20 +961,25 @@ private func permissionDictionaries(in object: Any) -> [[String: Any]] {
 }
 
 private func toolNames(in object: Any) -> Set<String> {
-    if let array = object as? [Any] {
-        return Set(array.flatMap { Array(toolNames(in: $0)) })
-    }
-    if let dictionary = object as? [String: Any] {
-        var names = Set(dictionary.values.flatMap { Array(toolNames(in: $0)) })
-        if let name = dictionary["name"] as? String {
-            names.insert(name)
-            if let selectorToolName = name.split(separator: ".").last {
-                names.insert(String(selectorToolName))
-            }
+    var names = Set<String>()
+    var stack = [object]
+    while let item = stack.popLast() {
+        if let array = item as? [Any] {
+            stack.append(contentsOf: array)
+            continue
         }
-        return names
+        if let dictionary = item as? [String: Any] {
+            stack.append(contentsOf: dictionary.values)
+            if let name = dictionary["name"] as? String {
+                names.insert(name)
+                if let selectorToolName = name.split(separator: ".").last {
+                    names.insert(String(selectorToolName))
+                }
+            }
+            continue
+        }
     }
-    return Set()
+    return names
 }
 
 private func fixtureProofSVG(descriptor: MenuDescriptor) -> String {
@@ -911,7 +1027,7 @@ private func writeReport(_ report: SmokeReport) throws {
 private enum CommandError: Error, CustomStringConvertible {
     case usage
     case timedOut(String)
-    case commandFailed(String, String)
+    case commandFailed(String, String, String)
 
     var description: String {
         switch self {
@@ -919,8 +1035,8 @@ private enum CommandError: Error, CustomStringConvertible {
             return "usage"
         case let .timedOut(command):
             return "\(command) timed out"
-        case let .commandFailed(command, stderr):
-            return "\(command) failed: \(stderr)"
+        case let .commandFailed(command, stdout, stderr):
+            return "\(command) failed: \([stdout, stderr].filter { !$0.isEmpty }.joined(separator: "\n"))"
         }
     }
 }

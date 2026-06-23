@@ -14,6 +14,7 @@ This repo now has the first Swift fixture path: sanitized PDT fixtures load into
 swift run pdtbar-dev model --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift run pdtbar-checks
+swift run pdtbar-smoke live-pdt
 swift build --product pdtbar
 swift run pdtbar-smoke packaged-app --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/manual-snapshot
 swift run pdtbar-smoke real-user-pulse --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/real-user-pulse

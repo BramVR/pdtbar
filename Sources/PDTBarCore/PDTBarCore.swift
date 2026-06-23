@@ -1118,6 +1118,254 @@ public extension PortfolioPriorSnapshotDataSource {
     }
 }
 
+public protocol PDTLiveToolClient {
+    func callReadTool(_ name: String, arguments: [String: String]) throws -> Data
+}
+
+public enum PDTLiveDataSourceError: Error, CustomStringConvertible {
+    case malformedToolResult(String)
+    case unavailableToolResult(String)
+
+    public var shouldSkipLiveSmoke: Bool {
+        switch self {
+        case .unavailableToolResult:
+            true
+        case .malformedToolResult:
+            false
+        }
+    }
+
+    public var description: String {
+        switch self {
+        case .malformedToolResult(let tool):
+            "live PDT tool \(tool) did not return the expected read-only JSON shape"
+        case .unavailableToolResult(let tool):
+            "live PDT tool \(tool) reported missing auth or unavailable local access"
+        }
+    }
+}
+
+public enum PDTLiveUnavailableClassifier {
+    public static func shouldSkip(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return false
+        }
+        if let data = trimmed.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data)
+        {
+            return unavailableTexts(in: object).contains(where: containsUnavailablePhrase)
+        }
+        return containsUnavailablePhrase(trimmed)
+    }
+
+    private static func containsUnavailablePhrase(_ value: String) -> Bool {
+        let lower = value.lowercased()
+        return unavailablePhrases.contains { lower.contains($0) }
+    }
+
+    private static let unavailablePhrases = [
+        "not authenticated",
+        "authentication required",
+        "oauth",
+        "missing credential",
+        "credentials not found",
+        "login required",
+        "please login",
+        "not logged in",
+        "token expired",
+        "session expired",
+        "unauthorized",
+        "forbidden",
+        "offline",
+        "connection refused",
+        "failed to connect",
+        "could not connect",
+        "econnrefused",
+        "server not found",
+        "server unavailable",
+    ]
+
+    private static let errorTextKeys = Set([
+        "error",
+        "message",
+        "detail",
+        "details",
+        "description",
+        "status",
+        "code",
+    ])
+
+    private static func unavailableTexts(in object: Any, forceErrorContext: Bool = false) -> [String] {
+        if let string = object as? String {
+            if forceErrorContext {
+                return [string]
+            }
+            if let data = string.data(using: .utf8),
+               let nested = try? JSONSerialization.jsonObject(with: data)
+            {
+                return unavailableTexts(in: nested)
+            }
+            return []
+        }
+        if let array = object as? [Any] {
+            return forceErrorContext ? array.flatMap { unavailableTexts(in: $0, forceErrorContext: true) } : []
+        }
+        guard let dictionary = object as? [String: Any] else {
+            return []
+        }
+
+        let isError = forceErrorContext || dictionary["isError"] as? Bool == true || dictionary["is_error"] as? Bool == true
+        var texts: [String] = []
+        for (key, value) in dictionary {
+            if errorTextKeys.contains(key) {
+                texts.append(contentsOf: unavailableTexts(in: value, forceErrorContext: true))
+            } else if key == "content", isError {
+                texts.append(contentsOf: unavailableTexts(in: value, forceErrorContext: true))
+            } else if isError && (key == "text" || key == "title") {
+                texts.append(contentsOf: unavailableTexts(in: value, forceErrorContext: true))
+            }
+        }
+        return texts
+    }
+}
+
+public struct PDTLiveDataSource: PortfolioDataSource {
+    public var toolClient: any PDTLiveToolClient
+
+    public init(toolClient: any PDTLiveToolClient) {
+        self.toolClient = toolClient
+    }
+
+    public func snapshot(asOf: String? = nil) throws -> PortfolioSnapshot {
+        let snapshotAsOf = asOf ?? currentDayString()
+        let incomeDateRange = [
+            "date_from": snapshotAsOf,
+            "date_to": dayString(snapshotAsOf, addingDays: 30),
+        ]
+        let dividendDateRange = [
+            "date_from": dayString(snapshotAsOf, addingDays: -370),
+            "date_to": incomeDateRange["date_to"] ?? snapshotAsOf,
+        ]
+        let holdingsEnvelope: LiveHoldingsEnvelope = try decodeLiveTool(
+            "pdt-get-portfolio-holdings",
+            data: toolClient.callReadTool("pdt-get-portfolio-holdings", arguments: [:])
+        )
+        let distributionsEnvelope: LiveDistributionsEnvelope = try decodeLiveTool(
+            "pdt-get-portfolio-distributions",
+            data: toolClient.callReadTool("pdt-get-portfolio-distributions", arguments: [:])
+        )
+        let calendarEnvelope: LiveCalendarEventsEnvelope = try decodeLiveTool(
+            "pdt-list-calendar-events",
+            data: toolClient.callReadTool("pdt-list-calendar-events", arguments: incomeDateRange)
+        )
+        let dividends = try liveDividends(arguments: dividendDateRange)
+
+        let openHoldings = holdingsEnvelope.holdings
+            .filter { $0.closedAt == nil }
+            .map {
+                NormalizedHolding(
+                    name: $0.symbolName,
+                    quoteId: $0.symbolQuoteId,
+                    weight: $0.portfolioWeight,
+                    worth: $0.currentWorthLocal,
+                    price: $0.currentPriceLocal,
+                    priceAsOf: dayPrefix($0.currentPriceDate)
+                )
+            }
+        let quoteIDsBySymbolID = try liveQuoteIDsBySymbolID(for: openHoldings)
+        let dividendsByQuoteID = Dictionary(
+            grouping: dividends,
+            by: \.symbolQuoteId
+        )
+        let currency = openHoldings.first?.worth.currency ?? "EUR"
+        let priceSeries = try livePriceSeries(for: openHoldings, asOf: snapshotAsOf)
+
+        return PortfolioSnapshot(
+            asOf: snapshotAsOf,
+            totalValue: sumWorth(openHoldings, currency: currency),
+            openHoldings: openHoldings,
+            sectors: distributionsEnvelope.sectors.map(\.summary),
+            assetTypes: distributionsEnvelope.assetTypes.map(\.summary),
+            incomeEvents: calendarEnvelope.data.filter { $0.type != "no-events-today" }.map {
+                let quoteId = $0.symbolId.flatMap { quoteIDsBySymbolID[$0] }
+                let amount = $0.type == "ex-dividend" && !$0.isEstimated
+                    ? latestLiveDividendAmount(for: quoteId, dividendsByQuoteID: dividendsByQuoteID)
+                    : nil
+                return IncomeEventSummary(
+                    date: $0.date,
+                    kind: $0.type,
+                    symbolName: $0.symbolName ?? "Portfolio",
+                    estimated: $0.isEstimated,
+                    symbolId: $0.symbolId,
+                    quoteId: quoteId,
+                    amount: amount,
+                    priorAmount: nil,
+                    changePercent: nil
+                )
+            },
+            dividendRowCount: dividends.count,
+            priceSeries: priceSeries
+        )
+    }
+
+    private func liveQuoteIDsBySymbolID(for holdings: [NormalizedHolding]) throws -> [Int: Int] {
+        var idsBySymbolID: [Int: Int] = [:]
+        for holding in holdings {
+            let quote: LiveSymbolQuoteEnvelope = try decodeLiveTool(
+                "pdt-get-symbol-quote",
+                data: toolClient.callReadTool("pdt-get-symbol-quote", arguments: ["id": String(holding.quoteId)])
+            )
+            idsBySymbolID[quote.symbolId] = quote.id
+        }
+        return idsBySymbolID
+    }
+
+    private func liveDividends(arguments baseArguments: [String: String]) throws -> [LiveDividend] {
+        var page = 1
+        var dividends: [LiveDividend] = []
+        while true {
+            let arguments = baseArguments.merging([
+                "page": String(page),
+                "per_page": "250",
+            ]) { _, new in new }
+            let envelope: LiveDividendsEnvelope = try decodeLiveTool(
+                "pdt-list-dividends",
+                data: toolClient.callReadTool("pdt-list-dividends", arguments: arguments)
+            )
+            dividends.append(contentsOf: envelope.data)
+            let lastPage = envelope.meta?.lastPage ?? page
+            guard page < lastPage else {
+                return dividends
+            }
+            page += 1
+        }
+    }
+
+    private func livePriceSeries(for holdings: [NormalizedHolding], asOf: String) throws -> [PricePoint] {
+        let priceDateRange = [
+            "date_from": dayString(asOf, addingDays: -7),
+            "date_to": asOf,
+        ]
+        return try holdings.flatMap { holding in
+            let prices: LivePricesEnvelope = try decodeLiveTool(
+                "pdt-list-symbol-prices",
+                data: toolClient.callReadTool(
+                    "pdt-list-symbol-prices",
+                    arguments: priceDateRange.merging(["symbol_quote_id": String(holding.quoteId)]) { _, new in new }
+                )
+            )
+            return prices.data.map {
+                PricePoint(
+                    quoteId: $0.symbolQuoteId,
+                    date: $0.date,
+                    closeAdjusted: $0.closeAdjusted
+                )
+            }
+        }
+    }
+}
+
 public enum PressureRunner {
     public static func seedPriorSnapshot(
         dataSource: any PortfolioPriorSnapshotDataSource,
@@ -1414,6 +1662,89 @@ private struct PDTFixturePayload: Decodable {
     }
 }
 
+private struct LiveHoldingsEnvelope: Decodable {
+    var holdings: [LiveHolding]
+}
+
+private struct LiveHolding: Decodable {
+    var symbolName: String
+    var symbolQuoteId: Int
+    var currentPriceDate: String
+    var currentPriceLocal: Money
+    var currentWorthLocal: Money
+    var portfolioWeight: Double
+    var closedAt: String?
+}
+
+private struct LiveDistributionsEnvelope: Decodable {
+    var sectors: [LiveDistribution]
+    var assetTypes: [LiveDistribution]
+}
+
+private struct LiveDistribution: Decodable {
+    var categoryName: String
+    var totalValue: Money
+    var percentage: Double
+
+    var summary: DistributionSummary {
+        DistributionSummary(name: categoryName, percentage: percentage, totalValue: totalValue)
+    }
+}
+
+private struct LiveCalendarEventsEnvelope: Decodable {
+    var data: [LiveCalendarEvent]
+}
+
+private struct LiveCalendarEvent: Decodable {
+    var date: String
+    var type: String
+    var isEstimated: Bool
+    var symbolId: Int?
+    var symbolName: String?
+}
+
+private struct LiveDividendsEnvelope: Decodable {
+    var data: [LiveDividend]
+    var meta: LivePaginationMeta?
+}
+
+private struct LivePaginationMeta: Decodable {
+    var lastPage: Int
+
+    enum CodingKeys: String, CodingKey {
+        case lastPage
+        case lastPageSnake = "last_page"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        lastPage = try container.decodeIfPresent(Int.self, forKey: .lastPageSnake)
+            ?? container.decodeIfPresent(Int.self, forKey: .lastPage)
+            ?? 1
+    }
+}
+
+private struct LiveDividend: Decodable {
+    var date: String
+    var amount: Money
+    var symbolQuoteId: Int
+}
+
+private struct LiveSymbolQuoteEnvelope: Decodable {
+    var id: Int
+    var symbolId: Int
+}
+
+private struct LivePricesEnvelope: Decodable {
+    var data: [LivePrice]
+}
+
+private struct LivePrice: Decodable {
+    var date: String
+    var closeAdjusted: String
+    var symbolQuoteId: Int
+}
+
 private struct FixtureMeta: Decodable {
     var asOf: String
     var portfolioCurrency: String
@@ -1510,6 +1841,104 @@ private struct FixturePrice: Decodable {
     var date: String
     var closeAdjusted: String
     var symbolQuoteId: Int
+}
+
+private func decodeLiveTool<T: Decodable>(_ tool: String, data: Data) throws -> T {
+    var diagnosticPayloads = [String(data: data, encoding: .utf8)].compactMap { $0 }
+    if let payloadData = try? extractedMCPPayloadData(from: data),
+       let decoded = try? JSONDecoder().decode(T.self, from: payloadData)
+    {
+        return decoded
+    } else if let payloadData = try? extractedMCPPayloadData(from: data),
+              let diagnostic = String(data: payloadData, encoding: .utf8)
+    {
+        diagnosticPayloads.append(diagnostic)
+    }
+    if let decoded = try? JSONDecoder().decode(T.self, from: data) {
+        return decoded
+    }
+    if diagnosticPayloads.contains(where: PDTLiveUnavailableClassifier.shouldSkip) {
+        throw PDTLiveDataSourceError.unavailableToolResult(tool)
+    }
+    throw PDTLiveDataSourceError.malformedToolResult(tool)
+}
+
+private func extractedMCPPayloadData(from data: Data) throws -> Data? {
+    let object = try JSONSerialization.jsonObject(with: data)
+    return extractedMCPPayloadData(from: object)
+}
+
+private func extractedMCPPayloadData(from object: Any) -> Data? {
+    if let dictionary = object as? [String: Any] {
+        if let content = dictionary["content"] as? [Any] {
+            for item in content {
+                guard let item = item as? [String: Any],
+                      let text = item["text"] as? String,
+                      let textData = text.data(using: .utf8)
+                else { continue }
+                return textData
+            }
+        }
+        for key in ["result", "data"] {
+            guard let nested = dictionary[key],
+                  let nestedData = try? JSONSerialization.data(withJSONObject: nested, options: [.sortedKeys])
+            else { continue }
+            return nestedData
+        }
+    }
+    return nil
+}
+
+private func latestLiveDividendAmount(
+    for quoteId: Int?,
+    dividendsByQuoteID: [Int: [LiveDividend]]
+) -> Money? {
+    guard let quoteId else {
+        return nil
+    }
+    let dividends = dividendsByQuoteID[quoteId] ?? []
+    guard !dividends.contains(where: { (Decimal(string: $0.amount.value) ?? 0) < 0 }) else {
+        return nil
+    }
+    return dividends
+        .filter {
+            guard let amount = Decimal(string: $0.amount.value),
+                  amount > 0
+            else { return false }
+            return true
+        }
+        .sorted { $0.date > $1.date }
+        .first?
+        .amount
+}
+
+private func currentDayString() -> String {
+    dayString(from: Date())
+}
+
+private func dayString(_ day: String, addingDays days: Int) -> String {
+    let formatter = dayFormatter()
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    guard let date = formatter.date(from: day),
+          let shifted = calendar.date(byAdding: .day, value: days, to: date)
+    else {
+        return day
+    }
+    return dayString(from: shifted)
+}
+
+private func dayString(from date: Date) -> String {
+    dayFormatter().string(from: date)
+}
+
+private func dayFormatter() -> DateFormatter {
+    let formatter = DateFormatter()
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "yyyy-MM-dd"
+    return formatter
 }
 
 private func display(_ money: Money) -> String {

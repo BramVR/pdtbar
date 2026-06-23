@@ -343,6 +343,125 @@ try check(
     quietRunFromDataSource.descriptor.statusTitle == "EUR 51,200.00 - All quiet",
     "PortfolioDataSource runner path should preserve fixture descriptor behavior"
 )
+
+let scriptedLiveStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-live-check")
+defer {
+    try? FileManager.default.removeItem(at: scriptedLiveStore.directory)
+}
+let scriptedLiveRun = try PressureRunner.run(
+    dataSource: PDTLiveDataSource(toolClient: ScriptedPDTLiveToolClient(responses: [
+        "pdt-get-portfolio-holdings": try mcpContent("""
+        {
+          "holdings": [
+            {
+              "symbolName": "Live Adapter Co",
+              "symbolQuoteId": 9101,
+              "currentPriceDate": "2026-06-22T22:00:00+00:00",
+              "currentPriceLocal": { "value": "20.00", "currency": "EUR" },
+              "currentWorthLocal": { "value": "250.00", "currency": "EUR" },
+              "portfolioWeight": 0.25,
+              "closedAt": null
+            },
+            {
+              "symbolName": "Closed Adapter Co",
+              "symbolQuoteId": 9102,
+              "currentPriceDate": "2026-06-22T22:00:00+00:00",
+              "currentPriceLocal": { "value": "0.00", "currency": "EUR" },
+              "currentWorthLocal": { "value": "0.00", "currency": "EUR" },
+              "portfolioWeight": 0.0,
+              "closedAt": "2026-06-01T00:00:00+00:00"
+            }
+          ]
+        }
+        """),
+        "pdt-get-portfolio-distributions": try mcpResult("""
+        {
+          "sectors": [
+            { "categoryName": "Technology", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
+          ],
+          "assetTypes": [
+            { "categoryName": "Stock", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
+          ]
+        }
+        """),
+        "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28": try mcpContent("""
+        {
+          "data": [
+            { "date": "2026-03-29", "type": "no-events-today", "isEstimated": false, "symbolId": null, "symbolName": null },
+            { "date": "2026-03-30", "type": "ex-dividend", "isEstimated": false, "symbolId": 5101, "symbolName": "Live Adapter Co" }
+          ]
+        }
+        """),
+        "pdt-list-dividends?date_from=2025-03-24&date_to=2026-04-28&page=1&per_page=250": try mcpResult("""
+        {
+          "data": [
+            { "date": "2026-03-28T08:13:00+00:00", "amount": { "value": "8.00", "currency": "EUR" }, "symbolQuoteId": 9101 }
+          ],
+          "meta": { "last_page": 1 }
+        }
+        """),
+        "pdt-get-symbol-quote?id=9101": try mcpContent("""
+        { "id": 9101, "symbolId": 5101 }
+        """),
+        "pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9101": try mcpContent("""
+        {
+          "data": [
+            { "date": "2026-03-27", "closeAdjusted": "19.00", "symbolQuoteId": 9101 },
+            { "date": "2026-03-29", "closeAdjusted": "20.00", "symbolQuoteId": 9101 }
+          ]
+        }
+        """),
+    ])),
+    snapshotStore: scriptedLiveStore,
+    asOf: "2026-03-29"
+)
+try check(scriptedLiveRun.snapshotCommit.written, "live data source run should write only isolated snapshot state")
+try check(
+    scriptedLiveRun.model.facetSnapshots.allocation.openHoldingCount == 1,
+    "live data source should normalize open holdings and filter closed positions"
+)
+try check(
+    scriptedLiveRun.model.facetSnapshots.allocation.sectorBreakdown.count == 1,
+    "live data source should normalize sector distributions from wrapped mcporter payloads"
+)
+try check(
+    scriptedLiveRun.model.facetSnapshots.allocation.assetTypeBreakdown.count == 1,
+    "live data source should normalize asset type distributions from wrapped mcporter payloads"
+)
+try check(
+    scriptedLiveRun.model.rankedAttentionItems.map(\.id).contains("allocation.concentration.9101"),
+    "live data source should feed normalized holdings into pressure ranking"
+)
+try check(
+    scriptedLiveRun.model.rankedAttentionItems.map(\.id).contains("income.ex-dividend.9101"),
+    "live data source should join calendar events to dividend quote ids"
+)
+try check(
+    scriptedLiveRun.model.facetSnapshots.income.upcomingEvents.count == 1,
+    "live data source should filter calendar no-event sentinel rows"
+)
+try check(
+    scriptedLiveRun.model.facetSnapshots.bigMovers.priceSeriesCount == 2,
+    "live data source should normalize symbol price rows for the big-mover facet"
+)
+try check(
+    scriptedLiveRun.descriptor.sections.first { $0.id == "pulse" }?.rows.isEmpty == false,
+    "live data source should render through the user-visible pulse descriptor"
+)
+try check(
+    FileManager.default.fileExists(atPath: scriptedLiveRun.snapshotCommit.path),
+    "live data source should commit a snapshot inside the passed store"
+)
+do {
+    _ = try PDTLiveDataSource(toolClient: ScriptedPDTLiveToolClient(responses: [
+        "pdt-get-portfolio-holdings": try mcpErrorContent("""
+        authentication required; please login with cached credentials before calling PDT
+        """),
+    ])).snapshot(asOf: "2026-03-29")
+    throw CheckFailure("exit-zero live PDT auth payload should not decode as a snapshot")
+} catch let error as PDTLiveDataSourceError {
+    try check(error.shouldSkipLiveSmoke, "exit-zero live PDT auth payload should be classified as a skip")
+}
 let quietRunWithPrior = try PressureRunner.run(
     fixture: fixture,
     snapshotDirectory: quietSnapshotStore.directory
@@ -954,4 +1073,51 @@ private struct CheckFailure: Error, CustomStringConvertible {
     init(_ description: String) {
         self.description = description
     }
+}
+
+private struct ScriptedPDTLiveToolClient: PDTLiveToolClient {
+    var responses: [String: Data]
+
+    func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
+        let suffix = arguments
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "&")
+        let key = suffix.isEmpty ? name : "\(name)?\(suffix)"
+        guard let response = responses[key] ?? responses[name] else {
+            throw CheckFailure("missing scripted live PDT response for \(key)")
+        }
+        return response
+    }
+}
+
+private func mcpContent(_ json: String) throws -> Data {
+    try mcpContent(json, isError: false)
+}
+
+private func mcpErrorContent(_ text: String) throws -> Data {
+    try mcpContent(text, isError: true)
+}
+
+private func mcpContent(_ text: String, isError: Bool) throws -> Data {
+    try JSONSerialization.data(
+        withJSONObject: [
+            "isError": isError,
+            "content": [
+                [
+                    "type": "text",
+                    "text": text,
+                ],
+            ],
+        ],
+        options: [.sortedKeys]
+    )
+}
+
+private func mcpResult(_ json: String) throws -> Data {
+    let payload = try JSONSerialization.jsonObject(with: Data(json.utf8))
+    return try JSONSerialization.data(
+        withJSONObject: ["result": payload],
+        options: [.sortedKeys]
+    )
 }
