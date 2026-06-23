@@ -307,11 +307,12 @@ let scriptedLiveRun = try PressureRunner.run(
           ]
         }
         """),
-        "pdt-list-dividends?date_from=2025-06-18&date_to=2026-07-23": try mcpResult("""
+        "pdt-list-dividends?date_from=2025-06-18&date_to=2026-07-23&page=1&per_page=250": try mcpResult("""
         {
           "data": [
             { "date": "2026-06-20T08:13:00+00:00", "amount": { "value": "8.00", "currency": "EUR" }, "symbolQuoteId": 9101 }
-          ]
+          ],
+          "meta": { "last_page": 1 }
         }
         """),
         "pdt-get-symbol-quote?id=9101": try mcpContent("""

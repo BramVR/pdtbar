@@ -1081,10 +1081,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             "pdt-list-calendar-events",
             data: toolClient.callReadTool("pdt-list-calendar-events", arguments: incomeDateRange)
         )
-        let dividendsEnvelope: LiveDividendsEnvelope = try decodeLiveTool(
-            "pdt-list-dividends",
-            data: toolClient.callReadTool("pdt-list-dividends", arguments: dividendDateRange)
-        )
+        let dividends = try liveDividends(arguments: dividendDateRange)
 
         let openHoldings = holdingsEnvelope.holdings
             .filter { $0.closedAt == nil }
@@ -1100,7 +1097,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             }
         let quoteIDsBySymbolID = try liveQuoteIDsBySymbolID(for: openHoldings)
         let dividendsByQuoteID = Dictionary(
-            grouping: dividendsEnvelope.data,
+            grouping: dividends,
             by: \.symbolQuoteId
         )
         let currency = openHoldings.first?.worth.currency ?? "EUR"
@@ -1129,7 +1126,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
                     changePercent: nil
                 )
             },
-            dividendRowCount: dividendsEnvelope.data.count,
+            dividendRowCount: dividends.count,
             priceSeries: priceSeries
         )
     }
@@ -1144,6 +1141,27 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             idsBySymbolID[quote.symbolId] = quote.id
         }
         return idsBySymbolID
+    }
+
+    private func liveDividends(arguments baseArguments: [String: String]) throws -> [LiveDividend] {
+        var page = 1
+        var dividends: [LiveDividend] = []
+        while true {
+            let arguments = baseArguments.merging([
+                "page": String(page),
+                "per_page": "250",
+            ]) { _, new in new }
+            let envelope: LiveDividendsEnvelope = try decodeLiveTool(
+                "pdt-list-dividends",
+                data: toolClient.callReadTool("pdt-list-dividends", arguments: arguments)
+            )
+            dividends.append(contentsOf: envelope.data)
+            let lastPage = envelope.meta?.lastPage ?? page
+            guard page < lastPage else {
+                return dividends
+            }
+            page += 1
+        }
     }
 
     private func livePriceSeries(for holdings: [NormalizedHolding], asOf: String) throws -> [PricePoint] {
@@ -1509,6 +1527,23 @@ private struct LiveCalendarEvent: Decodable {
 
 private struct LiveDividendsEnvelope: Decodable {
     var data: [LiveDividend]
+    var meta: LivePaginationMeta?
+}
+
+private struct LivePaginationMeta: Decodable {
+    var lastPage: Int
+
+    enum CodingKeys: String, CodingKey {
+        case lastPage
+        case lastPageSnake = "last_page"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        lastPage = try container.decodeIfPresent(Int.self, forKey: .lastPageSnake)
+            ?? container.decodeIfPresent(Int.self, forKey: .lastPage)
+            ?? 1
+    }
 }
 
 private struct LiveDividend: Decodable {
