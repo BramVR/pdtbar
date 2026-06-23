@@ -218,6 +218,19 @@ try check(
     loadedQuietSnapshot == quietSnapshot,
     "SnapshotStore should load the committed snapshot as the prior snapshot"
 )
+let quietFixtureDataSource = PDTFixtureDataSource(fixture: fixture)
+let quietRunFromDataSource = try PressureRunner.run(
+    dataSource: quietFixtureDataSource,
+    snapshotStore: quietSnapshotStore
+)
+try check(
+    quietRunFromDataSource.model.allQuiet,
+    "PressureRunner should run from a PortfolioDataSource adapter"
+)
+try check(
+    quietRunFromDataSource.descriptor.statusTitle == "EUR 51,200.00 - All quiet",
+    "PortfolioDataSource runner path should preserve fixture descriptor behavior"
+)
 let quietRunWithPrior = try PressureRunner.run(
     fixture: fixture,
     snapshotDirectory: quietSnapshotStore.directory

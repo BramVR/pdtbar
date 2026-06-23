@@ -27,13 +27,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func loadDescriptor() throws -> MenuDescriptor {
+        let dataSource = PDTFixtureDataSource(fixture: options.fixture)
         if let snapshotDirectory = options.snapshotDirectory {
             return try PressureRunner.run(
-                fixture: options.fixture,
-                snapshotDirectory: snapshotDirectory
+                dataSource: dataSource,
+                snapshotStore: SnapshotStore(directory: snapshotDirectory)
             ).descriptor
         }
-        let snapshot = try PDTFixtureDataSource.snapshot(from: options.fixture)
+        let snapshot = try dataSource.snapshot()
         return MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: snapshot))
     }
 

@@ -101,9 +101,9 @@ private func livePDTSmoke() throws -> SmokeReport {
         )
     }
 
-    let incomeSnapshot = try PDTFixtureDataSource.snapshot(
-        from: packageRoot.appending(path: "docs/pdt/fixtures/income-event.json")
-    )
+    let incomeSnapshot = try PDTFixtureDataSource(
+        fixture: packageRoot.appending(path: "docs/pdt/fixtures/income-event.json")
+    ).snapshot()
     let mappedIncomeEvent = incomeSnapshot.incomeEvents.first {
         $0.symbolId == 5003 && $0.quoteId == 9003
     }
@@ -242,7 +242,7 @@ private func fixtureProof(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
     let fixture = options.fixture ?? defaultFixture
     let output = options.output ?? packageRoot.appending(path: "docs/smoke/fixture-proof.svg")
-    let model = PressureEngine.buildModel(from: try PDTFixtureDataSource.snapshot(from: fixture))
+    let model = PressureEngine.buildModel(from: try PDTFixtureDataSource(fixture: fixture).snapshot())
     let descriptor = MenuDescriptorRenderer.render(model: model)
     try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
     try fixtureProofSVG(descriptor: descriptor).write(to: output, atomically: true, encoding: .utf8)
@@ -255,7 +255,7 @@ private func fixtureProof(arguments: [String]) throws -> SmokeReport {
 }
 
 private func fixtureStatusTitle(for fixture: URL) throws -> String {
-    let model = PressureEngine.buildModel(from: try PDTFixtureDataSource.snapshot(from: fixture))
+    let model = PressureEngine.buildModel(from: try PDTFixtureDataSource(fixture: fixture).snapshot())
     return MenuDescriptorRenderer.render(model: model).statusTitle
 }
 

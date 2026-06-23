@@ -10,7 +10,8 @@ do {
        arguments[1] == "--fixture"
     {
         let fixtureURL = URL(fileURLWithPath: arguments[2])
-        let snapshot = try PDTFixtureDataSource.snapshot(from: fixtureURL)
+        let dataSource = PDTFixtureDataSource(fixture: fixtureURL)
+        let snapshot = try dataSource.snapshot()
         let model = PressureEngine.buildModel(from: snapshot)
         if arguments[0] == "model" {
             output = try stableJSONData(model)
@@ -24,8 +25,8 @@ do {
     {
         output = try stableJSONData(
             PressureRunner.run(
-                fixture: URL(fileURLWithPath: arguments[2]),
-                snapshotDirectory: URL(fileURLWithPath: arguments[4])
+                dataSource: PDTFixtureDataSource(fixture: URL(fileURLWithPath: arguments[2])),
+                snapshotStore: SnapshotStore(directory: URL(fileURLWithPath: arguments[4]))
             )
         )
     } else if arguments.count == 5,
@@ -35,8 +36,8 @@ do {
     {
         output = try stableJSONData(
             PressureRunner.seedPriorSnapshot(
-                fixture: URL(fileURLWithPath: arguments[2]),
-                snapshotDirectory: URL(fileURLWithPath: arguments[4])
+                dataSource: PDTFixtureDataSource(fixture: URL(fileURLWithPath: arguments[2])),
+                snapshotStore: SnapshotStore(directory: URL(fileURLWithPath: arguments[4]))
             )
         )
     } else {
