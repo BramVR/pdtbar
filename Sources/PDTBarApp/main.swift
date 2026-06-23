@@ -99,7 +99,9 @@ do {
     let delegate = AppDelegate(options: options)
     app.delegate = delegate
     app.setActivationPolicy(.accessory)
-    app.run()
+    withExtendedLifetime(delegate) {
+        app.run()
+    }
 } catch {
     FileHandle.standardError.write(
         Data("usage: pdtbar --fixture <path> [--snapshot-dir <path>]\n".utf8)

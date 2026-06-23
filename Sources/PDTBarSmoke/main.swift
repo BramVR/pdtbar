@@ -173,7 +173,14 @@ private func peekabooSmoke(arguments: [String]) throws -> SmokeReport {
     }
 
     let permissionJSON = try run(peekaboo, arguments: ["permissions", "--json"], timeout: 15).stdout
-    let missingPermissions = requiredMissingPermissions(from: permissionJSON)
+    guard let missingPermissions = requiredMissingPermissions(from: permissionJSON) else {
+        return SmokeReport(
+            name: "peekaboo",
+            status: SmokeStatus.failed,
+            detail: "Peekaboo permissions output was not valid JSON",
+            artifacts: []
+        )
+    }
     guard missingPermissions.isEmpty else {
         return SmokeReport(
             name: "peekaboo",
@@ -194,6 +201,7 @@ private func peekabooSmoke(arguments: [String]) throws -> SmokeReport {
 
     let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
     let fixture = options.fixture ?? defaultFixture
+    let expectedStatusTitle = try fixtureStatusTitle(for: fixture)
     let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
     try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
 
@@ -211,7 +219,7 @@ private func peekabooSmoke(arguments: [String]) throws -> SmokeReport {
     Thread.sleep(forTimeInterval: 1.0)
 
     let menubarJSON = try run(peekaboo, arguments: ["menubar", "list", "--json"], timeout: 20).stdout
-    guard String(data: menubarJSON, encoding: .utf8)?.contains("EUR 51,200.00") == true else {
+    guard String(data: menubarJSON, encoding: .utf8)?.contains(expectedStatusTitle) == true else {
         return SmokeReport(
             name: "peekaboo",
             status: SmokeStatus.failed,
@@ -244,6 +252,11 @@ private func fixtureProof(arguments: [String]) throws -> SmokeReport {
         detail: "rendered fixture descriptor proof for \(fixture.lastPathComponent)",
         artifacts: [output.path]
     )
+}
+
+private func fixtureStatusTitle(for fixture: URL) throws -> String {
+    let model = PressureEngine.buildModel(from: try PDTFixtureDataSource.snapshot(from: fixture))
+    return MenuDescriptorRenderer.render(model: model).statusTitle
 }
 
 private struct SmokeOptions {
@@ -314,9 +327,9 @@ private func run(_ executable: URL, arguments: [String], timeout: TimeInterval) 
     return CommandResult(stdout: out, stderr: err)
 }
 
-private func requiredMissingPermissions(from data: Data) -> [String] {
+private func requiredMissingPermissions(from data: Data) -> [String]? {
     guard let object = try? JSONSerialization.jsonObject(with: data) else {
-        return ["permission status unavailable"]
+        return nil
     }
     return permissionDictionaries(in: object).compactMap { permission in
         guard permission["isRequired"] as? Bool == true,

@@ -16,7 +16,7 @@ npx -y mcporter list <pdt-server> --schema --json > /tmp/pdt-schema.json
 PDTBAR_LIVE_PDT_SMOKE=1 PDTBAR_LIVE_PDT_SCHEMA_JSON=/tmp/pdt-schema.json swift run pdtbar-smoke live-pdt
 ```
 
-Default behavior is a clean skip. The live smoke checks required PDT read-tool
+Default behavior is a clean skip. The live smoke check requires PDT read-tool
 availability from schema JSON and runs sanitized fixture normalization checks.
 It must not assert private portfolio values or print private PDT payloads.
 
