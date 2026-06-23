@@ -426,6 +426,7 @@ public enum MenuRowRole: String, Codable, Equatable {
     case setupLogin
     case setupFailure
     case fetchStatus
+    case fetchRetry
     case pulseQuiet
     case pulseAttention
     case pulseAttentionExpansion
@@ -662,7 +663,41 @@ public enum ClaudeLaunchFlow {
         }
     }
 
-    public static func descriptor(for state: ClaudeLaunchState) -> MenuDescriptor {
+    public static func descriptor(for state: ClaudeLaunchState, cachedPulse: MenuDescriptor? = nil) -> MenuDescriptor {
+        if let cachedPulse {
+            switch state {
+            case .probingClaude:
+                return cachedPulseDescriptor(
+                    cachedPulse,
+                    rows: [
+                        MenuRow(
+                            id: "portfolioFetch.probing",
+                            role: .fetchStatus,
+                            title: "Checking Claude setup"
+                        ),
+                    ]
+                )
+            case .fetchingPortfolio:
+                return cachedPulseDescriptor(
+                    cachedPulse,
+                    rows: [
+                        MenuRow(
+                            id: "portfolioFetch.refreshing",
+                            role: .fetchStatus,
+                            title: "Refreshing portfolio"
+                        ),
+                    ]
+                )
+            case .portfolioFetchFailed:
+                return cachedPulseDescriptor(
+                    cachedPulse,
+                    rows: portfolioFetchFailureRows()
+                )
+            case .loggedOut, .probeFailed:
+                break
+            }
+        }
+
         switch state {
         case .probingClaude:
             return MenuDescriptor(
@@ -729,17 +764,41 @@ public enum ClaudeLaunchFlow {
                     MenuSection(
                         id: "portfolioFetch",
                         title: "Portfolio",
-                        rows: [
-                            MenuRow(
-                                id: "portfolioFetch.failed",
-                                role: .fetchStatus,
-                                title: "Could not fetch portfolio"
-                            ),
-                        ]
+                        rows: portfolioFetchFailureRows()
                     ),
                 ]
             )
         }
+    }
+
+    private static func cachedPulseDescriptor(_ cachedPulse: MenuDescriptor, rows: [MenuRow]) -> MenuDescriptor {
+        MenuDescriptor(
+            statusTitle: cachedPulse.statusTitle,
+            statusBadge: cachedPulse.statusBadge,
+            statusAccessibilityIdentifier: cachedPulse.statusAccessibilityIdentifier,
+            sections: cachedPulse.sections + [
+                MenuSection(
+                    id: "portfolioFetch",
+                    title: "Portfolio",
+                    rows: rows
+                ),
+            ]
+        )
+    }
+
+    private static func portfolioFetchFailureRows() -> [MenuRow] {
+        [
+            MenuRow(
+                id: "portfolioFetch.failed",
+                role: .fetchStatus,
+                title: "Could not fetch portfolio"
+            ),
+            MenuRow(
+                id: "portfolioFetch.retry",
+                role: .fetchRetry,
+                title: "Try again"
+            ),
+        ]
     }
 }
 
@@ -1411,17 +1470,20 @@ public final class ScriptedPDTMCPConnector: PDTMCPConnector {
     public var availableTools: Set<String>
     public var responses: [String: Data]
     public var failure: PDTMCPConnectorError?
+    public var initialCallDelaySeconds: Double?
     public private(set) var availabilityChecks = 0
     public private(set) var calls: [String] = []
 
     public init(
         availableTools: Set<String> = Set(PDTReadTools.requiredV1),
         responses: [String: Data],
-        failure: PDTMCPConnectorError? = nil
+        failure: PDTMCPConnectorError? = nil,
+        initialCallDelaySeconds: Double? = nil
     ) {
         self.availableTools = availableTools
         self.responses = responses
         self.failure = failure
+        self.initialCallDelaySeconds = initialCallDelaySeconds
     }
 
     public func availableReadTools() throws -> Set<String> {
@@ -1431,6 +1493,10 @@ public final class ScriptedPDTMCPConnector: PDTMCPConnector {
 
     public func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
         calls.append(name)
+        if let delay = initialCallDelaySeconds, delay > 0 {
+            initialCallDelaySeconds = nil
+            Thread.sleep(forTimeInterval: delay)
+        }
         if let failure {
             throw failure
         }
@@ -1450,19 +1516,28 @@ public enum ScriptedPDTMCPConnectorConfigurationError: Error, Equatable {
     case emptyResponses
 }
 
-public struct ScriptedPDTMCPConnectorConfiguration: Codable, Equatable {
+public struct ScriptedPDTMCPConnectorConfiguration: Codable, Equatable, Sendable {
     public var availableTools: [String]?
     public var responses: [String: String]
     public var asOf: String?
+    public var failure: String?
+    public var failureMessage: String?
+    public var initialCallDelaySeconds: Double?
 
     public init(
         availableTools: [String]? = nil,
         responses: [String: String],
-        asOf: String? = nil
+        asOf: String? = nil,
+        failure: String? = nil,
+        failureMessage: String? = nil,
+        initialCallDelaySeconds: Double? = nil
     ) {
         self.availableTools = availableTools
         self.responses = responses
         self.asOf = asOf
+        self.failure = failure
+        self.failureMessage = failureMessage
+        self.initialCallDelaySeconds = initialCallDelaySeconds
     }
 
     public func connector() throws -> ScriptedPDTMCPConnector {
@@ -1471,8 +1546,25 @@ public struct ScriptedPDTMCPConnectorConfiguration: Codable, Equatable {
         }
         return ScriptedPDTMCPConnector(
             availableTools: Set(availableTools ?? PDTReadTools.requiredV1),
-            responses: responses.mapValues { Data($0.utf8) }
+            responses: responses.mapValues { Data($0.utf8) },
+            failure: scriptedFailure(),
+            initialCallDelaySeconds: initialCallDelaySeconds
         )
+    }
+
+    private func scriptedFailure() -> PDTMCPConnectorError? {
+        guard let failure else {
+            return nil
+        }
+        let message = failureMessage ?? "scripted PDT MCP failure"
+        switch failure {
+        case "setupUnavailable", "authSetupError":
+            return .setupUnavailable(message)
+        case "transientFailure":
+            return .transientFailure(message)
+        default:
+            return .transientFailure(message)
+        }
     }
 }
 
@@ -1756,6 +1848,13 @@ public struct PDTLiveDataSource: PortfolioDataSource {
 }
 
 public enum PressureRunner {
+    public static func cachedPulseDescriptor(snapshotStore: SnapshotStore) throws -> MenuDescriptor? {
+        guard let snapshot = try snapshotStore.loadPriorSnapshot() else {
+            return nil
+        }
+        return MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: snapshot))
+    }
+
     public static func seedPriorSnapshot(
         dataSource: any PortfolioPriorSnapshotDataSource,
         snapshotStore: SnapshotStore,
@@ -1798,7 +1897,7 @@ public enum PressureRunner {
     }
 }
 
-public struct SnapshotStore {
+public struct SnapshotStore: Sendable {
     public var directory: URL
 
     public init(directory: URL) {
