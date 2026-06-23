@@ -334,6 +334,14 @@ try check(
     "live data source should normalize open holdings and filter closed positions"
 )
 try check(
+    scriptedLiveRun.model.facetSnapshots.allocation.sectorBreakdown.count == 1,
+    "live data source should normalize sector distributions from wrapped mcporter payloads"
+)
+try check(
+    scriptedLiveRun.model.facetSnapshots.allocation.assetTypeBreakdown.count == 1,
+    "live data source should normalize asset type distributions from wrapped mcporter payloads"
+)
+try check(
     scriptedLiveRun.model.rankedAttentionItems.map(\.id).contains("allocation.concentration.9101"),
     "live data source should feed normalized holdings into pressure ranking"
 )

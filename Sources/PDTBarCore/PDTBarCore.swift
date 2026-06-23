@@ -1611,12 +1611,12 @@ private struct FixturePrice: Decodable {
 }
 
 private func decodeLiveTool<T: Decodable>(_ tool: String, data: Data) throws -> T {
-    if let decoded = try? JSONDecoder().decode(T.self, from: data) {
-        return decoded
-    }
     if let payloadData = try? extractedMCPPayloadData(from: data),
        let decoded = try? JSONDecoder().decode(T.self, from: payloadData)
     {
+        return decoded
+    }
+    if let decoded = try? JSONDecoder().decode(T.self, from: data) {
         return decoded
     }
     throw PDTLiveDataSourceError.malformedToolResult(tool)

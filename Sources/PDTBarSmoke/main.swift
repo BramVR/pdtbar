@@ -176,16 +176,20 @@ private func livePDTSmoke(arguments: [String]) throws -> SmokeReport {
 private func livePDTFailureShouldSkip(_ stderr: String) -> Bool {
     let lower = stderr.lowercased()
     return [
-        "auth",
+        "not authenticated",
+        "authentication required",
         "oauth",
-        "credential",
-        "login",
+        "missing credential",
+        "credentials not found",
+        "login required",
+        "please login",
         "unauthorized",
         "forbidden",
         "offline",
-        "connection",
-        "connect",
-        "refused",
+        "connection refused",
+        "failed to connect",
+        "could not connect",
+        "econnrefused",
         "server not found",
         "server unavailable",
     ].contains { lower.contains($0) }
