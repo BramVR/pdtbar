@@ -85,6 +85,8 @@ try check(
 )
 let setupDescriptor = ClaudeSetupMenuDescriptor.loggedOut()
 let setupSurface = MenuBarSurfaceRenderer.render(descriptor: setupDescriptor)
+let openingClaudeDescriptor = ClaudeLaunchFlow.descriptor(for: .openingClaude)
+let missingClaudeDescriptor = ClaudeLaunchFlow.descriptor(for: .missingClaude)
 let probingDescriptor = ClaudeLaunchFlow.descriptor(for: .probingClaude)
 let probingSurface = MenuBarSurfaceRenderer.render(descriptor: probingDescriptor)
 try check(
@@ -148,6 +150,14 @@ try check(
 try check(
     setupSurface.sections.flatMap(\.rows).map(\.title) == ["Not connected", "Log in with Claude"],
     "logged-out real launch should render Claude setup status and login rows"
+)
+try check(
+    openingClaudeDescriptor.sections.flatMap(\.rows).map(\.title) == ["Opening Claude Desktop"],
+    "login handoff should render progress while Claude Desktop is opening"
+)
+try check(
+    missingClaudeDescriptor.sections.flatMap(\.rows).map(\.title) == ["Claude Desktop not found", "Log in with Claude"],
+    "failed login handoff should render missing-Claude setup state with a retryable login action"
 )
 let descriptorObject = try require(
     JSONSerialization.jsonObject(with: try stableJSONData(descriptor)) as? [String: Any],

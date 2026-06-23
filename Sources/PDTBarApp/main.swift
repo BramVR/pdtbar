@@ -10,12 +10,16 @@ private struct PortfolioFetchOutcome: @unchecked Sendable {
 @MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let options: PDTBarLaunchOptions
+    private let loginHandoff: ClaudeLoginHandoff
     private var statusItem: NSStatusItem?
     private var cachedPulseDescriptor: MenuDescriptor?
     private var portfolioFetchInFlight = false
 
     init(options: PDTBarLaunchOptions) {
         self.options = options
+        self.loginHandoff = ClaudeDesktopLoginHandoff(
+            environment: ProcessInfo.processInfo.environment
+        )
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -103,6 +107,21 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         startFirstPortfolioFetch()
     }
 
+    @objc private func loginWithClaude(_ sender: NSMenuItem) {
+        installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .openingClaude))
+        loginHandoff.openOrFocus { [weak self] result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    self?.installMenuBarItem(ClaudeSetupMenuDescriptor.loggedOut())
+                case .failure(let error):
+                    FileHandle.standardError.write(Data("pdtbar: Claude handoff failed: \(error)\n".utf8))
+                    self?.installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .missingClaude))
+                }
+            }
+        }
+    }
+
     private func scriptedPDTConnectorConfiguration() throws -> ScriptedPDTMCPConnectorConfiguration {
         let url = appSupportDirectory().appending(path: "pdtbar/scripted-pdt-mcp.json")
         let data = try Data(contentsOf: url)
@@ -168,12 +187,87 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                     item.target = self
                     item.action = #selector(retryPortfolioFetch(_:))
                 }
+                if row.role == .setupLogin {
+                    item.target = self
+                    item.action = #selector(loginWithClaude(_:))
+                }
                 menu.addItem(item)
             }
             menu.addItem(.separator())
         }
         menu.addItem(NSMenuItem(title: "Quit PDTBar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         return menu
+    }
+}
+
+private protocol ClaudeLoginHandoff {
+    func openOrFocus(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void)
+}
+
+private enum ClaudeLoginHandoffError: Error, CustomStringConvertible {
+    case failed(String)
+
+    var description: String {
+        switch self {
+        case .failed(let message):
+            return message
+        }
+    }
+}
+
+private final class ClaudeDesktopLoginHandoff: ClaudeLoginHandoff {
+    private let environment: [String: String]
+
+    init(environment: [String: String]) {
+        self.environment = environment
+    }
+
+    func openOrFocus(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        if let script = scriptedHandoffPath() {
+            run(executable: URL(fileURLWithPath: script), arguments: [], completion: completion)
+            return
+        }
+        run(
+            executable: URL(fileURLWithPath: "/usr/bin/open"),
+            arguments: ["-a", "Claude"],
+            completion: completion
+        )
+    }
+
+    private func scriptedHandoffPath() -> String? {
+        if let script = environment["PDTBAR_CLAUDE_HANDOFF_SCRIPT"], !script.isEmpty {
+            return script
+        }
+        return nil
+    }
+
+    private func run(
+        executable: URL,
+        arguments: [String],
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void
+    ) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let process = Process()
+            process.executableURL = executable
+            process.arguments = arguments
+            let nullOutput = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/dev/null"))
+            process.standardOutput = nullOutput
+            process.standardError = nullOutput
+            do {
+                defer {
+                    try? nullOutput?.close()
+                }
+                try process.run()
+                process.waitUntilExit()
+                if process.terminationStatus == 0 {
+                    completion(.success(()))
+                } else {
+                    completion(.failure(ClaudeLoginHandoffError.failed("Claude Desktop could not be opened")))
+                }
+            } catch {
+                completion(.failure(error))
+            }
+        }
     }
 }
 

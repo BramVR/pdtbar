@@ -643,6 +643,8 @@ public enum ClaudeReadinessProbeResult: Equatable {
 public enum ClaudeLaunchState: Equatable {
     case probingClaude
     case loggedOut
+    case openingClaude
+    case missingClaude
     case probeFailed
     case fetchingPortfolio
     case portfolioFetchFailed
@@ -693,7 +695,7 @@ public enum ClaudeLaunchFlow {
                     cachedPulse,
                     rows: portfolioFetchFailureRows()
                 )
-            case .loggedOut, .probeFailed:
+            case .loggedOut, .openingClaude, .missingClaude, .probeFailed:
                 break
             }
         }
@@ -718,6 +720,25 @@ public enum ClaudeLaunchFlow {
             )
         case .loggedOut:
             return ClaudeSetupMenuDescriptor.loggedOut()
+        case .openingClaude:
+            return MenuDescriptor(
+                statusTitle: "Opening Claude Desktop",
+                sections: [
+                    MenuSection(
+                        id: "claudeSetup",
+                        title: "Claude",
+                        rows: [
+                            MenuRow(
+                                id: "claudeSetup.opening",
+                                role: .setupStatus,
+                                title: "Opening Claude Desktop"
+                            ),
+                        ]
+                    ),
+                ]
+            )
+        case .missingClaude:
+            return ClaudeSetupMenuDescriptor.missingClaude()
         case .probeFailed:
             return MenuDescriptor(
                 statusTitle: "Could not check Claude",
@@ -815,6 +836,30 @@ public enum ClaudeSetupMenuDescriptor {
                             id: "claudeSetup.status",
                             role: .setupStatus,
                             title: "Not connected"
+                        ),
+                        MenuRow(
+                            id: "claudeSetup.login",
+                            role: .setupLogin,
+                            title: "Log in with Claude"
+                        ),
+                    ]
+                ),
+            ]
+        )
+    }
+
+    public static func missingClaude() -> MenuDescriptor {
+        MenuDescriptor(
+            statusTitle: "Claude Desktop not found",
+            sections: [
+                MenuSection(
+                    id: "claudeSetup",
+                    title: "Claude",
+                    rows: [
+                        MenuRow(
+                            id: "claudeSetup.missingClaude",
+                            role: .setupFailure,
+                            title: "Claude Desktop not found"
                         ),
                         MenuRow(
                             id: "claudeSetup.login",
