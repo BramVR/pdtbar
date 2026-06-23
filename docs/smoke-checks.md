@@ -9,16 +9,29 @@ swift run pdtbar-checks
 swift test
 ```
 
-Opt-in live PDT contract smoke:
+Read-only live PDT pulse smoke:
 
 ```bash
 npx -y mcporter list <pdt-server> --schema --json > /tmp/pdt-schema.json
-PDTBAR_LIVE_PDT_SMOKE=1 PDTBAR_LIVE_PDT_SCHEMA_JSON=/tmp/pdt-schema.json swift run pdtbar-smoke live-pdt
+PDTBAR_LIVE_PDT_SERVER=<pdt-server> PDTBAR_LIVE_PDT_SCHEMA_JSON=/tmp/pdt-schema.json swift run pdtbar-smoke live-pdt
 ```
 
-Default behavior is a clean skip. The live smoke check requires PDT read-tool
-availability from schema JSON and runs sanitized fixture normalization checks.
-It must not assert private portfolio values or print private PDT payloads.
+Default behavior is a clean skip. The live smoke requires a configured/authenticated
+mcporter PDT server via `--server <pdt-server>` or `PDTBAR_LIVE_PDT_SERVER`. When
+`PDTBAR_LIVE_PDT_SCHEMA_JSON` is set, the gate first confirms the expected read
+tools are present in the schema. It then calls only read tools through the live
+`PortfolioDataSource`, runs the same `PressureRunner` path used by fixture e2e,
+renders the pulse descriptor, and keeps the raw live snapshot in an unreported
+temporary directory that is removed after the render check.
+
+Missing server credentials or local PDT access must stay `skipped`, not failed,
+so CI can run `swift run pdtbar-smoke live-pdt` without secrets. CI should treat
+`status: "skipped"` as neutral and `status: "failed"` as red. Passing live proof
+is sanitized: the reported artifact contains selector IDs/counts only, never raw
+portfolio payloads, holding names, or values.
+
+Live read calls default to a 60s timeout. Pass `--timeout <seconds>` to use a
+shorter local or CI bound.
 
 Local/release packaged-app smoke:
 

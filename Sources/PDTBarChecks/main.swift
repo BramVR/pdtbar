@@ -258,6 +258,101 @@ try check(
     quietRunFromDataSource.descriptor.statusTitle == "EUR 51,200.00 - All quiet",
     "PortfolioDataSource runner path should preserve fixture descriptor behavior"
 )
+
+let scriptedLiveStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-live-check")
+defer {
+    try? FileManager.default.removeItem(at: scriptedLiveStore.directory)
+}
+let scriptedLiveRun = try PressureRunner.run(
+    dataSource: PDTLiveDataSource(toolClient: ScriptedPDTLiveToolClient(responses: [
+        "pdt-get-portfolio-holdings": Data("""
+        {
+          "holdings": [
+            {
+              "symbolName": "Live Adapter Co",
+              "symbolQuoteId": 9101,
+              "currentPriceDate": "2026-06-22T22:00:00+00:00",
+              "currentPriceLocal": { "value": "20.00", "currency": "EUR" },
+              "currentWorthLocal": { "value": "250.00", "currency": "EUR" },
+              "portfolioWeight": 0.25,
+              "closedAt": null
+            },
+            {
+              "symbolName": "Closed Adapter Co",
+              "symbolQuoteId": 9102,
+              "currentPriceDate": "2026-06-22T22:00:00+00:00",
+              "currentPriceLocal": { "value": "0.00", "currency": "EUR" },
+              "currentWorthLocal": { "value": "0.00", "currency": "EUR" },
+              "portfolioWeight": 0.0,
+              "closedAt": "2026-06-01T00:00:00+00:00"
+            }
+          ]
+        }
+        """.utf8),
+        "pdt-get-portfolio-distributions": Data("""
+        {
+          "sectors": [
+            { "categoryName": "Technology", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
+          ],
+          "assetTypes": [
+            { "categoryName": "Stock", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
+          ]
+        }
+        """.utf8),
+        "pdt-list-calendar-events": Data("""
+        {
+          "data": [
+            { "date": "2026-06-24", "type": "ex-dividend", "isEstimated": false, "symbolId": 5101, "symbolName": "Live Adapter Co" }
+          ]
+        }
+        """.utf8),
+        "pdt-list-dividends": Data("""
+        {
+          "data": [
+            { "date": "2026-06-20T08:13:00+00:00", "amount": { "value": "8.00", "currency": "EUR" }, "symbolQuoteId": 9101 }
+          ]
+        }
+        """.utf8),
+        "pdt-get-symbol-quote?id=9101": Data("""
+        { "id": 9101, "symbolId": 5101 }
+        """.utf8),
+        "pdt-list-symbol-prices?symbolQuoteId=9101": Data("""
+        {
+          "data": [
+            { "date": "2026-06-20", "closeAdjusted": "19.00", "symbolQuoteId": 9101 },
+            { "date": "2026-06-22", "closeAdjusted": "20.00", "symbolQuoteId": 9101 }
+          ]
+        }
+        """.utf8),
+    ])),
+    snapshotStore: scriptedLiveStore,
+    asOf: "2026-06-23"
+)
+try check(scriptedLiveRun.snapshotCommit.written, "live data source run should write only isolated snapshot state")
+try check(
+    scriptedLiveRun.model.facetSnapshots.allocation.openHoldingCount == 1,
+    "live data source should normalize open holdings and filter closed positions"
+)
+try check(
+    scriptedLiveRun.model.rankedAttentionItems.map(\.id).contains("allocation.concentration.9101"),
+    "live data source should feed normalized holdings into pressure ranking"
+)
+try check(
+    scriptedLiveRun.model.rankedAttentionItems.map(\.id).contains("income.ex-dividend.9101"),
+    "live data source should join calendar events to dividend quote ids"
+)
+try check(
+    scriptedLiveRun.model.facetSnapshots.bigMovers.priceSeriesCount == 2,
+    "live data source should normalize symbol price rows for the big-mover facet"
+)
+try check(
+    scriptedLiveRun.descriptor.sections.first { $0.id == "pulse" }?.rows.isEmpty == false,
+    "live data source should render through the user-visible pulse descriptor"
+)
+try check(
+    FileManager.default.fileExists(atPath: scriptedLiveRun.snapshotCommit.path),
+    "live data source should commit a snapshot inside the passed store"
+)
 let quietRunWithPrior = try PressureRunner.run(
     fixture: fixture,
     snapshotDirectory: quietSnapshotStore.directory
@@ -605,5 +700,21 @@ private struct CheckFailure: Error, CustomStringConvertible {
 
     init(_ description: String) {
         self.description = description
+    }
+}
+
+private struct ScriptedPDTLiveToolClient: PDTLiveToolClient {
+    var responses: [String: Data]
+
+    func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
+        let suffix = arguments
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "&")
+        let key = suffix.isEmpty ? name : "\(name)?\(suffix)"
+        guard let response = responses[key] ?? responses[name] else {
+            throw CheckFailure("missing scripted live PDT response for \(key)")
+        }
+        return response
     }
 }
