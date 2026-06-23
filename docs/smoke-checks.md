@@ -6,6 +6,7 @@ Normal deterministic gate:
 swift build
 swift run pdtbar-checks
 swift run pdtbar-smoke scripted-pdt-connector
+swift run pdtbar-smoke scripted-login-handoff
 swift run pdtbar-smoke scripted-first-fetch
 swift run pdtbar-smoke scripted-returning-launch
 # Optional once Tests/ exists; currently exits with "no tests found".
@@ -24,6 +25,21 @@ required v1 PDT read tools are available, verifies only those tools are called,
 and proves each required read tool is called exactly once for the coalesced
 fetch. The proof artifact reports selectors/counts/scenario status only; no raw
 portfolio payloads, values, account identifiers, or live data are written.
+
+Scripted Claude login handoff e2e:
+
+```bash
+swift build --product pdtbar
+swift run pdtbar-smoke scripted-login-handoff
+```
+
+This uses isolated app-support directories, a scripted local handoff executable,
+and no live Claude credentials. It launches the logged-out menu, verifies the
+handoff script is not called before the user-initiated `Log in with Claude`
+menu action, then proves success shows `Opening Claude Desktop` while the
+handoff is in flight and failure renders `Claude Desktop not found` with a
+retryable login action. The proof artifact contains selector/click booleans
+only; no credentials, account identifiers, or portfolio payloads are written.
 
 Scripted first-fetch e2e:
 

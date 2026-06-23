@@ -34,6 +34,8 @@ do {
         report = try scriptedFirstFetchSmoke(arguments: Array(arguments.dropFirst()))
     case "scripted-returning-launch":
         report = try scriptedReturningLaunchSmoke(arguments: Array(arguments.dropFirst()))
+    case "scripted-login-handoff":
+        report = try scriptedLoginHandoffSmoke(arguments: Array(arguments.dropFirst()))
     case "logged-out-launch":
         report = try loggedOutLaunchSmoke(arguments: Array(arguments.dropFirst()))
     case "ready-launch":
@@ -59,6 +61,7 @@ do {
       pdtbar-smoke scripted-pdt-connector [--artifacts <dir>]
       pdtbar-smoke scripted-first-fetch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-returning-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
+      pdtbar-smoke scripted-login-handoff [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke logged-out-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke ready-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]
@@ -343,6 +346,221 @@ private func loggedOutLaunchSmoke(arguments: [String]) throws -> SmokeReport {
         status: SmokeStatus.passed,
         detail: "no-argument app launched real Claude-first setup with isolated app support, ignored fixture env, and rendered Not connected, Log in with Claude, and Quit PDTBar",
         artifacts: [artifactPath(evidence)]
+    )
+}
+
+private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
+    let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
+    guard FileManager.default.isExecutableFile(atPath: app.path) else {
+        return SmokeReport(
+            name: "scripted-login-handoff",
+            status: SmokeStatus.failed,
+            detail: "app executable missing; run swift build --product pdtbar first or pass --app <path>",
+            artifacts: []
+        )
+    }
+
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let proof = artifacts.appending(path: "pdtbar-scripted-login-handoff-proof.json")
+
+    guard AXIsProcessTrusted() else {
+        return SmokeReport(
+            name: "scripted-login-handoff",
+            status: SmokeStatus.skipped,
+            detail: "macOS Accessibility permission missing for user-initiated Log in with Claude menu-click proof",
+            artifacts: []
+        )
+    }
+
+    let successAppSupport = try options.isolatedAppSupportDirectory(prefix: "scripted-login-handoff-success-app-support")
+    let successMarker = successAppSupport.appending(path: "pdtbar/claude-handoff-started")
+    let successResult = successAppSupport.appending(path: "pdtbar/claude-handoff-result")
+    let successScript = try writeHandoffScript(
+        in: successAppSupport,
+        name: "handoff-success.sh",
+        delay: max(options.timeout, 1.0),
+        exitStatus: 0
+    )
+    let successProcess = try launchLoginHandoffApp(
+        app,
+        appSupportDirectory: successAppSupport,
+        handoffScript: successScript,
+        marker: successMarker,
+        result: successResult,
+        resultValue: "success"
+    )
+    defer {
+        terminate(successProcess)
+    }
+
+    let loginSurface = MenuBarSurfaceRenderer.render(descriptor: ClaudeSetupMenuDescriptor.loggedOut())
+    let loginTargets = requiredSetupMenuTargets(in: loginSurface)
+    let loginIDs = Set(loginTargets.map(\.accessibilityIdentifier))
+    let successAppElement = AXUIElementCreateApplication(successProcess.processIdentifier)
+    guard let successStatus = waitForAccessibilityElement(
+        in: successAppElement,
+        identifier: loginSurface.status.accessibilityIdentifier,
+        timeout: options.timeout
+    ) else {
+        return SmokeReport(
+            name: "scripted-login-handoff",
+            status: SmokeStatus.failed,
+            detail: "scripted success launch did not reach logged-out setup before handoff",
+            artifacts: [artifactPath(successAppSupport)]
+        )
+    }
+    let successWasIdleBeforeClick = !FileManager.default.fileExists(atPath: successMarker.path)
+    let successClick = pressMenuRow(
+        statusElement: successStatus,
+        appElement: successAppElement,
+        rowIdentifier: "pdtbar.row.claudeSetup.login",
+        expectedMenuIdentifiers: loginIDs,
+        timeout: options.timeout
+    )
+    let successScriptInvoked = waitForFile(successMarker, timeout: options.timeout)
+    let progressVisible = waitForStatusText(
+        "Opening Claude Desktop",
+        in: successAppElement,
+        statusIdentifier: "pdtbar.status",
+        timeout: options.timeout
+    )
+    let successCompleted = waitForFile(successResult, timeout: options.timeout + 2.0)
+    let returnedToLoggedOut = waitForStatusText(
+        "Not connected",
+        in: successAppElement,
+        statusIdentifier: "pdtbar.status",
+        timeout: options.timeout
+    )
+    terminate(successProcess)
+
+    let failureAppSupport = try options.isolatedAppSupportDirectory(prefix: "scripted-login-handoff-failure-app-support")
+    let failureMarker = failureAppSupport.appending(path: "pdtbar/claude-handoff-started")
+    let failureResult = failureAppSupport.appending(path: "pdtbar/claude-handoff-result")
+    let failureScript = try writeHandoffScript(
+        in: failureAppSupport,
+        name: "handoff-failure.sh",
+        delay: 0.1,
+        exitStatus: 42
+    )
+    let failureProcess = try launchLoginHandoffApp(
+        app,
+        appSupportDirectory: failureAppSupport,
+        handoffScript: failureScript,
+        marker: failureMarker,
+        result: failureResult,
+        resultValue: "failure"
+    )
+    defer {
+        terminate(failureProcess)
+    }
+
+    let failureAppElement = AXUIElementCreateApplication(failureProcess.processIdentifier)
+    guard let failureStatus = waitForAccessibilityElement(
+        in: failureAppElement,
+        identifier: loginSurface.status.accessibilityIdentifier,
+        timeout: options.timeout
+    ) else {
+        return SmokeReport(
+            name: "scripted-login-handoff",
+            status: SmokeStatus.failed,
+            detail: "scripted failure launch did not reach logged-out setup before handoff",
+            artifacts: [artifactPath(failureAppSupport)]
+        )
+    }
+    let failureWasIdleBeforeClick = !FileManager.default.fileExists(atPath: failureMarker.path)
+    let failureClick = pressMenuRow(
+        statusElement: failureStatus,
+        appElement: failureAppElement,
+        rowIdentifier: "pdtbar.row.claudeSetup.login",
+        expectedMenuIdentifiers: loginIDs,
+        timeout: options.timeout
+    )
+    let failureScriptInvoked = waitForFile(failureMarker, timeout: options.timeout)
+    let failureCompleted = waitForFile(failureResult, timeout: options.timeout + 2.0)
+    let missingClaudeSurface = MenuBarSurfaceRenderer.render(
+        descriptor: ClaudeLaunchFlow.descriptor(for: .missingClaude)
+    )
+    let missingClaudeTargets = requiredSetupMenuTargets(in: missingClaudeSurface)
+    let missingClaudeIDs = Set(missingClaudeTargets.map(\.accessibilityIdentifier))
+    let missingClaudeStatusVisible = waitForStatusText(
+        "Claude Desktop not found",
+        in: failureAppElement,
+        statusIdentifier: missingClaudeSurface.status.accessibilityIdentifier,
+        timeout: options.timeout
+    )
+    let missingClaudeMenu: AccessibilitySnapshot
+    if let missingClaudeStatus = waitForAccessibilityElement(
+        in: failureAppElement,
+        identifier: missingClaudeSurface.status.accessibilityIdentifier,
+        timeout: options.timeout
+    ) {
+        let openedMenu = openStatusMenu(
+            missingClaudeStatus,
+            appElement: failureAppElement,
+            expectedMenuIdentifiers: missingClaudeIDs,
+            timeout: options.timeout
+        )
+        missingClaudeMenu = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
+            missingClaudeIDs,
+            in: failureAppElement,
+            timeout: options.timeout
+        )
+    } else {
+        missingClaudeMenu = waitForAccessibilityIdentifiers(
+            missingClaudeIDs,
+            in: failureAppElement,
+            timeout: options.timeout
+        )
+    }
+    let missingClaudeMenuVisible = missingClaudeIDs.isSubset(of: missingClaudeMenu.identifiers)
+        && missingClaudeMenu.texts.contains("Claude Desktop not found")
+        && missingClaudeMenu.texts.contains("Log in with Claude")
+
+    let proofPayload = ScriptedLoginHandoffProof(
+        successIdleBeforeClick: successWasIdleBeforeClick,
+        successClickAttempt: successClick,
+        successScriptInvoked: successScriptInvoked,
+        successProgressVisible: progressVisible,
+        successCompleted: successCompleted,
+        successReturnedToLoggedOut: returnedToLoggedOut,
+        failureIdleBeforeClick: failureWasIdleBeforeClick,
+        failureClickAttempt: failureClick,
+        failureScriptInvoked: failureScriptInvoked,
+        failureCompleted: failureCompleted,
+        failureMissingClaudeStatusVisible: missingClaudeStatusVisible,
+        failureMissingClaudeMenuVisible: missingClaudeMenuVisible,
+        rawClaudeCredentialsUsed: false
+    )
+    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+
+    guard successWasIdleBeforeClick,
+          successClick != nil,
+          successScriptInvoked,
+          progressVisible,
+          successCompleted,
+          returnedToLoggedOut,
+          failureWasIdleBeforeClick,
+          failureClick != nil,
+          failureScriptInvoked,
+          failureCompleted,
+          missingClaudeStatusVisible,
+          missingClaudeMenuVisible
+    else {
+        return SmokeReport(
+            name: "scripted-login-handoff",
+            status: SmokeStatus.failed,
+            detail: "scripted login handoff did not prove user-initiated success, progress, and missing-Claude failure states",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+
+    return SmokeReport(
+        name: "scripted-login-handoff",
+        status: SmokeStatus.passed,
+        detail: "Log in with Claude invoked the scripted handoff only after menu click, showed Opening Claude Desktop, and rendered missing-Claude state on handoff failure",
+        artifacts: [artifactPath(proof)]
     )
 }
 
@@ -1371,6 +1589,22 @@ private struct ScriptedReturningLaunchProof: Codable {
     var rawPortfolioPayloadsRedacted: Bool
 }
 
+private struct ScriptedLoginHandoffProof: Codable {
+    var successIdleBeforeClick: Bool
+    var successClickAttempt: String?
+    var successScriptInvoked: Bool
+    var successProgressVisible: Bool
+    var successCompleted: Bool
+    var successReturnedToLoggedOut: Bool
+    var failureIdleBeforeClick: Bool
+    var failureClickAttempt: String?
+    var failureScriptInvoked: Bool
+    var failureCompleted: Bool
+    var failureMissingClaudeStatusVisible: Bool
+    var failureMissingClaudeMenuVisible: Bool
+    var rawClaudeCredentialsUsed: Bool
+}
+
 private struct ScriptedPDTConnectorScenarioResult: Codable {
     var name: String
     var passed: Bool
@@ -1409,6 +1643,60 @@ private func waitForAccessibilityIdentifiers(
         latest = accessibilitySnapshot(in: root)
     }
     return latest
+}
+
+private func waitForStatusText(
+    _ expected: String,
+    in root: AXUIElement,
+    statusIdentifier: String,
+    timeout: TimeInterval
+) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    repeat {
+        if let status = findAccessibilityElement(in: root, identifier: statusIdentifier) {
+            let texts = accessibilityTexts(in: status)
+            if texts.contains(expected) || texts.contains("PDTBar \(expected)") {
+                return true
+            }
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+    } while Date() < deadline
+    if let status = findAccessibilityElement(in: root, identifier: statusIdentifier) {
+        let texts = accessibilityTexts(in: status)
+        return texts.contains(expected) || texts.contains("PDTBar \(expected)")
+    }
+    return false
+}
+
+private func pressMenuRow(
+    statusElement: AXUIElement,
+    appElement: AXUIElement,
+    rowIdentifier: String,
+    expectedMenuIdentifiers: Set<String>,
+    timeout: TimeInterval
+) -> String? {
+    let openedMenu = openStatusMenu(
+        statusElement,
+        appElement: appElement,
+        expectedMenuIdentifiers: expectedMenuIdentifiers,
+        timeout: timeout
+    )
+    guard let row = waitForAccessibilityElement(
+        in: appElement,
+        identifier: rowIdentifier,
+        timeout: min(timeout, 1.0)
+    ) else {
+        return nil
+    }
+    let result = AXUIElementPerformAction(row, kAXPressAction as CFString)
+    if result == .success {
+        return "\(openedMenu.successfulAttempt ?? "menu opened"); \(kAXPressAction)=\(result)"
+    }
+    if let center = accessibilityCenter(of: row) {
+        click(point: center)
+        return "\(openedMenu.successfulAttempt ?? "menu opened"); coordinateClick=\(format(point: center)); \(kAXPressAction)=\(result)"
+    }
+    return "\(openedMenu.successfulAttempt ?? "menu opened"); \(kAXPressAction)=\(result)"
 }
 
 private func openStatusMenu(
@@ -1687,6 +1975,51 @@ private func launchFirstFetchApp(
     ]) { _, new in new }
     try process.run()
     return process
+}
+
+private func launchLoginHandoffApp(
+    _ app: URL,
+    appSupportDirectory: URL,
+    handoffScript: URL,
+    marker: URL,
+    result: URL,
+    resultValue: String
+) throws -> Process {
+    let process = Process()
+    process.executableURL = app
+    process.arguments = []
+    var environment = ProcessInfo.processInfo.environment
+    environment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
+    process.environment = environment.merging([
+        "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
+        "PDTBAR_CLAUDE_HANDOFF_SCRIPT": handoffScript.path,
+        "PDTBAR_CLAUDE_HANDOFF_MARKER": marker.path,
+        "PDTBAR_CLAUDE_HANDOFF_RESULT": result.path,
+        "PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE": resultValue,
+    ]) { _, new in new }
+    try process.run()
+    return process
+}
+
+private func writeHandoffScript(
+    in appSupportDirectory: URL,
+    name: String,
+    delay: TimeInterval,
+    exitStatus: Int32
+) throws -> URL {
+    let directory = appSupportDirectory.appending(path: "pdtbar")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let script = directory.appending(path: name)
+    let content = """
+    #!/bin/sh
+    printf started > "$PDTBAR_CLAUDE_HANDOFF_MARKER"
+    sleep \(String(format: "%.2f", delay))
+    printf "%s" "$PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE" > "$PDTBAR_CLAUDE_HANDOFF_RESULT"
+    exit \(exitStatus)
+    """
+    try Data(content.utf8).write(to: script, options: .atomic)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+    return script
 }
 
 private func terminate(_ process: Process) {
