@@ -316,7 +316,7 @@ let scriptedLiveRun = try PressureRunner.run(
         "pdt-get-symbol-quote?id=9101": try mcpContent("""
         { "id": 9101, "symbolId": 5101 }
         """),
-        "pdt-list-symbol-prices?symbolQuoteId=9101": try mcpContent("""
+        "pdt-list-symbol-prices?date_from=2026-06-16&date_to=2026-06-23&symbolQuoteId=9101": try mcpContent("""
         {
           "data": [
             { "date": "2026-06-20", "closeAdjusted": "19.00", "symbolQuoteId": 9101 },

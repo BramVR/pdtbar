@@ -1104,7 +1104,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             by: \.symbolQuoteId
         )
         let currency = openHoldings.first?.worth.currency ?? "EUR"
-        let priceSeries = try livePriceSeries(for: openHoldings)
+        let priceSeries = try livePriceSeries(for: openHoldings, asOf: snapshotAsOf)
 
         return PortfolioSnapshot(
             asOf: snapshotAsOf,
@@ -1146,13 +1146,17 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         return idsBySymbolID
     }
 
-    private func livePriceSeries(for holdings: [NormalizedHolding]) throws -> [PricePoint] {
-        try holdings.flatMap { holding in
+    private func livePriceSeries(for holdings: [NormalizedHolding], asOf: String) throws -> [PricePoint] {
+        let priceDateRange = [
+            "date_from": dayString(asOf, addingDays: -7),
+            "date_to": asOf,
+        ]
+        return try holdings.flatMap { holding in
             let prices: LivePricesEnvelope = try decodeLiveTool(
                 "pdt-list-symbol-prices",
                 data: toolClient.callReadTool(
                     "pdt-list-symbol-prices",
-                    arguments: ["symbolQuoteId": String(holding.quoteId)]
+                    arguments: priceDateRange.merging(["symbolQuoteId": String(holding.quoteId)]) { _, new in new }
                 )
             )
             return prices.data.map {
