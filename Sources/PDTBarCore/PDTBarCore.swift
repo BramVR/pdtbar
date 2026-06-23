@@ -1064,6 +1064,33 @@ public enum PDTLiveDataSourceError: Error, CustomStringConvertible {
     }
 }
 
+public enum PDTLiveUnavailableClassifier {
+    public static func shouldSkip(_ value: String) -> Bool {
+        let lower = value.lowercased()
+        return [
+            "not authenticated",
+            "authentication required",
+            "oauth",
+            "missing credential",
+            "credentials not found",
+            "login required",
+            "please login",
+            "not logged in",
+            "token expired",
+            "session expired",
+            "unauthorized",
+            "forbidden",
+            "offline",
+            "connection refused",
+            "failed to connect",
+            "could not connect",
+            "econnrefused",
+            "server not found",
+            "server unavailable",
+        ].contains { lower.contains($0) }
+    }
+}
+
 public struct PDTLiveDataSource: PortfolioDataSource {
     public var toolClient: any PDTLiveToolClient
 
@@ -1119,8 +1146,8 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             asOf: snapshotAsOf,
             totalValue: sumWorth(openHoldings, currency: currency),
             openHoldings: openHoldings,
-            sectors: (distributionsEnvelope.sectors ?? []).map(\.summary),
-            assetTypes: (distributionsEnvelope.assetTypes ?? []).map(\.summary),
+            sectors: distributionsEnvelope.sectors.map(\.summary),
+            assetTypes: distributionsEnvelope.assetTypes.map(\.summary),
             incomeEvents: calendarEnvelope.data.filter { $0.type != "no-events-today" }.map {
                 let quoteId = $0.symbolId.flatMap { quoteIDsBySymbolID[$0] }
                 let amount = $0.type == "ex-dividend" && !$0.isEstimated
@@ -1511,8 +1538,8 @@ private struct LiveHolding: Decodable {
 }
 
 private struct LiveDistributionsEnvelope: Decodable {
-    var sectors: [LiveDistribution]?
-    var assetTypes: [LiveDistribution]?
+    var sectors: [LiveDistribution]
+    var assetTypes: [LiveDistribution]
 }
 
 private struct LiveDistribution: Decodable {
@@ -1675,32 +1702,10 @@ private func decodeLiveTool<T: Decodable>(_ tool: String, data: Data) throws -> 
     if let decoded = try? JSONDecoder().decode(T.self, from: data) {
         return decoded
     }
-    if diagnosticPayloads.contains(where: liveToolPayloadLooksUnavailable) {
+    if diagnosticPayloads.contains(where: PDTLiveUnavailableClassifier.shouldSkip) {
         throw PDTLiveDataSourceError.unavailableToolResult(tool)
     }
     throw PDTLiveDataSourceError.malformedToolResult(tool)
-}
-
-private func liveToolPayloadLooksUnavailable(_ value: String) -> Bool {
-    let lower = value.lowercased()
-    return [
-        "not authenticated",
-        "authentication required",
-        "oauth",
-        "missing credential",
-        "credentials not found",
-        "login required",
-        "please login",
-        "unauthorized",
-        "forbidden",
-        "offline",
-        "connection refused",
-        "failed to connect",
-        "could not connect",
-        "econnrefused",
-        "server not found",
-        "server unavailable",
-    ].contains { lower.contains($0) }
 }
 
 private func extractedMCPPayloadData(from data: Data) throws -> Data? {

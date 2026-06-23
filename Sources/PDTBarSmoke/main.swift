@@ -122,7 +122,7 @@ private func livePDTSmoke(arguments: [String]) throws -> SmokeReport {
             snapshotStore: snapshotStore
         )
     } catch let CommandError.commandFailed(_, stdout, stderr) {
-        guard livePDTFailureShouldSkip([stdout, stderr].joined(separator: "\n")) else {
+        guard PDTLiveUnavailableClassifier.shouldSkip([stdout, stderr].joined(separator: "\n")) else {
             return SmokeReport(
                 name: "live-pdt",
                 status: SmokeStatus.failed,
@@ -186,28 +186,6 @@ private func livePDTSmoke(arguments: [String]) throws -> SmokeReport {
         detail: "read-only live PDT data reached PressureRunner and rendered a pulse descriptor with isolated snapshot state; private portfolio values redacted from proof",
         artifacts: [artifactPath(proof)]
     )
-}
-
-private func livePDTFailureShouldSkip(_ stderr: String) -> Bool {
-    let lower = stderr.lowercased()
-    return [
-        "not authenticated",
-        "authentication required",
-        "oauth",
-        "missing credential",
-        "credentials not found",
-        "login required",
-        "please login",
-        "unauthorized",
-        "forbidden",
-        "offline",
-        "connection refused",
-        "failed to connect",
-        "could not connect",
-        "econnrefused",
-        "server not found",
-        "server unavailable",
-    ].contains { lower.contains($0) }
 }
 
 private func packagedAppSmoke(arguments: [String]) throws -> SmokeReport {
