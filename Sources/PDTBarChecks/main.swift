@@ -21,6 +21,7 @@ try check(decoded.facetSnapshots.allocation.openHoldingCount == 9, "quiet fixtur
 try check(decoded.portfolioGlance.openHoldingCount == 9, "quiet model should expose open holding count glance context")
 try check(decoded.portfolioGlance.totalValue == Money(value: "51200.00", currency: "EUR"), "quiet model should expose total value glance context")
 try check(decoded.portfolioGlance.worstPriceAsOf == "2026-06-22", "quiet model should expose price freshness glance context")
+try check(!decoded.facetSnapshots.freshness.stale, "quiet model should expose fresh EOD state")
 try check(decoded.supportingDataSlots.map(\.id).contains("bigMovers.prices"), "model should expose supporting data slots")
 var legacyModelObject = try require(
     JSONSerialization.jsonObject(with: modelJSON) as? [String: Any],
@@ -125,6 +126,10 @@ try check(
     descriptor.sections.first { $0.id == "freshness" }?.rows.map(\.id) == ["freshness.summary"],
     "quiet freshness rows should expose stable ids"
 )
+try check(
+    descriptor.sections.first { $0.id == "freshness" }?.rows.first?.detail == "Fresh",
+    "quiet descriptor should render freshness from model facts"
+)
 
 let zeroWorthFixtureDirectory = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-zero-worth-fixture")
 defer {
@@ -176,6 +181,34 @@ try check(
 try check(
     zeroWorthSnapshot.openHoldings.first?.priceAsOf == "2026-06-21",
     "currentPriceDate should expose EOD freshness day"
+)
+
+let weekendFreshnessFixture = zeroWorthFixtureDirectory.directory.appending(path: "weekend-freshness.json")
+try Data("""
+{
+  "_meta": { "asOf": "2026-06-22", "portfolioCurrency": "EUR" },
+  "getPortfolioHoldings": {
+    "holdings": [
+      {
+        "symbolName": "Weekend Holding",
+        "symbolQuoteId": 9103,
+        "currentPriceDate": "2026-06-19T23:59:59+00:00",
+        "currentPriceLocal": { "value": "100.00", "currency": "EUR" },
+        "currentWorth": { "value": "1000.00", "currency": "EUR" },
+        "currentWorthLocal": { "value": "1000.00", "currency": "EUR" },
+        "portfolioWeight": 0.10,
+        "closedAt": null
+      }
+    ]
+  }
+}
+""".utf8).write(to: weekendFreshnessFixture)
+let weekendFreshnessModel = PressureEngine.buildModel(
+    from: try PDTFixtureDataSource.snapshot(from: weekendFreshnessFixture)
+)
+try check(
+    !weekendFreshnessModel.facetSnapshots.freshness.stale,
+    "normal weekend business-day price lag should not mark EOD freshness stale"
 )
 
 var nonQuietModel = decoded
@@ -552,6 +585,14 @@ try check(
 )
 try check(!concentrationRun.model.allQuiet, "concentration fixture should not be all quiet")
 try check(
+    concentrationRun.model.facetSnapshots.freshness.worstPriceAsOf == "2026-06-18",
+    "concentration fixture should expose the oldest PDT price date"
+)
+try check(
+    concentrationRun.model.facetSnapshots.freshness.stale,
+    "concentration fixture should mark stale EOD facts"
+)
+try check(
     concentrationRun.model.rankedAttentionItems.count == 1,
     "concentration fixture should produce one attention item"
 )
@@ -612,6 +653,10 @@ try check(
 try check(
     allocationDrillDownRow?.detail == "24.2% of portfolio; concentration line 20.0%",
     "descriptor should expose allocation drill-down for the item"
+)
+try check(
+    concentrationRun.descriptor.sections.first { $0.id == "freshness" }?.rows.first?.detail == "Stale",
+    "descriptor should render stale freshness from model facts"
 )
 
 var crowdedAllocationModel = concentrationRun.model
@@ -817,6 +862,7 @@ for fixture in allFixtures {
     let modelJSON = try stableJSONData(model)
     let decoded = try JSONDecoder().decode(PortfolioPulseModel.self, from: modelJSON)
     let descriptor = MenuDescriptorRenderer.render(model: decoded)
+    try assertInformationalCopy(model: decoded, descriptor: descriptor, fixtureName: fixture.lastPathComponent)
     try check(!descriptor.sections.isEmpty, "\(fixture.lastPathComponent) should render menu sections")
     try check(descriptor.statusAccessibilityIdentifier == "pdtbar.status", "\(fixture.lastPathComponent) should expose status accessibility id")
     try check(
@@ -854,6 +900,39 @@ private func crowdedAllocationItem(id: String, name: String, quoteId: Int, weigh
         threshold: PressureEngine.concentrationThreshold,
         supportingDataSlotIDs: ["allocation.holdings"]
     )
+}
+
+private func assertInformationalCopy(
+    model: PortfolioPulseModel,
+    descriptor: MenuDescriptor,
+    fixtureName: String
+) throws {
+    let copy = renderedCopy(from: model, descriptor: descriptor)
+    for value in copy where containsAdviceLikeLanguage(value) {
+        throw CheckFailure("\(fixtureName) should not render advice-like copy: \(value)")
+    }
+}
+
+private func renderedCopy(from model: PortfolioPulseModel, descriptor: MenuDescriptor) -> [String] {
+    var copy: [String?] = [
+        model.allQuietSignal.title,
+        model.allQuietSignal.detail,
+        descriptor.statusTitle,
+    ]
+    copy.append(contentsOf: model.rankedAttentionItems.flatMap {
+        [$0.title, $0.detail]
+    })
+    copy.append(contentsOf: model.supportingDataSlots.map(\.label))
+    copy.append(contentsOf: descriptor.sections.map(\.title))
+    copy.append(contentsOf: descriptor.sections.flatMap(\.rows).flatMap {
+        [$0.title, $0.detail]
+    })
+    return copy.compactMap { $0 }.filter { !$0.isEmpty }
+}
+
+private func containsAdviceLikeLanguage(_ value: String) -> Bool {
+    let pattern = #"\b(buy|sell|rebalance|trim|reduce|recommend|should)\b"#
+    return value.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
 }
 
 private func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
