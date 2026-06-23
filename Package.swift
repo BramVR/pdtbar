@@ -7,13 +7,23 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "PDTBarCore", targets: ["PDTBarCore"]),
+        .executable(name: "pdtbar", targets: ["PDTBarApp"]),
         .executable(name: "pdtbar-dev", targets: ["PDTBarDev"]),
+        .executable(name: "pdtbar-smoke", targets: ["PDTBarSmoke"]),
         .executable(name: "pdtbar-checks", targets: ["PDTBarChecks"]),
     ],
     targets: [
         .target(name: "PDTBarCore"),
         .executableTarget(
+            name: "PDTBarApp",
+            dependencies: ["PDTBarCore"]
+        ),
+        .executableTarget(
             name: "PDTBarDev",
+            dependencies: ["PDTBarCore"]
+        ),
+        .executableTarget(
+            name: "PDTBarSmoke",
             dependencies: ["PDTBarCore"]
         ),
         .executableTarget(
