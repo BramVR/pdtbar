@@ -300,7 +300,7 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         "--app", app.path,
         "--fixture", fixture.path,
         "--snapshot-dir", preflightSnapshotDirectory.path,
-        "--timeout", "2.0",
+        "--timeout", String(options.timeout),
     ])
     guard appReport.status == SmokeStatus.passed else {
         return appReport
@@ -342,16 +342,13 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
             artifacts: []
         )
     }
-    guard AXUIElementPerformAction(statusElement, kAXPressAction as CFString) == .success else {
-        return SmokeReport(
-            name: "real-user-pulse",
-            status: SmokeStatus.failed,
-            detail: "Accessibility found status item \(surface.status.accessibilityIdentifier), but AXPress could not open the pulse menu",
-            artifacts: []
-        )
-    }
-
-    let menuSnapshot = waitForAccessibilityIdentifiers(
+    let openedMenu = openStatusMenu(
+        statusElement,
+        appElement: appElement,
+        expectedMenuIdentifiers: expectedMenuIdentifiers,
+        timeout: options.timeout
+    )
+    let menuSnapshot = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
         expectedMenuIdentifiers,
         in: appElement,
         timeout: options.timeout
@@ -372,7 +369,7 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         return SmokeReport(
             name: "real-user-pulse",
             status: SmokeStatus.failed,
-            detail: "opened fixture-mode pulse menu, but missing expected quiet fixture targets: \(missingLabels)",
+            detail: "could not verify opened fixture-mode pulse menu after \(openedMenu.attempts.joined(separator: ", ")); missing expected quiet fixture targets: \(missingLabels)",
             artifacts: [artifactPath(evidence)]
         )
     }
@@ -380,7 +377,7 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
     return SmokeReport(
         name: "real-user-pulse",
         status: SmokeStatus.passed,
-        detail: "launched fixture-mode app, opened menu-bar pulse through Accessibility, and verified quiet fixture status plus pulse/allocation/income/big-mover/freshness selectors",
+        detail: "launched fixture-mode app, opened menu-bar pulse through \(openedMenu.successfulAttempt ?? "Accessibility"), and verified quiet fixture status plus pulse/allocation/income/big-mover/freshness selectors",
         artifacts: [artifactPath(evidence)]
     )
 }
@@ -431,6 +428,12 @@ private struct AccessibilitySnapshot: Codable {
     var texts: Set<String>
 }
 
+private struct OpenMenuResult {
+    var snapshot: AccessibilitySnapshot?
+    var successfulAttempt: String?
+    var attempts: [String]
+}
+
 private struct AccessibilityEvidence: Codable {
     var statusIdentifier: String
     var statusText: [String]
@@ -471,6 +474,47 @@ private func waitForAccessibilityIdentifiers(
         latest = accessibilitySnapshot(in: root)
     }
     return latest
+}
+
+private func openStatusMenu(
+    _ statusElement: AXUIElement,
+    appElement: AXUIElement,
+    expectedMenuIdentifiers: Set<String>,
+    timeout: TimeInterval
+) -> OpenMenuResult {
+    var attempts: [String] = []
+    let actions = accessibilityActionNames(of: statusElement)
+    for action in [kAXPressAction as String, kAXShowMenuAction as String] {
+        let result = AXUIElementPerformAction(statusElement, action as CFString)
+        attempts.append("\(action)=\(result)")
+        if result == .success || actions.contains(action) {
+            let snapshot = waitForAccessibilityIdentifiers(
+                expectedMenuIdentifiers,
+                in: appElement,
+                timeout: min(timeout, 1.5)
+            )
+            if expectedMenuIdentifiers.isSubset(of: snapshot.identifiers) {
+                return OpenMenuResult(snapshot: snapshot, successfulAttempt: action, attempts: attempts)
+            }
+        }
+    }
+
+    if let center = accessibilityCenter(of: statusElement) {
+        click(point: center)
+        attempts.append("coordinateClick=\(format(point: center))")
+        let snapshot = waitForAccessibilityIdentifiers(
+            expectedMenuIdentifiers,
+            in: appElement,
+            timeout: timeout
+        )
+        if expectedMenuIdentifiers.isSubset(of: snapshot.identifiers) {
+            return OpenMenuResult(snapshot: snapshot, successfulAttempt: "coordinate click", attempts: attempts)
+        }
+        return OpenMenuResult(snapshot: snapshot, successfulAttempt: nil, attempts: attempts)
+    }
+
+    attempts.append("coordinateClick=no AXPosition/AXSize")
+    return OpenMenuResult(snapshot: nil, successfulAttempt: nil, attempts: attempts)
 }
 
 private func findAccessibilityElement(in root: AXUIElement, identifier: String) -> AXUIElement? {
@@ -514,6 +558,72 @@ private func accessibilityString(_ element: AXUIElement, _ attribute: String) ->
         return nil
     }
     return value as? String
+}
+
+private func accessibilityActionNames(of element: AXUIElement) -> Set<String> {
+    var names: CFArray?
+    guard AXUIElementCopyActionNames(element, &names) == .success,
+          let actions = names as? [String]
+    else {
+        return []
+    }
+    return Set(actions)
+}
+
+private func accessibilityCenter(of element: AXUIElement) -> CGPoint? {
+    guard let position = accessibilityCGPoint(element, "AXPosition"),
+          let size = accessibilityCGSize(element, "AXSize")
+    else {
+        return nil
+    }
+    return CGPoint(x: position.x + (size.width / 2), y: position.y + (size.height / 2))
+}
+
+private func accessibilityCGPoint(_ element: AXUIElement, _ attribute: String) -> CGPoint? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+          let axValue = value,
+          CFGetTypeID(axValue) == AXValueGetTypeID(),
+          AXValueGetType(axValue as! AXValue) == .cgPoint
+    else {
+        return nil
+    }
+    var point = CGPoint.zero
+    guard AXValueGetValue(axValue as! AXValue, .cgPoint, &point) else {
+        return nil
+    }
+    return point
+}
+
+private func accessibilityCGSize(_ element: AXUIElement, _ attribute: String) -> CGSize? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+          let axValue = value,
+          CFGetTypeID(axValue) == AXValueGetTypeID(),
+          AXValueGetType(axValue as! AXValue) == .cgSize
+    else {
+        return nil
+    }
+    var size = CGSize.zero
+    guard AXValueGetValue(axValue as! AXValue, .cgSize, &size) else {
+        return nil
+    }
+    return size
+}
+
+private func click(point: CGPoint) {
+    let source = CGEventSource(stateID: .hidSystemState)
+    let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)
+    let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
+    down?.post(tap: .cghidEventTap)
+    Thread.sleep(forTimeInterval: 0.05)
+    up?.post(tap: .cghidEventTap)
+}
+
+private func format(point: CGPoint) -> String {
+    let x = String(format: "%.1f", point.x)
+    let y = String(format: "%.1f", point.y)
+    return "\(x),\(y)"
 }
 
 private func accessibilityChildren(of element: AXUIElement) -> [AXUIElement] {
@@ -641,14 +751,16 @@ private func run(_ executable: URL, arguments: [String], timeout: TimeInterval) 
         .appending(path: "pdtbar-smoke-\(UUID().uuidString).stderr")
     FileManager.default.createFile(atPath: stdoutURL.path, contents: nil)
     FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
-    let stdout = try FileHandle(forWritingTo: stdoutURL)
-    let stderr = try FileHandle(forWritingTo: stderrURL)
+    var stdout: FileHandle?
+    var stderr: FileHandle?
     defer {
-        try? stdout.close()
-        try? stderr.close()
+        try? stdout?.close()
+        try? stderr?.close()
         try? FileManager.default.removeItem(at: stdoutURL)
         try? FileManager.default.removeItem(at: stderrURL)
     }
+    stdout = try FileHandle(forWritingTo: stdoutURL)
+    stderr = try FileHandle(forWritingTo: stderrURL)
     process.executableURL = executable
     process.arguments = arguments
     process.standardOutput = stdout
@@ -663,8 +775,8 @@ private func run(_ executable: URL, arguments: [String], timeout: TimeInterval) 
         process.waitUntilExit()
         throw CommandError.timedOut(executable.lastPathComponent)
     }
-    try? stdout.close()
-    try? stderr.close()
+    try? stdout?.close()
+    try? stderr?.close()
     let out = try Data(contentsOf: stdoutURL)
     let err = try Data(contentsOf: stderrURL)
     guard process.terminationStatus == 0 else {
