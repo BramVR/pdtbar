@@ -591,6 +591,8 @@ public enum MenuBarSurfaceRenderer {
 }
 
 public enum MenuDescriptorRenderer {
+    private static let maxPulseAttentionItems = 3
+
     public static func render(model: PortfolioPulseModel) -> MenuDescriptor {
         let allocation = model.facetSnapshots.allocation
         let income = model.facetSnapshots.income
@@ -607,7 +609,7 @@ public enum MenuDescriptorRenderer {
                 ),
             ]
         } else {
-            pulseRows = model.rankedAttentionItems.flatMap { item in
+            pulseRows = model.rankedAttentionItems.prefix(maxPulseAttentionItems).flatMap { item in
                 [
                     MenuRow(
                         id: "\(item.id).glance",
@@ -815,7 +817,6 @@ public enum PressureEngine {
                     openHoldingCount: snapshot.openHoldings.count,
                     topHoldings: snapshot.openHoldings
                         .sorted(by: ranksByAllocation)
-                        .prefix(5)
                         .map {
                             HoldingSummary(
                                 name: $0.name,
