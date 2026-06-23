@@ -606,8 +606,36 @@ let allocationDrillDownRow = allocationRows.first {
     $0.role == .allocationDrillDown && $0.title == "Nova Lithography"
 }
 try check(
+    allocationRows.count == concentrationRun.model.facetSnapshots.allocation.openHoldingCount,
+    "allocation drill-down should list every open holding"
+)
+try check(
     allocationDrillDownRow?.detail == "24.2% of portfolio; concentration line 20.0%",
     "descriptor should expose allocation drill-down for the item"
+)
+
+var crowdedAllocationModel = concentrationRun.model
+crowdedAllocationModel.rankedAttentionItems = [
+    crowdedAllocationItem(id: "allocation.concentration.9501", name: "Alpha Concentration", quoteId: 9501, weight: 0.31),
+    crowdedAllocationItem(id: "allocation.concentration.9502", name: "Beta Concentration", quoteId: 9502, weight: 0.30),
+    crowdedAllocationItem(id: "allocation.concentration.9503", name: "Gamma Concentration", quoteId: 9503, weight: 0.29),
+    crowdedAllocationItem(id: "allocation.concentration.9504", name: "Delta Concentration", quoteId: 9504, weight: 0.28),
+]
+crowdedAllocationModel.attentionItems = crowdedAllocationModel.rankedAttentionItems
+let crowdedDescriptor = MenuDescriptorRenderer.render(model: crowdedAllocationModel)
+let crowdedPulseRows = crowdedDescriptor.sections.first { $0.id == "pulse" }?.rows ?? []
+try check(crowdedDescriptor.statusBadge == "4", "glance badge should count all pressure items")
+try check(
+    crowdedPulseRows.filter { $0.role == .pulseAttention }.map(\.title) == [
+        "Alpha Concentration concentration",
+        "Beta Concentration concentration",
+        "Gamma Concentration concentration",
+    ],
+    "glance should cap pressure rows at three model-ranked items"
+)
+try check(
+    !crowdedPulseRows.contains { $0.id == "allocation.concentration.9504.glance" },
+    "glance should omit pressure rows beyond the cap"
 )
 
 let thresholdFixtureDirectory = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-allocation-threshold-fixture")
@@ -810,6 +838,22 @@ for fixture in allFixtures {
     )
     try check(decoded.supportingDataSlots.count == 4, "\(fixture.lastPathComponent) should include supporting slots")
     try check(!decoded.facetSnapshots.allocation.totalValue.value.contains(","), "\(fixture.lastPathComponent) should keep Money.value canonical")
+}
+
+private func crowdedAllocationItem(id: String, name: String, quoteId: Int, weight: Double) -> AttentionItem {
+    AttentionItem(
+        id: id,
+        facet: "allocation",
+        rank: 0,
+        title: "\(name) concentration",
+        detail: "\(name) is \(weight * 100)% of the portfolio.",
+        severity: "medium",
+        score: weight,
+        holdingIdentity: HoldingIdentity(name: name, quoteId: quoteId),
+        currentWeight: weight,
+        threshold: PressureEngine.concentrationThreshold,
+        supportingDataSlotIDs: ["allocation.holdings"]
+    )
 }
 
 private func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
