@@ -16,11 +16,15 @@ Every brokerage app shows your value and a list of holdings. None of them curate
 
 The product lives in the macOS menu bar (the **pulse**), and **all information is reachable through it** — but via progressive disclosure, never a dashboard grid:
 
-- **Status item (always visible):** one small signal (portfolio value or next-payment countdown) + a badge when there are attention items.
+- **Status item (always visible):** the Concentration Stack icon. Bar heights show the concentration shape; filled bars show attention count capped at three; full status copy stays in tooltip/accessibility and the first Pulse row.
 - **The menu (the glance):** the ranked attention items, or "all quiet"; each expands to the numbers that triggered it.
 - **Submenus (drill-down):** the full picture — holdings/allocation, income/calendar, performance vs benchmark, cash — without leaving the bar.
 
 Quiet at the top, everything available underneath.
+
+## Current connection model
+
+PDTBar is Claude-only. No-argument launch probes the user's existing Claude Desktop login and PDT MCP server, then performs the first read-only PDT fetch when ready. If setup is missing, the menu offers `Log in with Claude` and `Check again`; PDTBar does not implement generic OAuth, Codex login, API-key entry, token paste, raw MCP JSON, or a mcporter runtime path.
 
 ## What it is NOT
 

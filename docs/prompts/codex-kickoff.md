@@ -1,5 +1,9 @@
 # Codex Kickoff Prompt — paste as the first message
 
+> Historical planning prompt from before the Swift implementation. Do not use
+> it as current workflow instructions when it conflicts with the README,
+> `docs/claude-login-workflow.md`, closed GitHub issues, or shipped code.
+
 > Paste this whole thing as your first message to Codex (or Claude Code). The repo already contains `CONTEXT.md`, `docs/product-brief.md`, `docs/mvp-scope.md`, `docs/reuse-notes.md`, and `docs/adr/`. This session writes **no product code** — alignment + domain modeling only.
 
 ---

@@ -4,6 +4,12 @@ Evidence captured by exercising the PDT MCP live (2026-06-22) for issue #8.
 This resolves the "PDT data reality" open question in `../../CONTEXT.md` and
 feeds ADR-0001.
 
+Current product fetch path is Claude-first: no-argument launch probes Claude
+Desktop/PDT MCP readiness, then the connector checks the required v1 read tools
+before normalizing into `PortfolioSnapshot`. The PDT shapes below are still the
+normalization source of truth; setup/login flow lives in
+[`../claude-login-workflow.md`](../claude-login-workflow.md).
+
 - [`portfolio-data-source.md`](portfolio-data-source.md) — the `PortfolioDataSource`
   seam described in terms of facets, the normalized interface, freshness rules,
   documented gaps/missing fields, and the ADR-0001 evidence.

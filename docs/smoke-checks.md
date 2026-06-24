@@ -1,5 +1,31 @@
 # Smoke Checks
 
+## Current setup assumptions
+
+- Product launch is no-argument `pdtbar`; fixture mode is explicit `--fixture`.
+- Claude is the only setup/login path. PDTBar uses the existing signed-in Claude Desktop user and the configured PDT MCP server.
+- Scripted smokes use isolated app-support and snapshot directories. They may inject fixture env vars only as sentinels to prove the no-argument path does not enter fixture mode.
+- Manual Claude reachability proof uses normal `claude -p`; `claude --bare` is refused because it does not prove the signed-in Desktop MCP setup.
+- Live `mcporter` smoke is optional research/dev proof, not the product runtime path.
+- Missing macOS Accessibility/Screen Recording permission, Claude CLI, sign-in, model access, or PDT MCP setup should skip with a setup-required detail unless the smoke is specifically testing that failure.
+
+## Redaction rules
+
+Public proof may report command names, selectors, row text, scenario status,
+counts, durations, fixture names, and redacted status text. Do not write private
+portfolio data, credentials, private endpoints, raw live payloads, account
+identifiers, live holding names/values, or non-public model IDs into docs,
+artifacts, PR bodies, or issue comments.
+
+## Status-icon proof rule
+
+The menu bar status slot always renders the Concentration Stack icon. The icon
+fill is attention count capped at three filled bars; it is not freshness,
+progress, or a separate notification dot. Freshness and fetch failure belong in
+tooltip/menu copy and may optionally dim the whole icon. Smoke proof should
+check the Codable `StatusVisualState`/surface state or sanitized rendered SVG,
+not private screenshots or raw portfolio payloads.
+
 Normal deterministic gate:
 
 ```bash
