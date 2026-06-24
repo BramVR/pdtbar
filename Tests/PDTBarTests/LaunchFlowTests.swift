@@ -56,6 +56,12 @@ struct ClaudeLaunchFlowTests {
         #expect(ClaudeLaunchFlow.state(afterReadinessProbe: .failed) == .probeFailed)
     }
 
+    @Test("Successful login handoff resumes readiness")
+    func successfulLoginHandoffResumesReadiness() {
+        #expect(ClaudeLaunchFlow.action(afterLoginHandoff: .succeeded) == .recheckReadiness)
+        #expect(ClaudeLaunchFlow.action(afterLoginHandoff: .failed) == .showMissingClaude)
+    }
+
     @Test("Probing Claude descriptor does not expose login UI")
     func probingDescriptorDoesNotExposeLoginUI() {
         let descriptor = ClaudeLaunchFlow.descriptor(for: .probingClaude)

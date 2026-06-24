@@ -765,6 +765,16 @@ public enum ClaudeLaunchState: Equatable {
     case portfolioFetchFailed
 }
 
+public enum ClaudeLoginHandoffOutcome: Equatable {
+    case succeeded
+    case failed
+}
+
+public enum ClaudeLoginHandoffAction: Equatable {
+    case recheckReadiness
+    case showMissingClaude
+}
+
 public enum ClaudeLaunchFlow {
     public static func state(afterReadinessProbe result: ClaudeReadinessProbeResult?) -> ClaudeLaunchState {
         guard let result else {
@@ -781,6 +791,15 @@ public enum ClaudeLaunchFlow {
             return .missingPDTMCP
         case .failed:
             return .probeFailed
+        }
+    }
+
+    public static func action(afterLoginHandoff outcome: ClaudeLoginHandoffOutcome) -> ClaudeLoginHandoffAction {
+        switch outcome {
+        case .succeeded:
+            return .recheckReadiness
+        case .failed:
+            return .showMissingClaude
         }
     }
 
@@ -1800,7 +1819,14 @@ public enum PDTReadTools {
 
 public protocol PDTMCPConnector {
     func availableReadTools() throws -> Set<String>
+    func availableReadTools(required: Set<String>) throws -> Set<String>
     func callReadTool(_ name: String, arguments: [String: String]) throws -> Data
+}
+
+public extension PDTMCPConnector {
+    func availableReadTools(required: Set<String>) throws -> Set<String> {
+        try availableReadTools().intersection(required)
+    }
 }
 
 public enum PDTMCPConnectorError: Error, CustomStringConvertible, Equatable {
@@ -1828,17 +1854,27 @@ public enum PDTMCPConnectorError: Error, CustomStringConvertible, Equatable {
 
 public struct PDTMCPConnectorDataSource: PortfolioDataSource {
     public var connector: any PDTMCPConnector
+    public var liveOptions: PDTLiveDataSourceOptions
 
-    public init(connector: any PDTMCPConnector) {
+    public init(
+        connector: any PDTMCPConnector,
+        liveOptions: PDTLiveDataSourceOptions = PDTLiveDataSourceOptions()
+    ) {
         self.connector = connector
+        self.liveOptions = liveOptions
     }
 
     public func snapshot(asOf: String? = nil) throws -> PortfolioSnapshot {
-        let missing = PDTReadTools.missingRequiredV1Tools(in: try connector.availableReadTools())
+        let requiredTools = Set(liveOptions.requiredReadTools)
+        let availableTools = try connector.availableReadTools(required: requiredTools)
+        let missing = liveOptions.requiredReadTools.filter { !availableTools.contains($0) }
         guard missing.isEmpty else {
             throw PDTMCPConnectorError.missingRequiredReadTools(missing)
         }
-        return try PDTLiveDataSource(toolClient: PDTMCPConnectorToolClient(connector: connector)).snapshot(asOf: asOf)
+        return try PDTLiveDataSource(
+            toolClient: PDTMCPConnectorToolClient(connector: connector),
+            options: liveOptions
+        ).snapshot(asOf: asOf)
     }
 }
 
@@ -2102,11 +2138,64 @@ public enum PDTLiveUnavailableClassifier {
     }
 }
 
+public struct PDTLiveDataSourceOptions: Equatable, Sendable {
+    public var includeDistributions: Bool
+    public var includeXRayHoldings: Bool
+    public var includeIncomeEvents: Bool
+    public var includeDividends: Bool
+    public var includeIncomeQuoteLookups: Bool
+    public var includePriceSeries: Bool
+
+    public init(
+        includeDistributions: Bool = true,
+        includeXRayHoldings: Bool = true,
+        includeIncomeEvents: Bool = true,
+        includeDividends: Bool = true,
+        includeIncomeQuoteLookups: Bool = true,
+        includePriceSeries: Bool = true
+    ) {
+        self.includeDistributions = includeDistributions
+        self.includeXRayHoldings = includeXRayHoldings
+        self.includeIncomeEvents = includeIncomeEvents
+        self.includeDividends = includeDividends
+        self.includeIncomeQuoteLookups = includeIncomeQuoteLookups
+        self.includePriceSeries = includePriceSeries
+    }
+
+    public var requiredReadTools: [String] {
+        var tools = ["pdt-get-portfolio-holdings"]
+        if includeDistributions {
+            tools.append("pdt-get-portfolio-distributions")
+        }
+        if includeXRayHoldings {
+            tools.append("pdt-list-x-ray-holdings")
+        }
+        if includeIncomeEvents {
+            tools.append("pdt-list-calendar-events")
+        }
+        if includeDividends {
+            tools.append("pdt-list-dividends")
+        }
+        if includeIncomeQuoteLookups {
+            tools.append("pdt-get-symbol-quote")
+        }
+        if includePriceSeries {
+            tools.append("pdt-list-symbol-prices")
+        }
+        return tools
+    }
+}
+
 public struct PDTLiveDataSource: PortfolioDataSource {
     public var toolClient: any PDTLiveToolClient
+    public var options: PDTLiveDataSourceOptions
 
-    public init(toolClient: any PDTLiveToolClient) {
+    public init(
+        toolClient: any PDTLiveToolClient,
+        options: PDTLiveDataSourceOptions = PDTLiveDataSourceOptions()
+    ) {
         self.toolClient = toolClient
+        self.options = options
     }
 
     public func snapshot(asOf: String? = nil) throws -> PortfolioSnapshot {
@@ -2123,16 +2212,24 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             "pdt-get-portfolio-holdings",
             data: toolClient.callReadTool("pdt-get-portfolio-holdings", arguments: [:])
         )
-        let distributionsEnvelope: LiveDistributionsEnvelope = try decodeLiveTool(
-            "pdt-get-portfolio-distributions",
-            data: toolClient.callReadTool("pdt-get-portfolio-distributions", arguments: [:])
-        )
-        let xRayHoldings = try liveXRayHoldings()
-        let calendarEnvelope: LiveCalendarEventsEnvelope = try decodeLiveTool(
-            "pdt-list-calendar-events",
-            data: toolClient.callReadTool("pdt-list-calendar-events", arguments: incomeDateRange)
-        )
-        let dividends = try liveDividends(arguments: dividendDateRange)
+        let distributionsEnvelope: LiveDistributionsEnvelope? = options.includeDistributions
+            ? try decodeLiveTool(
+                "pdt-get-portfolio-distributions",
+                data: toolClient.callReadTool("pdt-get-portfolio-distributions", arguments: [:])
+            )
+            : nil
+        let xRayHoldings = options.includeXRayHoldings ? try liveXRayHoldings() : []
+        let calendarEvents: [LiveCalendarEvent]
+        if options.includeIncomeEvents {
+            let calendarEnvelope: LiveCalendarEventsEnvelope = try decodeLiveTool(
+                "pdt-list-calendar-events",
+                data: toolClient.callReadTool("pdt-list-calendar-events", arguments: incomeDateRange)
+            )
+            calendarEvents = calendarEnvelope.data
+        } else {
+            calendarEvents = []
+        }
+        let dividends = options.includeDividends ? try liveDividends(arguments: dividendDateRange) : []
 
         let openHoldings = holdingsEnvelope.holdings
             .filter { $0.closedAt == nil }
@@ -2146,22 +2243,26 @@ public struct PDTLiveDataSource: PortfolioDataSource {
                     priceAsOf: dayPrefix($0.currentPriceDate)
                 )
             }
-        let quoteIDsBySymbolID = try liveQuoteIDsBySymbolID(for: openHoldings)
+        let quoteIDsBySymbolID = options.includeIncomeQuoteLookups
+            ? try liveQuoteIDsBySymbolID(for: openHoldings)
+            : [:]
         let dividendsByQuoteID = Dictionary(
             grouping: dividends,
             by: \.symbolQuoteId
         )
         let currency = openHoldings.first?.worth.currency ?? "EUR"
-        let priceSeries = try livePriceSeries(for: openHoldings, asOf: snapshotAsOf)
+        let priceSeries = options.includePriceSeries
+            ? try livePriceSeries(for: openHoldings, asOf: snapshotAsOf)
+            : []
 
         return PortfolioSnapshot(
             asOf: snapshotAsOf,
             totalValue: sumWorth(openHoldings, currency: currency),
             openHoldings: openHoldings,
-            sectors: distributionsEnvelope.sectors.map(\.summary),
-            assetTypes: distributionsEnvelope.assetTypes.map(\.summary),
+            sectors: distributionsEnvelope?.sectors.map(\.summary) ?? [],
+            assetTypes: distributionsEnvelope?.assetTypes.map(\.summary) ?? [],
             xRayHoldings: xRayHoldings,
-            incomeEvents: calendarEnvelope.data.filter { $0.type != "no-events-today" }.map {
+            incomeEvents: calendarEvents.filter { $0.type != "no-events-today" }.map {
                 let quoteId = $0.symbolId.flatMap { quoteIDsBySymbolID[$0] }
                 let amount = $0.type == "ex-dividend" && !$0.isEstimated
                     ? latestLiveDividendAmount(for: quoteId, dividendsByQuoteID: dividendsByQuoteID)

@@ -78,10 +78,11 @@ This uses isolated app-support directories, a scripted local handoff executable,
 and no live Claude credentials. It launches the logged-out menu, verifies the
 handoff script is not called before the user-initiated `Log in with Claude`
 menu action, then proves success shows `Opening Claude Desktop` while the
-handoff is in flight and returns to a signed-out state with `Check again`.
-Failure renders `Claude Desktop not found` with a retryable login action. The
-proof artifact contains selector/click booleans only; no credentials, account
-identifiers, or portfolio payloads are written.
+handoff is in flight, re-runs readiness, and starts the first fetch from
+scripted PDT data. Failure renders `Claude Desktop not found` with a retryable
+login action. The proof artifact contains selector/click booleans, readiness
+probe counts, snapshot status, and redacted state only; no credentials, account
+identifiers, or raw portfolio payloads are written.
 
 Scripted setup retry e2e:
 

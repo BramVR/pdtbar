@@ -18,7 +18,7 @@ No-argument `pdtbar` launch is the user path. It uses isolated app support when 
 pdtbar --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/manual-snapshot
 ```
 
-On product launch the app enters `probingClaude` before visible login UI. The probe checks whether the existing signed-in Claude user can reach the configured PDT MCP server. It must not open surprise prompts or fall back to fixtures.
+On product launch the app enters `probingClaude` before visible login UI. Scripted smoke files can drive this state in isolated test runs; otherwise the probe checks whether the existing signed-in Claude user can reach the configured PDT MCP server through `claude mcp list`. It must not open surprise prompts or fall back to fixtures.
 
 ## Setup states
 
@@ -29,10 +29,11 @@ On product launch the app enters `probingClaude` before visible login UI. The pr
 - Probe/fetch failure: keep setup or the previous good pulse visible; show retry copy in the menu.
 
 `Log in with Claude` is user-initiated. It opens or focuses Claude Desktop through the app handoff path. Browser OAuth, generic providers, Codex login, API keys, tokens, raw MCP JSON, and mcporter are not product login paths.
+After a successful handoff, PDTBar re-runs Claude/PDT readiness before deciding whether to fetch, show signed-out setup, show missing PDT MCP setup, or show probe failure. A failed handoff shows `Claude Desktop not found` with a retryable login action.
 
 ## First fetch and returning launch
 
-The first fetch calls only required v1 PDT read tools through the Claude/PDT MCP connector:
+The first fetch calls only required v1 PDT read tools through the Claude/PDT MCP connector. Scripted smoke runs use an isolated scripted connector file; real launches use the logged-in Claude CLI account and the Claude Desktop PDT MCP server.
 
 - `pdt-get-portfolio-holdings`
 - `pdt-get-portfolio-distributions`
@@ -43,6 +44,7 @@ The first fetch calls only required v1 PDT read tools through the Claude/PDT MCP
 - `pdt-get-symbol-quote`
 
 Complete data normalizes into `PortfolioSnapshot`, writes `latest-portfolio-snapshot.json`, runs the pressure engine, and then publishes the pulse. Missing required read tools or malformed/partial data prevents pulse publication.
+Real Claude CLI first-fetch runs are bounded for launch responsiveness: they fetch portfolio holdings first and publish a minimal pulse quickly, then start a background refresh for distributions, X-ray holdings, calendar events, and dividends. Slow per-holding quote/price enrichment is skipped during onboarding. The manual live smoke still proves all seven required read tools are reachable.
 
 Returning launches may render the previous real snapshot immediately while a fresh fetch runs. Transient fetch failures preserve that previous pulse and show `Could not fetch portfolio` plus `Try again`; retries coalesce so one replacement fetch runs.
 

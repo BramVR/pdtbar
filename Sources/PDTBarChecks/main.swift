@@ -182,6 +182,14 @@ try check(
     "login handoff should render progress while Claude Desktop is opening"
 )
 try check(
+    ClaudeLaunchFlow.action(afterLoginHandoff: .succeeded) == .recheckReadiness,
+    "successful login handoff should re-run readiness before deciding the next onboarding state"
+)
+try check(
+    ClaudeLaunchFlow.action(afterLoginHandoff: .failed) == .showMissingClaude,
+    "failed login handoff should render the retryable missing-Claude setup state"
+)
+try check(
     missingClaudeDescriptor.sections.flatMap(\.rows).map(\.title) == ["Claude Desktop not found", "Log in with Claude"],
     "failed login handoff should render missing-Claude setup state with a retryable login action"
 )
