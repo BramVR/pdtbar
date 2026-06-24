@@ -98,6 +98,10 @@ try check(
     "Claude probing state should have distinct status copy"
 )
 try check(
+    probingDescriptor.statusVisual.isDimmed && probingDescriptor.statusVisual.filledBarCount == 0,
+    "Claude probing state should dim the icon without filling notification bars"
+)
+try check(
     probingSurface.sections.flatMap(\.rows).map(\.title) == ["Checking Claude setup - No prompts opened"],
     "Claude probing state should not show login UI yet"
 )
@@ -114,6 +118,10 @@ try check(
     "missing PDT MCP probe should transition to a retryable PDT setup state"
 )
 let firstFetchDescriptor = ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio)
+try check(
+    firstFetchDescriptor.statusVisual.isDimmed && firstFetchDescriptor.statusVisual.filledBarCount == 0,
+    "first-fetch state should dim the icon without filling notification bars"
+)
 try check(
     firstFetchDescriptor.sections.flatMap(\.rows).map(\.title) == ["Fetching portfolio"],
     "first-fetch state should render without the logged-out menu"
@@ -136,6 +144,10 @@ try check(
     fetchFailedDescriptor.sections.flatMap(\.rows).map(\.title) == ["Could not fetch portfolio", "Try again"],
     "first-fetch failure should show a retry action without publishing a portfolio pulse"
 )
+try check(
+    MenuBarSurfaceRenderer.render(descriptor: fetchFailedDescriptor).status.visual.isDimmed,
+    "first-fetch failure may dim the status icon without changing attention fill"
+)
 let cachedRefreshDescriptor = ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio, cachedPulse: descriptor)
 try check(
     cachedRefreshDescriptor.statusTitle == descriptor.statusTitle
@@ -150,6 +162,12 @@ try check(
         && cachedFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Could not fetch portfolio")
         && cachedFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Try again"),
     "returning launch fetch failure should preserve the cached pulse and expose retry"
+)
+try check(
+    cachedFailureDescriptor.statusVisual.isDimmed
+        && cachedFailureDescriptor.statusVisual.barHeights == descriptor.statusVisual.barHeights
+        && cachedFailureDescriptor.statusVisual.filledBarCount == descriptor.statusVisual.filledBarCount,
+    "returning launch fetch failure should dim the icon while preserving cached concentration shape and fill"
 )
 try check(
     setupDescriptor.sections.map(\.id) == ["claudeSetup"],
@@ -199,7 +217,15 @@ try check(
     descriptor.statusTitle == "EUR 51,200.00 - All quiet",
     "quiet fixture descriptor should render the all-quiet status"
 )
+try check(
+    descriptor.statusVisual.filledBarCount == 0,
+    "quiet descriptor should expose zero filled notification bars"
+)
+try check(!descriptor.statusVisual.isDimmed, "quiet descriptor should not dim a fresh status icon")
+try check(descriptor.statusVisual.statusCopy == descriptor.statusTitle, "quiet descriptor visual should expose full status copy")
+try check(descriptor.statusVisual.barHeights.count == 3, "quiet descriptor should expose three concentration bars")
 try check(descriptorObject.keys.contains("statusBadge"), "descriptor JSON should explicitly encode statusBadge")
+try check(descriptorObject.keys.contains("statusVisual"), "descriptor JSON should encode the plain status visual state")
 try check(descriptor.sections.map(\.id) == ["pulse", "allocation", "income", "bigMovers", "freshness"], "descriptor should expose drill-down sections")
 try check(
     descriptor.statusAccessibilityIdentifier == "pdtbar.status",
@@ -212,6 +238,32 @@ try check(
 try check(
     launchSurface.status.badge == nil,
     "quiet fixture launch surface should preserve an empty descriptor badge"
+)
+try check(
+    launchSurface.status.menuBarTitle.isEmpty,
+    "fixture launch surface should not expose status text as menu-bar title"
+)
+try check(
+    launchSurface.status.visual == descriptor.statusVisual,
+    "fixture launch surface should preserve core status visual state for AppKit drawing"
+)
+let shortVisual = try JSONDecoder().decode(
+    StatusVisualState.self,
+    from: Data("""
+    {
+      "barHeights": [0.9],
+      "filledBarCount": 5,
+      "isDimmed": true,
+      "statusCopy": "Decoded status"
+    }
+    """.utf8)
+)
+try check(
+    shortVisual.barHeights == [0.9, 0.45, 0.45]
+        && shortVisual.filledBarCount == 3
+        && shortVisual.isDimmed
+        && shortVisual.statusCopy == "Decoded status",
+    "decoded status visual state should preserve its normalized plain state"
 )
 try check(
     launchSurface.status.accessibilityIdentifier == "pdtbar.status",
@@ -228,11 +280,11 @@ try check(
 )
 try check(
     launchSurface.sections.first { $0.id == "pulse" }?.rows.first?.title
-        == "All quiet - No attention items right now.",
-    "fixture launch surface should render product-facing row title and detail for AppKit menu rows"
+        == "EUR 51,200.00 - All quiet",
+    "fixture launch surface should put displaced status copy in the top Pulse row"
 )
 try check(
-    descriptor.sections.first { $0.id == "pulse" }?.rows.first?.children.map(\.id)
+    descriptor.sections.first { $0.id == "pulse" }?.rows.dropFirst().first?.children.map(\.id)
         == ["pulse.quiet.value", "pulse.quiet.holdings", "pulse.quiet.freshness"],
     "quiet pulse row should expose compact nested readouts"
 )
@@ -328,6 +380,21 @@ try check(
     "currentPriceDate should expose EOD freshness day"
 )
 
+let emptyHoldingsFixture = zeroWorthFixtureDirectory.directory.appending(path: "empty-open-holdings.json")
+try Data("""
+{
+  "_meta": { "asOf": "2026-06-22", "portfolioCurrency": "EUR" },
+  "getPortfolioHoldings": { "holdings": [] }
+}
+""".utf8).write(to: emptyHoldingsFixture)
+let emptyHoldingsModel = PressureEngine.buildModel(
+    from: try PDTFixtureDataSource.snapshot(from: emptyHoldingsFixture)
+)
+try check(
+    !emptyHoldingsModel.facetSnapshots.freshness.stale,
+    "empty open holdings should preserve the previous non-stale freshness behavior"
+)
+
 let weekendFreshnessFixture = zeroWorthFixtureDirectory.directory.appending(path: "weekend-freshness.json")
 try Data("""
 {
@@ -366,6 +433,33 @@ let attention = AttentionItem(
     score: 0.7,
     supportingDataSlotIDs: ["allocation.holdings"]
 )
+let secondAttention = AttentionItem(
+    id: "income.helix",
+    facet: "income",
+    rank: 2,
+    title: "Helix ex-dividend",
+    severity: "low",
+    score: 0.45,
+    supportingDataSlotIDs: ["income.calendar"]
+)
+let thirdAttention = AttentionItem(
+    id: "bigMovers.orbit",
+    facet: "bigMovers",
+    rank: 3,
+    title: "Orbit moved +11.0%",
+    severity: "medium",
+    score: 0.55,
+    supportingDataSlotIDs: ["bigMovers.prices"]
+)
+let fourthAttention = AttentionItem(
+    id: "income.nova",
+    facet: "income",
+    rank: 4,
+    title: "Nova payment landed",
+    severity: "low",
+    score: 0.35,
+    supportingDataSlotIDs: ["income.calendar"]
+)
 nonQuietModel.allQuiet = false
 nonQuietModel.attentionItems = [attention]
 nonQuietModel.rankedAttentionItems = [attention]
@@ -375,8 +469,28 @@ try check(
     "non-quiet descriptor should use the top attention item in status"
 )
 try check(
-    nonQuietDescriptor.sections.first { $0.id == "pulse" }?.rows.first?.children.isEmpty == false,
+    nonQuietDescriptor.sections.first { $0.id == "pulse" }?.rows.dropFirst().first?.children.isEmpty == false,
     "attention pulse rows should expose nested drill-down readouts instead of flat expansion rows"
+)
+try check(
+    nonQuietDescriptor.statusVisual.filledBarCount == 1,
+    "one attention item should fill one notification bar"
+)
+var twoAttentionModel = decoded
+twoAttentionModel.allQuiet = false
+twoAttentionModel.attentionItems = [attention, secondAttention]
+twoAttentionModel.rankedAttentionItems = [attention, secondAttention]
+try check(
+    MenuDescriptorRenderer.render(model: twoAttentionModel).statusVisual.filledBarCount == 2,
+    "two attention items should fill two notification bars"
+)
+var crowdedAttentionModel = decoded
+crowdedAttentionModel.allQuiet = false
+crowdedAttentionModel.attentionItems = [attention, secondAttention, thirdAttention, fourthAttention]
+crowdedAttentionModel.rankedAttentionItems = [attention, secondAttention, thirdAttention, fourthAttention]
+try check(
+    MenuDescriptorRenderer.render(model: crowdedAttentionModel).statusVisual.filledBarCount == 3,
+    "three or more attention items should cap at three filled notification bars"
 )
 
 let legacyAttention = try JSONDecoder().decode(
@@ -1036,20 +1150,32 @@ try check(!concentrationItem.detail.localizedCaseInsensitiveContains("should"), 
 try check(concentrationRun.descriptor.statusBadge == "1", "descriptor should expose a badge")
 let concentrationSurface = MenuBarSurfaceRenderer.render(descriptor: concentrationRun.descriptor)
 try check(
+    concentrationRun.descriptor.statusVisual.filledBarCount == 1,
+    "concentration descriptor should fill one notification bar"
+)
+try check(
+    concentrationRun.descriptor.statusVisual.isDimmed,
+    "stale concentration descriptor may dim the whole icon without lowering attention fill"
+)
+try check(
+    concentrationRun.descriptor.statusVisual.barHeights[0] > concentrationRun.descriptor.statusVisual.barHeights[1],
+    "concentration descriptor should make the leading concentration bar taller"
+)
+try check(
     concentrationSurface.status.badge == "1",
     "fixture launch surface should render non-quiet descriptor badge"
 )
 try check(
-    concentrationSurface.status.menuBarTitle == "\(concentrationRun.descriptor.statusTitle) [1]",
-    "fixture launch surface should render descriptor badge in the app-visible status title"
+    concentrationSurface.status.menuBarTitle.isEmpty,
+    "pressure fixture launch surface should keep status text out of the menu bar title"
 )
 try check(
-    concentrationSurface.sections.first { $0.id == "pulse" }?.rows.map(\.role)
+    concentrationSurface.sections.first { $0.id == "pulse" }?.rows.dropFirst().map(\.role)
         == [.pulseAttention],
     "fixture launch surface should keep attention items compact at the top level"
 )
 try check(
-    concentrationRun.descriptor.sections.first?.rows.first?.children.contains {
+    concentrationRun.descriptor.sections.first?.rows.first { $0.role == .pulseAttention }?.children.contains {
         $0.role == .pulseAttentionExpansion
     } == true,
     "descriptor should expose pulse attention expansion rows as a nested drill-down"
