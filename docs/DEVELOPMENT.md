@@ -19,12 +19,18 @@ Read matching `Read when` hints before editing. Keep docs current with behavior.
 ## Build And Checks
 
 ```bash
+make check
 swift build
 swift run pdtbar-checks
 swift test
 ./Scripts/test.sh
 make test
 ```
+
+`make check` is the default deterministic handoff gate. It delegates to
+`Scripts/check.sh`, which checks script syntax, builds the Swift package, runs
+`pdtbar-checks`, and runs the sharded Swift test runner. It does not run live
+Claude/PDT, Keychain, 1Password, Accessibility, or packaged-app flows.
 
 `Scripts/test.sh` runs Swift Testing suites through the PDTBar sharder. Useful knobs:
 
@@ -38,6 +44,7 @@ PDTBAR_TEST_SHARD_INDEX=0 PDTBAR_TEST_SHARD_COUNT=2 ./Scripts/test.sh
 ```bash
 make start
 make stop
+./Scripts/check.sh scripts
 swift run pdtbar-dev model --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift build --product pdtbar
