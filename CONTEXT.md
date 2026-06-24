@@ -33,5 +33,5 @@ Anchor terms above (**facet, pressure, attention item, the model, pulse, quiet-b
 - [x] **Core stack** — native Swift; mcporter is research/dev only. See ADR-0001.
 - [ ] **Pressure thresholds** — the concrete signals/thresholds per facet, and how they're tuned.
 - [ ] **Bar information architecture** — what's in the status item / at the glance / behind expansion / in submenus.
-- [ ] **History store** — confirmed required (pressure = change over time); decide shape and retention. See `docs/mvp-scope.md`.
-- [ ] **Cold-start & quiet-day behavior** — see `docs/mvp-scope.md`.
+- [ ] **History store** — confirmed required (pressure = change over time); decide shape and retention. See `docs/v1-scope.md`.
+- [ ] **Cold-start & quiet-day behavior** — see `docs/v1-scope.md`.

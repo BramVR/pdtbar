@@ -23,7 +23,7 @@ Read the portfolio from PDT plus a small **history snapshot**, compute **pressur
 
 - **Deterministic & tunable.** Pressure is rules + thresholds over the data; thresholds are configurable. (See the pressure-thresholds ADR once written.)
 - **No UI logic.** The engine knows nothing about the menu bar.
-- **Cold-start aware.** Must produce useful output on first run using absolute-threshold signals that need no history (see `docs/mvp-scope.md`).
+- **Cold-start aware.** Must produce useful output on first run using absolute-threshold signals that need no history (see `docs/v1-scope.md`).
 
 ## v1 scope
 

@@ -1,3 +1,11 @@
+---
+summary: "Observed PDT raw tool schemas and field notes for fixture and adapter contracts."
+read_when:
+  - Updating PDT fixture shapes
+  - Decoding raw PDT tool responses
+  - Auditing adapter field mappings
+---
+
 # PDT raw tool schemas (observed 2026-06-22)
 
 Field names/types as returned live by the PDT MCP. Values here are illustrative

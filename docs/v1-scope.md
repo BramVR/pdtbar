@@ -1,8 +1,16 @@
-# MVP Scope — the first slice
+---
+summary: "v1 scope: Claude-first product slice, facets, history, cold-start, and quiet-day behavior."
+read_when:
+  - Scoping v1 work or deciding what to defer
+  - Changing pressure facets, history, cold-start, or quiet-day behavior
+  - Planning the next product slice
+---
 
-The goal of v1 is to **prove the pressure engine with the smallest possible build**: Claude-first launch, one real attention item or all-quiet state computed from PDT data, and a menu-bar pulse rendered from the normalized model. Everything else expands from that working tracer bullet.
+# v1 Scope
 
-## The first slice (definition of done)
+The goal of v1 is to ship the smallest coherent product: Claude-first launch, one real attention item or all-quiet state computed from PDT data, and a menu-bar pulse rendered from the normalized model. Everything else expands from that product spine.
+
+## Definition Of Done
 
 **Launch PDTBar with no arguments → probe Claude/PDT MCP → fetch required read-only PDT data → normalize and snapshot → the engine emits the model → the bar renders it (Concentration Stack icon, glance, expand, and basic drill-down).**
 
@@ -32,7 +40,7 @@ Deferred facets: performance-vs-benchmark divergence, cash drag, corporate-actio
 
 ## History store — required, kept tiny
 
-Pressure is **change over time**, so the engine must remember prior state. This is **in the MVP, not optional** — but keep it minimal: a small local snapshot of the facet values needed to detect change (e.g. yesterday's weights and prices), with short retention. Borrow birdclaw's idea of a small local store; don't build a full mirror.
+Pressure is **change over time**, so the engine must remember prior state. This is **in v1, not optional** — but keep it minimal: a small local snapshot of the facet values needed to detect change (e.g. yesterday's weights and prices), with short retention. Borrow birdclaw's idea of a small local store; don't build a full mirror.
 
 ## Cold-start & quiet-day spec (the real UX risk)
 
@@ -48,7 +56,7 @@ The two hardest moments are day one and a calm day. Handle them deliberately:
 - Packaging / auto-update / distribution machinery (Sparkle, Homebrew).
 - Extra connectors (oracle, imsg, poltergeist).
 - A user-facing CLI (the engine emits JSON for testing; a CLI is a dev convenience, not a product surface).
-- Non-Claude login providers, Codex login, generic OAuth, pasted API keys/tokens, and raw MCP JSON.
+- Non-Claude login providers, Codex login, generic OAuth, pasted API keys/tokens, and raw MCP JSON as product paths. Existing host-app auth reuse may be used when narrow, read-only, prompt-safe, and documented.
 - mcporter as a shipped runtime path; it remains research/dev tooling unless a later ADR supersedes ADR-0001.
 
 ## One thing to actively consider un-deferring

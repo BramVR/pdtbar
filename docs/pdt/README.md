@@ -1,3 +1,11 @@
+---
+summary: "PDT data reality, fixture set, and sanitized evidence index."
+read_when:
+  - Working with PDT fixtures or live-shaped data
+  - Changing portfolio normalization inputs
+  - Reviewing PDT data evidence
+---
+
 # docs/pdt — PDT data reality & fixtures
 
 Evidence captured by exercising the PDT MCP live (2026-06-22) for issue #8.

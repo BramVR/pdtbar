@@ -1,3 +1,11 @@
+---
+summary: "Accepted decision: native Swift architecture, engine/bar separation, and mcporter as research/dev only."
+read_when:
+  - Revisiting native Swift vs TypeScript runtime
+  - Changing engine/bar boundaries
+  - Considering mcporter in shipped runtime
+---
+
 # ADR-0001: Core architecture & stack
 
 - **Status:** Accepted

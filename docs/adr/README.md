@@ -1,3 +1,11 @@
+---
+summary: "ADR process and index for lasting architecture decisions."
+read_when:
+  - Making or reviewing a non-obvious lasting decision
+  - Adding or updating an ADR
+  - Checking accepted architecture decisions
+---
+
 # Architecture Decision Records (ADRs)
 
 Short documents that capture a non-obvious decision, the context behind it, and its consequences — so we don't re-litigate or repeat bad ideas. The `grill-with-docs` skill writes ADRs inline as decisions get pinned down.

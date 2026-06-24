@@ -1,3 +1,11 @@
+---
+summary: "Claude-first product launch, setup states, first fetch, cached pulse, and status icon semantics."
+read_when:
+  - Changing no-argument launch or setup/login behavior
+  - Changing first fetch, cached pulse, or retry behavior
+  - Changing status icon semantics
+---
+
 # Claude Login Workflow
 
 This is the current Claude-first product flow. Older PRD/planning text is historical when it conflicts with this file, the Swift code, or closed child issues #44-#53 and #64.

@@ -1,3 +1,11 @@
+---
+summary: "Product brief: mission, target user, menu-bar surface, and non-goals."
+read_when:
+  - Changing product scope, positioning, or user-facing copy
+  - Deciding whether a feature belongs in PDTBar
+  - Updating setup/login promises
+---
+
 # Product Brief
 
 ## Mission
@@ -39,4 +47,4 @@ Same data as PDT, opposite delivery: **push/glance + curation** (the few things 
 
 ## The core bet
 
-The product's IP is the **pressure engine** — the logic that decides what's worth surfacing across the whole portfolio. Nothing off-the-shelf does this; it's where the effort goes. See `mvp-scope.md` for how we prove it minimally.
+The product's IP is the **pressure engine** — the logic that decides what's worth surfacing across the whole portfolio. Nothing off-the-shelf does this; it's where the effort goes. See `v1-scope.md` for the first coherent product scope.

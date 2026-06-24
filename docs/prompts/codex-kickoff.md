@@ -1,10 +1,17 @@
+---
+summary: "Historical kickoff prompt for initial product alignment."
+read_when:
+  - Reviewing original planning context
+  - Comparing current docs against kickoff assumptions
+---
+
 # Codex Kickoff Prompt — paste as the first message
 
 > Historical planning prompt from before the Swift implementation. Do not use
 > it as current workflow instructions when it conflicts with the README,
 > `docs/claude-login-workflow.md`, closed GitHub issues, or shipped code.
 
-> Paste this whole thing as your first message to Codex (or Claude Code). The repo already contains `CONTEXT.md`, `docs/product-brief.md`, `docs/mvp-scope.md`, `docs/reuse-notes.md`, and `docs/adr/`. This session writes **no product code** — alignment + domain modeling only.
+> Paste this whole thing as your first message to Codex (or Claude Code). The repo already contains `CONTEXT.md`, `docs/product-brief.md`, `docs/v1-scope.md`, `docs/reuse-notes.md`, and `docs/adr/`. This session writes **no product code** — alignment + domain modeling only.
 
 ---
 
@@ -23,12 +30,12 @@ An ambient, plug-and-play companion for an investor's **whole** portfolio on the
 1. **The pressure model — the core IP.** Per facet (income, performance, allocation, corporate-action, cash, benchmark): what signals and thresholds make something worth surfacing vs. silence? How is it tunable? Nothing we reuse solves this.
 2. **Bar information architecture.** What's in the status item / at the glance / behind expansion / in submenus? How do we keep it quiet-by-default at the top while making all info reachable underneath?
 3. **Core stack (ADR-0001).** Native Swift (reuse CodexBar/RepoBar, talk to PDT directly) vs. a thin Swift bar over a TS core (keeps mcporter). Decide *after* the PDT investigation; keep the engine cleanly separated from the bar; justify the pick.
-4. **History & cold start.** A small snapshot store is required (pressure = change over time). Confirm its shape, and the day-one + quiet-day behavior per `docs/mvp-scope.md`.
+4. **History & cold start.** A small snapshot store is required (pressure = change over time). Confirm its shape, and the day-one + quiet-day behavior per `docs/v1-scope.md`.
 
 (Channels beyond the bar, onboarding polish, and LLM-written narration are **later** — note, don't solve.)
 
 ## Scope the build small
-Target the first slice in `docs/mvp-scope.md`: **connect PDT → engine emits the model with one real attention item → the bar renders it (glance + expand + basic drill-down + an "all quiet" state).** Start with 2–3 facets (allocation/concentration, income events, big movers), one attention item end-to-end, then widen.
+Target v1 in `docs/v1-scope.md`: **connect PDT → engine emits the model with one real attention item → the bar renders it (glance + expand + basic drill-down + an "all quiet" state).** Start with 2–3 facets (allocation/concentration, income events, big movers), one attention item end-to-end, then widen.
 
 ## Hard constraints (non-negotiable — already in `CONTEXT.md`)
 Informational not advice (descriptive, never prescriptive); read-only against PDT by default; local-first/privacy; plug-and-play (two clicks to value, quiet by default); engine/bar separation.
@@ -36,7 +43,7 @@ Informational not advice (descriptive, never prescriptive); read-only against PD
 ## Deliverables this session (no code)
 1. Updated **`CONTEXT.md`** (domain model + sharpened language).
 2. **ADRs** filled in: at least ADR-0001 (stack), plus new ones for pressure thresholds, bar information architecture, and history store.
-3. A **minimal spec** of the first slice, ready for `/to-prd`.
+3. A **v1 spec** ready for `/to-prd`.
 
 ## Later (don't run yet)
 Once the engine + bar prove out: `/to-prd` → `/to-issues` (vertical slices) → `/prototype` → `/tdd`; then consider narration, a notification on new high-pressure items, and packaging.

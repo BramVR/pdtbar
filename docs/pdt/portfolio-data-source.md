@@ -1,3 +1,11 @@
+---
+summary: "PortfolioDataSource seam: PDT tools, normalized facets, joins, freshness, and gaps."
+read_when:
+  - Changing PDT/MCP data fetching or normalization
+  - Updating pressure facets sourced from PDT
+  - Debugging joins, freshness, or fixture realism
+---
+
 # PortfolioDataSource — PDT seam, facets & evidence
 
 > Output of issue #8: exercise the PDT MCP, describe the `PortfolioDataSource`

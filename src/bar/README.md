@@ -18,4 +18,4 @@ Borrow **CodexBar / RepoBar** menu-bar patterns selectively: status item, menu +
 
 ## Later
 
-A native notification when a *new* high-pressure item appears is a candidate to un-defer (see `docs/mvp-scope.md`); keep it to new, high-severity items to preserve quiet-by-default.
+A native notification when a *new* high-pressure item appears is a candidate to un-defer (see `docs/v1-scope.md`); keep it to new, high-severity items to preserve quiet-by-default.

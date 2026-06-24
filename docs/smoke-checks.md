@@ -1,3 +1,11 @@
+---
+summary: "Smoke checks, proof commands, redaction rules, and live/scripted validation boundaries."
+read_when:
+  - Updating smoke tests or proof artifacts
+  - Changing launch, login, fetch, or status-icon behavior
+  - Preparing PR proof for UI/runtime changes
+---
+
 # Smoke Checks
 
 ## Current setup assumptions

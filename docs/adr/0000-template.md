@@ -1,3 +1,10 @@
+---
+summary: "Template for new architecture decision records."
+read_when:
+  - Creating a new ADR
+  - Updating ADR format
+---
+
 # ADR-0000: <short title>
 
 - **Status:** Proposed | Accepted | Superseded by ADR-XXXX
