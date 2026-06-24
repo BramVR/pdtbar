@@ -3010,6 +3010,15 @@ private func scriptedPDTConnectorResponses() throws -> [String: Data] {
           ]
         }
         """),
+        "pdt-list-x-ray-holdings?limit=500&offset=0": try mcpResult("""
+        {
+          "items": [
+            { "weight": 25.0 },
+            { "weight": 0.5 }
+          ],
+          "hasMore": false
+        }
+        """),
         "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28": try mcpContent("""
         {
           "data": [
@@ -3064,6 +3073,15 @@ private func scriptedQuietPDTConnectorResponses() throws -> [String: Data] {
           "assetTypes": [
             { "categoryName": "Stock", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
           ]
+        }
+        """),
+        "pdt-list-x-ray-holdings?limit=500&offset=0": try mcpResult("""
+        {
+          "items": [
+            { "weight": 10.0 },
+            { "weight": 0.5 }
+          ],
+          "hasMore": false
         }
         """),
         "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28": try mcpContent("""
