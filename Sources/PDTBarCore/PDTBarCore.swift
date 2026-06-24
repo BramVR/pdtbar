@@ -342,20 +342,75 @@ public struct FreshnessSnapshot: Codable, Equatable {
     public var stale: Bool
 }
 
+public struct StatusVisualState: Codable, Equatable {
+    public var barHeights: [Double]
+    public var filledBarCount: Int
+    public var isDimmed: Bool
+    public var statusCopy: String
+
+    public init(
+        barHeights: [Double] = [0.58, 0.78, 0.64],
+        filledBarCount: Int = 0,
+        isDimmed: Bool = false,
+        statusCopy: String = ""
+    ) {
+        self.barHeights = Array(barHeights.prefix(3))
+        while self.barHeights.count < 3 {
+            self.barHeights.append(0.45)
+        }
+        self.filledBarCount = max(0, min(3, filledBarCount))
+        self.isDimmed = isDimmed
+        self.statusCopy = statusCopy
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case barHeights
+        case filledBarCount
+        case isDimmed
+        case statusCopy
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            barHeights: try container.decodeIfPresent([Double].self, forKey: .barHeights) ?? [0.58, 0.78, 0.64],
+            filledBarCount: try container.decodeIfPresent(Int.self, forKey: .filledBarCount) ?? 0,
+            isDimmed: try container.decodeIfPresent(Bool.self, forKey: .isDimmed) ?? false,
+            statusCopy: try container.decodeIfPresent(String.self, forKey: .statusCopy) ?? ""
+        )
+    }
+
+    public func withDimming(_ isDimmed: Bool) -> StatusVisualState {
+        StatusVisualState(
+            barHeights: barHeights,
+            filledBarCount: filledBarCount,
+            isDimmed: isDimmed,
+            statusCopy: statusCopy
+        )
+    }
+}
+
 public struct MenuDescriptor: Codable, Equatable {
     public var statusTitle: String
     public var statusBadge: String?
+    public var statusVisual: StatusVisualState
     public var statusAccessibilityIdentifier: String
     public var sections: [MenuSection]
 
     public init(
         statusTitle: String,
         statusBadge: String? = nil,
+        statusVisual: StatusVisualState = StatusVisualState(),
         statusAccessibilityIdentifier: String = "pdtbar.status",
         sections: [MenuSection]
     ) {
         self.statusTitle = statusTitle
         self.statusBadge = statusBadge
+        var visual = statusVisual
+        if visual.statusCopy.isEmpty {
+            visual.statusCopy = statusBadge.map { "\(statusTitle) [\($0)]" } ?? statusTitle
+        }
+        self.statusVisual = visual
         self.statusAccessibilityIdentifier = statusAccessibilityIdentifier
         self.sections = sections
     }
@@ -363,6 +418,7 @@ public struct MenuDescriptor: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case statusTitle
         case statusBadge
+        case statusVisual
         case statusAccessibilityIdentifier
         case sections
     }
@@ -371,6 +427,8 @@ public struct MenuDescriptor: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         statusTitle = try container.decode(String.self, forKey: .statusTitle)
         statusBadge = try container.decodeIfPresent(String.self, forKey: .statusBadge)
+        statusVisual = try container.decodeIfPresent(StatusVisualState.self, forKey: .statusVisual)
+            ?? StatusVisualState()
         statusAccessibilityIdentifier = try container.decodeIfPresent(String.self, forKey: .statusAccessibilityIdentifier)
             ?? "pdtbar.status"
         sections = try container.decode([MenuSection].self, forKey: .sections)
@@ -384,6 +442,7 @@ public struct MenuDescriptor: Codable, Equatable {
         } else {
             try container.encodeNil(forKey: .statusBadge)
         }
+        try container.encode(statusVisual, forKey: .statusVisual)
         try container.encode(statusAccessibilityIdentifier, forKey: .statusAccessibilityIdentifier)
         try container.encode(sections, forKey: .sections)
     }
@@ -428,6 +487,7 @@ public enum MenuRowRole: String, Codable, Equatable {
     case setupFailure
     case fetchStatus
     case fetchRetry
+    case pulseSummary
     case pulseQuiet
     case pulseAttention
     case pulseAttentionExpansion
@@ -521,6 +581,7 @@ public struct MenuBarStatusSurface: Codable, Equatable {
     public var title: String
     public var badge: String?
     public var menuBarTitle: String
+    public var visual: StatusVisualState
     public var accessibilityIdentifier: String
     public var accessibilityLabel: String
     public var toolTip: String
@@ -529,6 +590,7 @@ public struct MenuBarStatusSurface: Codable, Equatable {
         title: String,
         badge: String?,
         menuBarTitle: String,
+        visual: StatusVisualState,
         accessibilityIdentifier: String,
         accessibilityLabel: String,
         toolTip: String
@@ -536,6 +598,7 @@ public struct MenuBarStatusSurface: Codable, Equatable {
         self.title = title
         self.badge = badge
         self.menuBarTitle = menuBarTitle
+        self.visual = visual
         self.accessibilityIdentifier = accessibilityIdentifier
         self.accessibilityLabel = accessibilityLabel
         self.toolTip = toolTip
@@ -742,6 +805,7 @@ public enum ClaudeLaunchFlow {
             case .portfolioFetchFailed:
                 return cachedPulseDescriptor(
                     cachedPulse,
+                    statusVisual: cachedPulse.statusVisual.withDimming(true),
                     rows: portfolioFetchFailureRows()
                 )
             case .loggedOut, .openingClaude, .missingClaude, .missingClaudeLogin, .missingPDTMCP, .probeFailed:
@@ -753,6 +817,7 @@ public enum ClaudeLaunchFlow {
         case .probingClaude:
             return MenuDescriptor(
                 statusTitle: "Checking Claude",
+                statusVisual: StatusVisualState(isDimmed: true),
                 sections: [
                     MenuSection(
                         id: "claudeSetup",
@@ -773,6 +838,7 @@ public enum ClaudeLaunchFlow {
         case .openingClaude:
             return MenuDescriptor(
                 statusTitle: "Opening Claude Desktop",
+                statusVisual: StatusVisualState(isDimmed: true),
                 sections: [
                     MenuSection(
                         id: "claudeSetup",
@@ -797,6 +863,7 @@ public enum ClaudeLaunchFlow {
         case .probeFailed:
             return MenuDescriptor(
                 statusTitle: "Could not check Claude",
+                statusVisual: StatusVisualState(isDimmed: true),
                 sections: [
                     MenuSection(
                         id: "claudeSetup",
@@ -820,6 +887,7 @@ public enum ClaudeLaunchFlow {
         case .fetchingPortfolio:
             return MenuDescriptor(
                 statusTitle: "Fetching portfolio",
+                statusVisual: StatusVisualState(isDimmed: true),
                 sections: [
                     MenuSection(
                         id: "portfolioFetch",
@@ -838,6 +906,7 @@ public enum ClaudeLaunchFlow {
         case .portfolioFetchFailed:
             return MenuDescriptor(
                 statusTitle: "Could not fetch portfolio",
+                statusVisual: StatusVisualState(isDimmed: true),
                 sections: [
                     MenuSection(
                         id: "portfolioFetch",
@@ -849,10 +918,15 @@ public enum ClaudeLaunchFlow {
         }
     }
 
-    private static func cachedPulseDescriptor(_ cachedPulse: MenuDescriptor, rows: [MenuRow]) -> MenuDescriptor {
+    private static func cachedPulseDescriptor(
+        _ cachedPulse: MenuDescriptor,
+        statusVisual: StatusVisualState? = nil,
+        rows: [MenuRow]
+    ) -> MenuDescriptor {
         MenuDescriptor(
             statusTitle: cachedPulse.statusTitle,
             statusBadge: cachedPulse.statusBadge,
+            statusVisual: statusVisual ?? cachedPulse.statusVisual,
             statusAccessibilityIdentifier: cachedPulse.statusAccessibilityIdentifier,
             sections: cachedPulse.sections + [
                 MenuSection(
@@ -885,6 +959,7 @@ public enum ClaudeSetupMenuDescriptor {
     public static func loggedOut() -> MenuDescriptor {
         MenuDescriptor(
             statusTitle: "Not connected",
+            statusVisual: StatusVisualState(isDimmed: true),
             sections: [
                 MenuSection(
                     id: "claudeSetup",
@@ -910,6 +985,7 @@ public enum ClaudeSetupMenuDescriptor {
     public static func missingClaude() -> MenuDescriptor {
         MenuDescriptor(
             statusTitle: "Claude Desktop not found",
+            statusVisual: StatusVisualState(isDimmed: true),
             sections: [
                 MenuSection(
                     id: "claudeSetup",
@@ -935,6 +1011,7 @@ public enum ClaudeSetupMenuDescriptor {
     public static func missingClaudeLogin() -> MenuDescriptor {
         MenuDescriptor(
             statusTitle: "Not connected",
+            statusVisual: StatusVisualState(isDimmed: true),
             sections: [
                 MenuSection(
                     id: "claudeSetup",
@@ -965,6 +1042,7 @@ public enum ClaudeSetupMenuDescriptor {
     public static func missingPDTMCP() -> MenuDescriptor {
         MenuDescriptor(
             statusTitle: "Add the PDT MCP server in Claude Desktop",
+            statusVisual: StatusVisualState(isDimmed: true),
             sections: [
                 MenuSection(
                     id: "claudeSetup",
@@ -992,14 +1070,16 @@ public enum MenuBarSurfaceRenderer {
     public static func render(descriptor: MenuDescriptor) -> MenuBarSurface {
         let statusTitle = descriptor.statusBadge.map { "\(descriptor.statusTitle) [\($0)]" }
             ?? descriptor.statusTitle
+        let statusCopy = descriptor.statusVisual.statusCopy.isEmpty ? statusTitle : descriptor.statusVisual.statusCopy
         return MenuBarSurface(
             status: MenuBarStatusSurface(
                 title: descriptor.statusTitle,
                 badge: descriptor.statusBadge,
-                menuBarTitle: statusTitle,
+                menuBarTitle: "",
+                visual: descriptor.statusVisual,
                 accessibilityIdentifier: descriptor.statusAccessibilityIdentifier,
-                accessibilityLabel: "PDTBar \(statusTitle)",
-                toolTip: "PDTBar \(statusTitle)"
+                accessibilityLabel: "PDTBar \(statusCopy)",
+                toolTip: "PDTBar \(statusCopy)"
             ),
             sections: descriptor.sections.map { section in
                 MenuBarSectionSurface(
@@ -1073,12 +1153,25 @@ public enum MenuDescriptorRenderer {
         let statusSignal = model.allQuiet
             ? model.allQuietSignal.title
             : model.rankedAttentionItems.first?.title ?? "Attention"
+        let statusTitle = "\(display(model.allQuietSignal.totalValue)) - \(statusSignal)"
+        let statusVisual = statusVisual(for: model)
 
         return MenuDescriptor(
-            statusTitle: "\(display(model.allQuietSignal.totalValue)) - \(statusSignal)",
+            statusTitle: statusTitle,
             statusBadge: model.rankedAttentionItems.isEmpty ? nil : "\(model.rankedAttentionItems.count)",
+            statusVisual: statusVisual,
             sections: [
-                MenuSection(id: "pulse", title: "Pulse", rows: pulseRows),
+                MenuSection(
+                    id: "pulse",
+                    title: "Pulse",
+                    rows: [
+                        MenuRow(
+                            id: "pulse.status",
+                            role: .pulseSummary,
+                            title: statusTitle
+                        ),
+                    ] + pulseRows
+                ),
                 MenuSection(
                     id: "allocation",
                     title: "Allocation",
@@ -1150,6 +1243,25 @@ public enum MenuDescriptorRenderer {
                 ),
             ]
         )
+    }
+
+    private static func statusVisual(for model: PortfolioPulseModel) -> StatusVisualState {
+        StatusVisualState(
+            barHeights: concentrationBarHeights(from: model.facetSnapshots.allocation),
+            filledBarCount: model.rankedAttentionItems.count,
+            isDimmed: model.facetSnapshots.freshness.stale
+        )
+    }
+
+    private static func concentrationBarHeights(from allocation: AllocationSnapshot) -> [Double] {
+        let weights = allocation.topHoldings.prefix(3).map(\.weight)
+        guard let maxWeight = weights.max(), maxWeight > 0 else {
+            return StatusVisualState().barHeights
+        }
+        let heights = weights.map { weight in
+            rounded(0.35 + (0.65 * (weight / maxWeight)), places: 3)
+        }
+        return StatusVisualState(barHeights: heights).barHeights
     }
 
     private static func attentionChildren(

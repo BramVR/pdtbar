@@ -174,10 +174,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         if let statusItem {
             item = statusItem
         } else {
-            item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             statusItem = item
         }
+        item.length = NSStatusItem.squareLength
         item.button?.title = surface.status.menuBarTitle
+        item.button?.image = makeConcentrationStackStatusImage(from: surface.status.visual)
+        item.button?.imagePosition = .imageOnly
         item.button?.identifier = NSUserInterfaceItemIdentifier(surface.status.accessibilityIdentifier)
         item.button?.toolTip = surface.status.toolTip
         item.button?.setAccessibilityLabel(surface.status.accessibilityLabel)
@@ -229,6 +232,49 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             item.submenu = submenu
         }
         return item
+    }
+
+    private func makeConcentrationStackStatusImage(from visual: StatusVisualState) -> NSImage {
+        let size = NSSize(width: 24, height: 18)
+        let image = NSImage(size: size, flipped: false) { _ in
+            let maxBarHeight: CGFloat = 13
+            let barWidth: CGFloat = 4.4
+            let gap: CGFloat = 2.4
+            let baseline: CGFloat = 2
+            let startX: CGFloat = 4
+            let fillAlpha: CGFloat = visual.isDimmed ? 0.36 : 0.72
+            let outlineAlpha: CGFloat = visual.isDimmed ? 0.42 : 0.86
+
+            for (index, rawHeight) in visual.barHeights.prefix(3).enumerated() {
+                let normalizedHeight = CGFloat(max(0.30, min(1.0, rawHeight)))
+                let height = normalizedHeight * maxBarHeight
+                let rect = NSRect(
+                    x: startX + CGFloat(index) * (barWidth + gap),
+                    y: baseline,
+                    width: barWidth,
+                    height: height
+                )
+                let barPath = NSBezierPath(roundedRect: rect, xRadius: 2.2, yRadius: 2.2)
+                if index < visual.filledBarCount {
+                    NSGraphicsContext.saveGraphicsState()
+                    barPath.addClip()
+                    NSColor.black.withAlphaComponent(fillAlpha).setFill()
+                    NSBezierPath(rect: NSRect(
+                        x: rect.minX,
+                        y: rect.minY,
+                        width: rect.width,
+                        height: rect.height
+                    )).fill()
+                    NSGraphicsContext.restoreGraphicsState()
+                }
+                NSColor.black.withAlphaComponent(outlineAlpha).setStroke()
+                barPath.lineWidth = 1.15
+                barPath.stroke()
+            }
+            return true
+        }
+        image.isTemplate = true
+        return image
     }
 }
 

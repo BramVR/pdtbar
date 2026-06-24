@@ -1216,8 +1216,8 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
             )
             axArtifacts.append(artifactPath(evidence))
             let staleMenuVisible = Set(targets.map(\.accessibilityIdentifier)).isSubset(of: snapshot.identifiers)
-            let staleStatusVisible = statusText.contains(refreshingSurface.status.menuBarTitle)
-                || statusText.contains(refreshingSurface.status.accessibilityLabel)
+            let staleStatusVisible = statusText.contains(refreshingSurface.status.accessibilityLabel)
+                || statusText.contains(refreshingSurface.status.title)
             stalePulseVisible = staleMenuVisible || (staleStatusVisible && snapshotAsOf(successSnapshot) == staleSnapshot.asOf)
         }
     }
@@ -1836,11 +1836,11 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         )
     }
     let statusText = accessibilityTexts(in: statusElement)
-    guard statusText.contains(surface.status.menuBarTitle) || statusText.contains(surface.status.accessibilityLabel) else {
+    guard statusText.contains(surface.status.accessibilityLabel) || statusText.contains(surface.status.title) else {
         return SmokeReport(
             name: "real-user-pulse",
             status: SmokeStatus.failed,
-            detail: "fixture-mode app exposed status item \(surface.status.accessibilityIdentifier), but not visible expected status \(surface.status.menuBarTitle)",
+            detail: "fixture-mode app exposed status item \(surface.status.accessibilityIdentifier), but not visible expected status \(surface.status.accessibilityLabel)",
             artifacts: []
         )
     }
@@ -2527,7 +2527,7 @@ private func realClaudeFlowAXScenario(
     let expectedMenuIdentifiers = Set(expectedTargets.map(\.accessibilityIdentifier))
     let appElement = AXUIElementCreateApplication(process.processIdentifier)
     let expectedStatusTextVisible = waitForStatusText(
-        surface.status.menuBarTitle,
+        surface.status.accessibilityLabel,
         in: appElement,
         statusIdentifier: surface.status.accessibilityIdentifier,
         timeout: options.timeout + 1.0
@@ -2567,8 +2567,7 @@ private func realClaudeFlowAXScenario(
     )
 
     let statusVisible = expectedStatusTextVisible
-        && (statusText.contains(surface.status.menuBarTitle)
-            || statusText.contains(surface.status.accessibilityLabel)
+        && (statusText.contains(surface.status.accessibilityLabel)
             || statusText.contains(surface.status.title))
     let menuIdentifiersVisible = expectedMenuIdentifiers.isSubset(of: menuSnapshot.identifiers)
     let menuTextVisible = expectedTexts.allSatisfy { expected in
@@ -3455,7 +3454,7 @@ private func fixtureProofSVG(descriptor: MenuDescriptor) -> String {
     <svg xmlns="http://www.w3.org/2000/svg" width="900" height="460" viewBox="0 0 900 460">
       <rect width="900" height="460" fill="#f7f7f2"/>
       <rect x="30" y="28" width="840" height="48" rx="8" fill="#1f2933"/>
-      <text x="48" y="59" fill="#ffffff" font-family="Menlo, monospace" font-size="18">\(escape(descriptor.statusTitle))</text>
+      \(statusIconSVG(visual: descriptor.statusVisual, x: 48, y: 41, scale: 1.25))
       <rect x="30" y="100" width="520" height="320" rx="8" fill="#ffffff" stroke="#d6d3ca"/>
       <text x="44" y="132" class="heading">Fixture menu proof</text>
       \(escapedRows)
@@ -3497,7 +3496,6 @@ private func menuProofSVG(cards: [MenuProofCard]) -> String {
         .card { fill: #ffffff; stroke: #d7d3c8; }
         .status { fill: #18202a; }
         .label { font: 700 13px -apple-system, BlinkMacSystemFont, sans-serif; fill: #5b6470; }
-        .statusText { font: 700 15px -apple-system, BlinkMacSystemFont, sans-serif; fill: #ffffff; }
         .section { font: 700 13px -apple-system, BlinkMacSystemFont, sans-serif; fill: #18202a; }
         .row { font: 13px -apple-system, BlinkMacSystemFont, sans-serif; fill: #2e3742; }
         .child { font: 12px -apple-system, BlinkMacSystemFont, sans-serif; fill: #697386; }
@@ -3519,10 +3517,38 @@ private func menuProofCardSVG(card: MenuProofCard, x: Int, y: Int, width: Int, h
         <rect x="\(x)" y="\(y)" width="\(width)" height="\(height)" rx="8" class="card"/>
         <text x="\(x + 18)" y="\(y + 28)" class="label">\(escape(card.title))</text>
         <rect x="\(x + 16)" y="\(y + 42)" width="\(width - 32)" height="34" rx="7" class="status"/>
-        <text x="\(x + 30)" y="\(y + 64)" class="statusText">\(escape(proofText(card.descriptor.statusTitle, limit: 54)))</text>
+        \(statusIconSVG(visual: card.descriptor.statusVisual, x: x + 30, y: y + 50, scale: 1.0))
         \(rowsMarkup)
       </g>
     """
+}
+
+private func statusIconSVG(visual: StatusVisualState, x: Int, y: Int, scale: Double) -> String {
+    let barWidth = 4.4 * scale
+    let gap = 2.4 * scale
+    let maxHeight = 13.0 * scale
+    let baseline = Double(y) + (16.0 * scale)
+    let fillOpacity = visual.isDimmed ? 0.36 : 0.72
+    let outlineOpacity = visual.isDimmed ? 0.42 : 0.86
+    let bars = visual.barHeights.prefix(3).enumerated().map { index, rawHeight in
+        let height = max(0.30, min(1.0, rawHeight)) * maxHeight
+        let barX = Double(x) + Double(index) * (barWidth + gap)
+        let barY = baseline - height
+        let fill = index < visual.filledBarCount
+            ? "<rect x=\"\(svgNumber(barX))\" y=\"\(svgNumber(barY))\" width=\"\(svgNumber(barWidth))\" height=\"\(svgNumber(height))\" rx=\"\(svgNumber(2.2 * scale))\" fill=\"#ffffff\" opacity=\"\(svgNumber(fillOpacity))\"/>"
+            : ""
+        return [
+            fill,
+            "<rect x=\"\(svgNumber(barX))\" y=\"\(svgNumber(barY))\" width=\"\(svgNumber(barWidth))\" height=\"\(svgNumber(height))\" rx=\"\(svgNumber(2.2 * scale))\" fill=\"none\" stroke=\"#ffffff\" stroke-width=\"\(svgNumber(1.15 * scale))\" opacity=\"\(svgNumber(outlineOpacity))\"/>",
+        ]
+        .filter { !$0.isEmpty }
+        .joined(separator: "\n")
+    }.joined(separator: "\n")
+    return ["<g>", bars, "</g>"].joined(separator: "\n")
+}
+
+private func svgNumber(_ value: Double) -> String {
+    String(format: "%.2f", value)
 }
 
 private struct MenuProofRow {
