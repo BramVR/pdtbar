@@ -95,7 +95,7 @@ do {
 
 private func readyLaunchSmoke(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
-    let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
+    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
     guard FileManager.default.isExecutableFile(atPath: app.path) else {
         return SmokeReport(
             name: "ready-launch",
@@ -235,7 +235,7 @@ private func readyLaunchSmoke(arguments: [String]) throws -> SmokeReport {
 
 private func loggedOutLaunchSmoke(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
-    let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
+    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
     guard FileManager.default.isExecutableFile(atPath: app.path) else {
         return SmokeReport(
             name: "logged-out-launch",
@@ -363,7 +363,7 @@ private func loggedOutLaunchSmoke(arguments: [String]) throws -> SmokeReport {
 
 private func realClaudeFlowAXSmoke(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
-    let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
+    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
     guard FileManager.default.isExecutableFile(atPath: app.path) else {
         return SmokeReport(
             name: "real-claude-flow-ax",
@@ -514,7 +514,7 @@ private func realClaudeFlowAXSmoke(arguments: [String]) throws -> SmokeReport {
 
 private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
-    let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
+    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
     guard FileManager.default.isExecutableFile(atPath: app.path) else {
         return SmokeReport(
             name: "scripted-login-handoff",
@@ -756,7 +756,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
 
 private func scriptedSetupRetrySmoke(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
-    let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
+    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
     guard FileManager.default.isExecutableFile(atPath: app.path) else {
         return SmokeReport(
             name: "scripted-setup-retry",
@@ -902,7 +902,7 @@ private func scriptedPDTConnectorSmoke(arguments: [String]) throws -> SmokeRepor
 
 private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
-    let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
+    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
     guard FileManager.default.isExecutableFile(atPath: app.path) else {
         return SmokeReport(
             name: "scripted-first-fetch",
@@ -1114,7 +1114,7 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
 
 private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
-    let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
+    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
     guard FileManager.default.isExecutableFile(atPath: app.path) else {
         return SmokeReport(
             name: "scripted-returning-launch",
@@ -1630,7 +1630,7 @@ private func livePDTSmoke(arguments: [String]) throws -> SmokeReport {
 
 private func packagedAppSmoke(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
-    let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
+    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
     let fixture = options.fixture ?? defaultFixture
     guard FileManager.default.isExecutableFile(atPath: app.path) else {
         return SmokeReport(
@@ -1733,7 +1733,7 @@ private func peekabooSmoke(arguments: [String]) throws -> SmokeReport {
         return appReport
     }
 
-    let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
+    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
     let fixture = options.fixture ?? defaultFixture
     let expectedStatusTitle = try fixtureStatusTitle(for: fixture)
     let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
@@ -1784,7 +1784,7 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         )
     }
 
-    let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
+    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
     let fixture = options.fixture ?? defaultFixture
     let expectedSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "real-user-pulse-expected")
     let expectedScenario = try fixturePulseScenario(fixture: fixture, snapshotDirectory: expectedSnapshotDirectory)
@@ -2902,6 +2902,11 @@ private struct SmokeOptions {
         return try temporarySnapshotDirectory(prefix: "snapshots")
     }
 
+    func resolvedAppExecutable(defaultExecutable: URL) -> URL {
+        let candidate = app ?? defaultExecutable
+        return appBundleExecutable(in: candidate) ?? candidate
+    }
+
     func temporarySnapshotDirectory(prefix: String) throws -> URL {
         let directory = packageRoot
             .appending(path: ".build/pdtbar-smoke-artifacts/\(prefix)-\(UUID().uuidString)")
@@ -2924,6 +2929,21 @@ private struct SmokeOptions {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
     }
+}
+
+private func appBundleExecutable(in candidate: URL) -> URL? {
+    guard candidate.pathExtension == "app" else {
+        return nil
+    }
+
+    let infoPlist = candidate.appending(path: "Contents/Info.plist")
+    let info = (try? Data(contentsOf: infoPlist))
+        .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
+    let bundleExecutable = (info?["CFBundleExecutable"] as? String)
+        ?? candidate.deletingPathExtension().lastPathComponent
+    return candidate
+        .appending(path: "Contents/MacOS")
+        .appending(path: bundleExecutable)
 }
 
 private struct CommandResult {
