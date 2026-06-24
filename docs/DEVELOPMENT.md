@@ -22,9 +22,16 @@ Read matching `Read when` hints before editing. Keep docs current with behavior.
 swift build
 swift run pdtbar-checks
 swift test
+./Scripts/test.sh
+make test
 ```
 
-`swift test` may be a no-op until `Tests/` exists.
+`Scripts/test.sh` runs Swift Testing suites through the PDTBar sharder. Useful knobs:
+
+```bash
+PDTBAR_TEST_GROUP_SIZE=1 PDTBAR_TEST_SUITE_TIMEOUT=60 ./Scripts/test.sh
+PDTBAR_TEST_SHARD_INDEX=0 PDTBAR_TEST_SHARD_COUNT=2 ./Scripts/test.sh
+```
 
 ## Developer Commands
 
