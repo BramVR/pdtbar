@@ -42,6 +42,8 @@ do {
         report = try loggedOutLaunchSmoke(arguments: Array(arguments.dropFirst()))
     case "ready-launch":
         report = try readyLaunchSmoke(arguments: Array(arguments.dropFirst()))
+    case "real-claude-flow-ax":
+        report = try realClaudeFlowAXSmoke(arguments: Array(arguments.dropFirst()))
     case "packaged-app":
         report = try packagedAppSmoke(arguments: Array(arguments.dropFirst()))
     case "peekaboo":
@@ -67,6 +69,7 @@ do {
       pdtbar-smoke scripted-setup-retry [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke logged-out-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke ready-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
+      pdtbar-smoke real-claude-flow-ax [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]
       pdtbar-smoke peekaboo [--peekaboo <path>] [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>]
       pdtbar-smoke real-user-pulse [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
@@ -349,6 +352,157 @@ private func loggedOutLaunchSmoke(arguments: [String]) throws -> SmokeReport {
         status: SmokeStatus.passed,
         detail: "no-argument app launched real Claude-first setup with isolated app support, ignored fixture env, and rendered Not connected, Log in with Claude, and Quit PDTBar",
         artifacts: [artifactPath(evidence)]
+    )
+}
+
+private func realClaudeFlowAXSmoke(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
+    let app = options.app ?? packageRoot.appending(path: ".build/debug/pdtbar")
+    guard FileManager.default.isExecutableFile(atPath: app.path) else {
+        return SmokeReport(
+            name: "real-claude-flow-ax",
+            status: SmokeStatus.failed,
+            detail: "app executable missing; run swift build --product pdtbar first or pass --app <path>",
+            artifacts: []
+        )
+    }
+
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let proof = artifacts.appending(path: "pdtbar-real-claude-flow-ax-proof.json")
+    var proofPayload = RealClaudeFlowAXProof(
+        appArguments: [],
+        fixtureModeUsed: false,
+        scenarios: [],
+        rawClaudeCredentialsUsed: false,
+        rawPortfolioPayloadsRedacted: true
+    )
+
+    guard AXIsProcessTrusted() else {
+        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+        return SmokeReport(
+            name: "real-claude-flow-ax",
+            status: SmokeStatus.skipped,
+            detail: "macOS Accessibility permission missing for real Claude-flow menu-bar smoke; grant Accessibility in System Settings > Privacy & Security > Accessibility to the app running this command, then rerun",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+
+    let pressureResponses = try scriptedPDTConnectorResponses().mapValues { String(decoding: $0, as: UTF8.self) }
+    let quietResponses = try scriptedQuietPDTConnectorResponses().mapValues { String(decoding: $0, as: UTF8.self) }
+
+    let fetchingConfiguration = ScriptedPDTMCPConnectorConfiguration(
+        responses: quietResponses,
+        asOf: "2026-03-29",
+        initialCallDelaySeconds: max(options.timeout * 4.0, 6.0)
+    )
+    let quietConfiguration = ScriptedPDTMCPConnectorConfiguration(
+        responses: quietResponses,
+        asOf: "2026-03-29"
+    )
+    let pressureConfiguration = ScriptedPDTMCPConnectorConfiguration(
+        responses: pressureResponses,
+        asOf: "2026-03-29"
+    )
+    let retryableErrorConfiguration = ScriptedPDTMCPConnectorConfiguration(
+        responses: quietResponses,
+        asOf: "2026-03-29",
+        failure: "transientFailure",
+        failureMessage: "Claude call timed out"
+    )
+
+    let quietExpectedStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-real-claude-flow-quiet-expected")
+    let pressureExpectedStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-real-claude-flow-pressure-expected")
+    defer {
+        try? FileManager.default.removeItem(at: quietExpectedStore.directory)
+        try? FileManager.default.removeItem(at: pressureExpectedStore.directory)
+    }
+    let quietExpectedRun = try PDTCoalescedFirstPortfolioFetch(
+        dataSource: PDTMCPConnectorDataSource(connector: quietConfiguration.connector()),
+        snapshotStore: quietExpectedStore,
+        asOf: quietConfiguration.asOf
+    ).fetch()
+    let pressureExpectedRun = try PDTCoalescedFirstPortfolioFetch(
+        dataSource: PDTMCPConnectorDataSource(connector: pressureConfiguration.connector()),
+        snapshotStore: pressureExpectedStore,
+        asOf: pressureConfiguration.asOf
+    ).fetch()
+
+    proofPayload.scenarios = [
+        try realClaudeFlowAXScenario(
+            name: "setup",
+            app: app,
+            options: options,
+            artifacts: artifacts,
+            readiness: "missingClaudeLogin",
+            configuration: nil,
+            descriptor: ClaudeLaunchFlow.descriptor(for: .missingClaudeLogin),
+            targetMode: .setup,
+            expectedTexts: ["Not connected", "Log in with Claude", "Check again"]
+        ),
+        try realClaudeFlowAXScenario(
+            name: "fetching",
+            app: app,
+            options: options,
+            artifacts: artifacts,
+            readiness: nil,
+            configuration: fetchingConfiguration,
+            descriptor: ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio),
+            targetMode: .setup,
+            expectedTexts: ["Fetching portfolio"]
+        ),
+        try realClaudeFlowAXScenario(
+            name: "all-quiet",
+            app: app,
+            options: options,
+            artifacts: artifacts,
+            readiness: nil,
+            configuration: quietConfiguration,
+            descriptor: quietExpectedRun.descriptor,
+            targetMode: .pulse,
+            expectedTexts: ["All quiet - No ranked attention items from the fixture.", "No income events"],
+            expectedSnapshotAsOf: "2026-03-29"
+        ),
+        try realClaudeFlowAXScenario(
+            name: "pressure",
+            app: app,
+            options: options,
+            artifacts: artifacts,
+            readiness: nil,
+            configuration: pressureConfiguration,
+            descriptor: pressureExpectedRun.descriptor,
+            targetMode: .pulse,
+            expectedTexts: ["Scripted Adapter Co concentration"],
+            expectedSnapshotAsOf: "2026-03-29"
+        ),
+        try realClaudeFlowAXScenario(
+            name: "retryable-error",
+            app: app,
+            options: options,
+            artifacts: artifacts,
+            readiness: nil,
+            configuration: retryableErrorConfiguration,
+            descriptor: ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed),
+            targetMode: .setup,
+            expectedTexts: ["Could not fetch portfolio", "Try again"]
+        ),
+    ]
+    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+
+    guard proofPayload.scenarios.allSatisfy(\.passed) else {
+        return SmokeReport(
+            name: "real-claude-flow-ax",
+            status: SmokeStatus.failed,
+            detail: "real app Claude-flow Accessibility matrix did not verify every setup/fetching/all-quiet/pressure/retryable-error surface",
+            artifacts: [artifactPath(proof)] + proofPayload.scenarios.map(\.evidencePath)
+        )
+    }
+
+    return SmokeReport(
+        name: "real-claude-flow-ax",
+        status: SmokeStatus.passed,
+        detail: "real app no-argument Claude flow opened the menu through Accessibility and verified stable status/menu identifiers across setup, fetching, all-quiet, pressure, and retryable error surfaces",
+        artifacts: [artifactPath(proof)] + proofPayload.scenarios.map(\.evidencePath)
     )
 }
 
@@ -1740,6 +1894,28 @@ private struct ScriptedLoginHandoffProof: Codable {
     var rawClaudeCredentialsUsed: Bool
 }
 
+private struct RealClaudeFlowAXProof: Codable {
+    var appArguments: [String]
+    var fixtureModeUsed: Bool
+    var scenarios: [RealClaudeFlowAXScenarioProof]
+    var rawClaudeCredentialsUsed: Bool
+    var rawPortfolioPayloadsRedacted: Bool
+}
+
+private struct RealClaudeFlowAXScenarioProof: Codable {
+    var name: String
+    var statusIdentifier: String
+    var expectedMenuIdentifiers: [String]
+    var observedStatusText: [String]
+    var observedMenuTexts: [String]
+    var observedMenuIdentifiers: [String]
+    var openedMenuVia: String?
+    var snapshotAsOf: String?
+    var fixtureSnapshotWritten: Bool
+    var evidencePath: String
+    var passed: Bool
+}
+
 private struct ScriptedPDTConnectorScenarioResult: Codable {
     var name: String
     var passed: Bool
@@ -2075,6 +2251,133 @@ private func snapshotAsOf(_ url: URL) -> String? {
         return nil
     }
     return snapshot.asOf
+}
+
+private enum RealClaudeFlowAXTargetMode {
+    case setup
+    case pulse
+}
+
+private func realClaudeFlowAXScenario(
+    name: String,
+    app: URL,
+    options: SmokeOptions,
+    artifacts: URL,
+    readiness: String?,
+    configuration: ScriptedPDTMCPConnectorConfiguration?,
+    descriptor: MenuDescriptor,
+    targetMode: RealClaudeFlowAXTargetMode,
+    expectedTexts: Set<String>,
+    expectedSnapshotAsOf: String? = nil
+) throws -> RealClaudeFlowAXScenarioProof {
+    let appSupportDirectory = try options.isolatedAppSupportDirectory(prefix: "real-claude-flow-\(name)-app-support")
+    let fixtureSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "real-claude-flow-\(name)-fixture-sentinel")
+    let fixtureSnapshot = fixtureSnapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
+    if let configuration {
+        try writeFirstFetchAppScript(configuration: configuration, appSupportDirectory: appSupportDirectory)
+    } else if let readiness {
+        try writeReadinessScript(result: readiness, appSupportDirectory: appSupportDirectory)
+    }
+
+    let process = try launchFirstFetchApp(
+        app,
+        appSupportDirectory: appSupportDirectory,
+        fixtureSnapshotDirectory: fixtureSnapshotDirectory
+    )
+    defer {
+        terminate(process)
+    }
+
+    let stateSnapshot = appSupportDirectory.appending(path: "pdtbar/state/latest-portfolio-snapshot.json")
+    if let expectedSnapshotAsOf {
+        _ = waitForSnapshotAsOf(
+            stateSnapshot,
+            asOf: expectedSnapshotAsOf,
+            timeout: options.timeout + 3.0
+        )
+    }
+
+    let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
+    let expectedTargets: [PulseTarget]
+    switch targetMode {
+    case .setup:
+        expectedTargets = requiredSetupMenuTargets(in: surface)
+    case .pulse:
+        expectedTargets = requiredPulseMenuTargets(in: surface)
+    }
+    let expectedMenuIdentifiers = Set(expectedTargets.map(\.accessibilityIdentifier))
+    let appElement = AXUIElementCreateApplication(process.processIdentifier)
+    let expectedStatusTextVisible = waitForStatusText(
+        surface.status.menuBarTitle,
+        in: appElement,
+        statusIdentifier: surface.status.accessibilityIdentifier,
+        timeout: options.timeout + 1.0
+    )
+    let statusElement = waitForAccessibilityElement(
+        in: appElement,
+        identifier: surface.status.accessibilityIdentifier,
+        timeout: options.timeout + 1.0
+    )
+    let statusText = statusElement.map(accessibilityTexts) ?? []
+    let openedMenu: OpenMenuResult
+    let menuSnapshot: AccessibilitySnapshot
+    if let statusElement {
+        openedMenu = openStatusMenu(
+            statusElement,
+            appElement: appElement,
+            expectedMenuIdentifiers: expectedMenuIdentifiers,
+            timeout: options.timeout + 1.0
+        )
+        menuSnapshot = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
+            expectedMenuIdentifiers,
+            in: appElement,
+            timeout: options.timeout
+        )
+    } else {
+        openedMenu = OpenMenuResult(snapshot: nil, successfulAttempt: nil, attempts: ["status item missing"])
+        menuSnapshot = accessibilitySnapshot(in: appElement)
+    }
+
+    let evidence = artifacts.appending(path: "pdtbar-real-claude-flow-\(name)-ax.json")
+    try writeAccessibilityEvidence(
+        snapshot: menuSnapshot,
+        expected: expectedTargets,
+        statusIdentifier: surface.status.accessibilityIdentifier,
+        statusText: statusText,
+        output: evidence
+    )
+
+    let statusVisible = expectedStatusTextVisible
+        && (statusText.contains(surface.status.menuBarTitle)
+            || statusText.contains(surface.status.accessibilityLabel)
+            || statusText.contains(surface.status.title))
+    let menuIdentifiersVisible = expectedMenuIdentifiers.isSubset(of: menuSnapshot.identifiers)
+    let menuTextVisible = expectedTexts.allSatisfy { expected in
+        menuSnapshot.texts.contains { observed in
+            observed.contains(expected)
+        }
+    }
+    let snapshotMatches = expectedSnapshotAsOf.map { snapshotAsOf(stateSnapshot) == $0 } ?? true
+    let fixtureSnapshotWritten = FileManager.default.fileExists(atPath: fixtureSnapshot.path)
+    return RealClaudeFlowAXScenarioProof(
+        name: name,
+        statusIdentifier: surface.status.accessibilityIdentifier,
+        expectedMenuIdentifiers: expectedMenuIdentifiers.sorted(),
+        observedStatusText: statusText.sorted(),
+        observedMenuTexts: menuSnapshot.texts.sorted(),
+        observedMenuIdentifiers: menuSnapshot.identifiers.sorted(),
+        openedMenuVia: openedMenu.successfulAttempt,
+        snapshotAsOf: snapshotAsOf(stateSnapshot),
+        fixtureSnapshotWritten: fixtureSnapshotWritten,
+        evidencePath: artifactPath(evidence),
+        passed: process.isRunning
+            && statusElement != nil
+            && statusVisible
+            && menuIdentifiersVisible
+            && menuTextVisible
+            && snapshotMatches
+            && !fixtureSnapshotWritten
+    )
 }
 
 private func scriptedSetupRetryScenario(
@@ -2504,6 +2807,56 @@ private func scriptedPDTConnectorResponses() throws -> [String: Data] {
           "data": [
             { "date": "2026-03-27", "closeAdjusted": "19.00", "symbolQuoteId": 9101 },
             { "date": "2026-03-29", "closeAdjusted": "20.00", "symbolQuoteId": 9101 }
+          ]
+        }
+        """),
+    ]
+}
+
+private func scriptedQuietPDTConnectorResponses() throws -> [String: Data] {
+    [
+        "pdt-get-portfolio-holdings": try mcpContent("""
+        {
+          "holdings": [
+            {
+              "symbolName": "Scripted Quiet Co",
+              "symbolQuoteId": 9102,
+              "currentPriceDate": "2026-03-29T22:00:00+00:00",
+              "currentPriceLocal": { "value": "20.00", "currency": "EUR" },
+              "currentWorthLocal": { "value": "250.00", "currency": "EUR" },
+              "portfolioWeight": 0.10,
+              "closedAt": null
+            }
+          ]
+        }
+        """),
+        "pdt-get-portfolio-distributions": try mcpResult("""
+        {
+          "sectors": [
+            { "categoryName": "Technology", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
+          ],
+          "assetTypes": [
+            { "categoryName": "Stock", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
+          ]
+        }
+        """),
+        "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28": try mcpContent("""
+        { "data": [] }
+        """),
+        "pdt-list-dividends?date_from=2025-03-24&date_to=2026-04-28&page=1&per_page=250": try mcpResult("""
+        {
+          "data": [],
+          "meta": { "last_page": 1 }
+        }
+        """),
+        "pdt-get-symbol-quote?id=9102": try mcpContent("""
+        { "id": 9102, "symbolId": 5102 }
+        """),
+        "pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9102": try mcpContent("""
+        {
+          "data": [
+            { "date": "2026-03-27", "closeAdjusted": "20.00", "symbolQuoteId": 9102 },
+            { "date": "2026-03-29", "closeAdjusted": "20.00", "symbolQuoteId": 9102 }
           ]
         }
         """),

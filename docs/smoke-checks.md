@@ -10,6 +10,7 @@ swift run pdtbar-smoke scripted-login-handoff
 swift run pdtbar-smoke scripted-setup-retry
 swift run pdtbar-smoke scripted-first-fetch
 swift run pdtbar-smoke scripted-returning-launch
+swift run pdtbar-smoke real-claude-flow-ax
 # Optional once Tests/ exists; currently exits with "no tests found".
 swift test
 ```
@@ -137,6 +138,23 @@ Claude/PDT-ready path skips the logged-out menu, completes the first fetch,
 writes isolated first-fetch state, renders the first pulse, avoids fixture state,
 and writes only selector/status proof under `.build/pdtbar-smoke-artifacts/`.
 No live Claude credentials or portfolio payloads are used.
+
+Real Claude-flow Accessibility matrix smoke:
+
+```bash
+swift build --product pdtbar
+swift run pdtbar-smoke real-claude-flow-ax
+```
+
+This launches the actual no-argument app path with isolated app-support
+directories and scripted Claude/PDT dependencies. It opens the menu-bar item
+through macOS Accessibility and verifies stable status/menu identifiers plus
+visible text for setup, fetching, all-quiet, pressure, and retryable fetch-error
+surfaces. Fixture env is injected only as a guard; the smoke fails if fixture
+snapshot state is written. Missing macOS Accessibility permission exits
+successfully with `skipped` and names that exact TCC permission. Proof artifacts
+contain selectors, status text, scenario booleans, and redacted state only; no
+Claude credentials or raw portfolio payloads are used.
 
 This launches the fixture-mode app, routes it through an isolated snapshot
 directory, verifies `latest-portfolio-snapshot.json` was written, and verifies
