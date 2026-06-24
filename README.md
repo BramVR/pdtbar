@@ -20,9 +20,10 @@ swift run pdtbar-smoke scripted-setup-retry
 swift run pdtbar-smoke scripted-first-fetch
 swift run pdtbar-smoke scripted-returning-launch
 swift run pdtbar-smoke live-pdt
+swift build --product pdtbar
 swift run pdtbar-smoke logged-out-launch
 swift run pdtbar-smoke ready-launch
-swift build --product pdtbar
+swift run pdtbar-smoke real-claude-flow-ax
 swift run pdtbar-smoke packaged-app --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/manual-snapshot
 swift run pdtbar-smoke real-user-pulse --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/real-user-pulse
 ```
