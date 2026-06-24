@@ -26,6 +26,8 @@ do {
 
     let report: SmokeReport
     switch command {
+    case "manual-claude-pdt":
+        report = try manualClaudePDTSmoke(arguments: Array(arguments.dropFirst()))
     case "live-pdt":
         report = try livePDTSmoke(arguments: Array(arguments.dropFirst()))
     case "scripted-pdt-connector":
@@ -61,6 +63,7 @@ do {
 } catch CommandError.usage {
     FileHandle.standardError.write(Data("""
     usage:
+      pdtbar-smoke manual-claude-pdt [--claude <path>] [--model <alias>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke live-pdt [--server <mcporter-server>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-pdt-connector [--artifacts <dir>]
       pdtbar-smoke scripted-first-fetch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
@@ -1351,6 +1354,159 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
     )
 }
 
+private func manualClaudePDTSmoke(arguments: [String]) throws -> SmokeReport {
+    guard !arguments.contains("--bare") else {
+        return SmokeReport(
+            name: "manual-claude-pdt",
+            status: SmokeStatus.failed,
+            detail: "refusing manual Claude readiness proof with --bare; use normal claude -p so the logged-in Claude user and Desktop MCP setup are exercised",
+            artifacts: []
+        )
+    }
+
+    let options = try SmokeOptions(arguments: arguments)
+    let environment = ProcessInfo.processInfo.environment
+    let claudePath = options.claude?.path ?? environment["PDTBAR_CLAUDE_BIN"] ?? "claude"
+    let claude = URL(fileURLWithPath: claudePath)
+    let model = options.model ?? environment["PDTBAR_CLAUDE_MODEL"] ?? "opus"
+    let timeout = options.timeoutWasProvided ? options.timeout : 60.0
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+
+    guard claudePath.contains("/") || executableExistsOnPath(claudePath) else {
+        return SmokeReport(
+            name: "manual-claude-pdt",
+            status: SmokeStatus.skipped,
+            detail: "Claude CLI unavailable on PATH; install/sign in to Claude Desktop and rerun, or pass --claude <path>",
+            artifacts: []
+        )
+    }
+    if claudePath.contains("/") {
+        guard FileManager.default.isExecutableFile(atPath: claude.path) else {
+            return SmokeReport(
+                name: "manual-claude-pdt",
+                status: SmokeStatus.skipped,
+                detail: "Claude CLI unavailable at passed --claude path; install/sign in to Claude Desktop and rerun",
+                artifacts: []
+            )
+        }
+    }
+
+    let started = Date()
+    let result: CommandResult
+    do {
+        result = try run(
+            URL(fileURLWithPath: "/usr/bin/env"),
+            arguments: [
+                claudePath,
+                "--model", model,
+                "--allowedTools", manualClaudePDTAllowedTools().joined(separator: ","),
+                "--disallowedTools", manualClaudePDTDisallowedTools().joined(separator: ","),
+                "-p", manualClaudePDTPrompt(),
+                "--output-format", "stream-json",
+                "--verbose",
+                "--no-session-persistence",
+                "--json-schema", manualClaudePDTJSONSchema(),
+            ],
+            timeout: timeout
+        )
+    } catch let CommandError.commandFailed(_, stdout, stderr) {
+        let combined = [stdout, stderr].joined(separator: "\n")
+        guard PDTLiveUnavailableClassifier.shouldSkip(combined) || isClaudeModelSetupError(combined) else {
+            return SmokeReport(
+                name: "manual-claude-pdt",
+                status: SmokeStatus.failed,
+                detail: "claude -p returned an error before redacted PDT reachability proof could be parsed",
+                artifacts: []
+            )
+        }
+        return SmokeReport(
+            name: "manual-claude-pdt",
+            status: SmokeStatus.skipped,
+            detail: "local Claude/PDT setup required; claude -p did not complete with the configured model alias or Desktop MCP setup",
+            artifacts: []
+        )
+    } catch CommandError.timedOut {
+        return SmokeReport(
+            name: "manual-claude-pdt",
+            status: SmokeStatus.skipped,
+            detail: "claude -p timed out before PDT reachability proof completed; local Claude/PDT setup may need attention",
+            artifacts: []
+        )
+    }
+
+    let payload = redactedClaudePDTResponse(from: result.stdout)
+
+    let required = Set(PDTReadTools.requiredV1)
+    let reported = Set(payload.toolNames)
+    let missing = PDTReadTools.requiredV1.filter { !reported.contains($0) }
+    let writeToolCount = max(payload.writeToolsCalled, payload.nonReadPDTToolNames.count)
+    let success = (payload.status == "ok" || payload.status == "redacted-ok")
+        && missing.isEmpty
+        && writeToolCount == 0
+        && payload.toolResultErrorCount == 0
+    let duration = Date().timeIntervalSince(started)
+    let proof = ManualClaudePDTProof(
+        promptMode: "-p",
+        bareModeUsed: false,
+        requiredReadTools: PDTReadTools.requiredV1,
+        reportedReadTools: payload.toolNames.filter { required.contains($0) }.sorted(),
+        reportedToolCount: reported.intersection(required).count,
+        selectorCount: payload.selectors.count,
+        selectors: payload.selectors.sorted(),
+        durationSeconds: roundedSmokeValue(duration, places: 2),
+        statusText: redactedStatus(payload.statusText),
+        writeToolsCalled: writeToolCount,
+        toolResultErrorCount: payload.toolResultErrorCount,
+        rawClaudeOutputRedacted: true,
+        rawPortfolioPayloadsRedacted: true
+    )
+    let proofPath = artifacts.appending(path: "pdtbar-manual-claude-pdt-proof.json")
+    try stableJSONData(proof).write(to: proofPath, options: .atomic)
+
+    if payload.status == "setup-required" {
+        return SmokeReport(
+            name: "manual-claude-pdt",
+            status: SmokeStatus.skipped,
+            detail: "local Claude/PDT setup required; claude -p completed but reported setup-required without raw PDT data",
+            artifacts: [artifactPath(proofPath)]
+        )
+    }
+
+    guard success else {
+        return SmokeReport(
+            name: "manual-claude-pdt",
+            status: SmokeStatus.failed,
+            detail: "claude -p did not prove every required PDT read tool with redacted, read-only proof; missing=\(missing.joined(separator: ",")); writeToolsCalled=\(writeToolCount); toolResultErrorCount=\(payload.toolResultErrorCount)",
+            artifacts: [artifactPath(proofPath)]
+        )
+    }
+
+    return SmokeReport(
+        name: "manual-claude-pdt",
+        status: SmokeStatus.passed,
+        detail: "claude -p reached required PDT read tools through the logged-in Claude setup; proof contains only tool names, counts, selectors, duration, and redacted status",
+        artifacts: [artifactPath(proofPath)]
+    )
+}
+
+private func isClaudeModelSetupError(_ text: String) -> Bool {
+    let lowercased = text.lowercased()
+    guard lowercased.contains("model") else {
+        return false
+    }
+    return [
+        "unavailable",
+        "not available",
+        "unknown model",
+        "invalid model",
+        "does not exist",
+        "not found",
+        "no access",
+        "access denied",
+    ].contains { lowercased.contains($0) }
+}
+
 private func livePDTSmoke(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
     let environment = ProcessInfo.processInfo.environment
@@ -1814,6 +1970,32 @@ private struct LivePDTPulseProof: Codable {
     var sectionIDs: [String]
     var rowCount: Int
     var rawPortfolioValuesRedacted: Bool
+}
+
+private struct ManualClaudePDTProof: Codable {
+    var promptMode: String
+    var bareModeUsed: Bool
+    var requiredReadTools: [String]
+    var reportedReadTools: [String]
+    var reportedToolCount: Int
+    var selectorCount: Int
+    var selectors: [String]
+    var durationSeconds: Double
+    var statusText: String
+    var writeToolsCalled: Int
+    var toolResultErrorCount: Int
+    var rawClaudeOutputRedacted: Bool
+    var rawPortfolioPayloadsRedacted: Bool
+}
+
+private struct RedactedClaudePDTResponse {
+    var status: String
+    var statusText: String
+    var toolNames: [String]
+    var selectors: [String]
+    var writeToolsCalled: Int
+    var nonReadPDTToolNames: [String]
+    var toolResultErrorCount: Int
 }
 
 private struct ScriptedPDTConnectorProof: Codable {
@@ -2620,6 +2802,7 @@ private func fixtureStatusTitle(for fixture: URL) throws -> String {
 
 private struct SmokeOptions {
     var app: URL?
+    var claude: URL?
     var fixture: URL?
     var peekaboo: URL?
     var artifacts: URL?
@@ -2627,6 +2810,7 @@ private struct SmokeOptions {
     var snapshotDirectory: URL?
     var appSupportDirectory: URL?
     var server: String?
+    var model: String?
     var timeout: TimeInterval = 2.0
     var timeoutWasProvided = false
 
@@ -2636,6 +2820,9 @@ private struct SmokeOptions {
             switch arguments[index] {
             case "--app" where index + 1 < arguments.count:
                 app = URL(fileURLWithPath: arguments[index + 1])
+                index += 2
+            case "--claude" where index + 1 < arguments.count:
+                claude = URL(fileURLWithPath: arguments[index + 1])
                 index += 2
             case "--fixture" where index + 1 < arguments.count:
                 fixture = URL(fileURLWithPath: arguments[index + 1])
@@ -2657,6 +2844,9 @@ private struct SmokeOptions {
                 index += 2
             case "--server" where index + 1 < arguments.count:
                 server = arguments[index + 1]
+                index += 2
+            case "--model" where index + 1 < arguments.count:
+                model = arguments[index + 1]
                 index += 2
             case "--timeout" where index + 1 < arguments.count:
                 timeout = TimeInterval(arguments[index + 1]) ?? 2.0
@@ -3016,6 +3206,202 @@ private func toolNames(in object: Any) -> Set<String> {
         }
     }
     return names
+}
+
+private func manualClaudePDTPrompt() -> String {
+    let tools = PDTReadTools.requiredV1.joined(separator: "\n- ")
+    return """
+    PDTBar manual smoke. Use the Claude Desktop PDT MCP setup for read-only proof.
+
+    Rules:
+    - Use normal Claude tool access only. Do not use bare mode.
+    - Call only these read-only PDT tools:
+    - \(tools)
+    - Do not call any write/mutate tool.
+    - Do not include holdings, values, account identifiers, payload fields, endpoints, credentials, or raw tool output in your answer.
+    - For list tools, use the smallest safe read-only request you can. For quote/price tools, derive one selector from holdings if needed, but do not print it if it contains private data.
+
+    Return exactly one minified JSON object, no Markdown:
+    {"status":"redacted-ok","statusText":"redacted-ok","toolNames":["pdt-get-portfolio-holdings"],"selectors":["pdt-get-portfolio-holdings"],"writeToolsCalled":0}
+
+    Include all required tool names in toolNames/selectors only after you have reached them.
+    If Claude or PDT MCP setup is missing, return status "setup-required" with redacted statusText.
+    """
+}
+
+private func manualClaudePDTJSONSchema() -> String {
+    """
+    {"type":"object","additionalProperties":false,"properties":{"status":{"type":"string"},"statusText":{"type":"string"},"toolNames":{"type":"array","items":{"type":"string"}},"selectors":{"type":"array","items":{"type":"string"}},"writeToolsCalled":{"type":"integer"}},"required":["status","statusText","toolNames","selectors","writeToolsCalled"]}
+    """
+}
+
+private func manualClaudePDTAllowedTools() -> [String] {
+    let configuredDesktopNames = PDTReadTools.requiredV1.map {
+        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__\($0)"
+    }
+    let renamedServerNames = PDTReadTools.requiredV1.map {
+        "mcp__*__\($0)"
+    }
+    return configuredDesktopNames + renamedServerNames + ["StructuredOutput", "ToolSearch"]
+}
+
+private func manualClaudePDTDisallowedTools() -> [String] {
+    [
+        "AskUserQuestion",
+        "Bash",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "DesignSync",
+        "Edit",
+        "EnterPlanMode",
+        "EnterWorktree",
+        "ExitPlanMode",
+        "ExitWorktree",
+        "Monitor",
+        "NotebookEdit",
+        "PushNotification",
+        "Read",
+        "RemoteTrigger",
+        "ScheduleWakeup",
+        "Skill",
+        "Task",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskOutput",
+        "TaskStop",
+        "TaskUpdate",
+        "WebFetch",
+        "WebSearch",
+        "Workflow",
+        "Write",
+        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-add-*",
+        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-create-*",
+        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-delete-*",
+        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-patch-*",
+        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-post-*",
+        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-put-*",
+        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-remove-*",
+        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-set-*",
+        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-update-*",
+    ]
+}
+
+private func redactedClaudePDTResponse(from data: Data) -> RedactedClaudePDTResponse {
+    let streamObjects = streamJSONObjects(from: data)
+    let rawToolUseNames = streamObjects.flatMap(toolUseNames)
+    let telemetryToolNames = safePDTReadToolNames(in: rawToolUseNames)
+    let telemetryNonReadPDTToolNames = nonRequiredPDTToolNames(in: rawToolUseNames)
+    let telemetryToolResultErrorCount = streamObjects.map(toolResultErrorCount).reduce(0, +)
+    let reachedAllRequired = Set(PDTReadTools.requiredV1).isSubset(of: Set(telemetryToolNames))
+    let status = reachedAllRequired ? "redacted-ok" : (telemetryToolNames.isEmpty ? "setup-required" : "partial")
+    return RedactedClaudePDTResponse(
+        status: status,
+        statusText: reachedAllRequired ? "redacted-ok" : redactedStatus(status),
+        toolNames: telemetryToolNames,
+        selectors: telemetryToolNames,
+        writeToolsCalled: telemetryNonReadPDTToolNames.count,
+        nonReadPDTToolNames: telemetryNonReadPDTToolNames,
+        toolResultErrorCount: telemetryToolResultErrorCount
+    )
+}
+
+private func streamJSONObjects(from data: Data) -> [[String: Any]] {
+    guard let text = String(data: data, encoding: .utf8) else {
+        return []
+    }
+    return text
+        .split(separator: "\n")
+        .compactMap { line in
+            guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else {
+                return nil
+            }
+            return object
+        }
+}
+
+private func toolUseNames(in object: Any) -> [String] {
+    if let array = object as? [Any] {
+        return array.flatMap(toolUseNames)
+    }
+    guard let dictionary = object as? [String: Any] else {
+        return []
+    }
+    let current: [String]
+    if dictionary["type"] as? String == "tool_use",
+       let name = dictionary["name"] as? String
+    {
+        current = [name]
+    } else {
+        current = []
+    }
+    return current + dictionary.values.flatMap(toolUseNames)
+}
+
+private func toolResultErrorCount(in object: Any) -> Int {
+    if let array = object as? [Any] {
+        return array.map(toolResultErrorCount).reduce(0, +)
+    }
+    guard let dictionary = object as? [String: Any] else {
+        return 0
+    }
+    let current = dictionary["type"] as? String == "tool_result"
+        && (dictionary["is_error"] as? Bool == true || dictionary["isError"] as? Bool == true)
+        ? 1
+        : 0
+    return current + dictionary.values.map(toolResultErrorCount).reduce(0, +)
+}
+
+private func safePDTReadToolNames(in values: [String]) -> [String] {
+    let safeNames = values.flatMap { value in
+        PDTReadTools.requiredV1.filter { value.contains($0) }
+    }
+    return Array(Set(safeNames)).sorted()
+}
+
+private func nonRequiredPDTToolNames(in values: [String]) -> [String] {
+    let required = Set(PDTReadTools.requiredV1)
+    let names = values.flatMap(pdtToolNames)
+        .filter { !required.contains($0) }
+    return Array(Set(names)).sorted()
+}
+
+private func pdtToolNames(in value: String) -> [String] {
+    value
+        .split { character in
+            !(character.isLetter || character.isNumber || character == "-")
+        }
+        .map(String.init)
+        .filter { $0.hasPrefix("pdt-") }
+}
+
+private func redactedStatus(_ status: String) -> String {
+    let lowered = status.lowercased()
+    if lowered.contains("setup") || lowered.contains("missing") || lowered.contains("login") {
+        return "redacted-setup-required"
+    }
+    if lowered.contains("ok") || lowered.contains("pass") || lowered.contains("success") {
+        return "redacted-ok"
+    }
+    return "redacted-status"
+}
+
+private func executableExistsOnPath(_ name: String) -> Bool {
+    guard !name.contains("/") else {
+        return FileManager.default.isExecutableFile(atPath: name)
+    }
+    let paths = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+        .split(separator: ":")
+        .map(String.init)
+    return paths.contains { directory in
+        FileManager.default.isExecutableFile(atPath: URL(fileURLWithPath: directory).appending(path: name).path)
+    }
+}
+
+private func roundedSmokeValue(_ value: Double, places: Int) -> Double {
+    let multiplier = pow(10.0, Double(places))
+    return (value * multiplier).rounded() / multiplier
 }
 
 private func fixtureProofSVG(descriptor: MenuDescriptor) -> String {
