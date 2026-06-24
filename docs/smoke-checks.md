@@ -59,6 +59,35 @@ connected`, `Log in with Claude`, and `Check again`; missing PDT MCP renders
 artifact contains selectors, probe counts, status booleans, and redacted
 first-fetch state only.
 
+Manual Claude `-p` PDT reachability smoke:
+
+```bash
+swift run pdtbar-smoke manual-claude-pdt --model opus
+```
+
+This optional local smoke uses the installed `claude` CLI with normal `-p`
+mode plus an explicit `--allowedTools` list for the six required PDT read tools
+under the observed Desktop server name and renamed MCP server names, structured
+output, and non-mutating tool discovery; a broad `--disallowedTools` denylist
+for built-ins plus PDT mutate-tool prefixes on the configured Desktop MCP
+server; verbose stream JSON telemetry; and schema-enforced structured output to
+exercise the currently logged-in Claude user and Claude Desktop PDT MCP setup.
+It never passes `claude --bare`;
+if `--bare` is supplied to the smoke, it refuses the run because bare mode does
+not prove the signed-in Desktop setup. Use `--model <alias>` or
+`PDTBAR_CLAUDE_MODEL=<alias>` when the local Claude default model is
+unavailable; the current manual path defaults to the public `opus` alias. Pass
+`--claude <path>` or `PDTBAR_CLAUDE_BIN=<path>` for a scripted fake command in
+tests.
+
+Missing Claude CLI, sign-in, model access, or PDT MCP setup exits successfully
+with `skipped` and setup-required detail. Passing proof writes
+`pdtbar-manual-claude-pdt-proof.json` with only `-p` mode, `bareModeUsed=false`,
+required/reported tool names, selector/count totals, duration, and redacted
+status plus tool-result error counts. It must not contain raw Claude output,
+account identifiers, endpoints, portfolio holdings, values, credentials, or raw
+PDT payloads.
+
 Scripted first-fetch e2e:
 
 ```bash

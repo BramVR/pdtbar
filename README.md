@@ -19,6 +19,7 @@ swift run pdtbar-smoke scripted-login-handoff
 swift run pdtbar-smoke scripted-setup-retry
 swift run pdtbar-smoke scripted-first-fetch
 swift run pdtbar-smoke scripted-returning-launch
+swift run pdtbar-smoke manual-claude-pdt --model opus
 swift run pdtbar-smoke live-pdt
 swift build --product pdtbar
 swift run pdtbar-smoke logged-out-launch
