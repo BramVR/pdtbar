@@ -358,7 +358,7 @@ public struct StatusVisualState: Codable, Equatable {
     public var statusCopy: String
 
     public init(
-        barHeights: [Double] = [0.55, 1.0, 0.55],
+        barHeights: [Double] = [0.38, 0.55, 0.38],
         filledBarCount: Int = 0,
         isDimmed: Bool = false,
         statusCopy: String = ""
@@ -382,7 +382,7 @@ public struct StatusVisualState: Codable, Equatable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
-            barHeights: try container.decodeIfPresent([Double].self, forKey: .barHeights) ?? [0.55, 1.0, 0.55],
+            barHeights: try container.decodeIfPresent([Double].self, forKey: .barHeights) ?? [0.38, 0.55, 0.38],
             filledBarCount: try container.decodeIfPresent(Int.self, forKey: .filledBarCount) ?? 0,
             isDimmed: try container.decodeIfPresent(Bool.self, forKey: .isDimmed) ?? false,
             statusCopy: try container.decodeIfPresent(String.self, forKey: .statusCopy) ?? ""
@@ -1275,8 +1275,9 @@ public enum MenuDescriptorRenderer {
         let diversifiedHHI = usesXRay ? 1.0 / 25.0 : 1.0 / 12.0
         let concentratedHHI = usesXRay ? 0.16 : 0.12
         let pressure = max(0.0, min(1.0, (hhi - diversifiedHHI) / (concentratedHHI - diversifiedHHI)))
-        let sideHeight = rounded(0.72 - (0.34 * pressure), places: 3)
-        return [sideHeight, 1.0, sideHeight]
+        let sideHeight = 0.38
+        let middleHeight = rounded(0.55 + (0.45 * pressure), places: 3)
+        return [sideHeight, middleHeight, sideHeight]
     }
 
     private static func attentionChildren(

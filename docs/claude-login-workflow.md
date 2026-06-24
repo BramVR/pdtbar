@@ -42,7 +42,7 @@ Returning launches may render the previous real snapshot immediately while a fre
 
 The menu bar always shows the Concentration Stack icon. It is a stable portfolio mark, not top-three holdings and not a mini dashboard:
 
-- bar heights: concentration/allocation shape from core facts
+- bar heights: fixed side bars with a middle bar scaled by whole-portfolio concentration
 - concentration shape prefers X-ray look-through weights, then direct holding weights
 - filled bars: ranked attention item count, capped at three
 - zero attention: no filled bars

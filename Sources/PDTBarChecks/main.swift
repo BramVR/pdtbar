@@ -225,10 +225,15 @@ try check(!descriptor.statusVisual.isDimmed, "quiet descriptor should not dim a 
 try check(descriptor.statusVisual.statusCopy == descriptor.statusTitle, "quiet descriptor visual should expose full status copy")
 try check(descriptor.statusVisual.barHeights.count == 3, "quiet descriptor should expose three concentration bars")
 try check(
+    StatusVisualState().barHeights == [0.38, 0.55, 0.38],
+    "unknown weights should default to a calm gaussian concentration shape"
+)
+try check(
     descriptor.statusVisual.barHeights[0] == descriptor.statusVisual.barHeights[2]
-        && descriptor.statusVisual.barHeights[1] == 1.0
-        && descriptor.statusVisual.barHeights[0] > 0.5,
-    "diversified quiet descriptor should keep raised side bars around a normalized middle bar"
+        && descriptor.statusVisual.barHeights[0] == 0.38
+        && descriptor.statusVisual.barHeights[1] > descriptor.statusVisual.barHeights[0]
+        && descriptor.statusVisual.barHeights[1] < 0.8,
+    "diversified quiet descriptor should keep a modest middle bar between stable side bars"
 )
 var twoETFDirectModel = decoded
 twoETFDirectModel.facetSnapshots.allocation.openHoldingCount = 2
@@ -242,7 +247,7 @@ twoETFLikeModel.facetSnapshots.allocation.xRayHoldings = decoded.facetSnapshots.
 }
 let twoETFXRayHeights = MenuDescriptorRenderer.render(model: twoETFLikeModel).statusVisual.barHeights
 try check(
-    twoETFXRayHeights[1] == 1.0 && twoETFXRayHeights[0] > twoETFDirectHeights[0],
+    twoETFXRayHeights[0] == twoETFDirectHeights[0] && twoETFXRayHeights[1] < twoETFDirectHeights[1],
     "X-ray look-through weights should drive concentration bars when a diversified portfolio is held through two ETFs"
 )
 try check(descriptorObject.keys.contains("statusBadge"), "descriptor JSON should explicitly encode statusBadge")
@@ -1200,13 +1205,12 @@ try check(
 )
 try check(
     concentrationRun.descriptor.statusVisual.barHeights[0] == concentrationRun.descriptor.statusVisual.barHeights[2]
-        && concentrationRun.descriptor.statusVisual.barHeights[1] == 1.0
-        && concentrationRun.descriptor.statusVisual.barHeights[0] < descriptor.statusVisual.barHeights[0],
-    "concentration descriptor should lower the side bars around a normalized middle bar"
+        && concentrationRun.descriptor.statusVisual.barHeights[0] == descriptor.statusVisual.barHeights[0],
+    "concentration descriptor should keep stable side bars"
 )
 try check(
-    concentrationRun.descriptor.statusVisual.barHeights[1] == descriptor.statusVisual.barHeights[1],
-    "concentrated portfolio should keep the middle bar normalized like the diversified quiet portfolio"
+    concentrationRun.descriptor.statusVisual.barHeights[1] > descriptor.statusVisual.barHeights[1],
+    "concentrated portfolio should raise the middle bar above the diversified quiet portfolio"
 )
 try check(
     concentrationSurface.status.badge == "1",
