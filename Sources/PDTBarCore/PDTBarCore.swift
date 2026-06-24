@@ -2208,7 +2208,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
                 )
             )
             holdings.append(contentsOf: envelope.items.map {
-                XRayHoldingSummary(weight: normalizedPortfolioWeight($0.weight))
+                XRayHoldingSummary(weight: normalizedXRayPortfolioWeight($0.weight))
             })
             guard envelope.hasMore == true, !envelope.items.isEmpty else {
                 return holdings
@@ -2466,7 +2466,7 @@ public struct PDTFixtureDataSource: PortfolioDataSource, PortfolioPriorSnapshotD
             openHoldings: holdings,
             sectors: (payload.getPortfolioDistributions?.sectors ?? []).map(\.summary),
             assetTypes: (payload.getPortfolioDistributions?.assetTypes ?? []).map(\.summary),
-            xRayHoldings: payload.listXRayHoldings?.items.map { XRayHoldingSummary(weight: normalizedPortfolioWeight($0.weight)) },
+            xRayHoldings: payload.listXRayHoldings?.items.map { XRayHoldingSummary(weight: normalizedXRayPortfolioWeight($0.weight)) },
             incomeEvents: payload.listCalendarEvents?.data.map {
                 let quoteId = $0.symbolId.flatMap { quoteIDsBySymbolID[$0] }
                 let amount = $0.type == "ex-dividend" && !$0.isEstimated
@@ -2865,8 +2865,8 @@ private func percent(_ value: Double) -> String {
     "\(decimalString(String(value * 100), places: 1))%"
 }
 
-private func normalizedPortfolioWeight(_ value: Double) -> Double {
-    value > 1.0 ? value / 100.0 : value
+private func normalizedXRayPortfolioWeight(_ value: Double) -> Double {
+    value / 100.0
 }
 
 private func signedPercent(_ value: Double) -> String {

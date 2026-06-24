@@ -711,7 +711,8 @@ let scriptedConnectorResponses = [
     "pdt-list-x-ray-holdings?limit=500&offset=0": try mcpResult("""
     {
       "items": [
-        { "weight": 25.0 }
+        { "weight": 25.0 },
+        { "weight": 0.5 }
       ],
       "hasMore": false
     }
@@ -761,6 +762,10 @@ try check(
 try check(
     scriptedLiveRun.model.facetSnapshots.allocation.assetTypeBreakdown.count == 1,
     "live data source should normalize asset type distributions from wrapped mcporter payloads"
+)
+try check(
+    scriptedLiveRun.model.facetSnapshots.allocation.xRayHoldings?.map(\.weight) == [0.25, 0.005],
+    "live data source should normalize X-ray percentage weights including sub-1% holdings"
 )
 try check(
     scriptedLiveRun.model.rankedAttentionItems.map(\.id).contains("allocation.concentration.9101"),
