@@ -224,6 +224,32 @@ try check(
 try check(!descriptor.statusVisual.isDimmed, "quiet descriptor should not dim a fresh status icon")
 try check(descriptor.statusVisual.statusCopy == descriptor.statusTitle, "quiet descriptor visual should expose full status copy")
 try check(descriptor.statusVisual.barHeights.count == 3, "quiet descriptor should expose three concentration bars")
+try check(
+    StatusVisualState().barHeights == [0.38, 0.55, 0.38],
+    "unknown weights should default to a calm gaussian concentration shape"
+)
+try check(
+    descriptor.statusVisual.barHeights[0] == descriptor.statusVisual.barHeights[2]
+        && descriptor.statusVisual.barHeights[0] == 0.38
+        && descriptor.statusVisual.barHeights[1] > descriptor.statusVisual.barHeights[0]
+        && descriptor.statusVisual.barHeights[1] < 0.8,
+    "diversified quiet descriptor should keep a modest middle bar between stable side bars"
+)
+var twoETFDirectModel = decoded
+twoETFDirectModel.facetSnapshots.allocation.openHoldingCount = 2
+twoETFDirectModel.facetSnapshots.allocation.topHoldings = Array(twoETFDirectModel.facetSnapshots.allocation.topHoldings.prefix(2))
+twoETFDirectModel.facetSnapshots.allocation.topHoldings[0].weight = 0.5
+twoETFDirectModel.facetSnapshots.allocation.topHoldings[1].weight = 0.5
+let twoETFDirectHeights = MenuDescriptorRenderer.render(model: twoETFDirectModel).statusVisual.barHeights
+var twoETFLikeModel = twoETFDirectModel
+twoETFLikeModel.facetSnapshots.allocation.xRayHoldings = decoded.facetSnapshots.allocation.topHoldings.map {
+    XRayHoldingSummary(weight: $0.weight)
+}
+let twoETFXRayHeights = MenuDescriptorRenderer.render(model: twoETFLikeModel).statusVisual.barHeights
+try check(
+    twoETFXRayHeights[0] == twoETFDirectHeights[0] && twoETFXRayHeights[1] < twoETFDirectHeights[1],
+    "X-ray look-through weights should drive concentration bars when a diversified portfolio is held through two ETFs"
+)
 try check(descriptorObject.keys.contains("statusBadge"), "descriptor JSON should explicitly encode statusBadge")
 try check(descriptorObject.keys.contains("statusVisual"), "descriptor JSON should encode the plain status visual state")
 try check(descriptor.sections.map(\.id) == ["pulse", "allocation", "income", "bigMovers", "freshness"], "descriptor should expose drill-down sections")
@@ -476,6 +502,10 @@ try check(
     nonQuietDescriptor.statusVisual.filledBarCount == 1,
     "one attention item should fill one notification bar"
 )
+try check(
+    nonQuietDescriptor.statusVisual.barHeights == descriptor.statusVisual.barHeights,
+    "attention items should not change concentration bar heights"
+)
 var twoAttentionModel = decoded
 twoAttentionModel.allQuiet = false
 twoAttentionModel.attentionItems = [attention, secondAttention]
@@ -484,6 +514,10 @@ try check(
     MenuDescriptorRenderer.render(model: twoAttentionModel).statusVisual.filledBarCount == 2,
     "two attention items should fill two notification bars"
 )
+try check(
+    MenuDescriptorRenderer.render(model: twoAttentionModel).statusVisual.barHeights == descriptor.statusVisual.barHeights,
+    "two attention items should still leave concentration bar heights unchanged"
+)
 var crowdedAttentionModel = decoded
 crowdedAttentionModel.allQuiet = false
 crowdedAttentionModel.attentionItems = [attention, secondAttention, thirdAttention, fourthAttention]
@@ -491,6 +525,10 @@ crowdedAttentionModel.rankedAttentionItems = [attention, secondAttention, thirdA
 try check(
     MenuDescriptorRenderer.render(model: crowdedAttentionModel).statusVisual.filledBarCount == 3,
     "three or more attention items should cap at three filled notification bars"
+)
+try check(
+    MenuDescriptorRenderer.render(model: crowdedAttentionModel).statusVisual.barHeights == descriptor.statusVisual.barHeights,
+    "three or more attention items should still leave concentration bar heights unchanged"
 )
 
 let legacyAttention = try JSONDecoder().decode(
@@ -670,6 +708,15 @@ let scriptedConnectorResponses = [
       ]
     }
     """),
+    "pdt-list-x-ray-holdings?limit=500&offset=0": try mcpResult("""
+    {
+      "items": [
+        { "weight": 25.0 },
+        { "weight": 0.5 }
+      ],
+      "hasMore": false
+    }
+    """),
     "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28": try mcpContent("""
     {
       "data": [
@@ -715,6 +762,10 @@ try check(
 try check(
     scriptedLiveRun.model.facetSnapshots.allocation.assetTypeBreakdown.count == 1,
     "live data source should normalize asset type distributions from wrapped mcporter payloads"
+)
+try check(
+    scriptedLiveRun.model.facetSnapshots.allocation.xRayHoldings?.map(\.weight) == [0.25, 0.005],
+    "live data source should normalize X-ray percentage weights including sub-1% holdings"
 )
 try check(
     scriptedLiveRun.model.rankedAttentionItems.map(\.id).contains("allocation.concentration.9101"),
@@ -1158,8 +1209,13 @@ try check(
     "stale concentration descriptor may dim the whole icon without lowering attention fill"
 )
 try check(
-    concentrationRun.descriptor.statusVisual.barHeights[0] > concentrationRun.descriptor.statusVisual.barHeights[1],
-    "concentration descriptor should make the leading concentration bar taller"
+    concentrationRun.descriptor.statusVisual.barHeights[0] == concentrationRun.descriptor.statusVisual.barHeights[2]
+        && concentrationRun.descriptor.statusVisual.barHeights[0] == descriptor.statusVisual.barHeights[0],
+    "concentration descriptor should keep stable side bars"
+)
+try check(
+    concentrationRun.descriptor.statusVisual.barHeights[1] > descriptor.statusVisual.barHeights[1],
+    "concentrated portfolio should raise the middle bar above the diversified quiet portfolio"
 )
 try check(
     concentrationSurface.status.badge == "1",

@@ -12,7 +12,7 @@
 
 | v1 facet | PDT tool(s) | Cold-start? | Key fields |
 |---|---|---|---|
-| **Allocation / concentration** | `pdt-get-portfolio-holdings`, `pdt-get-portfolio-distributions` | ✅ absolute thresholds need no history | `portfolioWeight` (fraction), `currentWorthLocal`, `distributions.sectors[].percentage` |
+| **Allocation / concentration** | `pdt-get-portfolio-holdings`, `pdt-get-portfolio-distributions`, `pdt-list-x-ray-holdings` | ✅ absolute thresholds need no history | `portfolioWeight` (fraction), `currentWorthLocal`, X-ray `items[].weight`, `distributions.sectors[].percentage` |
 | **Income events** | `pdt-list-calendar-events`, `pdt-list-dividends` | ✅ ex-div dates are forward-looking | event `type`/`date`/`isEstimated`/`symbolId`; dividend `amount`/`tax`/`date`/`symbolQuoteId` |
 | **Big movers** | `pdt-list-symbol-prices`, `pdt-get-portfolio?date=` | ✅ via PDT price history; ✅✅ via prior snapshot | `close`/`closeAdjusted`/`closeCurrency`/`date`; prior-vs-current `portfolioWeight`/`currentPrice` |
 
@@ -41,6 +41,7 @@ PortfolioSnapshot
   freshness:   Freshness                 // see §4
   totals:      { currentWorth: Money, cash: Money, currency: String }
   holdings:    [Holding]                 // §facet: allocation, big-movers
+  xRayWeights: [Weight]                  // look-through underlying weights
   incomeEvents:[IncomeEvent]             // §facet: income
   // prices/weights for change detection come from prior snapshots + price series
 
@@ -85,6 +86,8 @@ Normalization the seam owns (all pure logic, no UI):
   `closedAt` set — filter them out for current allocation/movers.
 - **Cash is a holding** (`symbolName: "Cash"`, `symbolQuoteId` present) as well as
   `summary.cash`.
+- **X-ray holdings are weight-only in the normalized snapshot** for the status
+  icon concentration scalar; underlying names/ISINs/tickers are not needed.
 - **Join keys differ across tools** — see §3.
 
 ## 3. Gaps / missing PDT fields (impact on v1)
