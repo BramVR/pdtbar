@@ -182,8 +182,10 @@ Local/release packaged-app smoke:
 
 ```bash
 swift build --product pdtbar
+./Scripts/package_app.sh
 swift run pdtbar-smoke logged-out-launch
 swift run pdtbar-smoke ready-launch
+swift run pdtbar-smoke packaged-app --app PDTBar.app --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/quiet-packaged-snapshot
 swift run pdtbar-smoke packaged-app --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/quiet-snapshot
 ```
 

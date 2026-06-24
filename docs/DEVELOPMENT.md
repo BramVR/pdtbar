@@ -36,9 +36,13 @@ PDTBAR_TEST_SHARD_INDEX=0 PDTBAR_TEST_SHARD_COUNT=2 ./Scripts/test.sh
 ## Developer Commands
 
 ```bash
+make start
+make stop
 swift run pdtbar-dev model --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift build --product pdtbar
+./Scripts/package_app.sh
+./Scripts/launch.sh
 ```
 
 ## Smoke Gate
@@ -59,6 +63,7 @@ swift run pdtbar-smoke manual-claude-pdt --model opus
 swift run pdtbar-smoke live-pdt
 swift run pdtbar-smoke logged-out-launch
 swift run pdtbar-smoke ready-launch
+swift run pdtbar-smoke packaged-app --app PDTBar.app --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/packaged-snapshot
 swift run pdtbar-smoke packaged-app --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/manual-snapshot
 swift run pdtbar-smoke real-user-pulse --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/real-user-pulse
 ```
