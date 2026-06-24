@@ -4,9 +4,13 @@
 
 It lives in the **macOS menu bar** and surfaces only the few things across your portfolio that actually need attention right now — quiet by default, no dashboard. The core is a **pressure engine** that turns the firehose of portfolio data into a short, ranked list of "look at this" items, which the bar renders.
 
-## Status: Claude setup + fixture path
+## Status: Claude-first product path
 
-This repo now has the first Swift launch paths: no-argument app launch probes Claude/PDT readiness before setup UI, scripted-ready launches complete the first PDT MCP fetch before publishing a pulse, and explicit fixture mode loads sanitized PDT fixtures into the engine, descriptor, and native macOS menu-bar app. Pressure rules are still intentionally quiet-first.
+No-argument launch is the product path. The app starts in the macOS menu bar, quietly probes the existing Claude Desktop/PDT MCP setup, skips setup UI when Claude is ready, fetches the required read-only PDT data, writes the first local snapshot, and publishes a pulse only after complete normalized data reaches the pressure engine.
+
+If setup is missing, the menu stays Claude-only: `Log in with Claude`, `Check again`, and setup copy for missing Claude Desktop/login/PDT MCP. Fixture mode is explicit developer tooling behind `--fixture`; it must not be implied by no-argument launch or mutate real app state.
+
+The menu-bar status item is the compact Concentration Stack icon. Bar heights represent concentration shape; filled bars represent attention count capped at three; there is no separate notification dot. Freshness/failure stays in tooltip/menu copy, with optional whole-icon dimming.
 
 ## Developer commands
 
@@ -30,14 +34,11 @@ swift run pdtbar-smoke real-user-pulse --fixture docs/pdt/fixtures/quiet-no-pres
 ```
 
 Smoke gate details: [`docs/smoke-checks.md`](docs/smoke-checks.md).
+Claude workflow details: [`docs/claude-login-workflow.md`](docs/claude-login-workflow.md).
 
-## How to start
+## Historical planning kickoff
 
-1. **Install the skills.** Make Matt Pocock's [`mattpocock/skills`](https://github.com/mattpocock/skills) available to your agent (Codex CLI or Claude Code), and run `/setup-matt-pocock-skills` once so `CONTEXT.md`/ADR scaffolding is configured.
-2. **Open your agent and paste the kickoff prompt** — [`docs/prompts/codex-kickoff.md`](docs/prompts/codex-kickoff.md) — as the first message. (Attach [`docs/product-brief.md`](docs/product-brief.md) for fuller context.)
-3. The agent runs **`grill-with-docs`**: it refuses to write code and interviews you branch by branch, filling in [`CONTEXT.md`](CONTEXT.md) and the ADRs in [`docs/adr/`](docs/adr/).
-4. **First, exercise the PDT MCP** to learn what data actually exists — the whole design depends on it.
-5. Then continue Matt's loop: `/to-prd` → `/to-issues` (vertical slices) → `/prototype` → `/tdd` the first slice.
+The original alignment prompt lives at [`docs/prompts/codex-kickoff.md`](docs/prompts/codex-kickoff.md), but it is historical pre-build context. Current agents should start from this README, [`docs/claude-login-workflow.md`](docs/claude-login-workflow.md), [`docs/smoke-checks.md`](docs/smoke-checks.md), and the Swift sources.
 
 ## Repo map
 
@@ -53,10 +54,11 @@ portfolio-pulse/
 │   ├── adr/                  # architecture decision records
 │   │   ├── README.md
 │   │   ├── 0000-template.md
-│   │   └── 0001-core-architecture-and-stack.md   # status: Proposed (resolve in grilling)
+│   │   └── 0001-core-architecture-and-stack.md   # status: Accepted
+│   ├── claude-login-workflow.md
 │   └── prompts/
 │       └── codex-kickoff.md  # paste this as the first message to your agent
-└── src/                      # placeholders — no code yet; shape settles after the stack ADR
+└── src/                      # early architecture notes; Swift code lives in Sources/
     ├── engine/README.md      # the pressure engine (the IP)
     └── bar/README.md         # the menu-bar renderer (the "pulse")
 ```
@@ -64,7 +66,7 @@ portfolio-pulse/
 ## The two pieces
 
 - **Engine** (`src/engine`) — the brain. Reads the portfolio from PDT + a small history snapshot, computes "pressure," and emits a **structured model** (ranked attention items + their supporting data + facet snapshots). Deterministic; no LLM needed.
-- **Bar** (`src/bar`) — the "pulse." A thin renderer over the engine's model: a glanceable status item, a menu of attention items, and submenus to drill into everything without leaving the bar.
+- **Bar** (`src/bar`, `Sources/PDTBarApp`) — the "pulse." A thin renderer over the engine's model: the Concentration Stack status icon, a menu of attention items, and submenus to drill into everything without leaving the bar.
 
 Keep this separation clean — it's the main architectural bet.
 

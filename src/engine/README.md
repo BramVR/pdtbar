@@ -1,6 +1,6 @@
 # src/engine — the pressure engine (the IP)
 
-> Placeholder. No code yet — structure settles after the stack decision (ADR-0001).
+> Early architecture note. Current Swift implementation lives in `Sources/PDTBarCore`; ADR-0001 is accepted.
 
 The **brain** of the product. Deterministic logic, no LLM required.
 

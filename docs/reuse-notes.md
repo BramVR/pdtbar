@@ -4,9 +4,9 @@
 
 ## What we reuse
 
-- **CodexBar / RepoBar** (Swift menu-bar apps) — reuse the **menu-bar skeleton**: status item, menu + submenus, refresh loop, browser OAuth, Keychain token storage. This is what keeps a bar-first product from being expensive; don't hand-build menu-bar plumbing.
+- **CodexBar / RepoBar** (Swift menu-bar apps) — reuse the **menu-bar skeleton ideas**: status item, menu + submenus, refresh/coalescing, cached pulse while refreshing, and crisp empty/loading/error states. Do not copy browser OAuth, provider switching, or Keychain token storage into the Claude-first product path.
   - https://github.com/steipete/CodexBar · https://github.com/steipete/RepoBar
-- **mcporter** (TS MCP runtime/CLI) — use it to **explore the PDT MCP during research** (list tools, inspect schemas, call ad-hoc). If we choose a TS core, it can stay as the runtime bridge; if we go native Swift, it's a dev/prototyping tool only and we talk to PDT directly from the app.
+- **mcporter** (TS MCP runtime/CLI) — use it to **explore the PDT MCP during research** (list tools, inspect schemas, call ad-hoc) and for the optional live smoke. ADR-0001 chose native Swift, so mcporter is not a shipped runtime bridge.
   - https://github.com/steipete/mcporter
 - **birdclaw** (local-first SQLite workspace) — **ideas only, as needed:** stable `--json` to stdout / logs to stderr for any CLI; a small local snapshot store for history (keep it tiny); a Git text backup if/when we want a data-ownership story. Don't build a full mirror.
   - https://birdclaw.sh/
@@ -17,7 +17,7 @@ oracle, claude-code-mcp, imsg, poltergeist, Sparkle, Homebrew tap, stats.store �
 
 ## Decisions this affects
 
-The native-Swift-vs-TS-core choice (ADR-0001) determines whether mcporter is a shipped dependency or just a research tool. Resolve it early — it shapes the repo.
+ADR-0001 resolved the native-Swift-vs-TS-core choice: native Swift, with mcporter as research/dev tooling only.
 
 ## Licensing
 

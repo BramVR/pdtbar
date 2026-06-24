@@ -26,8 +26,10 @@ read tool. The product's job is curation, not coverage.
 
 ## 2. The normalized `PortfolioDataSource` interface (facets)
 
-The seam hides raw PDT/MCP shapes from the engine. One interface, two adapters
-(live PDT via MCP, and a fixture adapter reading `fixtures/*.json`). It returns
+The seam hides raw PDT/MCP shapes from the engine. One interface, three current
+adapters (live PDT via a `PDTLiveToolClient`, Claude/PDT MCP connector-backed
+fetch via `PDTMCPConnectorDataSource`, and a fixture adapter reading
+`fixtures/*.json`). It returns
 **normalized facets**, not raw PDT payloads:
 
 ```
@@ -133,8 +135,10 @@ Normalization the seam owns (all pure logic, no UI):
    load the whole blob into the model each tick.
 
 None of these block v1 — every gap is closable with derivation or an extra
-join call. They do mean the **PortfolioDataSource is non-trivial normalization
-logic**, which is the key input to ADR-0001 below.
+join call. The implemented Claude-first connector checks the same required v1
+read-tool list before fetching and refuses non-v1 read tools at the connector
+seam. These gaps mean the **PortfolioDataSource is non-trivial normalization
+logic**, which was the key input to ADR-0001 below.
 
 ## 4. Freshness (concrete, observed)
 
@@ -177,10 +181,9 @@ what exercising PDT tells us:
   logic is the `PortfolioDataSource` (joins, FX, freshness, derive raise/cut,
   filter closed) — and it is pure and language-agnostic.
 
-**Conclusion: there is now enough evidence to decide.** The choice is no longer
-gated by unknown PDT feasibility; it is a packaging preference. Recommendation
-stands at **Option A (native Swift, mcporter = research/dev tool only)** for a
-bar-first single-language app, because (a) nothing in PDT requires a TS runtime
-and (b) the shapes decode cleanly in Swift. Option B remains reasonable only if
-the team wants to reuse this normalization layer as shipped TypeScript. The ADR
-can move from *Proposed* to *Accepted* in grilling on this basis.
+**Conclusion: ADR-0001 is accepted.** The choice is no longer gated by unknown
+PDT feasibility; it is a packaging preference. Accepted path: **Option A
+(native Swift, mcporter = research/dev tool only)** for a bar-first
+single-language app, because (a) nothing in PDT requires a TS runtime and (b)
+the shapes decode cleanly in Swift. Option B remains reasonable only if the team
+later chooses to reuse this normalization layer as shipped TypeScript.

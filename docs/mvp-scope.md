@@ -1,21 +1,24 @@
 # MVP Scope — the first slice
 
-The goal of v1 is to **prove the pressure engine with the smallest possible build**: one real attention item, computed from real PDT data, rendered in the bar. Everything else expands from that working tracer bullet.
+The goal of v1 is to **prove the pressure engine with the smallest possible build**: Claude-first launch, one real attention item or all-quiet state computed from PDT data, and a menu-bar pulse rendered from the normalized model. Everything else expands from that working tracer bullet.
 
 ## The first slice (definition of done)
 
-**Connect to PDT → the engine emits the model (with at least one real attention item) → the bar renders it (glance + expand + a basic drill-down).**
+**Launch PDTBar with no arguments → probe Claude/PDT MCP → fetch required read-only PDT data → normalize and snapshot → the engine emits the model → the bar renders it (Concentration Stack icon, glance, expand, and basic drill-down).**
 
 Concretely, v1 is "done" when:
-- The app connects to PDT and pulls the relevant facet data.
+- The no-argument app path is the product path; fixture mode remains explicit `--fixture` developer tooling.
+- The app connects through Claude Desktop and the configured PDT MCP server, then pulls only the required read tools.
 - The engine computes pressure for the v1 facets and emits the structured model.
-- The bar shows the status item, the ranked attention item(s) at the glance, expansion to the supporting numbers, and an "all quiet" state.
+- The bar shows the Concentration Stack status icon, the ranked attention item(s) at the glance, expansion to the supporting numbers, and an "all quiet" state.
+- Setup, fetch, stale, and retryable failure states are covered without publishing fixture or partial data as real.
 
 ## Sequencing (do these in order)
 
-1. **Exercise the PDT MCP first.** Learn what's actually exposed, how fresh, and what's missing. The engine design is entirely downstream of this — don't design thresholds against assumed data.
-2. **Scope to 2–3 facets** (below) and get **one** attention item rendered end-to-end.
-3. **Then widen** — more facets, richer drill-down, tuning.
+1. **Exercise the PDT MCP first.** Done for v1 on 2026-06-22; keep `docs/pdt/portfolio-data-source.md` as the data-shape source unless live PDT changes.
+2. **Ship the Claude-only launch/fetch tracer.** No-argument launch, readiness probe, setup menu, first fetch, local snapshot, and returning-launch refresh are the product spine.
+3. **Scope to 2-3 facets** (below) and get one attention item or all-quiet pulse rendered end-to-end.
+4. **Then widen** — more facets, richer drill-down, tuning.
 
 ## v1 facet scope
 
@@ -45,6 +48,8 @@ The two hardest moments are day one and a calm day. Handle them deliberately:
 - Packaging / auto-update / distribution machinery (Sparkle, Homebrew).
 - Extra connectors (oracle, imsg, poltergeist).
 - A user-facing CLI (the engine emits JSON for testing; a CLI is a dev convenience, not a product surface).
+- Non-Claude login providers, Codex login, generic OAuth, pasted API keys/tokens, and raw MCP JSON.
+- mcporter as a shipped runtime path; it remains research/dev tooling unless a later ADR supersedes ADR-0001.
 
 ## One thing to actively consider un-deferring
 
