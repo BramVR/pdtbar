@@ -18,4 +18,4 @@ test:
 	./Scripts/test.sh
 
 check:
-	swift run pdtbar-checks
+	./Scripts/check.sh

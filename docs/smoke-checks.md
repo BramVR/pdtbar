@@ -37,6 +37,7 @@ not private screenshots or raw portfolio payloads.
 Normal deterministic gate:
 
 ```bash
+make check
 swift build
 swift run pdtbar-checks
 swift run pdtbar-smoke scripted-pdt-connector
@@ -48,6 +49,10 @@ swift run pdtbar-smoke real-claude-flow-ax
 # Optional once Tests/ exists; currently exits with "no tests found".
 swift test
 ```
+
+`make check` is bounded to local deterministic checks: script syntax, Swift
+build, `pdtbar-checks`, and the sharded Swift test runner. Live Claude/PDT,
+Keychain, 1Password, Accessibility, and packaged-app checks stay opt-in.
 
 Scripted Claude PDT connector e2e:
 
