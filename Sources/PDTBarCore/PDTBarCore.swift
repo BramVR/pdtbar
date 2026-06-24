@@ -463,19 +463,22 @@ public struct MenuRow: Codable, Equatable {
     public var accessibilityIdentifier: String
     public var title: String
     public var detail: String?
+    public var children: [MenuRow]
 
     public init(
         id: String = "",
         role: MenuRowRole = .row,
         accessibilityIdentifier: String? = nil,
         title: String,
-        detail: String? = nil
+        detail: String? = nil,
+        children: [MenuRow] = []
     ) {
         self.id = id
         self.role = role
         self.accessibilityIdentifier = accessibilityIdentifier ?? Self.defaultAccessibilityIdentifier(for: id)
         self.title = title
         self.detail = detail
+        self.children = children
     }
 
     enum CodingKeys: String, CodingKey {
@@ -484,6 +487,7 @@ public struct MenuRow: Codable, Equatable {
         case accessibilityIdentifier
         case title
         case detail
+        case children
     }
 
     public init(from decoder: Decoder) throws {
@@ -495,6 +499,7 @@ public struct MenuRow: Codable, Equatable {
             ?? Self.defaultAccessibilityIdentifier(for: id)
         title = try container.decode(String.self, forKey: .title)
         detail = try container.decodeIfPresent(String.self, forKey: .detail)
+        children = try container.decodeIfPresent([MenuRow].self, forKey: .children) ?? []
     }
 
     private static func defaultAccessibilityIdentifier(for id: String) -> String {
@@ -556,12 +561,20 @@ public struct MenuBarRowSurface: Codable, Equatable {
     public var role: MenuRowRole
     public var title: String
     public var accessibilityIdentifier: String
+    public var children: [MenuBarRowSurface]
 
-    public init(id: String, role: MenuRowRole, title: String, accessibilityIdentifier: String) {
+    public init(
+        id: String,
+        role: MenuRowRole,
+        title: String,
+        accessibilityIdentifier: String,
+        children: [MenuBarRowSurface] = []
+    ) {
         self.id = id
         self.role = role
         self.title = title
         self.accessibilityIdentifier = accessibilityIdentifier
+        self.children = children
     }
 }
 
@@ -709,7 +722,8 @@ public enum ClaudeLaunchFlow {
                         MenuRow(
                             id: "portfolioFetch.probing",
                             role: .fetchStatus,
-                            title: "Checking Claude setup"
+                            title: "Checking Claude setup",
+                            detail: "Keeping last pulse visible"
                         ),
                     ]
                 )
@@ -720,7 +734,8 @@ public enum ClaudeLaunchFlow {
                         MenuRow(
                             id: "portfolioFetch.refreshing",
                             role: .fetchStatus,
-                            title: "Refreshing portfolio"
+                            title: "Refreshing portfolio",
+                            detail: "Keeping last pulse visible"
                         ),
                     ]
                 )
@@ -746,7 +761,8 @@ public enum ClaudeLaunchFlow {
                             MenuRow(
                                 id: "claudeSetup.probing",
                                 role: .setupProbe,
-                                title: "Checking Claude setup"
+                                title: "Checking Claude setup",
+                                detail: "No prompts opened"
                             ),
                         ]
                     ),
@@ -765,7 +781,8 @@ public enum ClaudeLaunchFlow {
                             MenuRow(
                                 id: "claudeSetup.opening",
                                 role: .setupStatus,
-                                title: "Opening Claude Desktop"
+                                title: "Opening Claude Desktop",
+                                detail: "Finish setup there"
                             ),
                         ]
                     ),
@@ -788,7 +805,8 @@ public enum ClaudeLaunchFlow {
                             MenuRow(
                                 id: "claudeSetup.probeFailed",
                                 role: .setupFailure,
-                                title: "Could not check Claude"
+                                title: "Could not check Claude",
+                                detail: "Claude setup can be checked again"
                             ),
                             MenuRow(
                                 id: "claudeSetup.login",
@@ -810,7 +828,8 @@ public enum ClaudeLaunchFlow {
                             MenuRow(
                                 id: "portfolioFetch.status",
                                 role: .fetchStatus,
-                                title: "Fetching portfolio"
+                                title: "Fetching portfolio",
+                                detail: "Read-only through Claude"
                             ),
                         ]
                     ),
@@ -850,7 +869,8 @@ public enum ClaudeLaunchFlow {
             MenuRow(
                 id: "portfolioFetch.failed",
                 role: .fetchStatus,
-                title: "Could not fetch portfolio"
+                title: "Could not fetch portfolio",
+                detail: "No partial pulse published"
             ),
             MenuRow(
                 id: "portfolioFetch.retry",
@@ -873,7 +893,8 @@ public enum ClaudeSetupMenuDescriptor {
                         MenuRow(
                             id: "claudeSetup.status",
                             role: .setupStatus,
-                            title: "Not connected"
+                            title: "Not connected",
+                            detail: "Use Claude Desktop for PDT"
                         ),
                         MenuRow(
                             id: "claudeSetup.login",
@@ -897,7 +918,8 @@ public enum ClaudeSetupMenuDescriptor {
                         MenuRow(
                             id: "claudeSetup.missingClaude",
                             role: .setupFailure,
-                            title: "Claude Desktop not found"
+                            title: "Claude Desktop not found",
+                            detail: "Install or open Claude Desktop"
                         ),
                         MenuRow(
                             id: "claudeSetup.login",
@@ -921,7 +943,8 @@ public enum ClaudeSetupMenuDescriptor {
                         MenuRow(
                             id: "claudeSetup.status",
                             role: .setupStatus,
-                            title: "Not connected"
+                            title: "Not connected",
+                            detail: "Sign in with Claude Desktop"
                         ),
                         MenuRow(
                             id: "claudeSetup.login",
@@ -950,7 +973,8 @@ public enum ClaudeSetupMenuDescriptor {
                         MenuRow(
                             id: "claudeSetup.missingPDTMCP",
                             role: .setupFailure,
-                            title: "Add the PDT MCP server in Claude Desktop"
+                            title: "Add the PDT MCP server in Claude Desktop",
+                            detail: "Then check again"
                         ),
                         MenuRow(
                             id: "claudeSetup.retry",
@@ -982,16 +1006,19 @@ public enum MenuBarSurfaceRenderer {
                     id: section.id,
                     title: section.title,
                     accessibilityIdentifier: section.accessibilityIdentifier,
-                    rows: section.rows.map { row in
-                        MenuBarRowSurface(
-                            id: row.id,
-                            role: row.role,
-                            title: row.detail.map { "\(row.title) - \($0)" } ?? row.title,
-                            accessibilityIdentifier: row.accessibilityIdentifier
-                        )
-                    }
+                    rows: section.rows.map(renderRow)
                 )
             }
+        )
+    }
+
+    private static func renderRow(_ row: MenuRow) -> MenuBarRowSurface {
+        MenuBarRowSurface(
+            id: row.id,
+            role: row.role,
+            title: row.detail.map { "\(row.title) - \($0)" } ?? row.title,
+            accessibilityIdentifier: row.accessibilityIdentifier,
+            children: row.children.map(renderRow)
         )
     }
 }
@@ -1011,25 +1038,35 @@ public enum MenuDescriptorRenderer {
                     id: "pulse.quiet",
                     role: .pulseQuiet,
                     title: model.allQuietSignal.title,
-                    detail: model.allQuietSignal.detail
+                    detail: model.allQuietSignal.detail,
+                    children: [
+                        MenuRow(
+                            id: "pulse.quiet.value",
+                            title: "Value",
+                            detail: display(model.portfolioGlance.totalValue)
+                        ),
+                        MenuRow(
+                            id: "pulse.quiet.holdings",
+                            title: "Open holdings",
+                            detail: "\(model.portfolioGlance.openHoldingCount)"
+                        ),
+                        MenuRow(
+                            id: "pulse.quiet.freshness",
+                            title: "Latest prices",
+                            detail: model.portfolioGlance.worstPriceAsOf ?? "Unknown"
+                        ),
+                    ]
                 ),
             ]
         } else {
-            pulseRows = model.rankedAttentionItems.prefix(maxPulseAttentionItems).flatMap { item in
-                [
-                    MenuRow(
-                        id: "\(item.id).glance",
-                        role: .pulseAttention,
-                        title: item.title,
-                        detail: item.detail
-                    ),
-                    MenuRow(
-                        id: "\(item.id).expansion",
-                        role: .pulseAttentionExpansion,
-                        title: "\(item.facet) severity \(item.severity)",
-                        detail: supportDetail(for: item)
-                    ),
-                ]
+            pulseRows = model.rankedAttentionItems.prefix(maxPulseAttentionItems).map { item in
+                MenuRow(
+                    id: "\(item.id).glance",
+                    role: .pulseAttention,
+                    title: item.title,
+                    detail: item.detail,
+                    children: attentionChildren(for: item, supportingDataSlots: model.supportingDataSlots)
+                )
             }
         }
 
@@ -1059,7 +1096,8 @@ public enum MenuDescriptorRenderer {
                             id: "allocation.\(holding.quoteId)",
                             role: drillDownDetail == nil ? .allocationHolding : .allocationDrillDown,
                             title: holding.name,
-                            detail: drillDownDetail ?? "\(percent(holding.weight)) of portfolio"
+                            detail: drillDownDetail ?? "\(percent(holding.weight)) of portfolio",
+                            children: allocationChildren(for: holding, attention: attention)
                         )
                     }
                 ),
@@ -1072,7 +1110,7 @@ public enum MenuDescriptorRenderer {
                                 id: "income.empty",
                                 role: .incomeEmpty,
                                 title: "No income events",
-                                detail: "No calendar events in fixture"
+                                detail: "No calendar events in the next window"
                             ),
                         ]
                         : income.upcomingEvents.map {
@@ -1080,7 +1118,8 @@ public enum MenuDescriptorRenderer {
                                 id: incomeRowID(for: $0),
                                 role: $0.amount == nil ? .incomeEvent : .incomeDrillDown,
                                 title: $0.symbolName,
-                                detail: incomeDetail(for: $0)
+                                detail: incomeDetail(for: $0),
+                                children: incomeChildren(for: $0)
                             )
                         }
                 ),
@@ -1092,7 +1131,7 @@ public enum MenuDescriptorRenderer {
                             id: "bigMovers.summary",
                             role: .bigMoverSummary,
                             title: bigMovers.maxMove.map { "Quote \($0.quoteId)" } ?? "No big movers",
-                            detail: bigMovers.maxMove.map { "\(percent($0.percentChange)) over fixture window" }
+                            detail: bigMovers.maxMove.map { "\(percent($0.percentChange)) over recent window" }
                                 ?? "\(bigMovers.priceSeriesCount) price rows checked"
                         ),
                     ]
@@ -1111,6 +1150,85 @@ public enum MenuDescriptorRenderer {
                 ),
             ]
         )
+    }
+
+    private static func attentionChildren(
+        for item: AttentionItem,
+        supportingDataSlots: [SupportingDataSlot]
+    ) -> [MenuRow] {
+        var rows = [
+            MenuRow(
+                id: "\(item.id).severity",
+                role: .pulseAttentionExpansion,
+                title: "Pressure",
+                detail: "\(item.facet) \(item.severity); score \(decimalString(String(item.score), places: 2))"
+            ),
+        ]
+        if let detail = supportDetail(for: item) {
+            rows.append(
+                MenuRow(
+                    id: "\(item.id).readout",
+                    role: .pulseAttentionExpansion,
+                    title: "Readout",
+                    detail: detail
+                )
+            )
+        }
+        if !item.supportingDataSlotIDs.isEmpty {
+            let slotLabelsByID = supportingDataSlots.reduce(into: [String: String]()) { labelsByID, slot in
+                labelsByID[slot.id] = slot.label
+            }
+            let labels = item.supportingDataSlotIDs.map { slotLabelsByID[$0] ?? $0 }
+            rows.append(
+                MenuRow(
+                    id: "\(item.id).sources",
+                    role: .pulseAttentionExpansion,
+                    title: "Sources",
+                    detail: labels.joined(separator: ", ")
+                )
+            )
+        }
+        return rows
+    }
+
+    private static func allocationChildren(for holding: HoldingSummary, attention: AttentionItem?) -> [MenuRow] {
+        var rows = [
+            MenuRow(
+                id: "allocation.\(holding.quoteId).weight",
+                title: "Weight",
+                detail: "\(bar(fraction: holding.weight)) \(percent(holding.weight))"
+            ),
+            MenuRow(
+                id: "allocation.\(holding.quoteId).worth",
+                title: "Worth",
+                detail: display(holding.worth)
+            ),
+        ]
+        if let attention,
+           let threshold = attention.threshold
+        {
+            rows.append(
+                MenuRow(
+                    id: "allocation.\(holding.quoteId).line",
+                    title: "Concentration line",
+                    detail: percent(threshold)
+                )
+            )
+        }
+        return rows
+    }
+
+    private static func incomeChildren(for event: IncomeEventSummary) -> [MenuRow] {
+        [
+            MenuRow(id: "\(incomeRowID(for: event)).date", title: "Date", detail: event.date),
+            MenuRow(id: "\(incomeRowID(for: event)).kind", title: "Kind", detail: event.kind),
+            event.amount.map {
+                MenuRow(id: "\(incomeRowID(for: event)).amount", title: "Amount", detail: display($0))
+            },
+            event.changePercent.map {
+                MenuRow(id: "\(incomeRowID(for: event)).change", title: "Change", detail: signedPercent($0))
+            },
+        ].compactMap { $0 }
     }
 
     private static func supportDetail(for item: AttentionItem) -> String? {
@@ -1137,7 +1255,7 @@ public enum MenuDescriptorRenderer {
         else {
             return "score \(decimalString(String(item.score), places: 2))"
         }
-        return "\(percent(currentWeight)) current weight; \(percent(threshold)) threshold; score \(decimalString(String(item.score), places: 2))"
+        return "\(bar(fraction: currentWeight)) \(percent(currentWeight)); line \(percent(threshold))"
     }
 
     private static func incomeDetail(for event: IncomeEventSummary) -> String {
@@ -1150,6 +1268,13 @@ public enum MenuDescriptorRenderer {
             ?? event.symbolId.map { "symbol.\($0)" }
             ?? "portfolio"
         return "income.\(identity).\(event.kind).\(event.date)"
+    }
+
+    private static func bar(fraction: Double) -> String {
+        let width = 10
+        let clamped = max(0.0, min(1.0, fraction))
+        let filled = Int((clamped * Double(width)).rounded())
+        return "[\(String(repeating: "#", count: filled))\(String(repeating: "-", count: width - filled))]"
     }
 }
 
@@ -1209,7 +1334,7 @@ public enum PressureEngine {
             allQuiet: rankedItems.isEmpty,
             allQuietSignal: AllQuietSignal(
                 title: "All quiet",
-                detail: "No ranked attention items from the fixture.",
+                detail: "No attention items right now.",
                 totalValue: totalValue
             ),
             rankedAttentionItems: rankedItems,

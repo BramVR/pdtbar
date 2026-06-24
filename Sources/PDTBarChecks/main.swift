@@ -98,7 +98,7 @@ try check(
     "Claude probing state should have distinct status copy"
 )
 try check(
-    probingSurface.sections.flatMap(\.rows).map(\.title) == ["Checking Claude setup"],
+    probingSurface.sections.flatMap(\.rows).map(\.title) == ["Checking Claude setup - No prompts opened"],
     "Claude probing state should not show login UI yet"
 )
 try check(
@@ -156,7 +156,7 @@ try check(
     "logged-out real launch should render a Claude-only setup section"
 )
 try check(
-    setupSurface.sections.flatMap(\.rows).map(\.title) == ["Not connected", "Log in with Claude"],
+    setupSurface.sections.flatMap(\.rows).map(\.title) == ["Not connected - Use Claude Desktop for PDT", "Log in with Claude"],
     "logged-out real launch should render Claude setup status and login rows"
 )
 try check(
@@ -228,8 +228,13 @@ try check(
 )
 try check(
     launchSurface.sections.first { $0.id == "pulse" }?.rows.first?.title
-        == "All quiet - No ranked attention items from the fixture.",
-    "fixture launch surface should render row title and detail for AppKit menu rows"
+        == "All quiet - No attention items right now.",
+    "fixture launch surface should render product-facing row title and detail for AppKit menu rows"
+)
+try check(
+    descriptor.sections.first { $0.id == "pulse" }?.rows.first?.children.map(\.id)
+        == ["pulse.quiet.value", "pulse.quiet.holdings", "pulse.quiet.freshness"],
+    "quiet pulse row should expose compact nested readouts"
 )
 try check(
     descriptor.sections.map(\.accessibilityIdentifier) == [
@@ -253,6 +258,10 @@ try check(
 try check(
     descriptor.sections.first { $0.id == "income" }?.rows.map(\.id) == ["income.empty"],
     "quiet income rows should expose stable ids"
+)
+try check(
+    descriptor.sections.first { $0.id == "income" }?.rows.first?.detail == "No calendar events in the next window",
+    "quiet income empty state should avoid developer fixture copy"
 )
 try check(
     descriptor.sections.first { $0.id == "bigMovers" }?.rows.map(\.id) == ["bigMovers.summary"],
@@ -365,6 +374,10 @@ try check(
     nonQuietDescriptor.statusTitle == "EUR 51,200.00 - Nova concentration",
     "non-quiet descriptor should use the top attention item in status"
 )
+try check(
+    nonQuietDescriptor.sections.first { $0.id == "pulse" }?.rows.first?.children.isEmpty == false,
+    "attention pulse rows should expose nested drill-down readouts instead of flat expansion rows"
+)
 
 let legacyAttention = try JSONDecoder().decode(
     AttentionItem.self,
@@ -432,6 +445,30 @@ try check(
         && incompleteAllocationRow.detail == "11.7% of portfolio",
     "allocation drill-down should fall back when current weight or threshold is missing"
 )
+
+let userFacingDescriptors = [
+    setupDescriptor,
+    openingClaudeDescriptor,
+    missingClaudeDescriptor,
+    probingDescriptor,
+    firstFetchDescriptor,
+    probeFailedDescriptor,
+    fetchFailedDescriptor,
+    missingLoginDescriptor,
+    missingPDTMCPDescriptor,
+    descriptor,
+    nonQuietDescriptor,
+]
+let forbiddenVisibleTerms = ["codex", "oauth", "api key", "token", "fixture", "mcporter"]
+for visibleText in userFacingDescriptors.flatMap(visibleMenuText) {
+    let lowered = visibleText.lowercased()
+    for term in forbiddenVisibleTerms {
+        try check(
+            !lowered.contains(term),
+            "Claude-first menu copy should not expose \(term): \(visibleText)"
+        )
+    }
+}
 
 let concentrationFixture = packageRoot.appending(path: "docs/pdt/fixtures/concentration-pressure.json")
 let snapshotDirectory = FileManager.default.temporaryDirectory
@@ -820,8 +857,10 @@ try check(!bigMoverItem.detail.localizedCaseInsensitiveContains("should"), "big-
 let bigMoverExpansion = try require(
     bigMoverRun.descriptor.sections.first { $0.id == "pulse" }?
         .rows
-        .first { $0.id == "bigMovers.move.9001.expansion" },
-    "descriptor should expose big-mover expansion row"
+        .first { $0.id == "bigMovers.move.9001.glance" }?
+        .children
+        .first { $0.id == "bigMovers.move.9001.readout" },
+    "descriptor should expose big-mover expansion row as a nested readout"
 )
 try check(
     bigMoverExpansion.detail == "EUR 545.00 -> EUR 612.40; move +12.4%; score 0.62",
@@ -863,8 +902,10 @@ try check(!incomeItem.detail.localizedCaseInsensitiveContains("should"), "income
 let incomeExpansion = try require(
     incomeRun.descriptor.sections.first { $0.id == "pulse" }?
         .rows
-        .first { $0.id == "income.ex-dividend.9003.expansion" },
-    "descriptor should expose income expansion row"
+        .first { $0.id == "income.ex-dividend.9003.glance" }?
+        .children
+        .first { $0.id == "income.ex-dividend.9003.readout" },
+    "descriptor should expose income expansion row as a nested readout"
 )
 try check(
     incomeExpansion.detail == "2026-06-24; EUR 78.00; score 0.45",
@@ -1004,12 +1045,14 @@ try check(
 )
 try check(
     concentrationSurface.sections.first { $0.id == "pulse" }?.rows.map(\.role)
-        == [.pulseAttention, .pulseAttentionExpansion],
-    "fixture launch surface should include pulse drill-down entries"
+        == [.pulseAttention],
+    "fixture launch surface should keep attention items compact at the top level"
 )
 try check(
-    concentrationRun.descriptor.sections.first?.rows.map(\.role) == [.pulseAttention, .pulseAttentionExpansion],
-    "descriptor should expose pulse attention and expansion rows"
+    concentrationRun.descriptor.sections.first?.rows.first?.children.contains {
+        $0.role == .pulseAttentionExpansion
+    } == true,
+    "descriptor should expose pulse attention expansion rows as a nested drill-down"
 )
 let allocationRows = concentrationRun.descriptor.sections.first { $0.id == "allocation" }?.rows ?? []
 let allocationDrillDownRow = allocationRows.first {
@@ -1293,10 +1336,20 @@ private func renderedCopy(from model: PortfolioPulseModel, descriptor: MenuDescr
     })
     copy.append(contentsOf: model.supportingDataSlots.map(\.label))
     copy.append(contentsOf: descriptor.sections.map(\.title))
-    copy.append(contentsOf: descriptor.sections.flatMap(\.rows).flatMap {
-        [$0.title, $0.detail]
-    })
+    copy.append(contentsOf: descriptor.sections.flatMap { visibleMenuText($0.rows) })
     return copy.compactMap { $0 }.filter { !$0.isEmpty }
+}
+
+private func visibleMenuText(_ descriptor: MenuDescriptor) -> [String] {
+    [descriptor.statusTitle] + descriptor.sections.flatMap { section in
+        [section.title] + visibleMenuText(section.rows)
+    }
+}
+
+private func visibleMenuText(_ rows: [MenuRow]) -> [String] {
+    rows.flatMap { row in
+        [row.title, row.detail].compactMap { $0 } + visibleMenuText(row.children)
+    }
 }
 
 private func containsAdviceLikeLanguage(_ value: String) -> Bool {
