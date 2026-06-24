@@ -271,6 +271,7 @@ public struct AllocationSnapshot: Codable, Equatable {
     public var topHoldings: [HoldingSummary]
     public var sectorBreakdown: [DistributionSummary]
     public var assetTypeBreakdown: [DistributionSummary]
+    public var xRayHoldings: [XRayHoldingSummary]?
 }
 
 public struct HoldingSummary: Codable, Equatable {
@@ -284,6 +285,14 @@ public struct DistributionSummary: Codable, Equatable {
     public var name: String
     public var percentage: Double
     public var totalValue: Money
+}
+
+public struct XRayHoldingSummary: Codable, Equatable {
+    public var weight: Double
+
+    public init(weight: Double) {
+        self.weight = weight
+    }
 }
 
 public struct IncomeSnapshot: Codable, Equatable {
@@ -349,7 +358,7 @@ public struct StatusVisualState: Codable, Equatable {
     public var statusCopy: String
 
     public init(
-        barHeights: [Double] = [0.58, 0.78, 0.64],
+        barHeights: [Double] = [0.38, 0.55, 0.38],
         filledBarCount: Int = 0,
         isDimmed: Bool = false,
         statusCopy: String = ""
@@ -373,7 +382,7 @@ public struct StatusVisualState: Codable, Equatable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
-            barHeights: try container.decodeIfPresent([Double].self, forKey: .barHeights) ?? [0.58, 0.78, 0.64],
+            barHeights: try container.decodeIfPresent([Double].self, forKey: .barHeights) ?? [0.38, 0.55, 0.38],
             filledBarCount: try container.decodeIfPresent(Int.self, forKey: .filledBarCount) ?? 0,
             isDimmed: try container.decodeIfPresent(Bool.self, forKey: .isDimmed) ?? false,
             statusCopy: try container.decodeIfPresent(String.self, forKey: .statusCopy) ?? ""
@@ -1254,14 +1263,21 @@ public enum MenuDescriptorRenderer {
     }
 
     private static func concentrationBarHeights(from allocation: AllocationSnapshot) -> [Double] {
-        let weights = allocation.topHoldings.prefix(3).map(\.weight)
-        guard let maxWeight = weights.max(), maxWeight > 0 else {
+        let xRayWeights = (allocation.xRayHoldings ?? []).map(\.weight).filter { $0 > 0 }
+        let usesXRay = !xRayWeights.isEmpty
+        let weights = usesXRay
+            ? xRayWeights
+            : allocation.topHoldings.map(\.weight).filter { $0 > 0 }
+        guard !weights.isEmpty else {
             return StatusVisualState().barHeights
         }
-        let heights = weights.map { weight in
-            rounded(0.35 + (0.65 * (weight / maxWeight)), places: 3)
-        }
-        return StatusVisualState(barHeights: heights).barHeights
+        let hhi = weights.reduce(0.0) { $0 + ($1 * $1) }
+        let diversifiedHHI = usesXRay ? 1.0 / 25.0 : 1.0 / 12.0
+        let concentratedHHI = usesXRay ? 0.16 : 0.12
+        let pressure = max(0.0, min(1.0, (hhi - diversifiedHHI) / (concentratedHHI - diversifiedHHI)))
+        let sideHeight = 0.38
+        let middleHeight = rounded(0.55 + (0.45 * pressure), places: 3)
+        return [sideHeight, middleHeight, sideHeight]
     }
 
     private static func attentionChildren(
@@ -1471,7 +1487,8 @@ public enum PressureEngine {
                             )
                         },
                     sectorBreakdown: snapshot.sectors,
-                    assetTypeBreakdown: snapshot.assetTypes
+                    assetTypeBreakdown: snapshot.assetTypes,
+                    xRayHoldings: snapshot.xRayHoldings
                 ),
                 income: IncomeSnapshot(
                     upcomingEvents: snapshot.incomeEvents.sorted { $0.date < $1.date },
@@ -1769,6 +1786,7 @@ public enum PDTReadTools {
     public static let requiredV1 = [
         "pdt-get-portfolio-holdings",
         "pdt-get-portfolio-distributions",
+        "pdt-list-x-ray-holdings",
         "pdt-list-calendar-events",
         "pdt-list-dividends",
         "pdt-list-symbol-prices",
@@ -2109,6 +2127,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             "pdt-get-portfolio-distributions",
             data: toolClient.callReadTool("pdt-get-portfolio-distributions", arguments: [:])
         )
+        let xRayHoldings = try liveXRayHoldings()
         let calendarEnvelope: LiveCalendarEventsEnvelope = try decodeLiveTool(
             "pdt-list-calendar-events",
             data: toolClient.callReadTool("pdt-list-calendar-events", arguments: incomeDateRange)
@@ -2141,6 +2160,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             openHoldings: openHoldings,
             sectors: distributionsEnvelope.sectors.map(\.summary),
             assetTypes: distributionsEnvelope.assetTypes.map(\.summary),
+            xRayHoldings: xRayHoldings,
             incomeEvents: calendarEnvelope.data.filter { $0.type != "no-events-today" }.map {
                 let quoteId = $0.symbolId.flatMap { quoteIDsBySymbolID[$0] }
                 let amount = $0.type == "ex-dividend" && !$0.isEstimated
@@ -2173,6 +2193,28 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             idsBySymbolID[quote.symbolId] = quote.id
         }
         return idsBySymbolID
+    }
+
+    private func liveXRayHoldings() throws -> [XRayHoldingSummary] {
+        let limit = 500
+        var offset = 0
+        var holdings: [XRayHoldingSummary] = []
+        while true {
+            let envelope: XRayHoldingsEnvelope = try decodeLiveTool(
+                "pdt-list-x-ray-holdings",
+                data: toolClient.callReadTool(
+                    "pdt-list-x-ray-holdings",
+                    arguments: ["limit": String(limit), "offset": String(offset)]
+                )
+            )
+            holdings.append(contentsOf: envelope.items.map {
+                XRayHoldingSummary(weight: normalizedXRayPortfolioWeight($0.weight))
+            })
+            guard envelope.hasMore == true, !envelope.items.isEmpty else {
+                return holdings
+            }
+            offset += limit
+        }
     }
 
     private func liveDividends(arguments baseArguments: [String: String]) throws -> [LiveDividend] {
@@ -2312,6 +2354,7 @@ public struct PortfolioSnapshot: Codable, Equatable {
     public var openHoldings: [NormalizedHolding]
     public var sectors: [DistributionSummary]
     public var assetTypes: [DistributionSummary]
+    public var xRayHoldings: [XRayHoldingSummary]?
     public var incomeEvents: [IncomeEventSummary]
     public var dividendRowCount: Int
     public var priceSeries: [PricePoint]
@@ -2423,6 +2466,7 @@ public struct PDTFixtureDataSource: PortfolioDataSource, PortfolioPriorSnapshotD
             openHoldings: holdings,
             sectors: (payload.getPortfolioDistributions?.sectors ?? []).map(\.summary),
             assetTypes: (payload.getPortfolioDistributions?.assetTypes ?? []).map(\.summary),
+            xRayHoldings: payload.listXRayHoldings?.items.map { XRayHoldingSummary(weight: normalizedXRayPortfolioWeight($0.weight)) },
             incomeEvents: payload.listCalendarEvents?.data.map {
                 let quoteId = $0.symbolId.flatMap { quoteIDsBySymbolID[$0] }
                 let amount = $0.type == "ex-dividend" && !$0.isEstimated
@@ -2492,6 +2536,7 @@ private struct PDTFixturePayload: Decodable {
     var getPortfolioHoldingsCurrent: HoldingsEnvelope?
     var getPortfolioPriorSnapshot: HoldingsEnvelope?
     var getPortfolioDistributions: DistributionsEnvelope?
+    var listXRayHoldings: XRayHoldingsEnvelope?
     var listCalendarEvents: CalendarEventsEnvelope?
     var listDividends: DividendsEnvelope?
     var listSymbolPrices: PricesEnvelope?
@@ -2515,6 +2560,7 @@ private struct PDTFixturePayload: Decodable {
         case getPortfolioHoldingsCurrent
         case getPortfolioPriorSnapshot
         case getPortfolioDistributions
+        case listXRayHoldings
         case listCalendarEvents
         case listDividends
         case listSymbolPrices
@@ -2535,6 +2581,15 @@ private struct LiveHolding: Decodable {
     var currentWorthLocal: Money
     var portfolioWeight: Double
     var closedAt: String?
+}
+
+private struct XRayHoldingsEnvelope: Decodable {
+    var items: [XRayHolding]
+    var hasMore: Bool?
+}
+
+private struct XRayHolding: Decodable {
+    var weight: Double
 }
 
 private struct LiveDistributionsEnvelope: Decodable {
@@ -2808,6 +2863,10 @@ private func display(_ money: Money) -> String {
 
 private func percent(_ value: Double) -> String {
     "\(decimalString(String(value * 100), places: 1))%"
+}
+
+private func normalizedXRayPortfolioWeight(_ value: Double) -> Double {
+    value / 100.0
 }
 
 private func signedPercent(_ value: Double) -> String {

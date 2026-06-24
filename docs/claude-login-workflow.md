@@ -36,6 +36,7 @@ The first fetch calls only required v1 PDT read tools through the Claude/PDT MCP
 
 - `pdt-get-portfolio-holdings`
 - `pdt-get-portfolio-distributions`
+- `pdt-list-x-ray-holdings`
 - `pdt-list-calendar-events`
 - `pdt-list-dividends`
 - `pdt-list-symbol-prices`
@@ -49,7 +50,8 @@ Returning launches may render the previous real snapshot immediately while a fre
 
 The menu bar always shows the Concentration Stack icon. It is a stable portfolio mark, not top-three holdings and not a mini dashboard:
 
-- bar heights: concentration/allocation shape from core facts
+- bar heights: fixed side bars with a middle bar scaled by whole-portfolio concentration
+- concentration shape prefers X-ray look-through weights, then direct holding weights
 - filled bars: ranked attention item count, capped at three
 - zero attention: no filled bars
 - no separate round notification dot
