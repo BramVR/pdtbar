@@ -194,29 +194,41 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             heading.isEnabled = false
             menu.addItem(heading)
             for row in section.rows {
-                let item = NSMenuItem(title: row.title, action: nil, keyEquivalent: "")
-                if !row.accessibilityIdentifier.isEmpty {
-                    item.identifier = NSUserInterfaceItemIdentifier(row.accessibilityIdentifier)
-                    item.setAccessibilityIdentifier(row.accessibilityIdentifier)
-                }
-                if row.role == .fetchRetry {
-                    item.target = self
-                    item.action = #selector(retryPortfolioFetch(_:))
-                }
-                if row.role == .setupRetry {
-                    item.target = self
-                    item.action = #selector(retryClaudeReadiness(_:))
-                }
-                if row.role == .setupLogin {
-                    item.target = self
-                    item.action = #selector(loginWithClaude(_:))
-                }
-                menu.addItem(item)
+                menu.addItem(makeMenuItem(from: row))
             }
             menu.addItem(.separator())
         }
         menu.addItem(NSMenuItem(title: "Quit PDTBar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         return menu
+    }
+
+    private func makeMenuItem(from row: MenuBarRowSurface) -> NSMenuItem {
+        let item = NSMenuItem(title: row.title, action: nil, keyEquivalent: "")
+        if !row.accessibilityIdentifier.isEmpty {
+            item.identifier = NSUserInterfaceItemIdentifier(row.accessibilityIdentifier)
+            item.setAccessibilityIdentifier(row.accessibilityIdentifier)
+        }
+        if row.children.isEmpty {
+            if row.role == .fetchRetry {
+                item.target = self
+                item.action = #selector(retryPortfolioFetch(_:))
+            }
+            if row.role == .setupRetry {
+                item.target = self
+                item.action = #selector(retryClaudeReadiness(_:))
+            }
+            if row.role == .setupLogin {
+                item.target = self
+                item.action = #selector(loginWithClaude(_:))
+            }
+        } else {
+            let submenu = NSMenu()
+            for child in row.children {
+                submenu.addItem(makeMenuItem(from: child))
+            }
+            item.submenu = submenu
+        }
+        return item
     }
 }
 

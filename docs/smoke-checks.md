@@ -225,3 +225,13 @@ Fixture-rendered proof, usable when TCC blocks macOS UI capture:
 ```bash
 swift run pdtbar-smoke fixture-proof --fixture docs/pdt/fixtures/quiet-no-pressure.json
 ```
+
+Menu polish proof for PR review:
+
+```bash
+swift run pdtbar-smoke menu-polish-proof --output docs/smoke/menu-polish-proof.svg
+```
+
+This renders sanitized setup, fetching, all-quiet, pressure, and retryable-error
+menu cards from the same descriptors used by the app and AX smoke. It contains
+only fixture/scripted copy and no live portfolio payloads.

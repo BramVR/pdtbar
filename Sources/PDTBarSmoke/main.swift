@@ -54,6 +54,8 @@ do {
         report = try realUserPulseSmoke(arguments: Array(arguments.dropFirst()))
     case "fixture-proof":
         report = try fixtureProof(arguments: Array(arguments.dropFirst()))
+    case "menu-polish-proof":
+        report = try menuPolishProof(arguments: Array(arguments.dropFirst()))
     default:
         throw CommandError.usage
     }
@@ -77,6 +79,7 @@ do {
       pdtbar-smoke peekaboo [--peekaboo <path>] [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>]
       pdtbar-smoke real-user-pulse [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke fixture-proof [--fixture <path>] [--output <path>]
+      pdtbar-smoke menu-polish-proof [--output <path>]
 
     """.utf8))
     Foundation.exit(64)
@@ -463,7 +466,7 @@ private func realClaudeFlowAXSmoke(arguments: [String]) throws -> SmokeReport {
             configuration: quietConfiguration,
             descriptor: quietExpectedRun.descriptor,
             targetMode: .pulse,
-            expectedTexts: ["All quiet - No ranked attention items from the fixture.", "No income events"],
+            expectedTexts: ["All quiet - No attention items right now.", "No income events"],
             expectedSnapshotAsOf: "2026-03-29"
         ),
         try realClaudeFlowAXScenario(
@@ -1898,6 +1901,37 @@ private func fixtureProof(arguments: [String]) throws -> SmokeReport {
     )
 }
 
+private func menuPolishProof(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
+    let output = options.output ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts/pdtbar-menu-polish-proof.svg")
+    let quietDescriptor = MenuDescriptorRenderer.render(
+        model: PressureEngine.buildModel(from: try PDTFixtureDataSource(fixture: defaultFixture).snapshot())
+    )
+    let pressureStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-menu-polish-pressure")
+    defer {
+        try? FileManager.default.removeItem(at: pressureStore.directory)
+    }
+    let pressureDescriptor = try PressureRunner.run(
+        fixture: packageRoot.appending(path: "docs/pdt/fixtures/concentration-pressure.json"),
+        snapshotDirectory: pressureStore.directory
+    ).descriptor
+    let cards = [
+        MenuProofCard(title: "Setup", descriptor: ClaudeLaunchFlow.descriptor(for: .missingClaudeLogin)),
+        MenuProofCard(title: "Fetching", descriptor: ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio)),
+        MenuProofCard(title: "All quiet", descriptor: quietDescriptor),
+        MenuProofCard(title: "Pressure", descriptor: pressureDescriptor),
+        MenuProofCard(title: "Error", descriptor: ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed)),
+    ]
+    try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try menuProofSVG(cards: cards).write(to: output, atomically: true, encoding: .utf8)
+    return SmokeReport(
+        name: "menu-polish-proof",
+        status: SmokeStatus.passed,
+        detail: "rendered sanitized setup/fetching/all-quiet/pressure/error menu proof",
+        artifacts: [artifactPath(output)]
+    )
+}
+
 private struct PulseScenario {
     var run: PressureRunResult
     var seededPrior: SnapshotCommit?
@@ -1929,7 +1963,7 @@ private func requiredPulseMenuTargets(in surface: MenuBarSurface) -> [PulseTarge
         }
         targets.append(PulseTarget(accessibilityIdentifier: section.accessibilityIdentifier, title: section.title))
         for row in section.rows {
-            targets.append(PulseTarget(accessibilityIdentifier: row.accessibilityIdentifier, title: row.title))
+            targets.append(contentsOf: requiredMenuTargets(for: row))
         }
     }
 
@@ -1939,10 +1973,13 @@ private func requiredPulseMenuTargets(in surface: MenuBarSurface) -> [PulseTarge
 private func requiredSetupMenuTargets(in surface: MenuBarSurface) -> [PulseTarget] {
     surface.sections.flatMap { section in
         [PulseTarget(accessibilityIdentifier: section.accessibilityIdentifier, title: section.title)]
-            + section.rows.map {
-                PulseTarget(accessibilityIdentifier: $0.accessibilityIdentifier, title: $0.title)
-            }
+            + section.rows.flatMap(requiredMenuTargets)
     }
+}
+
+private func requiredMenuTargets(for row: MenuBarRowSurface) -> [PulseTarget] {
+    [PulseTarget(accessibilityIdentifier: row.accessibilityIdentifier, title: row.title)]
+        + row.children.flatMap(requiredMenuTargets)
 }
 
 private struct AccessibilitySnapshot: Codable {
@@ -3429,6 +3466,89 @@ private func fixtureProofSVG(descriptor: MenuDescriptor) -> String {
     </svg>
 
     """
+}
+
+private struct MenuProofCard {
+    var title: String
+    var descriptor: MenuDescriptor
+}
+
+private func menuProofSVG(cards: [MenuProofCard]) -> String {
+    let cardWidth = 520
+    let cardHeight = 330
+    let gap = 24
+    let columns = 2
+    let rows = Int(ceil(Double(cards.count) / Double(columns)))
+    let width = (cardWidth * columns) + (gap * (columns + 1))
+    let height = (cardHeight * rows) + (gap * (rows + 1))
+    let cardMarkup = cards.enumerated().map { index, card in
+        let column = index % columns
+        let row = index / columns
+        let x = gap + column * (cardWidth + gap)
+        let y = gap + row * (cardHeight + gap)
+        return menuProofCardSVG(card: card, x: x, y: y, width: cardWidth, height: cardHeight)
+    }.joined(separator: "\n")
+
+    return """
+    <svg xmlns="http://www.w3.org/2000/svg" width="\(width)" height="\(height)" viewBox="0 0 \(width) \(height)">
+      <rect width="100%" height="100%" fill="#f5f5f0"/>
+      \(cardMarkup)
+      <style>
+        .card { fill: #ffffff; stroke: #d7d3c8; }
+        .status { fill: #18202a; }
+        .label { font: 700 13px -apple-system, BlinkMacSystemFont, sans-serif; fill: #5b6470; }
+        .statusText { font: 700 15px -apple-system, BlinkMacSystemFont, sans-serif; fill: #ffffff; }
+        .section { font: 700 13px -apple-system, BlinkMacSystemFont, sans-serif; fill: #18202a; }
+        .row { font: 13px -apple-system, BlinkMacSystemFont, sans-serif; fill: #2e3742; }
+        .child { font: 12px -apple-system, BlinkMacSystemFont, sans-serif; fill: #697386; }
+      </style>
+    </svg>
+
+    """
+}
+
+private func menuProofCardSVG(card: MenuProofCard, x: Int, y: Int, width: Int, height: Int) -> String {
+    let visibleRows = menuProofRows(descriptor: card.descriptor).prefix(10)
+    let rowsMarkup = visibleRows.enumerated().map { offset, row in
+        let className = row.isChild ? "child" : (row.isSection ? "section" : "row")
+        let indent = row.isChild ? 22 : 0
+        return "<text x=\"\(x + 22 + indent)\" y=\"\(y + 104 + offset * 20)\" class=\"\(className)\">\(escape(proofText(row.text, limit: row.isChild ? 62 : 66)))</text>"
+    }.joined(separator: "\n")
+    return """
+      <g>
+        <rect x="\(x)" y="\(y)" width="\(width)" height="\(height)" rx="8" class="card"/>
+        <text x="\(x + 18)" y="\(y + 28)" class="label">\(escape(card.title))</text>
+        <rect x="\(x + 16)" y="\(y + 42)" width="\(width - 32)" height="34" rx="7" class="status"/>
+        <text x="\(x + 30)" y="\(y + 64)" class="statusText">\(escape(proofText(card.descriptor.statusTitle, limit: 54)))</text>
+        \(rowsMarkup)
+      </g>
+    """
+}
+
+private struct MenuProofRow {
+    var text: String
+    var isSection: Bool
+    var isChild: Bool
+}
+
+private func menuProofRows(descriptor: MenuDescriptor) -> [MenuProofRow] {
+    descriptor.sections.flatMap { section in
+        [MenuProofRow(text: section.title, isSection: true, isChild: false)]
+            + section.rows.flatMap { menuProofRows(row: $0, depth: 0) }
+    }
+}
+
+private func menuProofRows(row: MenuRow, depth: Int) -> [MenuProofRow] {
+    let title = row.detail.map { "\(row.title) - \($0)" } ?? row.title
+    return [MenuProofRow(text: title, isSection: false, isChild: depth > 0)]
+        + row.children.flatMap { menuProofRows(row: $0, depth: depth + 1) }
+}
+
+private func proofText(_ value: String, limit: Int) -> String {
+    if value.count <= limit {
+        return value
+    }
+    return String(value.prefix(max(0, limit - 3))) + "..."
 }
 
 private func escape(_ value: String) -> String {
