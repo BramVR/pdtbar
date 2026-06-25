@@ -1190,9 +1190,9 @@ public enum MenuDescriptorRenderer {
                         }
                         let drillDownDetail = attention.flatMap { item -> String? in
                             guard let currentWeight = item.currentWeight,
-                                  let threshold = item.threshold
+                                  item.threshold != nil
                             else { return nil }
-                            return "\(percent(currentWeight)); concentration line \(percent(threshold))"
+                            return percent(currentWeight)
                         }
                         return MenuRow(
                             id: "allocation.\(holding.quoteId)",

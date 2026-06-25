@@ -1245,7 +1245,7 @@ try check(
     "allocation drill-down should list every open holding"
 )
 try check(
-    allocationDrillDownRow?.detail == "24.2%; concentration line 20.0%",
+    allocationDrillDownRow?.detail == "24.2%",
     "descriptor should expose allocation drill-down for the item"
 )
 try check(
