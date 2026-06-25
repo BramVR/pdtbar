@@ -2214,8 +2214,8 @@ public enum PressureEngine {
             guard let priorHolding = priorHoldings[holding.quoteId],
                   let priorPrice = priorHolding.price,
                   let price = holding.price,
-                  let beforeDecimal = Decimal(string: priorPrice.value),
-                  let afterDecimal = Decimal(string: price.value),
+                  let beforeDecimal = posixDecimal(priorPrice.value),
+                  let afterDecimal = posixDecimal(price.value),
                   beforeDecimal != 0
             else { return nil }
 
@@ -3612,22 +3612,27 @@ private func averageBuyPrice(explicit: Money?, total: Money?, shares: Double?) -
     guard let total = validMoney(total),
           let shares = finite(shares),
           shares > 0,
-          let totalValue = Decimal(string: total.value, locale: Locale(identifier: "en_US_POSIX"))
+          let totalValue = posixDecimal(total.value),
+          let shareValue = posixDecimal(String(shares))
     else {
         return nil
     }
-    let average = totalValue / Decimal(shares)
+    let average = totalValue / shareValue
     return Money(value: canonicalDecimalString(average, places: 4), currency: total.currency)
 }
 
 private func validMoney(_ money: Money?) -> Money? {
     guard let money,
           !money.currency.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-          Decimal(string: money.value, locale: Locale(identifier: "en_US_POSIX")) != nil
+          posixDecimal(money.value) != nil
     else {
         return nil
     }
     return money
+}
+
+private func posixDecimal(_ value: String) -> Decimal? {
+    Decimal(string: value, locale: Locale(identifier: "en_US_POSIX"))
 }
 
 private func finite(_ value: Double?) -> Double? {

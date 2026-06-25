@@ -63,7 +63,7 @@ Holding
   isin:           String?
   weight:         Weight          // PDT portfolioWeight
   worth:          Money           // PDT currentWorthLocal (portfolio currency)
-  price:          Money           // PDT currentPriceLocal (portfolio currency)
+  price:          Money?          // PDT currentPriceLocal when present and parseable
   averageBuyPrice: Money?         // PDT unrealisedBoughtPriceAverageLocal, or total/shares fallback
   gainLoss:       Money?          // PDT unrealisedGains for the current open position
   gainLossPct:    Double?         // PDT unrealisedGainsPercentage for the current open position
