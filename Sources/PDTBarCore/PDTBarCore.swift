@@ -334,6 +334,149 @@ public struct IncomeEventSummary: Codable, Equatable {
     }
 }
 
+public struct IncomeCalendarIntent: Codable, Equatable {
+    public var asOf: String
+    public var summary: IncomeCalendarSummary
+    public var nextEvent: IncomeEventSummary?
+    public var events: [IncomeEventSummary]
+
+    public var isEmpty: Bool {
+        events.isEmpty
+    }
+}
+
+public struct IncomeCalendarSummary: Codable, Equatable {
+    public var eventCount: Int
+    public var confirmedCount: Int
+    public var estimatedCount: Int
+    public var windowStart: String
+    public var windowEnd: String?
+}
+
+public enum IncomeCalendar {
+    public static func build(events: [IncomeEventSummary], asOf: String) -> IncomeCalendarIntent {
+        let sortedEvents = events
+            .filter { isIncomeCalendarKind($0.kind) }
+            .filter { $0.date >= asOf }
+            .sorted(by: ranksBefore)
+        return IncomeCalendarIntent(
+            asOf: asOf,
+            summary: IncomeCalendarSummary(
+                eventCount: sortedEvents.count,
+                confirmedCount: sortedEvents.filter { !$0.estimated }.count,
+                estimatedCount: sortedEvents.filter(\.estimated).count,
+                windowStart: asOf,
+                windowEnd: sortedEvents.map(\.date).max()
+            ),
+            nextEvent: sortedEvents.first,
+            events: sortedEvents
+        )
+    }
+
+    private static func ranksBefore(_ lhs: IncomeEventSummary, _ rhs: IncomeEventSummary) -> Bool {
+        if lhs.date != rhs.date {
+            return lhs.date < rhs.date
+        }
+        let lhsPriority = eventPriority(lhs.kind)
+        let rhsPriority = eventPriority(rhs.kind)
+        if lhsPriority != rhsPriority {
+            return lhsPriority < rhsPriority
+        }
+        if lhs.symbolName != rhs.symbolName {
+            return lhs.symbolName < rhs.symbolName
+        }
+        return incomeEventRowID(for: lhs) < incomeEventRowID(for: rhs)
+    }
+
+    private static func eventPriority(_ kind: String) -> Int {
+        switch kind {
+        case "ex-dividend":
+            return 0
+        case "payment-dividend":
+            return 1
+        default:
+            return 2
+        }
+    }
+
+    private static func isIncomeCalendarKind(_ kind: String) -> Bool {
+        kind == "ex-dividend" || kind == "payment-dividend"
+    }
+}
+
+public enum IncomeCalendarDescriptor {
+    public static func rows(for intent: IncomeCalendarIntent) -> [MenuRow] {
+        guard let nextEvent = intent.nextEvent else {
+            return [
+                MenuRow(
+                    id: "income.empty",
+                    role: .incomeEmpty,
+                    title: "No income events",
+                    detail: "No calendar events in the next window"
+                ),
+            ]
+        }
+
+        return [
+            MenuRow(
+                id: "income.summary",
+                role: .incomeSummary,
+                title: "Income window",
+                detail: summaryDetail(for: intent.summary)
+            ),
+            MenuRow(
+                id: "income.next",
+                role: .incomeNext,
+                title: "Next income: \(nextEvent.symbolName)",
+                detail: incomeEventDetail(for: nextEvent),
+                children: incomeEventChildren(for: nextEvent)
+            ),
+        ]
+    }
+
+    private static func summaryDetail(for summary: IncomeCalendarSummary) -> String {
+        guard summary.eventCount > 0 else {
+            return "No calendar events in the next window"
+        }
+
+        let eventWord = summary.eventCount == 1 ? "event" : "events"
+        let window = summary.windowEnd.map { " through \($0)" } ?? ""
+        if summary.estimatedCount == 0 {
+            return "\(summary.confirmedCount) confirmed \(eventWord)\(window)"
+        }
+        if summary.confirmedCount == 0 {
+            return "\(summary.estimatedCount) estimated \(eventWord)\(window)"
+        }
+        return "\(summary.eventCount) \(eventWord)\(window); \(summary.confirmedCount) confirmed, \(summary.estimatedCount) estimated"
+    }
+}
+
+private func incomeEventChildren(for event: IncomeEventSummary) -> [MenuRow] {
+    [
+        MenuRow(id: "\(incomeEventRowID(for: event)).date", title: "Date", detail: event.date),
+        MenuRow(id: "\(incomeEventRowID(for: event)).kind", title: "Kind", detail: event.kind),
+        MenuRow(id: "\(incomeEventRowID(for: event)).state", title: "State", detail: event.estimated ? "Estimated" : "Confirmed"),
+        event.amount.map {
+            MenuRow(id: "\(incomeEventRowID(for: event)).amount", title: "Amount", detail: display($0))
+        },
+        event.changePercent.map {
+            MenuRow(id: "\(incomeEventRowID(for: event)).change", title: "Change", detail: signedPercent($0))
+        },
+    ].compactMap { $0 }
+}
+
+private func incomeEventDetail(for event: IncomeEventSummary) -> String {
+    let amount = event.amount.map { "; \(display($0))" } ?? ""
+    return "\(event.kind) on \(event.date)\(amount)"
+}
+
+private func incomeEventRowID(for event: IncomeEventSummary) -> String {
+    let identity = event.quoteId.map { "quote.\($0)" }
+        ?? event.symbolId.map { "symbol.\($0)" }
+        ?? "portfolio"
+    return "income.\(identity).\(event.kind).\(event.date)"
+}
+
 public struct BigMoversSnapshot: Codable, Equatable {
     public var priceSeriesCount: Int
     public var maxMove: PriceMoveSummary?
@@ -503,6 +646,8 @@ public enum MenuRowRole: String, Codable, Equatable {
     case allocationHolding
     case allocationDrillDown
     case incomeEmpty
+    case incomeSummary
+    case incomeNext
     case incomeEvent
     case incomeDrillDown
     case bigMoverSummary
@@ -1206,24 +1351,9 @@ public enum MenuDescriptorRenderer {
                 MenuSection(
                     id: "income",
                     title: "Income",
-                    rows: income.upcomingEvents.isEmpty
-                        ? [
-                            MenuRow(
-                                id: "income.empty",
-                                role: .incomeEmpty,
-                                title: "No income events",
-                                detail: "No calendar events in the next window"
-                            ),
-                        ]
-                        : income.upcomingEvents.map {
-                            MenuRow(
-                                id: incomeRowID(for: $0),
-                                role: $0.amount == nil ? .incomeEvent : .incomeDrillDown,
-                                title: $0.symbolName,
-                                detail: incomeDetail(for: $0),
-                                children: incomeChildren(for: $0)
-                            )
-                        }
+                    rows: IncomeCalendarDescriptor.rows(
+                        for: IncomeCalendar.build(events: income.upcomingEvents, asOf: model.asOf)
+                    )
                 ),
                 MenuSection(
                     id: "bigMovers",
@@ -1346,19 +1476,6 @@ public enum MenuDescriptorRenderer {
         return rows
     }
 
-    private static func incomeChildren(for event: IncomeEventSummary) -> [MenuRow] {
-        [
-            MenuRow(id: "\(incomeRowID(for: event)).date", title: "Date", detail: event.date),
-            MenuRow(id: "\(incomeRowID(for: event)).kind", title: "Kind", detail: event.kind),
-            event.amount.map {
-                MenuRow(id: "\(incomeRowID(for: event)).amount", title: "Amount", detail: display($0))
-            },
-            event.changePercent.map {
-                MenuRow(id: "\(incomeRowID(for: event)).change", title: "Change", detail: signedPercent($0))
-            },
-        ].compactMap { $0 }
-    }
-
     private static func supportDetail(for item: AttentionItem) -> String? {
         if item.facet == "income",
            let eventDate = item.eventDate
@@ -1384,18 +1501,6 @@ public enum MenuDescriptorRenderer {
             return "score \(decimalString(String(item.score), places: 2))"
         }
         return "\(bar(fraction: currentWeight)) \(percent(currentWeight)); line \(percent(threshold))"
-    }
-
-    private static func incomeDetail(for event: IncomeEventSummary) -> String {
-        let amount = event.amount.map { "; \(display($0))" } ?? ""
-        return "\(event.kind) on \(event.date)\(amount)"
-    }
-
-    private static func incomeRowID(for event: IncomeEventSummary) -> String {
-        let identity = event.quoteId.map { "quote.\($0)" }
-            ?? event.symbolId.map { "symbol.\($0)" }
-            ?? "portfolio"
-        return "income.\(identity).\(event.kind).\(event.date)"
     }
 
     private static func bar(fraction: Double) -> String {

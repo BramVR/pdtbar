@@ -77,7 +77,7 @@ do {
       pdtbar-smoke real-claude-flow-ax [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]
       pdtbar-smoke peekaboo [--peekaboo <path>] [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>]
-      pdtbar-smoke real-user-pulse [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
+      pdtbar-smoke real-user-pulse [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
       pdtbar-smoke fixture-proof [--fixture <path>] [--output <path>]
       pdtbar-smoke menu-polish-proof [--output <path>]
 
@@ -1793,6 +1793,9 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
     let expectedMenuIdentifiers = Set(expectedTargets.map(\.accessibilityIdentifier))
     let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
     try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let screenshotPeekaboo = peekabooScreenshotTool(
+        options.peekaboo ?? URL(fileURLWithPath: "/opt/homebrew/bin/peekaboo")
+    )
 
     let preflightSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "real-user-pulse-preflight")
     let appReport = try packagedAppSmoke(arguments: [
@@ -1876,12 +1879,21 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         )
     }
 
+    movePointerToNeutralMenuArea(in: menuSnapshot)
+    let screenshot = try? captureRealUserMenuScreenshot(
+        snapshot: menuSnapshot,
+        expectedMenuIdentifiers: expectedMenuIdentifiers,
+        artifacts: artifacts,
+        peekaboo: screenshotPeekaboo
+    )
     let priorDetail = expectedScenario.seededPrior.map { "; seeded prior snapshot \($0.asOf)" } ?? ""
+    let screenshotDetail = screenshot == nil ? "" : "; captured menu screenshot"
+    let reportArtifacts = [artifactPath(evidence)] + (screenshot.map { [artifactPath($0)] } ?? [])
     return SmokeReport(
         name: "real-user-pulse",
         status: SmokeStatus.passed,
-        detail: "launched fixture-mode app with isolated state\(priorDetail), opened menu-bar pulse through \(openedMenu.successfulAttempt ?? "Accessibility"), and verified status plus pulse/allocation/income/big-mover/freshness selectors for \(fixture.lastPathComponent)",
-        artifacts: [artifactPath(evidence)]
+        detail: "launched fixture-mode app with isolated state\(priorDetail), opened menu-bar pulse through \(openedMenu.successfulAttempt ?? "Accessibility"), verified status plus pulse/allocation/income/big-mover/freshness selectors for \(fixture.lastPathComponent)\(screenshotDetail)",
+        artifacts: reportArtifacts
     )
 }
 
@@ -1985,6 +1997,25 @@ private func requiredMenuTargets(for row: MenuBarRowSurface) -> [PulseTarget] {
 private struct AccessibilitySnapshot: Codable {
     var identifiers: Set<String>
     var texts: Set<String>
+    var framesByIdentifier: [String: AccessibilityFrame]
+}
+
+private struct AccessibilityFrame: Codable {
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+
+    init(rect: CGRect) {
+        x = Double(rect.minX)
+        y = Double(rect.minY)
+        width = Double(rect.width)
+        height = Double(rect.height)
+    }
+
+    var rect: CGRect {
+        CGRect(x: x, y: y, width: width, height: height)
+    }
 }
 
 private struct OpenMenuResult {
@@ -1998,6 +2029,7 @@ private struct AccessibilityEvidence: Codable {
     var statusText: [String]
     var expected: [PulseTargetEvidence]
     var observedIdentifiers: [String]
+    var observedFramesByIdentifier: [String: AccessibilityFrame]
     var observedTexts: [String]
 }
 
@@ -2287,13 +2319,16 @@ private func findAccessibilityElement(in root: AXUIElement, identifier: String) 
 }
 
 private func accessibilitySnapshot(in root: AXUIElement) -> AccessibilitySnapshot {
-    var snapshot = AccessibilitySnapshot(identifiers: [], texts: [])
+    var snapshot = AccessibilitySnapshot(identifiers: [], texts: [], framesByIdentifier: [:])
     var stack = [root]
     var visited = 0
     while let element = stack.popLast(), visited < 800 {
         visited += 1
         if let identifier = accessibilityString(element, "AXIdentifier"), !identifier.isEmpty {
             snapshot.identifiers.insert(identifier)
+            if let frame = accessibilityFrame(of: element) {
+                snapshot.framesByIdentifier[identifier] = AccessibilityFrame(rect: frame)
+            }
         }
         for text in accessibilityTexts(in: element) {
             snapshot.texts.insert(text)
@@ -2301,6 +2336,173 @@ private func accessibilitySnapshot(in root: AXUIElement) -> AccessibilitySnapsho
         stack.append(contentsOf: accessibilityChildren(of: element))
     }
     return snapshot
+}
+
+private func captureRealUserMenuScreenshot(
+    snapshot: AccessibilitySnapshot,
+    expectedMenuIdentifiers: Set<String>,
+    artifacts: URL,
+    peekaboo: URL?
+) throws -> URL? {
+    guard let peekaboo else {
+        return nil
+    }
+    let rawScreenshot = artifacts.appending(path: "pdtbar-real-user-pulse-screen.png")
+    let screenshot = artifacts.appending(path: "pdtbar-real-user-pulse-menu.png")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let menuBounds = menuFrameBounds(snapshot: snapshot, expectedMenuIdentifiers: expectedMenuIdentifiers)
+    let displayBounds = displayBounds(containing: menuBounds)
+    let displayRegion = "\(Int(displayBounds.minX)),\(Int(displayBounds.minY)),\(Int(displayBounds.width)),\(Int(displayBounds.height))"
+    _ = try run(
+        peekaboo,
+        arguments: [
+            "image",
+            "--mode", "area",
+            "--region", displayRegion,
+            "--path", rawScreenshot.path,
+            "--json",
+            "--no-remote",
+        ],
+        timeout: 20
+    )
+    try cropMenuScreenshot(
+        rawScreenshot,
+        to: screenshot,
+        snapshot: snapshot,
+        expectedMenuIdentifiers: expectedMenuIdentifiers,
+        displayBounds: displayBounds
+    )
+    try? FileManager.default.removeItem(at: rawScreenshot)
+    return screenshot
+}
+
+private func movePointerToNeutralMenuArea(in snapshot: AccessibilitySnapshot) {
+    let neutralIdentifiers = [
+        "pdtbar.section.income",
+        "pdtbar.section.pulse",
+        "pdtbar.section.allocation",
+    ]
+    guard let rect = neutralIdentifiers.compactMap({ snapshot.framesByIdentifier[$0]?.rect }).first else {
+        return
+    }
+    moveMouse(to: CGPoint(x: rect.minX + 24, y: rect.midY))
+    Thread.sleep(forTimeInterval: 0.2)
+}
+
+private func peekabooScreenshotTool(_ peekaboo: URL) -> URL? {
+    guard FileManager.default.isExecutableFile(atPath: peekaboo.path) else {
+        return nil
+    }
+    guard let permissionJSON = try? run(peekaboo, arguments: ["permissions", "--json"], timeout: 15).stdout else {
+        return nil
+    }
+    guard requiredMissingPermissions(from: permissionJSON)?.isEmpty == true else {
+        return nil
+    }
+    return peekaboo
+}
+
+private func cropMenuScreenshot(
+    _ source: URL,
+    to destination: URL,
+    snapshot: AccessibilitySnapshot,
+    expectedMenuIdentifiers: Set<String>,
+    displayBounds: CGRect
+) throws {
+    let dimensions = try imageDimensions(of: source)
+    let scaleX = Double(dimensions.width) / max(Double(displayBounds.width), 1)
+    let scaleY = Double(dimensions.height) / max(Double(displayBounds.height), 1)
+    let fallback = CGRect(
+        x: max(0, Double(dimensions.width - min(dimensions.width, 1700) - 20)),
+        y: 20,
+        width: Double(min(dimensions.width, 1700)),
+        height: Double(min(dimensions.height, 760))
+    )
+    let sourceRect: CGRect
+    if let bounds = menuFrameBounds(snapshot: snapshot, expectedMenuIdentifiers: expectedMenuIdentifiers) {
+        let minX = bounds.minX
+        let minY = bounds.minY - 8
+        let maxX = bounds.maxX + 40
+        let maxY = bounds.maxY + 48
+        sourceRect = CGRect(
+            x: Double(minX - displayBounds.minX) * scaleX,
+            y: Double(minY - displayBounds.minY) * scaleY,
+            width: Double(maxX - minX) * scaleX,
+            height: Double(maxY - minY) * scaleY
+        )
+    } else {
+        sourceRect = fallback
+    }
+    let imageRect = CGRect(x: 0, y: 0, width: dimensions.width, height: dimensions.height)
+    let candidate = sourceRect.intersection(imageRect)
+    let clamped = candidate.isNull || candidate.isEmpty ? fallback.intersection(imageRect) : candidate
+    guard !clamped.isNull, !clamped.isEmpty else {
+        throw CommandError.commandFailed("sips", "", "empty screenshot crop")
+    }
+    let width = max(1, Int(clamped.width.rounded(.up)))
+    let height = max(1, Int(clamped.height.rounded(.up)))
+    let offsetX = max(0, Int(clamped.minX.rounded(.down)))
+    let offsetY = max(0, Int(clamped.minY.rounded(.down)))
+    try? FileManager.default.removeItem(at: destination)
+    try FileManager.default.copyItem(at: source, to: destination)
+    _ = try run(
+        URL(fileURLWithPath: "/usr/bin/sips"),
+        arguments: [
+            "-c", "\(height)", "\(width)",
+            "--cropOffset", "\(offsetY)", "\(offsetX)",
+            destination.path,
+        ],
+        timeout: 20
+    )
+}
+
+private func menuFrameBounds(
+    snapshot: AccessibilitySnapshot,
+    expectedMenuIdentifiers: Set<String>
+) -> CGRect? {
+    expectedMenuIdentifiers
+        .compactMap { snapshot.framesByIdentifier[$0]?.rect }
+        .filter { !$0.isNull && !$0.isEmpty && $0.width > 0 && $0.height > 0 }
+        .reduce(nil as CGRect?) { partial, rect in partial?.union(rect) ?? rect }
+}
+
+private func displayBounds(containing rect: CGRect?) -> CGRect {
+    guard let rect, !rect.isNull, !rect.isEmpty else {
+        return CGDisplayBounds(CGMainDisplayID())
+    }
+    var displayCount: UInt32 = 0
+    guard CGGetActiveDisplayList(0, nil, &displayCount) == .success, displayCount > 0 else {
+        return CGDisplayBounds(CGMainDisplayID())
+    }
+    var displays = Array(repeating: CGDirectDisplayID(), count: Int(displayCount))
+    guard CGGetActiveDisplayList(displayCount, &displays, &displayCount) == .success else {
+        return CGDisplayBounds(CGMainDisplayID())
+    }
+    return displays
+        .prefix(Int(displayCount))
+        .map { CGDisplayBounds($0) }
+        .max { left, right in
+            left.intersection(rect).area < right.intersection(rect).area
+        } ?? CGDisplayBounds(CGMainDisplayID())
+}
+
+private func imageDimensions(of image: URL) throws -> (width: Int, height: Int) {
+    let output = try run(
+        URL(fileURLWithPath: "/usr/bin/sips"),
+        arguments: [
+            "-g", "pixelWidth",
+            "-g", "pixelHeight",
+            image.path,
+        ],
+        timeout: 20
+    ).stdout
+    let text = String(data: output, encoding: .utf8) ?? ""
+    let width = text.dimensionValue(for: "pixelWidth")
+    let height = text.dimensionValue(for: "pixelHeight")
+    guard let width, let height else {
+        throw CommandError.commandFailed("sips", text, "missing image dimensions")
+    }
+    return (width, height)
 }
 
 private func accessibilityTexts(in element: AXUIElement) -> Set<String> {
@@ -2333,6 +2535,15 @@ private func accessibilityCenter(of element: AXUIElement) -> CGPoint? {
         return nil
     }
     return CGPoint(x: position.x + (size.width / 2), y: position.y + (size.height / 2))
+}
+
+private func accessibilityFrame(of element: AXUIElement) -> CGRect? {
+    guard let position = accessibilityCGPoint(element, "AXPosition"),
+          let size = accessibilityCGSize(element, "AXSize")
+    else {
+        return nil
+    }
+    return CGRect(origin: position, size: size)
 }
 
 private func accessibilityCGPoint(_ element: AXUIElement, _ attribute: String) -> CGPoint? {
@@ -2376,6 +2587,12 @@ private func click(point: CGPoint) {
     up?.post(tap: .cghidEventTap)
 }
 
+private func moveMouse(to point: CGPoint) {
+    let source = CGEventSource(stateID: .hidSystemState)
+    let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)
+    move?.post(tap: .cghidEventTap)
+}
+
 private func format(point: CGPoint) -> String {
     let x = String(format: "%.1f", point.x)
     let y = String(format: "%.1f", point.y)
@@ -2417,6 +2634,7 @@ private func writeAccessibilityEvidence(
             )
         },
         observedIdentifiers: snapshot.identifiers.sorted(),
+        observedFramesByIdentifier: snapshot.framesByIdentifier,
         observedTexts: snapshot.texts.sorted()
     )
     let encoder = JSONEncoder()
@@ -3628,6 +3846,27 @@ private func writeReport(_ report: SmokeReport) throws {
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     FileHandle.standardOutput.write(try encoder.encode(report))
     FileHandle.standardOutput.write(Data("\n".utf8))
+}
+
+private extension String {
+    func dimensionValue(for key: String) -> Int? {
+        split(separator: "\n").compactMap { line -> Int? in
+            let parts = line.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 2, parts[0] == key else {
+                return nil
+            }
+            return Int(parts[1])
+        }.first
+    }
+}
+
+private extension CGRect {
+    var area: CGFloat {
+        guard !isNull, !isEmpty else {
+            return 0
+        }
+        return width * height
+    }
 }
 
 private enum CommandError: Error, CustomStringConvertible {

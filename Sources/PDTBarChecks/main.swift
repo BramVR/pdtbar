@@ -1077,18 +1077,31 @@ try check(
     "income descriptor should render date, amount, and score"
 )
 let incomeRows = incomeRun.descriptor.sections.first { $0.id == "income" }?.rows ?? []
-let incomeDrillDownRow = incomeRows.first {
-    $0.role == .incomeDrillDown && $0.title == "Helix Pharma A/S"
-}
 try check(
-    incomeDrillDownRow?.detail == "ex-dividend on 2026-06-24; EUR 78.00",
-    "income section should expand event date and amount support"
+    incomeRows.map(\.id) == ["income.summary", "income.next"],
+    "income section should render calendar summary and next-event rows"
 )
-let incomePaymentRow = incomeRows.first { $0.id == "income.quote.9003.payment-dividend.2026-07-10" }
+let incomeSummaryRow = incomeRows.first { $0.id == "income.summary" }
 try check(
-    incomePaymentRow?.role == .incomeEvent
-        && incomePaymentRow?.detail == "payment-dividend on 2026-07-10",
-    "income section should not attach historical amount to unrelated calendar events"
+    incomeSummaryRow?.role == .incomeSummary
+        && incomeSummaryRow?.title == "Income window"
+        && incomeSummaryRow?.detail == "4 events through 2026-07-10; 2 confirmed, 2 estimated",
+    "income section should summarize the calendar window"
+)
+let incomeNextRow = incomeRows.first { $0.id == "income.next" }
+try check(
+    incomeNextRow?.role == .incomeNext
+        && incomeNextRow?.title == "Next income: Lumen Luxury"
+        && incomeNextRow?.detail == "payment-dividend on 2026-06-22",
+    "income section should expose the next income event"
+)
+try check(
+    incomeNextRow?.children.map(\.id) == [
+        "income.symbol.5007.payment-dividend.2026-06-22.date",
+        "income.symbol.5007.payment-dividend.2026-06-22.kind",
+        "income.symbol.5007.payment-dividend.2026-06-22.state",
+    ],
+    "income next-event row should expose stable detail row ids"
 )
 try check(
     Set(incomeRows.map(\.id)).count == incomeRows.count,

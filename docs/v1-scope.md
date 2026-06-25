@@ -34,6 +34,7 @@ Pick the highest-signal, lowest-data-dependency facets first:
 
 - **Allocation / concentration** — a position's weight crosses a line (e.g. >20%, or drifted by >N points). *Absolute thresholds work on day one with no history; once prior state exists, repeat alerts require a fresh crossing from below the line.*
 - **Income events** — a dividend cut/raise, a payment landed, or an ex-dividend date within N days. *Mostly forward-looking calendar data.*
+  The Income menu stays browsable rather than alert-like: it summarizes the current income window, shows the next ex-dividend/payment event, and keeps Pulse limited to pressure-worthy income items.
 - **Big movers** — a holding moved more than X% over the window. *Needs a little history (see below).*
 
 Deferred facets: performance-vs-benchmark divergence, cash drag, corporate-action decisions — add after the first three work. (Cash drag is a cheap absolute-threshold add if PDT exposes cash readily.)
