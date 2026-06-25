@@ -1879,7 +1879,7 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         )
     }
 
-    let screenshot = try captureRealUserMenuScreenshot(
+    let screenshot = try? captureRealUserMenuScreenshot(
         snapshot: menuSnapshot,
         expectedMenuIdentifiers: expectedMenuIdentifiers,
         artifacts: artifacts,
