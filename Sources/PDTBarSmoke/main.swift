@@ -2396,7 +2396,7 @@ private func cropMenuScreenshot(
     let scaleY = Double(dimensions.height) / max(Double(displayBounds.height), 1)
     let frameRects = expectedMenuIdentifiers
         .compactMap { snapshot.framesByIdentifier[$0]?.rect }
-        .filter { !$0.isNull && !$0.isEmpty }
+        .filter { !$0.isNull && !$0.isEmpty && $0.width > 0 && $0.height > 0 }
     let fallback = CGRect(
         x: max(0, Double(dimensions.width - min(dimensions.width, 1700) - 20)),
         y: 20,
@@ -2406,12 +2406,15 @@ private func cropMenuScreenshot(
     let sourceRect: CGRect
     let bounds = frameRects.reduce(nil as CGRect?) { partial, rect in partial?.union(rect) ?? rect }
     if let bounds {
-        let padded = bounds.insetBy(dx: 0, dy: -8)
+        let minX = bounds.minX
+        let minY = bounds.minY - 8
+        let maxX = bounds.maxX + 40
+        let maxY = bounds.maxY + 48
         sourceRect = CGRect(
-            x: Double(padded.minX - displayBounds.minX) * scaleX,
-            y: Double(padded.minY - displayBounds.minY) * scaleY,
-            width: Double(padded.width) * scaleX,
-            height: Double(padded.height) * scaleY
+            x: Double(minX - displayBounds.minX) * scaleX,
+            y: Double(minY - displayBounds.minY) * scaleY,
+            width: Double(maxX - minX) * scaleX,
+            height: Double(maxY - minY) * scaleY
         )
     } else {
         sourceRect = fallback
