@@ -1078,8 +1078,14 @@ try check(
 )
 let incomeRows = incomeRun.descriptor.sections.first { $0.id == "income" }?.rows ?? []
 try check(
-    incomeRows.map(\.id) == ["income.summary", "income.next"],
-    "income section should render calendar summary and next-event rows"
+    incomeRows.map(\.id) == [
+        "income.summary",
+        "income.next",
+        "income.quote.9003.ex-dividend.2026-06-24",
+        "income.symbol.5009.ex-dividend.2026-07-02",
+        "income.overflow.later",
+    ],
+    "income section should render calendar summary, capped preview, and overflow rows"
 )
 let incomeSummaryRow = incomeRows.first { $0.id == "income.summary" }
 try check(
@@ -1103,9 +1109,18 @@ try check(
     ],
     "income next-event row should expose stable detail row ids"
 )
+let incomeOverflowRow = incomeRows.first { $0.id == "income.overflow.later" }
 try check(
-    Set(incomeRows.map(\.id)).count == incomeRows.count,
-    "income section should expose unique row ids"
+    incomeOverflowRow?.role == .incomeDrillDown
+        && incomeOverflowRow?.title == "Later"
+        && incomeOverflowRow?.children.map(\.id) == [
+            "income.overflow.later.income.quote.9003.payment-dividend.2026-07-10",
+        ],
+    "income overflow row should expose later events through native children"
+)
+try check(
+    Set(allRows(in: incomeRows).map(\.id)).count == allRows(in: incomeRows).count,
+    "income section should expose unique row ids recursively"
 )
 var unmappedIncomeSnapshot = try PDTFixtureDataSource.snapshot(from: incomeFixture)
 unmappedIncomeSnapshot.incomeEvents.append(
@@ -1160,6 +1175,69 @@ try check(correctionItem.amount == nil, "income item should not expose reversed 
 try check(
     correctionItem.detail == "Correction Corp has an ex-dividend date on 2026-06-24.",
     "income copy should omit corrected-away amounts"
+)
+
+var longIncomeModel = decoded
+longIncomeModel.asOf = "2026-06-22"
+longIncomeModel.facetSnapshots.income.upcomingEvents = [
+    IncomeEventSummary(date: "2026-06-22", kind: "payment-dividend", symbolName: "Anchor Pay A", estimated: false, quoteId: 9300),
+    IncomeEventSummary(date: "2026-06-22", kind: "payment-dividend", symbolName: "Anchor Pay B", estimated: false, quoteId: 9301),
+    IncomeEventSummary(date: "2026-06-22", kind: "payment-dividend", symbolName: "Anchor Pay C", estimated: false, quoteId: 9302),
+    IncomeEventSummary(date: "2026-06-22", kind: "payment-dividend", symbolName: "Overflow Next", estimated: false, quoteId: 9303),
+    IncomeEventSummary(date: "2026-06-23", kind: "ex-dividend", symbolName: "Near Ex", estimated: true, quoteId: 9304),
+    IncomeEventSummary(date: "2026-06-26", kind: "ex-dividend", symbolName: "Overflow Week", estimated: false, quoteId: 9305),
+    IncomeEventSummary(date: "2026-07-01", kind: "payment-dividend", symbolName: "Overflow Later", estimated: true, quoteId: 9306),
+]
+let longIncomeRows = MenuDescriptorRenderer.render(model: longIncomeModel)
+    .sections
+    .first { $0.id == "income" }?
+    .rows ?? []
+let longPreviewRows = longIncomeRows.filter { $0.role == .incomeNext || $0.role == .incomeEvent }
+let longOverflowRows = longIncomeRows.filter { $0.role == .incomeDrillDown }
+try check(
+    longPreviewRows.count == IncomeCalendarDescriptor.previewLimit,
+    "long income calendar should cap direct preview rows at the configured preview limit"
+)
+try check(
+    longOverflowRows.map(\.id) == ["income.overflow.next", "income.overflow.this-week", "income.overflow.later"],
+    "long income calendar should group overflow into next, this week, and later buckets"
+)
+try check(
+    longOverflowRows.first { $0.id == "income.overflow.next" }?.children.map(\.title) == ["Overflow Next"],
+    "long income calendar should anchor next overflow to the model as-of next event date"
+)
+try check(
+    longOverflowRows.first { $0.id == "income.overflow.this-week" }?.children.map(\.title) == ["Near Ex", "Overflow Week"],
+    "long income calendar should anchor this-week overflow to the model as-of week"
+)
+try check(
+    longOverflowRows.first { $0.id == "income.overflow.later" }?.children.map(\.title) == ["Overflow Later"],
+    "long income calendar should keep later overflow reachable"
+)
+let longIncomeAllRows = allRows(in: longIncomeRows)
+try check(
+    Set(longIncomeAllRows.map(\.id)).count == longIncomeAllRows.count,
+    "long income calendar should expose unique row ids recursively"
+)
+try check(
+    longIncomeAllRows.allSatisfy { !$0.id.isEmpty && $0.accessibilityIdentifier == "pdtbar.row.\($0.id)" },
+    "long income calendar should expose stable accessibility ids recursively"
+)
+var futureNextIncomeModel = longIncomeModel
+futureNextIncomeModel.facetSnapshots.income.upcomingEvents = [
+    IncomeEventSummary(date: "2026-07-01", kind: "payment-dividend", symbolName: "Future Pay A", estimated: false, quoteId: 9310),
+    IncomeEventSummary(date: "2026-07-01", kind: "payment-dividend", symbolName: "Future Pay B", estimated: false, quoteId: 9311),
+    IncomeEventSummary(date: "2026-07-01", kind: "payment-dividend", symbolName: "Future Pay C", estimated: false, quoteId: 9312),
+    IncomeEventSummary(date: "2026-07-01", kind: "payment-dividend", symbolName: "Future Pay D", estimated: false, quoteId: 9313),
+]
+let futureNextOverflowRows = MenuDescriptorRenderer.render(model: futureNextIncomeModel)
+    .sections
+    .first { $0.id == "income" }?
+    .rows
+    .filter { $0.role == .incomeDrillDown } ?? []
+try check(
+    futureNextOverflowRows.map(\.id) == ["income.overflow.next"],
+    "future next-date overflow should not duplicate into the later bucket"
 )
 
 let concentrationRun = try PressureRunner.run(
@@ -1562,6 +1640,12 @@ private func visibleMenuText(_ descriptor: MenuDescriptor) -> [String] {
 private func visibleMenuText(_ rows: [MenuRow]) -> [String] {
     rows.flatMap { row in
         [row.title, row.detail].compactMap { $0 } + visibleMenuText(row.children)
+    }
+}
+
+private func allRows(in rows: [MenuRow]) -> [MenuRow] {
+    rows.flatMap { row in
+        [row] + allRows(in: row.children)
     }
 }
 
