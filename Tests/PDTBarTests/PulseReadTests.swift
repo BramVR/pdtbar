@@ -88,6 +88,30 @@ struct PulseReadTests {
         #expect(cachedDescriptor.statusTitle.contains("All caught up"))
     }
 
+    @Test("Cached relaunch does not prune prior-dependent big-mover read state")
+    func cachedRelaunchDoesNotPruneBigMoverReadState() throws {
+        let fixture = packageRoot.appending(path: "docs/pdt/fixtures/big-mover.json")
+        let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-big-mover-read-relaunch-test")
+        let readStore = PulseReadStore(directory: snapshotStore.directory)
+        _ = try PressureRunner.seedPriorSnapshot(
+            dataSource: PDTFixtureDataSource(fixture: fixture),
+            snapshotStore: snapshotStore,
+            asOf: "2026-06-15"
+        )
+        let run = try PressureRunner.run(
+            dataSource: PDTFixtureDataSource(fixture: fixture),
+            snapshotStore: snapshotStore,
+            asOf: "2026-06-22",
+            pulseReadStore: readStore
+        )
+        let bigMover = try #require(run.model.rankedAttentionItems.first { $0.facet == "bigMovers" })
+
+        try readStore.markRead(bigMover.readFingerprint)
+        _ = try PressureRunner.cachedPulseDescriptor(snapshotStore: snapshotStore, pulseReadStore: readStore)
+
+        #expect(try readStore.load().contains(bigMover.readFingerprint))
+    }
+
     @Test("Fingerprints include facet material facts")
     func fingerprintsIncludeFacetMaterialFacts() throws {
         let concentration = try #require(
