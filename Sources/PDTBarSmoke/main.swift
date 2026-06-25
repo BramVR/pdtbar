@@ -1,6 +1,7 @@
 import ApplicationServices
 import AppKit
 import Foundation
+import ImageIO
 import PDTBarAppSupport
 import PDTBarCore
 
@@ -52,6 +53,8 @@ do {
         report = try readyLaunchSmoke(arguments: Array(arguments.dropFirst()))
     case "real-claude-flow-ax":
         report = try realClaudeFlowAXSmoke(arguments: Array(arguments.dropFirst()))
+    case "packaged-onboarding":
+        report = try packagedOnboardingSmoke(arguments: Array(arguments.dropFirst()))
     case "packaged-app":
         report = try packagedAppSmoke(arguments: Array(arguments.dropFirst()))
     case "peekaboo":
@@ -83,6 +86,7 @@ do {
       pdtbar-smoke logged-out-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke ready-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke real-claude-flow-ax [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
+      pdtbar-smoke packaged-onboarding [--app <path-to-PDTBar.app>] [--app-support-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
       pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]
       pdtbar-smoke peekaboo [--peekaboo <path>] [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>]
       pdtbar-smoke real-user-pulse [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
@@ -845,6 +849,289 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         name: "scripted-login-handoff",
         status: SmokeStatus.passed,
         detail: "Log in with Claude invoked scripted claude auth login only after menu click, superseded an in-flight auth retry, rechecked readiness once, started first fetch, and rendered failed-login state on login failure",
+        artifacts: [artifactPath(proof)]
+    )
+}
+
+private func packagedOnboardingSmoke(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
+    let appBundle = options.app ?? packageRoot.appending(path: "PDTBar.app")
+    guard appBundle.pathExtension == "app",
+          let app = appBundleExecutable(in: appBundle),
+          FileManager.default.isExecutableFile(atPath: app.path)
+    else {
+        return SmokeReport(
+            name: "packaged-onboarding",
+            status: SmokeStatus.failed,
+            detail: "packaged PDTBar.app missing; run ./Scripts/package_app.sh or pass --app <path-to-PDTBar.app>",
+            artifacts: []
+        )
+    }
+
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let proof = artifacts.appending(path: "pdtbar-packaged-onboarding-proof.json")
+    let appSupportDirectory = try options.isolatedAppSupportDirectory(prefix: "packaged-onboarding-app-support")
+    let fixtureSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "packaged-onboarding-fixture-sentinel")
+    let fixtureSnapshot = fixtureSnapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
+    let marker = appSupportDirectory.appending(path: "pdtbar/claude-handoff-started")
+    let result = appSupportDirectory.appending(path: "pdtbar/claude-handoff-result")
+    let probeLog = appSupportDirectory.appending(path: "pdtbar/readiness-probes.log")
+    let handoffScript = try writeHandoffScript(
+        in: appSupportDirectory,
+        name: "packaged-onboarding-handoff-success.sh",
+        delay: max(options.timeout, 1.0),
+        exitStatus: 0
+    )
+
+    var proofPayload = PackagedOnboardingProof(
+        appBundlePath: artifactPath(appBundle),
+        appExecutablePath: artifactPath(app),
+        appArguments: [],
+        appSupportPath: artifactPath(appSupportDirectory),
+        fixtureSnapshotPath: artifactPath(fixtureSnapshot),
+        fixtureEnvInjected: true,
+        fixtureSnapshotWritten: false,
+        accessibilityChecked: AXIsProcessTrusted(),
+        setupMenuVisible: false,
+        loginClickAttempt: nil,
+        handoffScriptInvoked: false,
+        loginArgsIncluded: false,
+        openingStatusVisible: false,
+        readinessProbeCount: 0,
+        readinessRechecked: false,
+        fetchingVisibleAfterReadiness: false,
+        firstFetchSnapshotWritten: false,
+        postReadinessState: nil,
+        expectedSelectors: [],
+        observedSelectors: [],
+        observedStatusText: [],
+        screenshotPaths: [],
+        rawClaudeCredentialsUsed: false,
+        rawPortfolioPayloadsRedacted: true
+    )
+    let screenshotTool = options.peekaboo.flatMap(peekabooScreenshotTool)
+
+    let process = try launchPackagedOnboardingApp(
+        app,
+        appSupportDirectory: appSupportDirectory,
+        fixtureSnapshotDirectory: fixtureSnapshotDirectory,
+        handoffScript: handoffScript,
+        marker: marker,
+        result: result,
+        probeLog: probeLog
+    )
+    defer {
+        terminate(process)
+    }
+
+    let loginSurface = MenuBarSurfaceRenderer.render(descriptor: ClaudeSetupMenuDescriptor.loggedOut())
+    let loginTargets = requiredSetupMenuTargets(in: loginSurface)
+    let loginIDs = Set(loginTargets.map(\.accessibilityIdentifier))
+    let appElement = AXUIElementCreateApplication(process.processIdentifier)
+    _ = waitForReadinessProbeCount(probeLog, expectedCount: 1, timeout: options.timeout)
+    Thread.sleep(forTimeInterval: 0.2)
+
+    guard process.isRunning else {
+        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+        return SmokeReport(
+            name: "packaged-onboarding",
+            status: SmokeStatus.failed,
+            detail: "packaged PDTBar.app exited before onboarding setup proof",
+            artifacts: [artifactPath(proof), artifactPath(appSupportDirectory)]
+        )
+    }
+
+    proofPayload.fixtureSnapshotWritten = FileManager.default.fileExists(atPath: fixtureSnapshot.path)
+    proofPayload.readinessProbeCount = readinessProbeCount(in: probeLog)
+    guard !proofPayload.fixtureSnapshotWritten else {
+        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+        return SmokeReport(
+            name: "packaged-onboarding",
+            status: SmokeStatus.failed,
+            detail: "packaged no-argument onboarding consumed fixture environment and wrote fixture snapshot state",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+
+    guard proofPayload.accessibilityChecked else {
+        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+        return SmokeReport(
+            name: "packaged-onboarding",
+            status: SmokeStatus.skipped,
+            detail: "packaged PDTBar.app launched with isolated app support and ignored fixture env; macOS Accessibility permission missing for Log in with Claude click proof",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+
+    guard let statusElement = waitForAccessibilityElement(
+        in: appElement,
+        identifier: loginSurface.status.accessibilityIdentifier,
+        timeout: options.timeout
+    ) else {
+        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+        return SmokeReport(
+            name: "packaged-onboarding",
+            status: SmokeStatus.failed,
+            detail: "packaged PDTBar.app launched, but Accessibility could not find setup status item \(loginSurface.status.accessibilityIdentifier)",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+
+    let openedMenu = openStatusMenu(
+        statusElement,
+        appElement: appElement,
+        expectedMenuIdentifiers: loginIDs,
+        timeout: options.timeout
+    )
+    let setupSnapshot = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
+        loginIDs,
+        in: appElement,
+        timeout: options.timeout
+    )
+    if let screenshot = try? captureMenuScreenshot(
+        name: "pdtbar-packaged-onboarding-setup",
+        snapshot: setupSnapshot,
+        expectedMenuIdentifiers: loginIDs,
+        artifacts: artifacts,
+        peekaboo: screenshotTool
+    ) {
+        proofPayload.screenshotPaths.append(artifactPath(screenshot))
+    }
+    proofPayload.setupMenuVisible = loginIDs.isSubset(of: setupSnapshot.identifiers)
+        && setupSnapshot.texts.contains("Log in with Claude")
+        && setupSnapshot.texts.contains { $0.contains("Not connected") }
+    proofPayload.expectedSelectors = loginIDs.sorted()
+    proofPayload.observedSelectors = setupSnapshot.identifiers.sorted()
+    proofPayload.observedStatusText = accessibilityTexts(in: statusElement).sorted()
+
+    let configuration = ScriptedPDTMCPConnectorConfiguration(
+        responses: try scriptedPDTConnectorResponses().mapValues { String(decoding: $0, as: UTF8.self) },
+        asOf: "2026-03-29",
+        initialCallDelaySeconds: max(options.timeout, 1.0)
+    )
+    try writeFirstFetchAppScript(configuration: configuration, appSupportDirectory: appSupportDirectory)
+
+    proofPayload.loginClickAttempt = pressMenuRow(
+        statusElement: statusElement,
+        appElement: appElement,
+        rowIdentifier: "pdtbar.row.claudeSetup.login",
+        expectedMenuIdentifiers: loginIDs,
+        timeout: options.timeout
+    )
+    proofPayload.handoffScriptInvoked = waitForFile(marker, timeout: options.timeout)
+    proofPayload.loginArgsIncluded = waitForFileContent(
+        marker,
+        contains: "auth login",
+        timeout: options.timeout
+    )
+    proofPayload.openingStatusVisible = waitForStatusText(
+        "Signing in with Claude",
+        in: appElement,
+        statusIdentifier: "pdtbar.status",
+        timeout: options.timeout
+    )
+    let openingSurface = MenuBarSurfaceRenderer.render(descriptor: ClaudeLaunchFlow.descriptor(for: .openingClaude))
+    let openingTargets = requiredSetupMenuTargets(in: openingSurface)
+    let openingIDs = Set(openingTargets.map(\.accessibilityIdentifier))
+    if let openingStatus = waitForAccessibilityElement(
+        in: appElement,
+        identifier: openingSurface.status.accessibilityIdentifier,
+        timeout: min(options.timeout, 2.0)
+    ) {
+        let openingMenu = openStatusMenu(
+            openingStatus,
+            appElement: appElement,
+            expectedMenuIdentifiers: openingIDs,
+            timeout: min(options.timeout, 2.0)
+        )
+        if let openingSnapshot = openingMenu.snapshot,
+           let screenshot = try? captureMenuScreenshot(
+               name: "pdtbar-packaged-onboarding-opening",
+               snapshot: openingSnapshot,
+               expectedMenuIdentifiers: openingIDs,
+               artifacts: artifacts,
+               peekaboo: screenshotTool
+           )
+        {
+            proofPayload.screenshotPaths.append(artifactPath(screenshot))
+        }
+    }
+
+    let completed = waitForFile(result, timeout: options.timeout + 3.0)
+    proofPayload.readinessRechecked = waitForReadinessProbeCount(
+        probeLog,
+        expectedCount: 2,
+        timeout: options.timeout + 4.0
+    )
+    proofPayload.readinessProbeCount = readinessProbeCount(in: probeLog)
+    proofPayload.fetchingVisibleAfterReadiness = waitForStatusText(
+        "Fetching portfolio",
+        in: appElement,
+        statusIdentifier: "pdtbar.status",
+        timeout: options.timeout + 2.0
+    )
+    if proofPayload.fetchingVisibleAfterReadiness {
+        proofPayload.postReadinessState = "fetchingPortfolio"
+        let fetchingSurface = MenuBarSurfaceRenderer.render(descriptor: ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio))
+        let fetchingTargets = requiredSetupMenuTargets(in: fetchingSurface)
+        let fetchingIDs = Set(fetchingTargets.map(\.accessibilityIdentifier))
+        if let fetchingStatus = waitForAccessibilityElement(
+            in: appElement,
+            identifier: fetchingSurface.status.accessibilityIdentifier,
+            timeout: min(options.timeout, 2.0)
+        ) {
+            let fetchingMenu = openStatusMenu(
+                fetchingStatus,
+                appElement: appElement,
+                expectedMenuIdentifiers: fetchingIDs,
+                timeout: min(options.timeout, 2.0)
+            )
+            if let fetchingSnapshot = fetchingMenu.snapshot,
+               let screenshot = try? captureMenuScreenshot(
+                   name: "pdtbar-packaged-onboarding-fetching",
+                   snapshot: fetchingSnapshot,
+                   expectedMenuIdentifiers: fetchingIDs,
+                   artifacts: artifacts,
+                   peekaboo: screenshotTool
+               )
+            {
+                proofPayload.screenshotPaths.append(artifactPath(screenshot))
+            }
+        }
+    }
+    let firstFetchSnapshot = appSupportDirectory.appending(path: "pdtbar/state/latest-portfolio-snapshot.json")
+    proofPayload.firstFetchSnapshotWritten = waitForFile(
+        firstFetchSnapshot,
+        timeout: options.timeout + 6.0
+    )
+    proofPayload.fixtureSnapshotWritten = FileManager.default.fileExists(atPath: fixtureSnapshot.path)
+    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+
+    guard proofPayload.setupMenuVisible,
+          proofPayload.loginClickAttempt != nil,
+          proofPayload.handoffScriptInvoked,
+          proofPayload.loginArgsIncluded,
+          completed,
+          proofPayload.openingStatusVisible,
+          proofPayload.readinessRechecked,
+          proofPayload.readinessProbeCount >= 2,
+          proofPayload.fetchingVisibleAfterReadiness,
+          proofPayload.firstFetchSnapshotWritten,
+          !proofPayload.fixtureSnapshotWritten
+    else {
+        return SmokeReport(
+            name: "packaged-onboarding",
+            status: SmokeStatus.failed,
+            detail: "packaged onboarding did not prove setup click, scripted handoff success, readiness recheck, and post-recheck first fetch",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+
+    return SmokeReport(
+        name: "packaged-onboarding",
+        status: SmokeStatus.passed,
+        detail: "packaged PDTBar.app no-argument onboarding ignored fixture env, opened setup through Accessibility, clicked Log in with Claude, rechecked readiness, and started scripted first fetch",
         artifacts: [artifactPath(proof)]
     )
 }
@@ -2417,6 +2704,33 @@ private struct ScriptedLoginHandoffProof: Codable {
     var rawClaudeCredentialsUsed: Bool
 }
 
+private struct PackagedOnboardingProof: Codable {
+    var appBundlePath: String
+    var appExecutablePath: String
+    var appArguments: [String]
+    var appSupportPath: String
+    var fixtureSnapshotPath: String
+    var fixtureEnvInjected: Bool
+    var fixtureSnapshotWritten: Bool
+    var accessibilityChecked: Bool
+    var setupMenuVisible: Bool
+    var loginClickAttempt: String?
+    var handoffScriptInvoked: Bool
+    var loginArgsIncluded: Bool
+    var openingStatusVisible: Bool
+    var readinessProbeCount: Int
+    var readinessRechecked: Bool
+    var fetchingVisibleAfterReadiness: Bool
+    var firstFetchSnapshotWritten: Bool
+    var postReadinessState: String?
+    var expectedSelectors: [String]
+    var observedSelectors: [String]
+    var observedStatusText: [String]
+    var screenshotPaths: [String]
+    var rawClaudeCredentialsUsed: Bool
+    var rawPortfolioPayloadsRedacted: Bool
+}
+
 private struct RealClaudeFlowAXProof: Codable {
     var appArguments: [String]
     var fixtureModeUsed: Bool
@@ -2623,21 +2937,33 @@ private func captureRealUserMenuScreenshot(
     artifacts: URL,
     peekaboo: URL?
 ) throws -> URL? {
+    try captureMenuScreenshot(
+        name: "pdtbar-real-user-pulse",
+        snapshot: snapshot,
+        expectedMenuIdentifiers: expectedMenuIdentifiers,
+        artifacts: artifacts,
+        peekaboo: peekaboo
+    )
+}
+
+private func captureMenuScreenshot(
+    name: String,
+    snapshot: AccessibilitySnapshot,
+    expectedMenuIdentifiers: Set<String>,
+    artifacts: URL,
+    peekaboo: URL?
+) throws -> URL? {
     guard let peekaboo else {
         return nil
     }
-    let rawScreenshot = artifacts.appending(path: "pdtbar-real-user-pulse-screen.png")
-    let screenshot = artifacts.appending(path: "pdtbar-real-user-pulse-menu.png")
+    let rawScreenshot = artifacts.appending(path: "\(name)-screen.png")
+    let screenshot = artifacts.appending(path: "\(name)-menu.png")
     try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-    let menuBounds = menuFrameBounds(snapshot: snapshot, expectedMenuIdentifiers: expectedMenuIdentifiers)
-    let displayBounds = displayBounds(containing: menuBounds)
-    let displayRegion = "\(Int(displayBounds.minX)),\(Int(displayBounds.minY)),\(Int(displayBounds.width)),\(Int(displayBounds.height))"
     _ = try run(
         peekaboo,
         arguments: [
             "image",
-            "--mode", "area",
-            "--region", displayRegion,
+            "--mode", "screen",
             "--path", rawScreenshot.path,
             "--json",
             "--no-remote",
@@ -2649,9 +2975,16 @@ private func captureRealUserMenuScreenshot(
         to: screenshot,
         snapshot: snapshot,
         expectedMenuIdentifiers: expectedMenuIdentifiers,
-        displayBounds: displayBounds
+        displayBounds: displayBounds(containing: menuFrameBounds(
+            snapshot: snapshot,
+            expectedMenuIdentifiers: expectedMenuIdentifiers
+        ))
     )
     try? FileManager.default.removeItem(at: rawScreenshot)
+    guard imageHasVisiblePixels(screenshot) else {
+        try? FileManager.default.removeItem(at: screenshot)
+        return nil
+    }
     return screenshot
 }
 
@@ -2782,6 +3115,55 @@ private func imageDimensions(of image: URL) throws -> (width: Int, height: Int) 
         throw CommandError.commandFailed("sips", text, "missing image dimensions")
     }
     return (width, height)
+}
+
+private func imageHasVisiblePixels(_ image: URL) -> Bool {
+    guard let source = CGImageSourceCreateWithURL(image as CFURL, nil),
+          let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
+    else {
+        return false
+    }
+    let width = cgImage.width
+    let height = cgImage.height
+    guard width > 0, height > 0 else {
+        return false
+    }
+    let bytesPerPixel = 4
+    let bytesPerRow = width * bytesPerPixel
+    var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    guard let context = CGContext(
+        data: &pixels,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: bytesPerRow,
+        space: colorSpace,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else {
+        return false
+    }
+    context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+    let sampleStride = max(bytesPerPixel, pixels.count / 256 / bytesPerPixel * bytesPerPixel)
+    var minLuma = Double.greatestFiniteMagnitude
+    var maxLuma = 0.0
+    var visibleSamples = 0
+    var index = 0
+    while index + 3 < pixels.count {
+        let alpha = pixels[index + 3]
+        if alpha > 8 {
+            let luma = 0.2126 * Double(pixels[index])
+                + 0.7152 * Double(pixels[index + 1])
+                + 0.0722 * Double(pixels[index + 2])
+            minLuma = min(minLuma, luma)
+            maxLuma = max(maxLuma, luma)
+            if luma > 24 {
+                visibleSamples += 1
+            }
+        }
+        index += sampleStride
+    }
+    return visibleSamples > 2 && maxLuma > minLuma + 16
 }
 
 private func accessibilityTexts(in element: AXUIElement) -> Set<String> {
@@ -3395,6 +3777,35 @@ private func launchLoginHandoffApp(
         scriptedEnvironment["PDTBAR_CLAUDE_READINESS_LOG"] = probeLog.path
     }
     process.environment = environment.merging(scriptedEnvironment) { _, new in new }
+    try process.run()
+    return process
+}
+
+private func launchPackagedOnboardingApp(
+    _ app: URL,
+    appSupportDirectory: URL,
+    fixtureSnapshotDirectory: URL,
+    handoffScript: URL,
+    marker: URL,
+    result: URL,
+    probeLog: URL
+) throws -> Process {
+    let process = Process()
+    process.executableURL = app
+    process.arguments = []
+    var environment = ProcessInfo.processInfo.environment
+    environment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
+    process.environment = environment.merging([
+        "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
+        "PDTBAR_FIXTURE": defaultFixture.path,
+        "PDTBAR_SNAPSHOT_DIR": fixtureSnapshotDirectory.path,
+        "PDTBAR_CLAUDE_BIN": handoffScript.path,
+        "PDTBAR_CLAUDE_HANDOFF_MARKER": marker.path,
+        "PDTBAR_CLAUDE_HANDOFF_RESULT": result.path,
+        "PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE": "success",
+        "PDTBAR_CLAUDE_READINESS_LOG": probeLog.path,
+        "PDTBAR_DISABLE_REAL_CLAUDE": "1",
+    ]) { _, new in new }
     try process.run()
     return process
 }

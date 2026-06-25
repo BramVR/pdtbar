@@ -207,6 +207,7 @@ swift build --product pdtbar
 ./Scripts/package_app.sh
 swift run pdtbar-smoke logged-out-launch
 swift run pdtbar-smoke ready-launch
+swift run pdtbar-smoke packaged-onboarding --app PDTBar.app --peekaboo /opt/homebrew/bin/peekaboo
 swift run pdtbar-smoke packaged-app --app PDTBar.app --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/quiet-packaged-snapshot
 swift run pdtbar-smoke packaged-app --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/quiet-snapshot
 ```
@@ -225,6 +226,18 @@ Claude/PDT-ready path skips the logged-out menu, completes the first fetch,
 writes isolated first-fetch state, renders the first pulse, avoids fixture state,
 and writes only selector/status proof under `.build/pdtbar-smoke-artifacts/`.
 No live Claude credentials or portfolio payloads are used.
+
+The packaged onboarding smoke is the first-run onboarding regression gate. It
+requires a packaged `PDTBar.app`, launches the no-argument bundle executable with
+fresh isolated app-support state, injects fixture env only as a sentinel, opens
+the setup menu through Accessibility, clicks `Log in with Claude`, uses a
+scripted successful `claude auth login`, and verifies readiness is rechecked
+before the scripted first fetch starts. Missing Accessibility exits
+successfully with `skipped` after proving packaged launch liveness and fixture
+isolation. Proof artifacts contain app/support/sentinel paths, selectors, setup
+and fetch status text, and booleans only.
+Passing `--peekaboo` additionally captures sanitized real UI PNGs for setup,
+login-opening, and post-readiness fetching states.
 
 Real Claude-flow Accessibility matrix smoke:
 
