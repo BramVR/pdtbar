@@ -602,14 +602,18 @@ public struct StatusVisualState: Codable, Equatable {
     public var statusCopy: String
 
     public init(
-        barHeights: [Double] = [0.38, 0.55, 0.38],
+        barHeights: [Double] = [0.58, 1.0, 0.58],
         filledBarCount: Int = 0,
         isDimmed: Bool = false,
         statusCopy: String = ""
     ) {
         self.barHeights = Array(barHeights.prefix(3))
+        let fallbackHeights = [0.58, 1.0, 0.58]
         while self.barHeights.count < 3 {
-            self.barHeights.append(0.45)
+            self.barHeights.append(fallbackHeights[self.barHeights.count])
+        }
+        if self.barHeights.count > 1 {
+            self.barHeights[1] = 1.0
         }
         self.filledBarCount = max(0, min(3, filledBarCount))
         self.isDimmed = isDimmed
@@ -626,7 +630,7 @@ public struct StatusVisualState: Codable, Equatable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
-            barHeights: try container.decodeIfPresent([Double].self, forKey: .barHeights) ?? [0.38, 0.55, 0.38],
+            barHeights: try container.decodeIfPresent([Double].self, forKey: .barHeights) ?? [0.58, 1.0, 0.58],
             filledBarCount: try container.decodeIfPresent(Int.self, forKey: .filledBarCount) ?? 0,
             isDimmed: try container.decodeIfPresent(Bool.self, forKey: .isDimmed) ?? false,
             statusCopy: try container.decodeIfPresent(String.self, forKey: .statusCopy) ?? ""
@@ -1708,20 +1712,28 @@ public enum MenuDescriptorRenderer {
 
     private static func concentrationBarHeights(from allocation: AllocationSnapshot) -> [Double] {
         let xRayWeights = (allocation.xRayHoldings ?? []).map(\.weight).filter { $0 > 0 }
-        let usesXRay = !xRayWeights.isEmpty
-        let weights = usesXRay
-            ? xRayWeights
-            : allocation.topHoldings.map(\.weight).filter { $0 > 0 }
-        guard !weights.isEmpty else {
+        guard !xRayWeights.isEmpty else {
             return StatusVisualState().barHeights
         }
-        let hhi = weights.reduce(0.0) { $0 + ($1 * $1) }
-        let diversifiedHHI = usesXRay ? 1.0 / 25.0 : 1.0 / 12.0
-        let concentratedHHI = usesXRay ? 0.16 : 0.12
-        let pressure = max(0.0, min(1.0, (hhi - diversifiedHHI) / (concentratedHHI - diversifiedHHI)))
-        let sideHeight = 0.38
-        let middleHeight = rounded(0.55 + (0.45 * pressure), places: 3)
-        return [sideHeight, middleHeight, sideHeight]
+        return concentrationStackShape(fromXRayWeights: xRayWeights)
+    }
+
+    private static func concentrationStackShape(fromXRayWeights weights: [Double]) -> [Double] {
+        let sortedWeights = weights
+            .filter { $0 > 0 }
+            .sorted(by: >)
+        guard !sortedWeights.isEmpty else {
+            return StatusVisualState().barHeights
+        }
+        let leftShoulder = concentrationShoulderHeight(for: sortedWeights.first ?? 0)
+        let rightShoulder = concentrationShoulderHeight(for: sortedWeights.dropFirst().first ?? 0)
+        return [leftShoulder, 1.0, rightShoulder]
+    }
+
+    private static func concentrationShoulderHeight(for normalizedWeight: Double) -> Double {
+        let clampedWeight = max(0.0, min(0.5, normalizedWeight))
+        let pressure = sqrt(clampedWeight / 0.5)
+        return rounded(0.42 + (0.48 * pressure), places: 3)
     }
 
     private static func attentionChildren(

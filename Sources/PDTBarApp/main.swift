@@ -402,13 +402,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func makeConcentrationStackStatusImage(from visual: StatusVisualState) -> NSImage {
-        let size = NSSize(width: 24, height: 18)
+        let size = NSSize(width: 24, height: 19)
         let image = NSImage(size: size, flipped: false) { _ in
-            let maxBarHeight: CGFloat = 13
-            let barWidth: CGFloat = 4.4
-            let gap: CGFloat = 2.4
-            let baseline: CGFloat = 2
-            let startX: CGFloat = 4
+            let maxBarHeight: CGFloat = 16.2
+            let barWidth: CGFloat = 5.0
+            let gap: CGFloat = 2.0
+            let baseline: CGFloat = 1.2
+            let startX: CGFloat = 2.5
             let fillAlpha: CGFloat = visual.isDimmed ? 0.36 : 0.72
             let outlineAlpha: CGFloat = visual.isDimmed ? 0.42 : 0.86
 
@@ -435,7 +435,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                     NSGraphicsContext.restoreGraphicsState()
                 }
                 NSColor.black.withAlphaComponent(outlineAlpha).setStroke()
-                barPath.lineWidth = 1.15
+                barPath.lineWidth = 1.2
                 barPath.stroke()
             }
             return true

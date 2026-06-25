@@ -29,10 +29,12 @@ artifacts, PR bodies, or issue comments.
 
 The menu bar status slot always renders the Concentration Stack icon. The icon
 fill is attention count capped at three filled bars; it is not freshness,
-progress, or a separate notification dot. Freshness and fetch failure belong in
-tooltip/menu copy and may optionally dim the whole icon. Smoke proof should
-check the Codable `StatusVisualState`/surface state or sanitized rendered SVG,
-not private screenshots or raw portfolio payloads.
+progress, or a separate notification dot. The center bar stays at max visual
+height; side bars come from X-ray look-through concentration shoulders, with a
+deterministic balanced fallback when X-ray data is unavailable. Freshness and
+fetch failure belong in tooltip/menu copy and may optionally dim the whole icon.
+Smoke proof should check the Codable `StatusVisualState`/surface state or
+sanitized rendered SVG, not private screenshots or raw portfolio payloads.
 
 Normal deterministic gate:
 

@@ -5,12 +5,12 @@
     <text x="42" y="52" class="label">Setup</text>
     <rect x="40" y="66" width="488" height="34" rx="7" class="status"/>
     <g>
-<rect x="54.00" y="82.46" width="4.40" height="7.54" rx="2.20" fill="none" stroke="#ffffff" stroke-width="1.15" opacity="0.42"/>
-<rect x="60.80" y="79.86" width="4.40" height="10.14" rx="2.20" fill="none" stroke="#ffffff" stroke-width="1.15" opacity="0.42"/>
-<rect x="67.60" y="81.68" width="4.40" height="8.32" rx="2.20" fill="none" stroke="#ffffff" stroke-width="1.15" opacity="0.42"/>
+<rect x="54.00" y="82.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
+<rect x="61.00" y="75.20" width="5.00" height="16.20" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
+<rect x="68.00" y="82.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
 </g>
     <text x="46" y="128" class="section">Claude</text>
-<text x="46" y="148" class="row">Not connected - Sign in with Claude Desktop</text>
+<text x="46" y="148" class="row">Not connected - Sign in with Claude CLI</text>
 <text x="46" y="168" class="row">Log in with Claude</text>
 <text x="46" y="188" class="row">Check again</text>
   </g>
@@ -19,9 +19,9 @@
     <text x="586" y="52" class="label">Fetching</text>
     <rect x="584" y="66" width="488" height="34" rx="7" class="status"/>
     <g>
-<rect x="598.00" y="82.46" width="4.40" height="7.54" rx="2.20" fill="none" stroke="#ffffff" stroke-width="1.15" opacity="0.42"/>
-<rect x="604.80" y="79.86" width="4.40" height="10.14" rx="2.20" fill="none" stroke="#ffffff" stroke-width="1.15" opacity="0.42"/>
-<rect x="611.60" y="81.68" width="4.40" height="8.32" rx="2.20" fill="none" stroke="#ffffff" stroke-width="1.15" opacity="0.42"/>
+<rect x="598.00" y="82.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
+<rect x="605.00" y="75.20" width="5.00" height="16.20" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
+<rect x="612.00" y="82.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
 </g>
     <text x="590" y="128" class="section">Portfolio</text>
 <text x="590" y="148" class="row">Fetching portfolio - Read-only through Claude</text>
@@ -31,9 +31,9 @@
     <text x="42" y="406" class="label">All quiet</text>
     <rect x="40" y="420" width="488" height="34" rx="7" class="status"/>
     <g>
-<rect x="54.00" y="431.00" width="4.40" height="13.00" rx="2.20" fill="none" stroke="#ffffff" stroke-width="1.15" opacity="0.86"/>
-<rect x="60.80" y="431.00" width="4.40" height="13.00" rx="2.20" fill="none" stroke="#ffffff" stroke-width="1.15" opacity="0.86"/>
-<rect x="67.60" y="431.29" width="4.40" height="12.71" rx="2.20" fill="none" stroke="#ffffff" stroke-width="1.15" opacity="0.86"/>
+<rect x="54.00" y="436.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.86"/>
+<rect x="61.00" y="429.20" width="5.00" height="16.20" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.86"/>
+<rect x="68.00" y="436.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.86"/>
 </g>
     <text x="46" y="482" class="section">Pulse</text>
 <text x="46" y="502" class="row">EUR 51,200.00 - All quiet</text>
@@ -51,10 +51,10 @@
     <text x="586" y="406" class="label">Pressure</text>
     <rect x="584" y="420" width="488" height="34" rx="7" class="status"/>
     <g>
-<rect x="598.00" y="431.00" width="4.40" height="13.00" rx="2.20" fill="#ffffff" opacity="0.36"/>
-<rect x="598.00" y="431.00" width="4.40" height="13.00" rx="2.20" fill="none" stroke="#ffffff" stroke-width="1.15" opacity="0.42"/>
-<rect x="604.80" y="435.03" width="4.40" height="8.97" rx="2.20" fill="none" stroke="#ffffff" stroke-width="1.15" opacity="0.42"/>
-<rect x="611.60" y="436.17" width="4.40" height="7.83" rx="2.20" fill="none" stroke="#ffffff" stroke-width="1.15" opacity="0.42"/>
+<rect x="598.00" y="436.00" width="5.00" height="9.40" rx="2.50" fill="#ffffff" opacity="0.36"/>
+<rect x="598.00" y="436.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
+<rect x="605.00" y="429.20" width="5.00" height="16.20" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
+<rect x="612.00" y="436.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
 </g>
     <text x="590" y="482" class="section">Pulse</text>
 <text x="590" y="502" class="row">EUR 64,000.00 - Nova Lithography concentration</text>
@@ -72,13 +72,14 @@
     <text x="42" y="760" class="label">Error</text>
     <rect x="40" y="774" width="488" height="34" rx="7" class="status"/>
     <g>
-<rect x="54.00" y="790.46" width="4.40" height="7.54" rx="2.20" fill="none" stroke="#ffffff" stroke-width="1.15" opacity="0.42"/>
-<rect x="60.80" y="787.86" width="4.40" height="10.14" rx="2.20" fill="none" stroke="#ffffff" stroke-width="1.15" opacity="0.42"/>
-<rect x="67.60" y="789.68" width="4.40" height="8.32" rx="2.20" fill="none" stroke="#ffffff" stroke-width="1.15" opacity="0.42"/>
+<rect x="54.00" y="790.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
+<rect x="61.00" y="783.20" width="5.00" height="16.20" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
+<rect x="68.00" y="790.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
 </g>
     <text x="46" y="836" class="section">Portfolio</text>
 <text x="46" y="856" class="row">Could not fetch portfolio - No partial pulse published</text>
 <text x="46" y="876" class="row">Try again</text>
+<text x="46" y="896" class="row">Log in with Claude</text>
   </g>
   <style>
     .card { fill: #ffffff; stroke: #d7d3c8; }
