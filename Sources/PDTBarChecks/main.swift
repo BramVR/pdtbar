@@ -181,12 +181,12 @@ try check(
     "logged-out real launch should render a Claude-only setup section"
 )
 try check(
-    setupSurface.sections.flatMap(\.rows).map(\.title) == ["Not connected - Use Claude Desktop for PDT", "Log in with Claude"],
+    setupSurface.sections.flatMap(\.rows).map(\.title) == ["Not connected - Use Claude CLI for PDT", "Log in with Claude"],
     "logged-out real launch should render Claude setup status and login rows"
 )
 try check(
-    openingClaudeDescriptor.sections.flatMap(\.rows).map(\.title) == ["Opening Claude Desktop"],
-    "login handoff should render progress while Claude Desktop is opening"
+    openingClaudeDescriptor.sections.flatMap(\.rows).map(\.title) == ["Signing in with Claude"],
+    "login handoff should render progress while claude auth login is running"
 )
 try check(
     ClaudeLaunchFlow.action(afterLoginHandoff: .succeeded) == .recheckReadiness,
@@ -197,8 +197,22 @@ try check(
     "failed login handoff should render the retryable missing-Claude setup state"
 )
 try check(
-    missingClaudeDescriptor.sections.flatMap(\.rows).map(\.title) == ["Claude Desktop not found", "Log in with Claude"],
+    missingClaudeDescriptor.sections.flatMap(\.rows).map(\.title) == ["Claude CLI not found", "Log in with Claude"],
     "failed login handoff should render missing-Claude setup state with a retryable login action"
+)
+try check(
+    ClaudeLaunchFlow.descriptor(forLoginFailure: .timedOut).sections.flatMap(\.rows).map(\.title) == [
+        "Claude login timed out",
+        "Log in with Claude",
+    ],
+    "timed-out claude auth login should render CodexBar-aligned login failure copy"
+)
+try check(
+    ClaudeLaunchFlow.descriptor(forLoginFailure: .failed).sections.flatMap(\.rows).map(\.title) == [
+        "Claude login failed",
+        "Log in with Claude",
+    ],
+    "failed claude auth login should render CodexBar-aligned login failure copy"
 )
 let missingLoginDescriptor = ClaudeLaunchFlow.descriptor(for: .missingClaudeLogin)
 try check(
@@ -211,7 +225,7 @@ try check(
 )
 let missingPDTMCPDescriptor = ClaudeLaunchFlow.descriptor(for: .missingPDTMCP)
 try check(
-    missingPDTMCPDescriptor.sections.flatMap(\.rows).map(\.title) == ["Add the PDT MCP server in Claude Desktop", "Check again"],
+    missingPDTMCPDescriptor.sections.flatMap(\.rows).map(\.title) == ["Add the PDT MCP server to Claude", "Check again"],
     "missing PDT MCP should render product-facing setup copy with a readiness retry action"
 )
 try check(
@@ -881,7 +895,7 @@ do {
 }
 let setupErrorConnector = ScriptedPDTMCPConnector(
     responses: scriptedConnectorResponses,
-    failure: .setupUnavailable("Claude Desktop needs PDT setup")
+    failure: .setupUnavailable("Claude needs PDT setup")
 )
 do {
     _ = try PDTMCPConnectorDataSource(connector: setupErrorConnector).snapshot(asOf: "2026-03-29")

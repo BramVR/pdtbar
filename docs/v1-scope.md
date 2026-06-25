@@ -16,7 +16,7 @@ The goal of v1 is to ship the smallest coherent product: Claude-first launch, on
 
 Concretely, v1 is "done" when:
 - The no-argument app path is the product path; fixture mode remains explicit `--fixture` developer tooling.
-- The app connects through Claude Desktop and the configured PDT MCP server, then pulls only the required read tools.
+- The app connects through the Claude CLI and configured PDT MCP server, then pulls only the required read tools.
 - The engine computes pressure for the v1 facets and emits the structured model.
 - The bar shows the Concentration Stack status icon, the ranked attention item(s) at the glance, expansion to the supporting numbers, and an "all quiet" state.
 - Setup, fetch, stale, and retryable failure states are covered without publishing fixture or partial data as real.

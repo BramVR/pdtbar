@@ -47,7 +47,7 @@ Do not copy provider registry, browser cookie import, OAuth/device flow, Keychai
 ## Deferred But Plausible Later
 
 - **Tabbed source/provider surfaces:** likely useful once PDTBar supports multiple MCP access paths or richer source diagnostics. Keep v1 menu descriptors simple, but avoid naming/layout choices that make tabs impossible later.
-- **Codex login for MCP access:** plausible future source path alongside Claude Desktop. When this becomes active work, revisit CodexBar's Codex login/source-selection patterns and write an ADR before copying auth/storage code.
+- **Codex login for MCP access:** plausible future source path alongside Claude CLI. When this becomes active work, revisit CodexBar's Codex login/source-selection patterns and write an ADR before copying auth/storage code.
 - **Provider/source registry:** likely useful only when Claude/PDT is no longer the sole product source. Introduce the smallest source abstraction when the second real source lands.
 - **Existing Claude/Codex login reuse:** valid when narrow, read-only, prompt-safe, and explicit about storage ownership. Reuse host-app cookies/tokens only through a small source adapter; do not add broad browser-cookie import or generic credential storage until a product path requires it.
 - **Credential storage:** only after a product path requires PDTBar-owned credentials. Until then, prefer existing signed-in host apps and scripted smoke fakes.

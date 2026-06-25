@@ -597,9 +597,14 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
     )
     let successScriptInvoked = waitForFile(successMarker, timeout: options.timeout)
     let progressVisible = waitForStatusText(
-        "Opening Claude Desktop",
+        "Signing in with Claude",
         in: successAppElement,
         statusIdentifier: "pdtbar.status",
+        timeout: options.timeout
+    )
+    let successLoginArgsIncluded = waitForFileContent(
+        successMarker,
+        contains: "auth login",
         timeout: options.timeout
     )
     let successConfiguration = ScriptedPDTMCPConnectorConfiguration(
@@ -672,14 +677,19 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         timeout: options.timeout
     )
     let failureScriptInvoked = waitForFile(failureMarker, timeout: options.timeout)
+    let failureLoginArgsIncluded = waitForFileContent(
+        failureMarker,
+        contains: "auth login",
+        timeout: options.timeout
+    )
     let failureCompleted = waitForFile(failureResult, timeout: options.timeout + 2.0)
     let missingClaudeSurface = MenuBarSurfaceRenderer.render(
-        descriptor: ClaudeLaunchFlow.descriptor(for: .missingClaude)
+        descriptor: ClaudeLaunchFlow.descriptor(forLoginFailure: .failed)
     )
     let missingClaudeTargets = requiredSetupMenuTargets(in: missingClaudeSurface)
     let missingClaudeIDs = Set(missingClaudeTargets.map(\.accessibilityIdentifier))
     let missingClaudeStatusVisible = waitForStatusText(
-        "Claude Desktop not found",
+        "Claude login failed",
         in: failureAppElement,
         statusIdentifier: missingClaudeSurface.status.accessibilityIdentifier,
         timeout: options.timeout
@@ -715,7 +725,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         )
     }
     let missingClaudeMenuVisible = missingClaudeIDs.isSubset(of: missingClaudeMenu.identifiers)
-        && missingClaudeMenu.texts.contains { $0.contains("Claude Desktop not found") }
+        && missingClaudeMenu.texts.contains { $0.contains("Claude login failed") }
         && missingClaudeMenu.texts.contains("Log in with Claude")
 
     let proofPayload = ScriptedLoginHandoffProof(
@@ -723,6 +733,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         successInitialReadinessProbed: successInitialReadinessProbed,
         successClickAttempt: successClick,
         successScriptInvoked: successScriptInvoked,
+        successLoginArgsIncluded: successLoginArgsIncluded,
         successProgressVisible: progressVisible,
         successCompleted: successCompleted,
         successReadinessRechecked: successReadinessRechecked,
@@ -733,6 +744,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         failureIdleBeforeClick: failureWasIdleBeforeClick,
         failureClickAttempt: failureClick,
         failureScriptInvoked: failureScriptInvoked,
+        failureLoginArgsIncluded: failureLoginArgsIncluded,
         failureCompleted: failureCompleted,
         failureMissingClaudeStatusVisible: missingClaudeStatusVisible,
         failureMissingClaudeMenuVisible: missingClaudeMenuVisible,
@@ -747,6 +759,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
           successInitialReadinessProbed,
           successClick != nil,
           successScriptInvoked,
+          successLoginArgsIncluded,
           progressVisible,
           successCompleted,
           successReadinessRechecked,
@@ -756,6 +769,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
           failureWasIdleBeforeClick,
           failureClick != nil,
           failureScriptInvoked,
+          failureLoginArgsIncluded,
           failureCompleted,
           missingClaudeStatusVisible,
           missingClaudeMenuVisible
@@ -771,7 +785,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
     return SmokeReport(
         name: "scripted-login-handoff",
         status: SmokeStatus.passed,
-        detail: "Log in with Claude invoked the scripted handoff only after menu click, showed Opening Claude Desktop, rechecked readiness, started first fetch, and rendered missing-Claude state on handoff failure",
+        detail: "Log in with Claude invoked scripted claude auth login only after menu click, showed Signing in with Claude, rechecked readiness, started first fetch, and rendered failed-login state on login failure",
         artifacts: [artifactPath(proof)]
     )
 }
@@ -832,7 +846,7 @@ private func scriptedSetupRetrySmoke(arguments: [String]) throws -> SmokeReport 
         name: "missing-pdt-mcp",
         initialReadiness: "missingPDTMCP",
         descriptor: missingPDTMCPDescriptor,
-        expectedTexts: ["Add the PDT MCP server in Claude Desktop", "Check again"],
+        expectedTexts: ["Add the PDT MCP server to Claude", "Check again"],
         options: options,
         app: app,
         artifacts: artifacts
@@ -1384,7 +1398,7 @@ private func manualClaudePDTSmoke(arguments: [String]) throws -> SmokeReport {
         return SmokeReport(
             name: "manual-claude-pdt",
             status: SmokeStatus.failed,
-            detail: "refusing manual Claude readiness proof with --bare; use normal claude -p so the logged-in Claude user and Desktop MCP setup are exercised",
+            detail: "refusing manual Claude readiness proof with --bare; use normal claude -p so the logged-in Claude CLI user and MCP setup are exercised",
             artifacts: []
         )
     }
@@ -1402,7 +1416,7 @@ private func manualClaudePDTSmoke(arguments: [String]) throws -> SmokeReport {
         return SmokeReport(
             name: "manual-claude-pdt",
             status: SmokeStatus.skipped,
-            detail: "Claude CLI unavailable on PATH; install/sign in to Claude Desktop and rerun, or pass --claude <path>",
+            detail: "Claude CLI unavailable on PATH; install/sign in with Claude and rerun, or pass --claude <path>",
             artifacts: []
         )
     }
@@ -1411,7 +1425,7 @@ private func manualClaudePDTSmoke(arguments: [String]) throws -> SmokeReport {
             return SmokeReport(
                 name: "manual-claude-pdt",
                 status: SmokeStatus.skipped,
-                detail: "Claude CLI unavailable at passed --claude path; install/sign in to Claude Desktop and rerun",
+                detail: "Claude CLI unavailable at passed --claude path; install/sign in with Claude and rerun",
                 artifacts: []
             )
         }
@@ -1474,7 +1488,7 @@ private func manualClaudePDTSmoke(arguments: [String]) throws -> SmokeReport {
         return SmokeReport(
             name: "manual-claude-pdt",
             status: SmokeStatus.skipped,
-            detail: "local Claude/PDT setup required; claude -p did not complete with the configured model alias or Desktop MCP setup",
+            detail: "local Claude/PDT setup required; claude -p did not complete with the configured model alias or MCP setup",
             artifacts: []
         )
     } catch CommandError.timedOut {
@@ -2156,6 +2170,7 @@ private struct ScriptedLoginHandoffProof: Codable {
     var successInitialReadinessProbed: Bool
     var successClickAttempt: String?
     var successScriptInvoked: Bool
+    var successLoginArgsIncluded: Bool
     var successProgressVisible: Bool
     var successCompleted: Bool
     var successReadinessRechecked: Bool
@@ -2166,6 +2181,7 @@ private struct ScriptedLoginHandoffProof: Codable {
     var failureIdleBeforeClick: Bool
     var failureClickAttempt: String?
     var failureScriptInvoked: Bool
+    var failureLoginArgsIncluded: Bool
     var failureCompleted: Bool
     var failureMissingClaudeStatusVisible: Bool
     var failureMissingClaudeMenuVisible: Bool
@@ -2512,6 +2528,19 @@ private func waitForFile(_ url: URL, timeout: TimeInterval) -> Bool {
         Thread.sleep(forTimeInterval: 0.1)
     } while Date() < deadline
     return FileManager.default.fileExists(atPath: url.path)
+}
+
+private func waitForFileContent(_ url: URL, contains needle: String, timeout: TimeInterval) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    repeat {
+        if let text = try? String(contentsOf: url, encoding: .utf8),
+           text.contains(needle)
+        {
+            return true
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+    } while Date() < deadline
+    return (try? String(contentsOf: url, encoding: .utf8))?.contains(needle) == true
 }
 
 private func waitForSnapshotAsOf(_ url: URL, asOf: String, timeout: TimeInterval) -> Bool {
@@ -2872,7 +2901,7 @@ private func launchLoginHandoffApp(
     environment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
     var scriptedEnvironment = [
         "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
-        "PDTBAR_CLAUDE_HANDOFF_SCRIPT": handoffScript.path,
+        "PDTBAR_CLAUDE_BIN": handoffScript.path,
         "PDTBAR_CLAUDE_HANDOFF_MARKER": marker.path,
         "PDTBAR_CLAUDE_HANDOFF_RESULT": result.path,
         "PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE": resultValue,
@@ -2897,8 +2926,19 @@ private func writeHandoffScript(
     let script = directory.appending(path: name)
     let content = """
     #!/bin/sh
-    printf started > "$PDTBAR_CLAUDE_HANDOFF_MARKER"
+    printf 'started %s' "$*" > "$PDTBAR_CLAUDE_HANDOFF_MARKER"
+    if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
+      printf 'https://claude.ai/login\\n'
+      if [ \(exitStatus) -eq 0 ]; then
+        :
+      else
+        printf 'Claude login failed\\n'
+      fi
+    fi
     sleep \(String(format: "%.2f", delay))
+    if [ "$1" = "auth" ] && [ "$2" = "login" ] && [ \(exitStatus) -eq 0 ]; then
+      printf 'Successfully logged in\\n'
+    fi
     printf "%s" "$PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE" > "$PDTBAR_CLAUDE_HANDOFF_RESULT"
     exit \(exitStatus)
     """
@@ -3055,7 +3095,7 @@ private func scriptedPDTConnectorScenarioResults(
     }
 
     for (name, failure) in [
-        ("auth-setup-error", PDTMCPConnectorError.setupUnavailable("Claude Desktop needs PDT setup")),
+        ("auth-setup-error", PDTMCPConnectorError.setupUnavailable("Claude needs PDT setup")),
         ("transient-failure", PDTMCPConnectorError.transientFailure("Claude call timed out")),
     ] {
         do {
@@ -3370,7 +3410,7 @@ private func manualClaudePDTPrompt(resolvedTools: [String]) -> String {
         "\(readTool): \(resolvedTool)"
     }.joined(separator: "\n- ")
     return """
-    PDTBar manual smoke. Use the Claude Desktop PDT MCP setup for read-only proof.
+    PDTBar manual smoke. Use the Claude CLI PDT MCP setup for read-only proof.
 
     Rules:
     - Call each resolved PDT MCP tool listed below exactly once.

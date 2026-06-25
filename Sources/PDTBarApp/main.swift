@@ -27,7 +27,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     init(options: PDTBarLaunchOptions) {
         self.options = options
-        self.loginHandoff = ClaudeDesktopLoginHandoff(
+        self.loginHandoff = ClaudeCLILoginHandoff(
             environment: ProcessInfo.processInfo.environment
         )
     }
@@ -191,7 +191,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func loginWithClaude(_ sender: NSMenuItem) {
         installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .openingClaude))
-        loginHandoff.openOrFocus { [weak self] result in
+        loginHandoff.startLogin { [weak self] result in
             DispatchQueue.main.async {
                 switch result {
                 case .success:
@@ -203,11 +203,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 case .failure(let error):
                     FileHandle.standardError.write(Data("pdtbar: Claude handoff failed: \(error)\n".utf8))
-                    switch ClaudeLaunchFlow.action(afterLoginHandoff: .failed) {
-                    case .recheckReadiness:
-                        self?.startClaudeReadinessProbe()
-                    case .showMissingClaude:
-                        self?.installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .missingClaude))
+                    if let handoffError = error as? ClaudeLoginHandoffError {
+                        self?.installMenuBarItem(
+                            ClaudeLaunchFlow.descriptor(forLoginFailure: handoffError.reason)
+                        )
+                    } else {
+                        self?.installMenuBarItem(
+                            ClaudeLaunchFlow.descriptor(forLoginFailure: .failed)
+                        )
                     }
                 }
             }
@@ -380,71 +383,55 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 private protocol ClaudeLoginHandoff {
-    func openOrFocus(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void)
+    func startLogin(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void)
 }
 
 private enum ClaudeLoginHandoffError: Error, CustomStringConvertible {
-    case failed(String)
+    case failed(ClaudeLoginFailureReason, String)
+
+    var reason: ClaudeLoginFailureReason {
+        switch self {
+        case .failed(let reason, _):
+            return reason
+        }
+    }
 
     var description: String {
         switch self {
-        case .failed(let message):
+        case .failed(_, let message):
             return message
         }
     }
 }
 
-private final class ClaudeDesktopLoginHandoff: ClaudeLoginHandoff {
+private final class ClaudeCLILoginHandoff: ClaudeLoginHandoff {
     private let environment: [String: String]
 
     init(environment: [String: String]) {
         self.environment = environment
     }
 
-    func openOrFocus(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
-        if let script = scriptedHandoffPath() {
-            run(executable: URL(fileURLWithPath: script), arguments: [], completion: completion)
-            return
-        }
-        run(
-            executable: URL(fileURLWithPath: "/usr/bin/open"),
-            arguments: ["-a", "Claude"],
-            completion: completion
-        )
-    }
-
-    private func scriptedHandoffPath() -> String? {
-        if let script = environment["PDTBAR_CLAUDE_HANDOFF_SCRIPT"], !script.isEmpty {
-            return script
-        }
-        return nil
-    }
-
-    private func run(
-        executable: URL,
-        arguments: [String],
-        completion: @escaping @Sendable (Result<Void, Error>) -> Void
-    ) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let process = Process()
-            process.executableURL = executable
-            process.arguments = arguments
-            let nullOutput = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/dev/null"))
-            process.standardOutput = nullOutput
-            process.standardError = nullOutput
-            do {
-                defer {
-                    try? nullOutput?.close()
-                }
-                try process.run()
-                process.waitUntilExit()
-                if process.terminationStatus == 0 {
-                    completion(.success(()))
-                } else {
-                    completion(.failure(ClaudeLoginHandoffError.failed("Claude Desktop could not be opened")))
-                }
-            } catch {
-                completion(.failure(error))
+    func startLogin(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        Task.detached(priority: .userInitiated) { [environment] in
+            let result = await ClaudeLoginRunner.run(
+                timeout: 120,
+                environment: environment,
+                onPhaseChange: { _ in }
+            )
+            switch result.outcome {
+            case .success:
+                completion(.success(()))
+            case .missingBinary:
+                completion(.failure(ClaudeLoginHandoffError.failed(.missingBinary, "Claude CLI not found")))
+            case .timedOut:
+                completion(.failure(ClaudeLoginHandoffError.failed(.timedOut, "Claude login timed out")))
+            case .failed(let status):
+                completion(.failure(ClaudeLoginHandoffError.failed(
+                    .failed,
+                    "claude auth login exited with status \(status)"
+                )))
+            case .launchFailed(let message):
+                completion(.failure(ClaudeLoginHandoffError.failed(.launchFailed, message)))
             }
         }
     }

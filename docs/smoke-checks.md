@@ -11,9 +11,9 @@ read_when:
 ## Current setup assumptions
 
 - Product launch is no-argument `pdtbar`; fixture mode is explicit `--fixture`.
-- Claude is the only setup/login path. PDTBar uses the existing signed-in Claude Desktop user and the configured PDT MCP server.
+- Claude is the only setup/login path. PDTBar uses the existing signed-in Claude CLI user and the configured PDT MCP server.
 - Scripted smokes use isolated app-support and snapshot directories. They may inject fixture env vars only as sentinels to prove the no-argument path does not enter fixture mode.
-- Manual Claude reachability proof uses normal `claude -p`; `claude --bare` is refused because it does not prove the signed-in Desktop MCP setup.
+- Manual Claude reachability proof uses normal `claude -p`; `claude --bare` is refused because it does not prove the signed-in Claude CLI MCP setup.
 - Live `mcporter` smoke is optional research/dev proof, not the product runtime path.
 - Missing macOS Accessibility/Screen Recording permission, Claude CLI, sign-in, model access, or PDT MCP setup should skip with a setup-required detail unless the smoke is specifically testing that failure.
 
@@ -74,15 +74,15 @@ swift build --product pdtbar
 swift run pdtbar-smoke scripted-login-handoff
 ```
 
-This uses isolated app-support directories, a scripted local handoff executable,
-and no live Claude credentials. It launches the logged-out menu, verifies the
-handoff script is not called before the user-initiated `Log in with Claude`
-menu action, then proves success shows `Opening Claude Desktop` while the
-handoff is in flight, re-runs readiness, and starts the first fetch from
-scripted PDT data. Failure renders `Claude Desktop not found` with a retryable
-login action. The proof artifact contains selector/click booleans, readiness
-probe counts, snapshot status, and redacted state only; no credentials, account
-identifiers, or raw portfolio payloads are written.
+This uses isolated app-support directories, a scripted fake Claude CLI, and no
+live Claude credentials. It launches the logged-out menu, verifies the
+fake Claude CLI is not called before the user-initiated `Log in with Claude`
+menu action, then proves success invokes `claude auth login`, shows `Signing in
+with Claude` while login is in flight, re-runs readiness, and starts the first
+fetch from scripted PDT data. Failure renders `Claude login failed` with a
+retryable login action. The proof artifact contains selector/click booleans,
+readiness probe counts, snapshot status, and redacted state only; no
+credentials, account identifiers, or raw portfolio payloads are written.
 
 Scripted setup retry e2e:
 
@@ -94,7 +94,7 @@ swift run pdtbar-smoke scripted-setup-retry
 This uses isolated app-support directories, scripted readiness files, and no
 live Claude credentials. It verifies missing Claude login renders `Not
 connected`, `Log in with Claude`, and `Check again`; missing PDT MCP renders
-`Add the PDT MCP server in Claude Desktop` and `Check again`; and clicking
+`Add the PDT MCP server to Claude` and `Check again`; and clicking
 `Check again` reruns readiness once before the scripted first fetch. The proof
 artifact contains selectors, probe counts, status booleans, and redacted
 first-fetch state only.
@@ -109,12 +109,12 @@ This optional local smoke uses the installed `claude` CLI with normal `-p`
 mode plus an explicit `--allowedTools` list for the six required PDT read tools
 under the observed Desktop server name and renamed MCP server names, structured
 output, and non-mutating tool discovery; a broad `--disallowedTools` denylist
-for built-ins plus PDT mutate-tool prefixes on the configured Desktop MCP
+for built-ins plus PDT mutate-tool prefixes on the configured Claude CLI MCP
 server; verbose stream JSON telemetry; and schema-enforced structured output to
-exercise the currently logged-in Claude user and Claude Desktop PDT MCP setup.
+exercise the currently logged-in Claude user and Claude CLI PDT MCP setup.
 It never passes `claude --bare`;
 if `--bare` is supplied to the smoke, it refuses the run because bare mode does
-not prove the signed-in Desktop setup. Use `--model <alias>` or
+not prove the signed-in Claude CLI setup. Use `--model <alias>` or
 `PDTBAR_CLAUDE_MODEL=<alias>` when the local Claude default model is
 unavailable; the current manual path defaults to the public `opus` alias. Pass
 `--claude <path>` or `PDTBAR_CLAUDE_BIN=<path>` for a scripted fake command in

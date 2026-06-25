@@ -18,22 +18,22 @@ No-argument `pdtbar` launch is the user path. It uses isolated app support when 
 pdtbar --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/manual-snapshot
 ```
 
-On product launch the app enters `probingClaude` before visible login UI. Scripted smoke files can drive this state in isolated test runs; otherwise the probe checks whether the existing signed-in Claude user can reach the configured PDT MCP server through `claude mcp list`. It must not open surprise prompts or fall back to fixtures.
+On product launch the app enters `probingClaude` before visible login UI. Scripted smoke files can drive this state in isolated test runs; otherwise the probe checks whether the existing signed-in Claude CLI user can reach the configured PDT MCP server through `claude mcp list`. It must not open surprise prompts or fall back to fixtures.
 
 ## Setup states
 
 - Ready Claude/PDT setup: skip logged-out UI and start first fetch.
 - Missing Claude login: show `Not connected`, `Log in with Claude`, and `Check again`.
-- Missing PDT MCP: show `Add the PDT MCP server in Claude Desktop` and `Check again`.
-- Missing Claude Desktop or failed handoff: show `Claude Desktop not found` and retryable `Log in with Claude`.
+- Missing PDT MCP: show `Add the PDT MCP server to Claude` and `Check again`.
+- Missing Claude CLI or failed login: show the matching CodexBar-style login failure (`Claude CLI not found`, `Claude login timed out`, `Claude login failed`, or `Could not start claude auth login`) plus retryable `Log in with Claude`.
 - Probe/fetch failure: keep setup or the previous good pulse visible; show retry copy in the menu.
 
-`Log in with Claude` is user-initiated. It opens or focuses Claude Desktop through the app handoff path. Browser OAuth, generic providers, Codex login, API keys, tokens, raw MCP JSON, and mcporter are not product login paths.
-After a successful handoff, PDTBar re-runs Claude/PDT readiness before deciding whether to fetch, show signed-out setup, show missing PDT MCP setup, or show probe failure. A failed handoff shows `Claude Desktop not found` with a retryable login action.
+`Log in with Claude` is user-initiated. It runs `claude auth login` through the same PTY-style flow CodexBar uses for Claude Code auth, then waits for CLI login success. Browser OAuth, generic providers, Codex login, API keys, tokens, raw MCP JSON, and mcporter are not product login paths.
+After a successful login, PDTBar re-runs Claude/PDT readiness before deciding whether to fetch, show signed-out setup, show missing PDT MCP setup, or show probe failure. A failed login shows the matching retryable login failure state.
 
 ## First fetch and returning launch
 
-The first fetch calls only required v1 PDT read tools through the Claude/PDT MCP connector. Scripted smoke runs use an isolated scripted connector file; real launches use the logged-in Claude CLI account and the Claude Desktop PDT MCP server.
+The first fetch calls only required v1 PDT read tools through the Claude/PDT MCP connector. Scripted smoke runs use an isolated scripted connector file; real launches use the logged-in Claude CLI account and PDT MCP server.
 
 - `pdt-get-portfolio-holdings`
 - `pdt-get-portfolio-distributions`
@@ -65,4 +65,4 @@ Full status copy remains in tooltip, accessibility label, and the first Pulse me
 
 Public docs/proof may include command names, selectors, row text, counts, durations, scenario booleans, fixture names, and redacted status. They must not include private portfolio data, credentials, private endpoints, raw live payloads, account identifiers, holding names/values from live data, or non-public model IDs.
 
-Use `claude -p` only for optional manual PDT reachability proof. Do not use `claude --bare`; bare mode does not prove the signed-in Desktop MCP setup. The smoke defaults to the public `opus` alias and lets local users override via `--model` or `PDTBAR_CLAUDE_MODEL`.
+Use `claude -p` only for optional manual PDT reachability proof. Do not use `claude --bare`; bare mode does not prove the signed-in Claude CLI MCP setup. The smoke defaults to the public `opus` alias and lets local users override via `--model` or `PDTBAR_CLAUDE_MODEL`.

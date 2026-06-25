@@ -85,9 +85,29 @@ struct ClaudeLaunchFlowTests {
 
         #expect(rowTitles(in: missingLogin) == ["Not connected", "Log in with Claude", "Check again"])
         #expect(missingLogin.sections.flatMap(\.rows).last?.role == .setupRetry)
-        #expect(rowTitles(in: missingPDTMCP) == ["Add the PDT MCP server in Claude Desktop", "Check again"])
+        #expect(rowTitles(in: missingPDTMCP) == ["Add the PDT MCP server to Claude", "Check again"])
         #expect(missingPDTMCP.sections.flatMap(\.rows).last?.role == .setupRetry)
-        #expect(rowTitles(in: missingClaude) == ["Claude Desktop not found", "Log in with Claude"])
+        #expect(rowTitles(in: missingClaude) == ["Claude CLI not found", "Log in with Claude"])
+    }
+
+    @Test("Login failure descriptors use Claude CLI result copy")
+    func loginFailureDescriptorsUseClaudeCLIResultCopy() {
+        #expect(rowTitles(in: ClaudeLaunchFlow.descriptor(forLoginFailure: .missingBinary)) == [
+            "Claude CLI not found",
+            "Log in with Claude",
+        ])
+        #expect(rowTitles(in: ClaudeLaunchFlow.descriptor(forLoginFailure: .timedOut)) == [
+            "Claude login timed out",
+            "Log in with Claude",
+        ])
+        #expect(rowTitles(in: ClaudeLaunchFlow.descriptor(forLoginFailure: .failed)) == [
+            "Claude login failed",
+            "Log in with Claude",
+        ])
+        #expect(rowTitles(in: ClaudeLaunchFlow.descriptor(forLoginFailure: .launchFailed)) == [
+            "Could not start claude auth login",
+            "Log in with Claude",
+        ])
     }
 
     @Test("Fetch descriptors keep login UI out of ready path")

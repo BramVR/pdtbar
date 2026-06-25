@@ -775,6 +775,13 @@ public enum ClaudeLoginHandoffAction: Equatable {
     case showMissingClaude
 }
 
+public enum ClaudeLoginFailureReason: Equatable, Sendable {
+    case missingBinary
+    case timedOut
+    case failed
+    case launchFailed
+}
+
 public enum ClaudeLaunchFlow {
     public static func state(afterReadinessProbe result: ClaudeReadinessProbeResult?) -> ClaudeLaunchState {
         guard let result else {
@@ -870,7 +877,7 @@ public enum ClaudeLaunchFlow {
             return ClaudeSetupMenuDescriptor.loggedOut()
         case .openingClaude:
             return MenuDescriptor(
-                statusTitle: "Opening Claude Desktop",
+                statusTitle: "Signing in with Claude",
                 statusVisual: StatusVisualState(isDimmed: true),
                 sections: [
                     MenuSection(
@@ -880,8 +887,8 @@ public enum ClaudeLaunchFlow {
                             MenuRow(
                                 id: "claudeSetup.opening",
                                 role: .setupStatus,
-                                title: "Opening Claude Desktop",
-                                detail: "Finish setup there"
+                                title: "Signing in with Claude",
+                                detail: "Finish the claude auth login flow"
                             ),
                         ]
                     ),
@@ -951,6 +958,48 @@ public enum ClaudeLaunchFlow {
         }
     }
 
+    public static func descriptor(forLoginFailure reason: ClaudeLoginFailureReason) -> MenuDescriptor {
+        let title: String
+        let detail: String
+        switch reason {
+        case .missingBinary:
+            title = "Claude CLI not found"
+            detail = "Install Claude Code CLI"
+        case .timedOut:
+            title = "Claude login timed out"
+            detail = "Try again"
+        case .failed:
+            title = "Claude login failed"
+            detail = "Try again"
+        case .launchFailed:
+            title = "Could not start claude auth login"
+            detail = "Try again"
+        }
+        return MenuDescriptor(
+            statusTitle: title,
+            statusVisual: StatusVisualState(isDimmed: true),
+            sections: [
+                MenuSection(
+                    id: "claudeSetup",
+                    title: "Claude",
+                    rows: [
+                        MenuRow(
+                            id: "claudeSetup.loginFailure",
+                            role: .setupFailure,
+                            title: title,
+                            detail: detail
+                        ),
+                        MenuRow(
+                            id: "claudeSetup.login",
+                            role: .setupLogin,
+                            title: "Log in with Claude"
+                        ),
+                    ]
+                ),
+            ]
+        )
+    }
+
     private static func cachedPulseDescriptor(
         _ cachedPulse: MenuDescriptor,
         statusVisual: StatusVisualState? = nil,
@@ -1007,7 +1056,7 @@ public enum ClaudeSetupMenuDescriptor {
                             id: "claudeSetup.status",
                             role: .setupStatus,
                             title: "Not connected",
-                            detail: "Use Claude Desktop for PDT"
+                            detail: "Use Claude CLI for PDT"
                         ),
                         MenuRow(
                             id: "claudeSetup.login",
@@ -1022,7 +1071,7 @@ public enum ClaudeSetupMenuDescriptor {
 
     public static func missingClaude() -> MenuDescriptor {
         MenuDescriptor(
-            statusTitle: "Claude Desktop not found",
+            statusTitle: "Claude CLI not found",
             statusVisual: StatusVisualState(isDimmed: true),
             sections: [
                 MenuSection(
@@ -1032,8 +1081,8 @@ public enum ClaudeSetupMenuDescriptor {
                         MenuRow(
                             id: "claudeSetup.missingClaude",
                             role: .setupFailure,
-                            title: "Claude Desktop not found",
-                            detail: "Install or open Claude Desktop"
+                            title: "Claude CLI not found",
+                            detail: "Install Claude Code CLI"
                         ),
                         MenuRow(
                             id: "claudeSetup.login",
@@ -1059,7 +1108,7 @@ public enum ClaudeSetupMenuDescriptor {
                             id: "claudeSetup.status",
                             role: .setupStatus,
                             title: "Not connected",
-                            detail: "Sign in with Claude Desktop"
+                            detail: "Sign in with Claude CLI"
                         ),
                         MenuRow(
                             id: "claudeSetup.login",
@@ -1079,7 +1128,7 @@ public enum ClaudeSetupMenuDescriptor {
 
     public static func missingPDTMCP() -> MenuDescriptor {
         MenuDescriptor(
-            statusTitle: "Add the PDT MCP server in Claude Desktop",
+            statusTitle: "Add the PDT MCP server to Claude",
             statusVisual: StatusVisualState(isDimmed: true),
             sections: [
                 MenuSection(
@@ -1089,7 +1138,7 @@ public enum ClaudeSetupMenuDescriptor {
                         MenuRow(
                             id: "claudeSetup.missingPDTMCP",
                             role: .setupFailure,
-                            title: "Add the PDT MCP server in Claude Desktop",
+                            title: "Add the PDT MCP server to Claude",
                             detail: "Then check again"
                         ),
                         MenuRow(
