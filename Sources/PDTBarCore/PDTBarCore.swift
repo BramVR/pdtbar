@@ -2359,16 +2359,6 @@ public enum PressureEngine {
     public static let bigMoverThreshold = 0.10
     private static let freshnessBusinessDayGrace = 1
 
-    public static func materialReadFingerprints(
-        from snapshot: PortfolioSnapshot,
-        priorSnapshot: PortfolioSnapshot? = nil
-    ) -> [String] {
-        (concentrationMaterialItems(from: snapshot)
-            + incomeItems(from: snapshot)
-            + bigMoverItems(from: snapshot, priorSnapshot: priorSnapshot))
-            .map(\.readFingerprint)
-    }
-
     public static func buildModel(
         from snapshot: PortfolioSnapshot,
         priorSnapshot: PortfolioSnapshot? = nil,
