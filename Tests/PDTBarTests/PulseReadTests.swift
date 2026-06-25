@@ -16,6 +16,19 @@ struct PulseReadTests {
         #expect(reloaded.contains("pulse:v1:test:fingerprint"))
     }
 
+    @Test("Mark read preserves persisted schema version")
+    func markReadPreservesSchemaVersion() throws {
+        let store = try temporaryPulseReadStore()
+
+        try store.save(PulseReadState(schemaVersion: 2, readFingerprints: ["pulse:v1:existing"]))
+        try store.markRead("pulse:v1:new")
+        let reloaded = try store.load()
+
+        #expect(reloaded.schemaVersion == 2)
+        #expect(reloaded.contains("pulse:v1:existing"))
+        #expect(reloaded.contains("pulse:v1:new"))
+    }
+
     @Test("Resetting stale read fingerprints preserves newer read writes")
     func resetPreservesNewerReadWrites() throws {
         let store = try temporaryPulseReadStore()
@@ -132,6 +145,36 @@ struct PulseReadTests {
 
         #expect(refresh.model.rankedAttentionItems.first?.readFingerprint == originalItem.readFingerprint)
         #expect(!((try readStore.load()).contains(originalItem.readFingerprint)))
+    }
+
+    @Test("Changed income fingerprint resurfaces and prunes stale read")
+    func changedIncomeFingerprintResurfacesAndPrunesStaleRead() throws {
+        let originalSnapshot = try fixtureSnapshot("income-event.json")
+        let originalItem = try #require(
+            PressureEngine.buildModel(from: originalSnapshot)
+                .rankedAttentionItems
+                .first { $0.facet == "income" }
+        )
+        var changedSnapshot = originalSnapshot
+        let eventIndex = try #require(
+            changedSnapshot.incomeEvents.firstIndex { $0.kind == "ex-dividend" && !$0.estimated }
+        )
+        changedSnapshot.incomeEvents[eventIndex].date = "2026-07-01"
+        let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-income-stale-read-test")
+        let readStore = PulseReadStore(directory: snapshotStore.directory)
+
+        try readStore.markRead(originalItem.readFingerprint)
+        let run = try PressureRunner.run(
+            dataSource: StaticPortfolioDataSource(snapshot: changedSnapshot),
+            snapshotStore: snapshotStore,
+            pulseReadStore: readStore
+        )
+        let changedItem = try #require(run.model.rankedAttentionItems.first { $0.facet == "income" })
+        let readState = try readStore.load()
+
+        #expect(changedItem.readFingerprint != originalItem.readFingerprint)
+        #expect(!readState.contains(originalItem.readFingerprint))
+        #expect(!readState.contains(changedItem.readFingerprint))
     }
 
     @Test("Same material concentration remains read after prior-aware refresh and cached relaunch")

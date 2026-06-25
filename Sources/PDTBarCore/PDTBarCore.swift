@@ -235,14 +235,17 @@ public struct AttentionItem: Codable, Equatable {
 }
 
 public extension AttentionItem {
-    var readFingerprint: String {
-        let identity = holdingIdentity.map { "quote:\($0.quoteId):name:\(fingerprintToken($0.name))" }
+    private var readFingerprintIdentity: String {
+        holdingIdentity.map { "quote:\($0.quoteId):name:\(fingerprintToken($0.name))" }
             ?? "id:\(fingerprintToken(id))"
+    }
+
+    var readFingerprint: String {
         switch facet {
         case "allocation":
             return [
                 "pulse:v1:allocation",
-                identity,
+                readFingerprintIdentity,
                 "threshold-bp:\(basisPoints(threshold))",
                 "severity:\(fingerprintToken(severity))",
                 "weight-bucket-bp:\(bucketBasisPoints(currentWeight, bucketSize: 100))",
@@ -250,7 +253,7 @@ public extension AttentionItem {
         case "income":
             return [
                 "pulse:v1:income",
-                identity,
+                readFingerprintIdentity,
                 "date:\(eventDate ?? "unknown")",
                 "amount:\(moneyFingerprint(amount))",
                 "change-bp:\(basisPoints(changePercent))",
@@ -258,7 +261,7 @@ public extension AttentionItem {
         case "bigMovers":
             return [
                 "pulse:v1:bigMovers",
-                identity,
+                readFingerprintIdentity,
                 "window:\(windowStart ?? "unknown")..\(windowEnd ?? "unknown")",
                 "move-bucket-bp:\(bucketBasisPoints(moveSize, bucketSize: 100))",
             ].joined(separator: ":")
@@ -266,10 +269,21 @@ public extension AttentionItem {
             return [
                 "pulse:v1",
                 fingerprintToken(facet),
-                identity,
+                readFingerprintIdentity,
                 "severity:\(fingerprintToken(severity))",
                 "score-bp:\(basisPoints(score))",
             ].joined(separator: ":")
+        }
+    }
+
+    var staleReadPruningPrefix: String? {
+        switch facet {
+        case "income":
+            return ["pulse:v1:income", readFingerprintIdentity].joined(separator: ":") + ":"
+        case "bigMovers":
+            return ["pulse:v1:bigMovers", readFingerprintIdentity].joined(separator: ":") + ":"
+        default:
+            return nil
         }
     }
 
@@ -277,11 +291,9 @@ public extension AttentionItem {
         guard facet == "allocation" else {
             return nil
         }
-        let identity = holdingIdentity.map { "quote:\($0.quoteId):name:\(fingerprintToken($0.name))" }
-            ?? "id:\(fingerprintToken(id))"
         return [
             "pulse:v1:allocation",
-            identity,
+            readFingerprintIdentity,
             "threshold-bp:\(basisPoints(threshold))",
         ].joined(separator: ":") + ":"
     }
@@ -324,7 +336,10 @@ public struct PulseReadStore: Sendable {
     public func markRead(_ fingerprint: String) throws {
         try Self.mutationQueue.sync {
             var state = try loadUnlocked()
-            state = PulseReadState(readFingerprints: state.readFingerprints + [fingerprint])
+            state = PulseReadState(
+                schemaVersion: state.schemaVersion,
+                readFingerprints: state.readFingerprints + [fingerprint]
+            )
             try saveUnlocked(state)
         }
     }
@@ -3548,10 +3563,33 @@ public enum PressureRunner {
                 .filter(\.resetsReadState)
                 .map(\.readFingerprint)
         )
-        guard !reappearedFingerprints.isEmpty else {
+        let staleFingerprints = staleReadFingerprints(in: model, readState: loadedReadState)
+        let fingerprintsToRemove = reappearedFingerprints.union(staleFingerprints)
+        guard !fingerprintsToRemove.isEmpty else {
             return loadedReadState
         }
-        return try pulseReadStore.removeReadFingerprints(reappearedFingerprints)
+        return try pulseReadStore.removeReadFingerprints(fingerprintsToRemove)
+    }
+
+    private static func staleReadFingerprints(
+        in model: PortfolioPulseModel,
+        readState: PulseReadState
+    ) -> Set<String> {
+        var currentFingerprintsByPrefix: [String: Set<String>] = [:]
+        for item in model.rankedAttentionItems {
+            guard let prefix = item.staleReadPruningPrefix else {
+                continue
+            }
+            currentFingerprintsByPrefix[prefix, default: []].insert(item.readFingerprint)
+        }
+        guard !currentFingerprintsByPrefix.isEmpty else {
+            return []
+        }
+        return Set(readState.readFingerprints.filter { fingerprint in
+            currentFingerprintsByPrefix.contains { prefix, currentFingerprints in
+                fingerprint.hasPrefix(prefix) && !currentFingerprints.contains(fingerprint)
+            }
+        })
     }
 }
 
