@@ -303,12 +303,47 @@ public struct PulseReadState: Codable, Equatable, Sendable {
 
 public struct PulseReadStore: Sendable {
     public var directory: URL
+    private static let mutationQueue = DispatchQueue(label: "PDTBarCore.PulseReadStore.mutation")
 
     public init(directory: URL) {
         self.directory = directory
     }
 
     public func load() throws -> PulseReadState {
+        try Self.mutationQueue.sync {
+            try loadUnlocked()
+        }
+    }
+
+    public func save(_ state: PulseReadState) throws {
+        try Self.mutationQueue.sync {
+            try saveUnlocked(state)
+        }
+    }
+
+    public func markRead(_ fingerprint: String) throws {
+        try Self.mutationQueue.sync {
+            var state = try loadUnlocked()
+            state = PulseReadState(readFingerprints: state.readFingerprints + [fingerprint])
+            try saveUnlocked(state)
+        }
+    }
+
+    public func removeReadFingerprints(_ fingerprints: Set<String>) throws -> PulseReadState {
+        try Self.mutationQueue.sync {
+            let state = try loadUnlocked()
+            let resetState = PulseReadState(
+                schemaVersion: state.schemaVersion,
+                readFingerprints: state.readFingerprints.filter { !fingerprints.contains($0) }
+            )
+            if resetState != state {
+                try saveUnlocked(resetState)
+            }
+            return resetState
+        }
+    }
+
+    private func loadUnlocked() throws -> PulseReadState {
         let target = stateFile
         guard FileManager.default.fileExists(atPath: target.path) else {
             return PulseReadState()
@@ -321,15 +356,9 @@ public struct PulseReadStore: Sendable {
         return state
     }
 
-    public func save(_ state: PulseReadState) throws {
+    private func saveUnlocked(_ state: PulseReadState) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try stableJSONData(state).write(to: stateFile, options: .atomic)
-    }
-
-    public func markRead(_ fingerprint: String) throws {
-        var state = try load()
-        state = PulseReadState(readFingerprints: state.readFingerprints + [fingerprint])
-        try save(state)
     }
 
     private var stateFile: URL {
@@ -3522,14 +3551,7 @@ public enum PressureRunner {
         guard !reappearedFingerprints.isEmpty else {
             return loadedReadState
         }
-        let resetState = PulseReadState(
-            schemaVersion: loadedReadState.schemaVersion,
-            readFingerprints: loadedReadState.readFingerprints.filter { !reappearedFingerprints.contains($0) }
-        )
-        if resetState != loadedReadState {
-            try pulseReadStore.save(resetState)
-        }
-        return resetState
+        return try pulseReadStore.removeReadFingerprints(reappearedFingerprints)
     }
 }
 

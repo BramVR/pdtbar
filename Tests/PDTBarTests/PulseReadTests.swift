@@ -16,6 +16,20 @@ struct PulseReadTests {
         #expect(reloaded.contains("pulse:v1:test:fingerprint"))
     }
 
+    @Test("Resetting stale read fingerprints preserves newer read writes")
+    func resetPreservesNewerReadWrites() throws {
+        let store = try temporaryPulseReadStore()
+
+        try store.save(PulseReadState(readFingerprints: ["pulse:v1:stale"]))
+        _ = try store.load()
+        try store.markRead("pulse:v1:newer")
+        let reset = try store.removeReadFingerprints(["pulse:v1:stale"])
+
+        #expect(!reset.contains("pulse:v1:stale"))
+        #expect(reset.contains("pulse:v1:newer"))
+        #expect((try store.load()).readFingerprints == ["pulse:v1:newer"])
+    }
+
     @Test("Corrupt read state falls back to empty")
     func corruptReadStateFallsBackToEmpty() throws {
         let store = try temporaryPulseReadStore()
