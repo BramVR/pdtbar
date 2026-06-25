@@ -58,6 +58,7 @@ swift build --product pdtbar
 swift run pdtbar-smoke scripted-pdt-connector
 swift run pdtbar-smoke scripted-login-handoff
 swift run pdtbar-smoke scripted-setup-retry
+swift run pdtbar-smoke scripted-pulse-mark-read
 swift run pdtbar-smoke scripted-first-fetch
 swift run pdtbar-smoke scripted-returning-launch
 swift run pdtbar-smoke real-claude-flow-ax
