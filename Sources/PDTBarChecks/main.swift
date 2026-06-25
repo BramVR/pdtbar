@@ -1192,8 +1192,8 @@ try check(
     "attention item should expose threshold"
 )
 try check(
-    concentrationItem.detail == "Nova Lithography is 24.2% of the portfolio, above the 20.0% concentration line.",
-    "attention item copy should be descriptive"
+    concentrationItem.detail == "Above concentration line at 24.2%.",
+    "cold-start concentration copy should stay compact"
 )
 try check(!concentrationItem.detail.localizedCaseInsensitiveContains("sell"), "copy should not prescribe selling")
 try check(!concentrationItem.detail.localizedCaseInsensitiveContains("buy"), "copy should not prescribe buying")
@@ -1207,6 +1207,24 @@ try check(
 try check(
     concentrationRun.descriptor.statusVisual.isDimmed,
     "stale concentration descriptor may dim the whole icon without lowering attention fill"
+)
+let concentrationSnapshot = try PDTFixtureDataSource.snapshot(from: concentrationFixture)
+let quietPriorSnapshot = try PDTFixtureDataSource.snapshot(from: fixture)
+let crossingConcentrationModel = PressureEngine.buildModel(
+    from: concentrationSnapshot,
+    priorSnapshot: quietPriorSnapshot
+)
+try check(
+    crossingConcentrationModel.rankedAttentionItems.first?.detail == "Crossed concentration line at 24.2%.",
+    "concentration copy should say crossed when prior snapshot was below the line"
+)
+let repeatedConcentrationModel = PressureEngine.buildModel(
+    from: concentrationSnapshot,
+    priorSnapshot: concentrationSnapshot
+)
+try check(
+    repeatedConcentrationModel.rankedAttentionItems.filter { $0.facet == "allocation" }.isEmpty,
+    "concentration pressure should not repeat when the prior snapshot was already over the line"
 )
 try check(
     concentrationRun.descriptor.statusVisual.barHeights[0] == concentrationRun.descriptor.statusVisual.barHeights[2]
@@ -1323,8 +1341,8 @@ try check(
 )
 try check(
     thresholdModel.rankedAttentionItems.first?.detail
-        == "Threshold Holding is 20.0% of the portfolio, at the 20.0% concentration line.",
-    "threshold concentration copy should describe equality accurately"
+        == "At concentration line: 20.0%.",
+    "threshold concentration copy should describe equality compactly"
 )
 
 let rankingFixtureDirectory = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-allocation-ranking-fixture")
