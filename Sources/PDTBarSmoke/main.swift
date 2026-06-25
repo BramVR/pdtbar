@@ -3104,11 +3104,13 @@ private func displayBounds(containing rect: CGRect?) -> CGRect {
 private func screenshotCaptureBounds(containing rect: CGRect?) -> CGRect {
     let display = displayBounds(containing: rect)
     guard let rect, !rect.isNull, !rect.isEmpty else {
+        let width = min(display.width, 1700)
+        let height = min(display.height, 760)
         return CGRect(
-            x: max(display.minX, 0),
-            y: max(display.minY, 0),
-            width: min(display.width, 900),
-            height: min(display.height, 600)
+            x: display.maxX - width,
+            y: display.minY,
+            width: width,
+            height: height
         ).integral
     }
     let padded = rect.insetBy(dx: -40, dy: -40)
