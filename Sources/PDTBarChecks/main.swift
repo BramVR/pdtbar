@@ -278,8 +278,8 @@ try check(!descriptor.statusVisual.isDimmed, "quiet descriptor should not dim a 
 try check(descriptor.statusVisual.statusCopy == descriptor.statusTitle, "quiet descriptor visual should expose full status copy")
 try check(descriptor.statusVisual.barHeights.count == 3, "quiet descriptor should expose three concentration bars")
 try check(
-    StatusVisualState().barHeights == [0.58, 1.0, 0.58],
-    "unknown weights should default to a deterministic balanced concentration stack"
+    StatusVisualState().barHeights == [0.5, 1.0, 0.667],
+    "unknown weights should default to the deterministic concentration-stack silhouette"
 )
 try check(
     descriptor.statusVisual.barHeights[1] == 1.0,
@@ -287,7 +287,7 @@ try check(
 )
 try check(
     descriptor.statusVisual.barHeights == StatusVisualState().barHeights,
-    "missing X-ray data should use the deterministic balanced fallback stack"
+    "missing X-ray data should use the deterministic fallback silhouette"
 )
 var twoETFDirectModel = decoded
 twoETFDirectModel.facetSnapshots.allocation.openHoldingCount = 2
@@ -302,11 +302,11 @@ twoETFLikeModel.facetSnapshots.allocation.xRayHoldings = decoded.facetSnapshots.
 let twoETFXRayHeights = MenuDescriptorRenderer.render(model: twoETFLikeModel).statusVisual.barHeights
 try check(
     twoETFDirectHeights == StatusVisualState().barHeights
-        && twoETFXRayHeights[0] == twoETFXRayHeights[2]
         && twoETFXRayHeights[0] != twoETFDirectHeights[0]
+        && twoETFXRayHeights[2] > twoETFXRayHeights[0]
         && twoETFXRayHeights[1] == 1.0
         && twoETFDirectHeights[1] == 1.0,
-    "X-ray look-through weights should override balanced fallback side bars while the middle bar remains max height"
+    "X-ray look-through weights should scale the side silhouette while the middle bar remains max height"
 )
 var concentratedXRayModel = twoETFDirectModel
 concentratedXRayModel.facetSnapshots.allocation.xRayHoldings = [
@@ -315,10 +315,10 @@ concentratedXRayModel.facetSnapshots.allocation.xRayHoldings = [
 ]
 let concentratedXRayHeights = MenuDescriptorRenderer.render(model: concentratedXRayModel).statusVisual.barHeights
 try check(
-    concentratedXRayHeights[0] > twoETFXRayHeights[0]
-        && concentratedXRayHeights[2] > twoETFXRayHeights[2]
+    concentratedXRayHeights[0] < twoETFXRayHeights[0]
+        && concentratedXRayHeights[2] < twoETFXRayHeights[2]
         && concentratedXRayHeights[1] == 1.0,
-    "concentrated X-ray shoulders should render taller side bars than diversified X-ray look-through"
+    "high X-ray concentration should scale side bars downward from the default silhouette"
 )
 var skewedXRayModel = twoETFDirectModel
 skewedXRayModel.facetSnapshots.allocation.xRayHoldings = [
@@ -330,10 +330,10 @@ skewedXRayModel.facetSnapshots.allocation.xRayHoldings = [
 ]
 let skewedXRayHeights = MenuDescriptorRenderer.render(model: skewedXRayModel).statusVisual.barHeights
 try check(
-    skewedXRayHeights[0] > twoETFXRayHeights[0]
-        && skewedXRayHeights[2] < skewedXRayHeights[0]
+    skewedXRayHeights[0] < twoETFXRayHeights[0]
+        && skewedXRayHeights[2] > skewedXRayHeights[0]
         && skewedXRayHeights[1] == 1.0,
-    "skewed X-ray concentration should lift the left side bar above the right side bar"
+    "skewed X-ray concentration should lower the side silhouette while keeping the right side taller than the left"
 )
 try check(descriptorObject.keys.contains("statusBadge"), "descriptor JSON should explicitly encode statusBadge")
 try check(descriptorObject.keys.contains("statusVisual"), "descriptor JSON should encode the plain status visual state")
@@ -370,7 +370,7 @@ let shortVisual = try JSONDecoder().decode(
     """.utf8)
 )
 try check(
-    shortVisual.barHeights == [0.9, 1.0, 0.58]
+    shortVisual.barHeights == [0.9, 1.0, 0.667]
         && shortVisual.filledBarCount == 3
         && shortVisual.isDimmed
         && shortVisual.statusCopy == "Decoded status",
@@ -856,7 +856,8 @@ let partialXRayHeights = MenuDescriptorRenderer.render(model: scriptedLiveRun.mo
 try check(
     partialXRayHeights[0] < 0.8
         && partialXRayHeights[1] == 1.0
-        && partialXRayHeights[2] < 0.5,
+        && partialXRayHeights[0] > StatusVisualState().barHeights[0]
+        && partialXRayHeights[2] > StatusVisualState().barHeights[2],
     "partial X-ray coverage should use absolute portfolio weights instead of renormalizing to a full distribution"
 )
 try check(
@@ -1513,7 +1514,7 @@ try check(
 )
 try check(
     concentrationRun.descriptor.statusVisual.barHeights == StatusVisualState().barHeights,
-    "concentration fixture without X-ray data should keep the balanced fallback stack"
+    "concentration fixture without X-ray data should keep the fallback silhouette"
 )
 try check(
     concentrationRun.descriptor.statusVisual.barHeights[1] == 1.0,

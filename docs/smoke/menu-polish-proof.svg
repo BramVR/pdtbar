@@ -5,9 +5,9 @@
     <text x="42" y="52" class="label">Setup</text>
     <rect x="40" y="66" width="488" height="34" rx="7" class="status"/>
     <g>
-<rect x="54.00" y="82.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
+<rect x="54.00" y="83.30" width="5.00" height="8.10" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
 <rect x="61.00" y="75.20" width="5.00" height="16.20" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
-<rect x="68.00" y="82.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
+<rect x="68.00" y="80.59" width="5.00" height="10.81" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
 </g>
     <text x="46" y="128" class="section">Claude</text>
 <text x="46" y="148" class="row">Not connected - Sign in with Claude CLI</text>
@@ -19,9 +19,9 @@
     <text x="586" y="52" class="label">Fetching</text>
     <rect x="584" y="66" width="488" height="34" rx="7" class="status"/>
     <g>
-<rect x="598.00" y="82.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
+<rect x="598.00" y="83.30" width="5.00" height="8.10" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
 <rect x="605.00" y="75.20" width="5.00" height="16.20" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
-<rect x="612.00" y="82.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
+<rect x="612.00" y="80.59" width="5.00" height="10.81" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
 </g>
     <text x="590" y="128" class="section">Portfolio</text>
 <text x="590" y="148" class="row">Fetching portfolio - Read-only through Claude</text>
@@ -31,9 +31,9 @@
     <text x="42" y="406" class="label">All quiet</text>
     <rect x="40" y="420" width="488" height="34" rx="7" class="status"/>
     <g>
-<rect x="54.00" y="436.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.86"/>
+<rect x="54.00" y="437.30" width="5.00" height="8.10" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.86"/>
 <rect x="61.00" y="429.20" width="5.00" height="16.20" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.86"/>
-<rect x="68.00" y="436.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.86"/>
+<rect x="68.00" y="434.59" width="5.00" height="10.81" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.86"/>
 </g>
     <text x="46" y="482" class="section">Pulse</text>
 <text x="46" y="502" class="row">EUR 51,200.00 - All quiet</text>
@@ -51,10 +51,10 @@
     <text x="586" y="406" class="label">Pressure</text>
     <rect x="584" y="420" width="488" height="34" rx="7" class="status"/>
     <g>
-<rect x="598.00" y="436.00" width="5.00" height="9.40" rx="2.50" fill="#ffffff" opacity="0.36"/>
-<rect x="598.00" y="436.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
+<rect x="598.00" y="437.30" width="5.00" height="8.10" rx="2.50" fill="#ffffff" opacity="0.36"/>
+<rect x="598.00" y="437.30" width="5.00" height="8.10" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
 <rect x="605.00" y="429.20" width="5.00" height="16.20" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
-<rect x="612.00" y="436.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
+<rect x="612.00" y="434.59" width="5.00" height="10.81" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
 </g>
     <text x="590" y="482" class="section">Pulse</text>
 <text x="590" y="502" class="row">EUR 64,000.00 - Nova Lithography concentration</text>
@@ -72,9 +72,9 @@
     <text x="42" y="760" class="label">Error</text>
     <rect x="40" y="774" width="488" height="34" rx="7" class="status"/>
     <g>
-<rect x="54.00" y="790.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
+<rect x="54.00" y="791.30" width="5.00" height="8.10" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
 <rect x="61.00" y="783.20" width="5.00" height="16.20" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
-<rect x="68.00" y="790.00" width="5.00" height="9.40" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
+<rect x="68.00" y="788.59" width="5.00" height="10.81" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
 </g>
     <text x="46" y="836" class="section">Portfolio</text>
 <text x="46" y="856" class="row">Could not fetch portfolio - No partial pulse published</text>

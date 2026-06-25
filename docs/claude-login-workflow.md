@@ -53,7 +53,7 @@ Returning launches may render the previous real snapshot immediately while a fre
 The menu bar always shows the Concentration Stack icon. It is a stable portfolio mark, not top-three holdings and not a mini dashboard:
 
 - bar heights: middle bar is always max height; side bars show X-ray look-through concentration shoulders
-- missing X-ray data: deterministic balanced fallback stack
+- missing X-ray data: deterministic default silhouette with left half-height and right two-thirds height
 - filled bars: ranked attention item count, capped at three
 - zero attention: no filled bars
 - no separate round notification dot

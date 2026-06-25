@@ -602,13 +602,13 @@ public struct StatusVisualState: Codable, Equatable {
     public var statusCopy: String
 
     public init(
-        barHeights: [Double] = [0.58, 1.0, 0.58],
+        barHeights: [Double] = [0.5, 1.0, 0.667],
         filledBarCount: Int = 0,
         isDimmed: Bool = false,
         statusCopy: String = ""
     ) {
         self.barHeights = Array(barHeights.prefix(3))
-        let fallbackHeights = [0.58, 1.0, 0.58]
+        let fallbackHeights = [0.5, 1.0, 0.667]
         while self.barHeights.count < 3 {
             self.barHeights.append(fallbackHeights[self.barHeights.count])
         }
@@ -630,7 +630,7 @@ public struct StatusVisualState: Codable, Equatable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
-            barHeights: try container.decodeIfPresent([Double].self, forKey: .barHeights) ?? [0.58, 1.0, 0.58],
+            barHeights: try container.decodeIfPresent([Double].self, forKey: .barHeights) ?? [0.5, 1.0, 0.667],
             filledBarCount: try container.decodeIfPresent(Int.self, forKey: .filledBarCount) ?? 0,
             isDimmed: try container.decodeIfPresent(Bool.self, forKey: .isDimmed) ?? false,
             statusCopy: try container.decodeIfPresent(String.self, forKey: .statusCopy) ?? ""
@@ -1725,15 +1725,20 @@ public enum MenuDescriptorRenderer {
         guard !sortedWeights.isEmpty else {
             return StatusVisualState().barHeights
         }
-        let leftShoulder = concentrationShoulderHeight(for: sortedWeights.first ?? 0)
-        let rightShoulder = concentrationShoulderHeight(for: sortedWeights.dropFirst().first ?? 0)
-        return [leftShoulder, 1.0, rightShoulder]
+        let scale = concentrationSideScale(from: sortedWeights)
+        return [
+            rounded(0.5 * scale, places: 3),
+            1.0,
+            min(1.0, rounded(0.667 * scale, places: 3)),
+        ]
     }
 
-    private static func concentrationShoulderHeight(for portfolioWeight: Double) -> Double {
-        let clampedWeight = max(0.0, min(0.5, portfolioWeight))
-        let pressure = sqrt(clampedWeight / 0.5)
-        return rounded(0.42 + (0.48 * pressure), places: 3)
+    private static func concentrationSideScale(from portfolioWeights: [Double]) -> Double {
+        let hhi = portfolioWeights.reduce(0.0) { $0 + ($1 * $1) }
+        let diversifiedHHI = 1.0 / 25.0
+        let concentratedHHI = 0.16
+        let pressure = max(0.0, min(1.0, (hhi - diversifiedHHI) / (concentratedHHI - diversifiedHHI)))
+        return 1.25 - (0.5 * pressure)
     }
 
     private static func attentionChildren(
