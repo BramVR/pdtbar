@@ -29,6 +29,9 @@ currentWorth          Money             // trading currency
 currentWorthLocal     Money             // portfolio currency
 portfolioWeight       Number            // FRACTION (0.1567 == 15.67%)
 portfolioWeightRelative Number
+unrealisedBoughtPriceAverageLocal Money // current open-position average buy price
+unrealisedBoughtPriceTotalLocal Money   // fallback numerator for average buy price
+unrealisedBoughtShares Number           // fallback denominator for average buy price
 unrealisedGains       Money
 unrealisedGainsPercentage Number        // FRACTION
 dividendsReceived     Money

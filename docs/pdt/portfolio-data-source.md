@@ -64,11 +64,13 @@ Holding
   weight:         Weight          // PDT portfolioWeight
   worth:          Money           // PDT currentWorthLocal (portfolio currency)
   price:          Money           // PDT currentPriceLocal (portfolio currency)
+  averageBuyPrice: Money?         // PDT unrealisedBoughtPriceAverageLocal, or total/shares fallback
+  gainLoss:       Money?          // PDT unrealisedGains for the current open position
+  gainLossPct:    Double?         // PDT unrealisedGainsPercentage for the current open position
   priceNative:    Money           // PDT currentPrice (trading currency, e.g. GBX/DKK/USD)
   fx:             Double          // PDT currentExchangeRate
   priceAsOf:      Date            // PDT currentPriceDate  (per-holding freshness!)
   fxAsOf:         Date            // PDT currentExchangeRateDate
-  unrealisedPct:  Double          // PDT unrealisedGainsPercentage
   isCash:         Bool            // PDT symbolName == "Cash"
   isClosed:       Bool            // PDT closedAt != null  (exclude from current views)
 
@@ -90,6 +92,10 @@ Normalization the seam owns (all pure logic, no UI):
 - **Two currencies per holding**: `currentPrice`/`currentWorth` are in the
   *trading* currency (GBX, DKK, USD…); `…Local` variants are in the *portfolio*
   currency (EUR). The engine should consume the `…Local` values + `currentExchangeRate`.
+- **Open-position cost/gain facts**: drill-down facts use `unrealised*` fields,
+  not `total*` fields, because sold history should not change current holding rows.
+  Average buy price prefers `unrealisedBoughtPriceAverageLocal`; fallback is
+  `unrealisedBoughtPriceTotalLocal / unrealisedBoughtShares` when both parse cleanly.
 - **Closed positions are included** in `holdings` with `currentWorth = 0` and
   `closedAt` set — filter them out for current allocation/movers.
 - **Cash is a holding** (`symbolName: "Cash"`, `symbolQuoteId` present) as well as

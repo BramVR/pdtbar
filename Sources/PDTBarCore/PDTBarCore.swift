@@ -279,6 +279,10 @@ public struct HoldingSummary: Codable, Equatable {
     public var quoteId: Int
     public var weight: Double
     public var worth: Money
+    public var price: Money?
+    public var averageBuyPrice: Money?
+    public var gainLoss: Money?
+    public var gainLossPercentage: Double?
 }
 
 public struct DistributionSummary: Codable, Equatable {
@@ -1890,6 +1894,42 @@ public enum MenuDescriptorRenderer {
                 detail: display(holding.worth)
             ),
         ]
+        if let price = holding.price {
+            rows.append(
+                MenuRow(
+                    id: "allocation.\(holding.quoteId).price",
+                    title: "Price",
+                    detail: display(price)
+                )
+            )
+        }
+        if let averageBuyPrice = holding.averageBuyPrice {
+            rows.append(
+                MenuRow(
+                    id: "allocation.\(holding.quoteId).averageBuyPrice",
+                    title: "Average buy price",
+                    detail: display(averageBuyPrice)
+                )
+            )
+        }
+        if let gainLoss = holding.gainLoss {
+            rows.append(
+                MenuRow(
+                    id: "allocation.\(holding.quoteId).gainLoss",
+                    title: "Gain/loss",
+                    detail: display(gainLoss)
+                )
+            )
+        }
+        if let gainLossPercentage = holding.gainLossPercentage {
+            rows.append(
+                MenuRow(
+                    id: "allocation.\(holding.quoteId).gainLossPercentage",
+                    title: "Gain/loss %",
+                    detail: signedPercent(gainLossPercentage)
+                )
+            )
+        }
         if let attention,
            let threshold = attention.threshold
         {
@@ -2016,7 +2056,11 @@ public enum PressureEngine {
                                 name: $0.name,
                                 quoteId: $0.quoteId,
                                 weight: $0.weight,
-                                worth: $0.worth
+                                worth: $0.worth,
+                                price: validMoney($0.price),
+                                averageBuyPrice: $0.averageBuyPrice,
+                                gainLoss: $0.gainLoss,
+                                gainLossPercentage: $0.gainLossPercentage
                             )
                         },
                     sectorBreakdown: snapshot.sectors,
@@ -2168,8 +2212,10 @@ public enum PressureEngine {
         let moverThreshold = Decimal(string: String(bigMoverThreshold)) ?? 0
         return snapshot.openHoldings.compactMap { holding -> AttentionItem? in
             guard let priorHolding = priorHoldings[holding.quoteId],
-                  let beforeDecimal = Decimal(string: priorHolding.price.value),
-                  let afterDecimal = Decimal(string: holding.price.value),
+                  let priorPrice = priorHolding.price,
+                  let price = holding.price,
+                  let beforeDecimal = Decimal(string: priorPrice.value),
+                  let afterDecimal = Decimal(string: price.value),
                   beforeDecimal != 0
             else { return nil }
 
@@ -2187,7 +2233,7 @@ public enum PressureEngine {
                 facet: "bigMovers",
                 rank: 0,
                 title: "\(holding.name) moved \(signedPercent(moveSize))",
-                detail: "\(holding.name) moved \(signedPercent(moveSize)) from \(holding.price.currency) \(decimalString(String(beforeValue), places: 2)) to \(holding.price.currency) \(decimalString(String(afterValue), places: 2)) while portfolio weight changed \(percent(priorHolding.weight)) -> \(percent(holding.weight)).",
+                detail: "\(holding.name) moved \(signedPercent(moveSize)) from \(price.currency) \(decimalString(String(beforeValue), places: 2)) to \(price.currency) \(decimalString(String(afterValue), places: 2)) while portfolio weight changed \(percent(priorHolding.weight)) -> \(percent(holding.weight)).",
                 severity: abs(moveSize) >= 0.20 ? "high" : "medium",
                 score: score,
                 holdingIdentity: HoldingIdentity(name: holding.name, quoteId: holding.quoteId),
@@ -2196,7 +2242,7 @@ public enum PressureEngine {
                 moveSize: moveSize,
                 beforeWeight: priorHolding.weight,
                 afterWeight: holding.weight,
-                valueCurrency: holding.price.currency,
+                valueCurrency: price.currency,
                 supportingDataSlotIDs: ["bigMovers.priorSnapshot", "bigMovers.prices"]
             )
         }
@@ -2755,8 +2801,15 @@ public struct PDTLiveDataSource: PortfolioDataSource {
                     quoteId: $0.symbolQuoteId,
                     weight: $0.portfolioWeight,
                     worth: $0.currentWorthLocal,
-                    price: $0.currentPriceLocal,
-                    priceAsOf: dayPrefix($0.currentPriceDate)
+                    price: validMoney($0.currentPriceLocal),
+                    priceAsOf: dayPrefix($0.currentPriceDate),
+                    averageBuyPrice: averageBuyPrice(
+                        explicit: $0.unrealisedBoughtPriceAverageLocal,
+                        total: $0.unrealisedBoughtPriceTotalLocal,
+                        shares: $0.unrealisedBoughtShares
+                    ),
+                    gainLoss: validMoney($0.unrealisedGains),
+                    gainLossPercentage: finite($0.unrealisedGainsPercentage)
                 )
             }
         let quoteIDsBySymbolID = options.includeIncomeQuoteLookups
@@ -2982,16 +3035,32 @@ public struct NormalizedHolding: Codable, Equatable {
     public var quoteId: Int
     public var weight: Double
     public var worth: Money
-    public var price: Money
+    public var price: Money?
     public var priceAsOf: String
+    public var averageBuyPrice: Money?
+    public var gainLoss: Money?
+    public var gainLossPercentage: Double?
 
-    public init(name: String, quoteId: Int, weight: Double, worth: Money, price: Money, priceAsOf: String) {
+    public init(
+        name: String,
+        quoteId: Int,
+        weight: Double,
+        worth: Money,
+        price: Money?,
+        priceAsOf: String,
+        averageBuyPrice: Money? = nil,
+        gainLoss: Money? = nil,
+        gainLossPercentage: Double? = nil
+    ) {
         self.name = name
         self.quoteId = quoteId
         self.weight = weight
         self.worth = worth
         self.price = price
         self.priceAsOf = priceAsOf
+        self.averageBuyPrice = averageBuyPrice
+        self.gainLoss = gainLoss
+        self.gainLossPercentage = gainLossPercentage
     }
 
     public init(from decoder: Decoder) throws {
@@ -3000,9 +3069,11 @@ public struct NormalizedHolding: Codable, Equatable {
         quoteId = try container.decode(Int.self, forKey: .quoteId)
         weight = try container.decode(Double.self, forKey: .weight)
         worth = try container.decode(Money.self, forKey: .worth)
-        price = try container.decodeIfPresent(Money.self, forKey: .price)
-            ?? Money(value: "0.00", currency: worth.currency)
+        price = validMoney(try? container.decodeIfPresent(Money.self, forKey: .price))
         priceAsOf = try container.decode(String.self, forKey: .priceAsOf)
+        averageBuyPrice = validMoney(try? container.decodeIfPresent(Money.self, forKey: .averageBuyPrice))
+        gainLoss = validMoney(try? container.decodeIfPresent(Money.self, forKey: .gainLoss))
+        gainLossPercentage = finite(try? container.decodeIfPresent(Double.self, forKey: .gainLossPercentage))
     }
 }
 
@@ -3061,8 +3132,15 @@ public struct PDTFixtureDataSource: PortfolioDataSource, PortfolioPriorSnapshotD
                     quoteId: $0.symbolQuoteId,
                     weight: $0.portfolioWeight,
                     worth: $0.currentWorthLocal,
-                    price: $0.currentPriceLocal,
-                    priceAsOf: dayPrefix($0.currentPriceDate)
+                    price: validMoney($0.currentPriceLocal),
+                    priceAsOf: dayPrefix($0.currentPriceDate),
+                    averageBuyPrice: averageBuyPrice(
+                        explicit: $0.unrealisedBoughtPriceAverageLocal,
+                        total: $0.unrealisedBoughtPriceTotalLocal,
+                        shares: $0.unrealisedBoughtShares
+                    ),
+                    gainLoss: validMoney($0.unrealisedGains),
+                    gainLossPercentage: finite($0.unrealisedGainsPercentage)
                 )
             }
 
@@ -3194,10 +3272,50 @@ private struct LiveHolding: Decodable {
     var symbolName: String
     var symbolQuoteId: Int
     var currentPriceDate: String
-    var currentPriceLocal: Money
+    var currentPriceLocal: Money?
     var currentWorthLocal: Money
     var portfolioWeight: Double
+    var unrealisedBoughtPriceAverageLocal: Money?
+    var unrealisedBoughtPriceTotalLocal: Money?
+    var unrealisedBoughtShares: Double?
+    var unrealisedGains: Money?
+    var unrealisedGainsPercentage: Double?
     var closedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case symbolName
+        case symbolQuoteId
+        case currentPriceDate
+        case currentPriceLocal
+        case currentWorthLocal
+        case portfolioWeight
+        case unrealisedBoughtPriceAverageLocal
+        case unrealisedBoughtPriceTotalLocal
+        case unrealisedBoughtShares
+        case unrealisedGains
+        case unrealisedGainsPercentage
+        case closedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        symbolName = try container.decode(String.self, forKey: .symbolName)
+        symbolQuoteId = try container.decode(Int.self, forKey: .symbolQuoteId)
+        currentPriceDate = try container.decode(String.self, forKey: .currentPriceDate)
+        currentPriceLocal = validMoney(try? container.decodeIfPresent(Money.self, forKey: .currentPriceLocal))
+        currentWorthLocal = try container.decode(Money.self, forKey: .currentWorthLocal)
+        portfolioWeight = try container.decode(Double.self, forKey: .portfolioWeight)
+        unrealisedBoughtPriceAverageLocal = validMoney(
+            try? container.decodeIfPresent(Money.self, forKey: .unrealisedBoughtPriceAverageLocal)
+        )
+        unrealisedBoughtPriceTotalLocal = validMoney(
+            try? container.decodeIfPresent(Money.self, forKey: .unrealisedBoughtPriceTotalLocal)
+        )
+        unrealisedBoughtShares = finite(try? container.decodeIfPresent(Double.self, forKey: .unrealisedBoughtShares))
+        unrealisedGains = validMoney(try? container.decodeIfPresent(Money.self, forKey: .unrealisedGains))
+        unrealisedGainsPercentage = finite(try? container.decodeIfPresent(Double.self, forKey: .unrealisedGainsPercentage))
+        closedAt = try container.decodeIfPresent(String.self, forKey: .closedAt)
+    }
 }
 
 private struct XRayHoldingsEnvelope: Decodable {
@@ -3302,11 +3420,53 @@ private struct FixtureHolding: Decodable {
     var symbolName: String
     var symbolQuoteId: Int
     var currentPriceDate: String
-    var currentPriceLocal: Money
+    var currentPriceLocal: Money?
     var currentWorth: Money?
     var currentWorthLocal: Money
     var portfolioWeight: Double
+    var unrealisedBoughtPriceAverageLocal: Money?
+    var unrealisedBoughtPriceTotalLocal: Money?
+    var unrealisedBoughtShares: Double?
+    var unrealisedGains: Money?
+    var unrealisedGainsPercentage: Double?
     var closedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case symbolName
+        case symbolQuoteId
+        case currentPriceDate
+        case currentPriceLocal
+        case currentWorth
+        case currentWorthLocal
+        case portfolioWeight
+        case unrealisedBoughtPriceAverageLocal
+        case unrealisedBoughtPriceTotalLocal
+        case unrealisedBoughtShares
+        case unrealisedGains
+        case unrealisedGainsPercentage
+        case closedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        symbolName = try container.decode(String.self, forKey: .symbolName)
+        symbolQuoteId = try container.decode(Int.self, forKey: .symbolQuoteId)
+        currentPriceDate = try container.decode(String.self, forKey: .currentPriceDate)
+        currentPriceLocal = validMoney(try? container.decodeIfPresent(Money.self, forKey: .currentPriceLocal))
+        currentWorth = validMoney(try? container.decodeIfPresent(Money.self, forKey: .currentWorth))
+        currentWorthLocal = try container.decode(Money.self, forKey: .currentWorthLocal)
+        portfolioWeight = try container.decode(Double.self, forKey: .portfolioWeight)
+        unrealisedBoughtPriceAverageLocal = validMoney(
+            try? container.decodeIfPresent(Money.self, forKey: .unrealisedBoughtPriceAverageLocal)
+        )
+        unrealisedBoughtPriceTotalLocal = validMoney(
+            try? container.decodeIfPresent(Money.self, forKey: .unrealisedBoughtPriceTotalLocal)
+        )
+        unrealisedBoughtShares = finite(try? container.decodeIfPresent(Double.self, forKey: .unrealisedBoughtShares))
+        unrealisedGains = validMoney(try? container.decodeIfPresent(Money.self, forKey: .unrealisedGains))
+        unrealisedGainsPercentage = finite(try? container.decodeIfPresent(Double.self, forKey: .unrealisedGainsPercentage))
+        closedAt = try container.decodeIfPresent(String.self, forKey: .closedAt)
+    }
 }
 
 private extension FixtureHolding {
@@ -3443,6 +3603,38 @@ private func latestLiveDividendAmount(
         .sorted { $0.date > $1.date }
         .first?
         .amount
+}
+
+private func averageBuyPrice(explicit: Money?, total: Money?, shares: Double?) -> Money? {
+    if let explicit = validMoney(explicit) {
+        return explicit
+    }
+    guard let total = validMoney(total),
+          let shares = finite(shares),
+          shares > 0,
+          let totalValue = Decimal(string: total.value, locale: Locale(identifier: "en_US_POSIX"))
+    else {
+        return nil
+    }
+    let average = totalValue / Decimal(shares)
+    return Money(value: canonicalDecimalString(average, places: 4), currency: total.currency)
+}
+
+private func validMoney(_ money: Money?) -> Money? {
+    guard let money,
+          !money.currency.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+          Decimal(string: money.value, locale: Locale(identifier: "en_US_POSIX")) != nil
+    else {
+        return nil
+    }
+    return money
+}
+
+private func finite(_ value: Double?) -> Double? {
+    guard let value, value.isFinite else {
+        return nil
+    }
+    return value
 }
 
 private func currentDayString() -> String {

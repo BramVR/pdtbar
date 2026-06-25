@@ -1598,6 +1598,120 @@ try check(
     "descriptor should render stale freshness from model facts"
 )
 
+let holdingFactsFixtureDirectory = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-holding-facts-fixture")
+defer {
+    try? FileManager.default.removeItem(at: holdingFactsFixtureDirectory.directory)
+}
+let holdingFactsFixture = holdingFactsFixtureDirectory.directory.appending(path: "holding-facts.json")
+try Data("""
+{
+  "_meta": { "asOf": "2026-06-22", "portfolioCurrency": "EUR" },
+  "getPortfolioHoldings": {
+    "holdings": [
+      {
+        "symbolName": "Core Facts Holding",
+        "symbolQuoteId": 9601,
+        "currentPriceDate": "2026-06-22T23:59:59+00:00",
+        "currentPriceLocal": { "value": "50.00", "currency": "EUR" },
+        "currentWorth": { "value": "1000.00", "currency": "EUR" },
+        "currentWorthLocal": { "value": "1000.00", "currency": "EUR" },
+        "portfolioWeight": 0.10,
+        "unrealisedBoughtPriceAverageLocal": { "value": "40.00", "currency": "EUR" },
+        "unrealisedBoughtPriceTotalLocal": { "value": "9999.00", "currency": "EUR" },
+        "unrealisedBoughtShares": 10,
+        "unrealisedGains": { "value": "200.00", "currency": "EUR" },
+        "unrealisedGainsPercentage": 0.25,
+        "totalGains": { "value": "9999.00", "currency": "EUR" },
+        "totalGainsPercentage": 9.99,
+        "closedAt": null
+      },
+      {
+        "symbolName": "Fallback Facts Holding",
+        "symbolQuoteId": 9602,
+        "currentPriceDate": "2026-06-22T23:59:59+00:00",
+        "currentPriceLocal": { "value": "25.00", "currency": "EUR" },
+        "currentWorth": { "value": "500.00", "currency": "EUR" },
+        "currentWorthLocal": { "value": "500.00", "currency": "EUR" },
+        "portfolioWeight": 0.05,
+        "unrealisedBoughtPriceTotalLocal": { "value": "300.00", "currency": "EUR" },
+        "unrealisedBoughtShares": 12,
+        "closedAt": null
+      },
+      {
+        "symbolName": "Sparse Facts Holding",
+        "symbolQuoteId": 9603,
+        "currentPriceDate": "2026-06-22T23:59:59+00:00",
+        "currentPriceLocal": { "value": "not-a-number", "currency": "EUR" },
+        "currentWorth": { "value": "400.00", "currency": "EUR" },
+        "currentWorthLocal": { "value": "400.00", "currency": "EUR" },
+        "portfolioWeight": 0.04,
+        "unrealisedBoughtPriceAverageLocal": { "value": "not-a-number", "currency": "EUR" },
+        "unrealisedBoughtPriceTotalLocal": { "value": "100.00", "currency": "EUR" },
+        "unrealisedBoughtShares": 0,
+        "unrealisedGains": { "value": "not-a-number", "currency": "EUR" },
+        "unrealisedGainsPercentage": "not-a-number",
+        "totalGains": { "value": "777.00", "currency": "EUR" },
+        "totalGainsPercentage": 7.77,
+        "closedAt": null
+      }
+    ]
+  }
+}
+""".utf8).write(to: holdingFactsFixture)
+let holdingFactsDescriptor = MenuDescriptorRenderer.render(
+    model: PressureEngine.buildModel(from: try PDTFixtureDataSource.snapshot(from: holdingFactsFixture))
+)
+let holdingFactsChildren = try require(
+    holdingFactsDescriptor.sections.first { $0.id == "allocation" }?
+        .rows.first { $0.title == "Core Facts Holding" }?
+        .children,
+    "holding facts descriptor row should exist"
+)
+try check(
+    holdingFactsChildren.map(\.title).containsSequence([
+        "Worth",
+        "Price",
+        "Average buy price",
+        "Gain/loss",
+        "Gain/loss %",
+    ]),
+    "allocation drill-down should render core holding fact rows"
+)
+try check(
+    holdingFactsChildren.first { $0.title == "Average buy price" }?.detail == "EUR 40.00",
+    "allocation drill-down should prefer explicit average buy price"
+)
+try check(
+    holdingFactsChildren.first { $0.title == "Gain/loss" }?.detail == "EUR 200.00"
+        && holdingFactsChildren.first { $0.title == "Gain/loss %" }?.detail == "+25.0%",
+    "allocation drill-down should render unrealised gain/loss fields instead of total lifetime fields"
+)
+let fallbackFactsChildren = try require(
+    holdingFactsDescriptor.sections.first { $0.id == "allocation" }?
+        .rows.first { $0.title == "Fallback Facts Holding" }?
+        .children,
+    "fallback holding descriptor row should exist"
+)
+try check(
+    fallbackFactsChildren.first { $0.title == "Average buy price" }?.detail == "EUR 25.00",
+    "allocation drill-down should compute average buy price from total and shares fallback"
+)
+let sparseFactsChildren = try require(
+    holdingFactsDescriptor.sections.first { $0.id == "allocation" }?
+        .rows.first { $0.title == "Sparse Facts Holding" }?
+        .children,
+    "sparse holding descriptor row should exist"
+)
+try check(
+    sparseFactsChildren.map(\.title).allSatisfy { ![
+        "Price",
+        "Average buy price",
+        "Gain/loss",
+        "Gain/loss %",
+    ].contains($0) },
+    "allocation drill-down should omit unavailable or malformed holding fact rows"
+)
+
 var crowdedAllocationModel = concentrationRun.model
 crowdedAllocationModel.rankedAttentionItems = [
     crowdedAllocationItem(id: "allocation.concentration.9501", name: "Alpha Concentration", quoteId: 9501, weight: 0.31),
@@ -1888,6 +2002,20 @@ private func allRows(in rows: [MenuRow]) -> [MenuRow] {
 private func containsAdviceLikeLanguage(_ value: String) -> Bool {
     let pattern = #"\b(buy|sell|rebalance|trim|reduce|recommend|should)\b"#
     return value.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+}
+
+private extension Array where Element: Equatable {
+    func containsSequence(_ sequence: [Element]) -> Bool {
+        guard !sequence.isEmpty else { return true }
+        var matchIndex = 0
+        for element in self where element == sequence[matchIndex] {
+            matchIndex += 1
+            if matchIndex == sequence.count {
+                return true
+            }
+        }
+        return false
+    }
 }
 
 private func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
