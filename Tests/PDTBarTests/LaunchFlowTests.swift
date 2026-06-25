@@ -56,29 +56,61 @@ struct ClaudeLaunchFlowTests {
         #expect(ClaudeLaunchFlow.state(afterReadinessProbe: .failed) == .probeFailed)
     }
 
-    @Test("Probing Claude descriptor does not expose login UI")
-    func probingDescriptorDoesNotExposeLoginUI() {
+    @Test("Successful login handoff resumes readiness")
+    func successfulLoginHandoffResumesReadiness() {
+        #expect(ClaudeLaunchFlow.action(afterLoginHandoff: .succeeded) == .recheckReadiness)
+        #expect(ClaudeLaunchFlow.action(afterLoginHandoff: .failed) == .showMissingClaude)
+    }
+
+    @Test("Probing Claude descriptor keeps login action available")
+    func probingDescriptorKeepsLoginActionAvailable() {
         let descriptor = ClaudeLaunchFlow.descriptor(for: .probingClaude)
         let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
 
         #expect(descriptor.statusTitle == "Checking Claude")
         #expect(descriptor.statusVisual.isDimmed)
         #expect(descriptor.statusVisual.filledBarCount == 0)
-        #expect(surface.sections.flatMap(\.rows).map(\.title) == ["Checking Claude setup - No prompts opened"])
-        #expect(!surface.sections.flatMap(\.rows).map(\.title).contains("Log in with Claude"))
+        #expect(surface.sections.flatMap(\.rows).map(\.title) == [
+            "Checking Claude setup - No prompts opened",
+            "Log in with Claude",
+        ])
+        #expect(surface.sections.flatMap(\.rows).last?.role == .setupLogin)
     }
 
     @Test("Setup descriptors expose retryable onboarding actions")
     func setupDescriptorsExposeRetryableOnboardingActions() {
+        let openingClaude = ClaudeLaunchFlow.descriptor(for: .openingClaude)
         let missingLogin = ClaudeLaunchFlow.descriptor(for: .missingClaudeLogin)
         let missingPDTMCP = ClaudeLaunchFlow.descriptor(for: .missingPDTMCP)
         let missingClaude = ClaudeLaunchFlow.descriptor(for: .missingClaude)
 
+        #expect(rowTitles(in: openingClaude) == ["Signing in with Claude", "Try login again"])
+        #expect(openingClaude.sections.flatMap(\.rows).last?.role == .setupLogin)
         #expect(rowTitles(in: missingLogin) == ["Not connected", "Log in with Claude", "Check again"])
         #expect(missingLogin.sections.flatMap(\.rows).last?.role == .setupRetry)
-        #expect(rowTitles(in: missingPDTMCP) == ["Add the PDT MCP server in Claude Desktop", "Check again"])
+        #expect(rowTitles(in: missingPDTMCP) == ["Add the PDT MCP server to Claude", "Log in with Claude", "Check again"])
         #expect(missingPDTMCP.sections.flatMap(\.rows).last?.role == .setupRetry)
-        #expect(rowTitles(in: missingClaude) == ["Claude Desktop not found", "Log in with Claude"])
+        #expect(rowTitles(in: missingClaude) == ["Claude CLI not found", "Log in with Claude"])
+    }
+
+    @Test("Login failure descriptors use Claude CLI result copy")
+    func loginFailureDescriptorsUseClaudeCLIResultCopy() {
+        #expect(rowTitles(in: ClaudeLaunchFlow.descriptor(forLoginFailure: .missingBinary)) == [
+            "Claude CLI not found",
+            "Log in with Claude",
+        ])
+        #expect(rowTitles(in: ClaudeLaunchFlow.descriptor(forLoginFailure: .timedOut)) == [
+            "Claude login timed out",
+            "Log in with Claude",
+        ])
+        #expect(rowTitles(in: ClaudeLaunchFlow.descriptor(forLoginFailure: .failed)) == [
+            "Claude login failed",
+            "Log in with Claude",
+        ])
+        #expect(rowTitles(in: ClaudeLaunchFlow.descriptor(forLoginFailure: .launchFailed)) == [
+            "Could not start claude auth login",
+            "Log in with Claude",
+        ])
     }
 
     @Test("Fetch descriptors keep login UI out of ready path")
@@ -88,10 +120,12 @@ struct ClaudeLaunchFlowTests {
         let cachedPulse = try quietFixtureDescriptor()
         let cachedRefresh = ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio, cachedPulse: cachedPulse)
         let cachedFailure = ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed, cachedPulse: cachedPulse)
+        let cachedRefreshAction = ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: cachedPulse)
+        let backgroundFailure = ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(cachedPulse: cachedPulse)
 
         #expect(rowTitles(in: firstFetch) == ["Fetching portfolio"])
         #expect(!rowTitles(in: firstFetch).contains("Log in with Claude"))
-        #expect(rowTitles(in: fetchFailed) == ["Could not fetch portfolio", "Try again"])
+        #expect(rowTitles(in: fetchFailed) == ["Could not fetch portfolio", "Try again", "Log in with Claude"])
         #expect(MenuBarSurfaceRenderer.render(descriptor: fetchFailed).status.visual.isDimmed)
         #expect(cachedRefresh.statusTitle == cachedPulse.statusTitle)
         #expect(cachedRefresh.sections.map(\.id).contains("pulse"))
@@ -99,7 +133,40 @@ struct ClaudeLaunchFlowTests {
         #expect(cachedFailure.statusVisual.isDimmed)
         #expect(cachedFailure.statusVisual.barHeights == cachedPulse.statusVisual.barHeights)
         #expect(cachedFailure.statusVisual.filledBarCount == cachedPulse.statusVisual.filledBarCount)
-        #expect(rowTitles(in: cachedFailure).contains("Try again"))
+        #expect(rowTitles(in: cachedFailure).contains("Details fill failed"))
+        #expect(rowTitles(in: cachedFailure).contains("Fill details again"))
+        #expect(!rowTitles(in: cachedFailure).contains("Log in with Claude"))
+        #expect(rowTitles(in: cachedRefreshAction).contains("Refresh details"))
+        #expect(rowTitles(in: backgroundFailure).contains("Details fill failed"))
+        #expect(rowTitles(in: backgroundFailure).contains("Fill details again"))
+        #expect(!rowTitles(in: backgroundFailure).contains("Log in with Claude"))
+    }
+
+    @Test("Claude auth status parser reads logged-in JSON from stdout")
+    func claudeAuthStatusParserReadsLoggedInJSONFromStdout() {
+        let noisyStdout = """
+        notice
+        {"loggedIn":true,"authMethod":"oauth"}
+        """
+
+        #expect(ClaudeAuthStatusParser.isLoggedIn(stdout: #"{"loggedIn":true}"#))
+        #expect(ClaudeAuthStatusParser.isLoggedIn(stdout: noisyStdout))
+        #expect(!ClaudeAuthStatusParser.isLoggedIn(stdout: #"{"loggedIn":false}"#))
+        #expect(!ClaudeAuthStatusParser.isLoggedIn(stdout: "not json"))
+        #expect(ClaudeAuthStatusParser.loggedInStatus(stdout: "not json") == nil)
+    }
+
+    @Test("Fetching descriptor exposes elapsed working time")
+    func fetchingDescriptorExposesElapsedWorkingTime() {
+        let descriptor = ClaudeLaunchFlow.descriptor(
+            for: .fetchingPortfolio,
+            fetchingElapsedSeconds: 12
+        )
+
+        #expect(descriptor.statusTitle == "Fetching portfolio 0:12")
+        #expect(rowTitles(in: descriptor) == ["Fetching portfolio"])
+        #expect(descriptor.sections.flatMap(\.rows).map(\.detail) == ["Read-only through Claude - working for 0:12"])
+        #expect(MenuBarSurfaceRenderer.render(descriptor: descriptor).status.accessibilityLabel == "PDTBar Fetching portfolio 0:12")
     }
 
     @Test("Readiness probe gate serializes setup probes")
@@ -111,6 +178,23 @@ struct ClaudeLaunchFlowTests {
         gate.finish()
         #expect(gate.begin())
         gate.finish()
+    }
+
+    @Test("Login attempt gate ignores stale completions after retry")
+    func loginAttemptGateIgnoresStaleCompletionsAfterRetry() {
+        let gate = ClaudeLoginAttemptGate()
+
+        let firstAttempt = gate.begin()
+        let retryAttempt = gate.begin()
+
+        #expect(!gate.finish(firstAttempt))
+        #expect(gate.finish(retryAttempt))
+        #expect(!gate.finish(retryAttempt))
+
+        let laterAttempt = gate.begin()
+        #expect(laterAttempt != firstAttempt)
+        #expect(!gate.finish(firstAttempt))
+        #expect(gate.finish(laterAttempt))
     }
 }
 

@@ -2,7 +2,7 @@
 
 PDTBar is a quiet macOS menu bar companion for a Portfolio Dividend Tracker portfolio.
 
-It watches the whole portfolio through the user's existing Claude Desktop + PDT MCP setup and surfaces only the few things worth attention right now: concentration, income events, big movers, freshness, and calm "all quiet" days.
+It watches the whole portfolio through the user's existing Claude CLI + PDT MCP setup and surfaces only the few things worth attention right now: concentration, income events, big movers, freshness, and calm "all quiet" days.
 
 ## What It Does
 
@@ -17,7 +17,7 @@ It watches the whole portfolio through the user's existing Claude Desktop + PDT 
 The product path is Claude-first:
 
 1. Launch PDTBar.
-2. PDTBar checks Claude Desktop and the configured PDT MCP server.
+2. PDTBar checks Claude CLI login and the configured PDT MCP server.
 3. If ready, it fetches read-only PDT data and publishes the pulse.
 4. If setup is missing, the menu offers `Log in with Claude` and `Check again`.
 

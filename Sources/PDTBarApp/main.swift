@@ -1,10 +1,19 @@
 import AppKit
+import Darwin
 import Foundation
 import PDTBarCore
 
 private struct PortfolioFetchOutcome: @unchecked Sendable {
     var descriptor: MenuDescriptor?
     var errorDescription: String?
+    var shouldStartBackgroundRefresh = false
+}
+
+private struct FirstFetchConnectorConfiguration: @unchecked Sendable {
+    var connector: any PDTMCPConnector
+    var asOf: String?
+    var liveOptions = PDTLiveDataSourceOptions()
+    var shouldStartBackgroundRefresh = false
 }
 
 @MainActor
@@ -14,11 +23,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var cachedPulseDescriptor: MenuDescriptor?
     private var portfolioFetchInFlight = false
+    private var portfolioRefreshInFlight = false
+    private var portfolioFetchStartedAt: Date?
+    private var portfolioFetchProgressTimer: Timer?
     private let claudeReadinessProbeGate = ClaudeReadinessProbeGate()
+    private let claudeLoginAttemptGate = ClaudeLoginAttemptGate()
 
     init(options: PDTBarLaunchOptions) {
         self.options = options
-        self.loginHandoff = ClaudeDesktopLoginHandoff(
+        self.loginHandoff = ClaudeCLILoginHandoff(
             environment: ProcessInfo.processInfo.environment
         )
     }
@@ -78,19 +91,33 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         portfolioFetchInFlight = true
-        installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio, cachedPulse: cachedPulseDescriptor))
         do {
-            let configuration = try scriptedPDTConnectorConfiguration()
+            let configuration = try firstFetchConnectorConfiguration()
+            if configuration.shouldStartBackgroundRefresh && cachedPulseDescriptor != nil {
+                portfolioFetchInFlight = false
+                startBackgroundPortfolioRefresh()
+                return
+            }
+            portfolioFetchStartedAt = Date()
+            installPortfolioFetchProgressMenu(cancelOpenMenu: true)
+            startPortfolioFetchProgressTimer()
             let snapshotStore = SnapshotStore(directory: firstFetchStateDirectory())
             DispatchQueue.global(qos: .userInitiated).async {
                 let outcome: PortfolioFetchOutcome
                 do {
-                    let fetch = try PDTCoalescedFirstPortfolioFetch(
-                        dataSource: PDTMCPConnectorDataSource(connector: configuration.connector()),
+                    let fetch = PDTCoalescedFirstPortfolioFetch(
+                        dataSource: PDTMCPConnectorDataSource(
+                            connector: configuration.connector,
+                            liveOptions: configuration.liveOptions
+                        ),
                         snapshotStore: snapshotStore,
                         asOf: configuration.asOf
                     )
-                    outcome = PortfolioFetchOutcome(descriptor: try fetch.fetch().descriptor, errorDescription: nil)
+                    outcome = PortfolioFetchOutcome(
+                        descriptor: try fetch.fetch().descriptor,
+                        errorDescription: nil,
+                        shouldStartBackgroundRefresh: configuration.shouldStartBackgroundRefresh
+                    )
                 } catch {
                     outcome = PortfolioFetchOutcome(descriptor: nil, errorDescription: "\(error)")
                 }
@@ -105,9 +132,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func finishFirstPortfolioFetch(_ outcome: PortfolioFetchOutcome) {
         portfolioFetchInFlight = false
+        stopPortfolioFetchProgressTimer()
         if let descriptor = outcome.descriptor {
             cachedPulseDescriptor = descriptor
-            installMenuBarItem(descriptor)
+            installPortfolioPulseDescriptor(descriptor)
+            if outcome.shouldStartBackgroundRefresh {
+                startBackgroundPortfolioRefresh()
+            }
             return
         }
         let errorDescription = outcome.errorDescription ?? "unknown error"
@@ -115,8 +146,95 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed, cachedPulse: cachedPulseDescriptor))
     }
 
+    private func startPortfolioFetchProgressTimer() {
+        portfolioFetchProgressTimer?.invalidate()
+        let timer = Timer(
+            timeInterval: 1.0,
+            target: self,
+            selector: #selector(updatePortfolioFetchProgress(_:)),
+            userInfo: nil,
+            repeats: true
+        )
+        portfolioFetchProgressTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopPortfolioFetchProgressTimer() {
+        portfolioFetchProgressTimer?.invalidate()
+        portfolioFetchProgressTimer = nil
+        portfolioFetchStartedAt = nil
+    }
+
+    @objc private func updatePortfolioFetchProgress(_ timer: Timer) {
+        guard portfolioFetchInFlight else {
+            stopPortfolioFetchProgressTimer()
+            return
+        }
+        installPortfolioFetchProgressMenu(cancelOpenMenu: false)
+    }
+
+    private func installPortfolioFetchProgressMenu(cancelOpenMenu: Bool) {
+        let elapsedSeconds = portfolioFetchStartedAt.map {
+            Int(Date().timeIntervalSince($0))
+        } ?? 0
+        installMenuBarItem(
+            ClaudeLaunchFlow.descriptor(
+                for: .fetchingPortfolio,
+                cachedPulse: cachedPulseDescriptor,
+                fetchingElapsedSeconds: elapsedSeconds
+            ),
+            cancelOpenMenu: cancelOpenMenu
+        )
+    }
+
     @objc private func retryPortfolioFetch(_ sender: NSMenuItem) {
         startFirstPortfolioFetch()
+    }
+
+    private func startBackgroundPortfolioRefresh() {
+        guard !portfolioRefreshInFlight else {
+            return
+        }
+        portfolioRefreshInFlight = true
+        let snapshotStore = SnapshotStore(directory: firstFetchStateDirectory())
+        let environment = ProcessInfo.processInfo.environment
+        DispatchQueue.global(qos: .utility).async {
+            let outcome: PortfolioFetchOutcome
+            do {
+                let fetch = PDTCoalescedFirstPortfolioFetch(
+                    dataSource: PDTMCPConnectorDataSource(
+                        connector: ClaudeCLIPDTMCPConnector(environment: environment),
+                        liveOptions: PDTLiveDataSourceOptions(
+                            includeIncomeQuoteLookups: false,
+                            includePriceSeries: false
+                        )
+                    ),
+                    snapshotStore: snapshotStore
+                )
+                outcome = PortfolioFetchOutcome(descriptor: try fetch.fetch().descriptor, errorDescription: nil)
+            } catch {
+                outcome = PortfolioFetchOutcome(descriptor: nil, errorDescription: "\(error)")
+            }
+            DispatchQueue.main.async { [weak self] in
+                self?.finishBackgroundPortfolioRefresh(outcome)
+            }
+        }
+    }
+
+    private func finishBackgroundPortfolioRefresh(_ outcome: PortfolioFetchOutcome) {
+        portfolioRefreshInFlight = false
+        if let descriptor = outcome.descriptor {
+            cachedPulseDescriptor = descriptor
+            installPortfolioPulseDescriptor(descriptor)
+            return
+        }
+        let errorDescription = outcome.errorDescription ?? "unknown error"
+        FileHandle.standardError.write(Data("pdtbar: background refresh failed: \(errorDescription)\n".utf8))
+        if let cachedPulseDescriptor {
+            installMenuBarItem(ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(cachedPulse: cachedPulseDescriptor))
+        } else {
+            installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed))
+        }
     }
 
     @objc private func retryClaudeReadiness(_ sender: NSMenuItem) {
@@ -124,15 +242,32 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func loginWithClaude(_ sender: NSMenuItem) {
+        let attempt = claudeLoginAttemptGate.begin()
         installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .openingClaude))
-        loginHandoff.openOrFocus { [weak self] result in
+        loginHandoff.startLogin { [weak self] result in
             DispatchQueue.main.async {
+                guard let self, self.claudeLoginAttemptGate.finish(attempt) else {
+                    return
+                }
                 switch result {
                 case .success:
-                    self?.installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .missingClaudeLogin))
+                    switch ClaudeLaunchFlow.action(afterLoginHandoff: .succeeded) {
+                    case .recheckReadiness:
+                        self.startClaudeReadinessProbe()
+                    case .showMissingClaude:
+                        self.installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .missingClaude))
+                    }
                 case .failure(let error):
                     FileHandle.standardError.write(Data("pdtbar: Claude handoff failed: \(error)\n".utf8))
-                    self?.installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .missingClaude))
+                    if let handoffError = error as? ClaudeLoginHandoffError {
+                        self.installMenuBarItem(
+                            ClaudeLaunchFlow.descriptor(forLoginFailure: handoffError.reason)
+                        )
+                    } else {
+                        self.installMenuBarItem(
+                            ClaudeLaunchFlow.descriptor(forLoginFailure: .failed)
+                        )
+                    }
                 }
             }
         }
@@ -142,6 +277,31 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let url = appSupportDirectory().appending(path: "pdtbar/scripted-pdt-mcp.json")
         let data = try Data(contentsOf: url)
         return try JSONDecoder().decode(ScriptedPDTMCPConnectorConfiguration.self, from: data)
+    }
+
+    private func firstFetchConnectorConfiguration() throws -> FirstFetchConnectorConfiguration {
+        let scriptedURL = appSupportDirectory().appending(path: "pdtbar/scripted-pdt-mcp.json")
+        if FileManager.default.fileExists(atPath: scriptedURL.path) {
+            let configuration = try scriptedPDTConnectorConfiguration()
+            return FirstFetchConnectorConfiguration(
+                connector: try configuration.connector(),
+                asOf: configuration.asOf,
+                liveOptions: PDTLiveDataSourceOptions()
+            )
+        }
+        return FirstFetchConnectorConfiguration(
+            connector: ClaudeCLIPDTMCPConnector(environment: ProcessInfo.processInfo.environment),
+            asOf: nil,
+            liveOptions: PDTLiveDataSourceOptions(
+                includeDistributions: false,
+                includeXRayHoldings: false,
+                includeIncomeEvents: false,
+                includeDividends: false,
+                includeIncomeQuoteLookups: false,
+                includePriceSeries: false
+            ),
+            shouldStartBackgroundRefresh: true
+        )
     }
 
     private func firstFetchStateDirectory() -> URL {
@@ -168,7 +328,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         options.appSupportDirectory ?? defaultAppSupportDirectory()
     }
 
-    private func installMenuBarItem(_ descriptor: MenuDescriptor) {
+    private func installMenuBarItem(_ descriptor: MenuDescriptor, cancelOpenMenu: Bool = true) {
         let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
         let item: NSStatusItem
         if let statusItem {
@@ -176,6 +336,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             statusItem = item
+        }
+        if cancelOpenMenu {
+            item.menu?.cancelTracking()
         }
         item.length = NSStatusItem.squareLength
         item.button?.title = surface.status.menuBarTitle
@@ -186,6 +349,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.setAccessibilityLabel(surface.status.accessibilityLabel)
         item.button?.setAccessibilityIdentifier(surface.status.accessibilityIdentifier)
         item.menu = makeMenu(from: surface)
+    }
+
+    private func installPortfolioPulseDescriptor(_ descriptor: MenuDescriptor) {
+        installMenuBarItem(ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: descriptor))
     }
 
     private func makeMenu(from surface: MenuBarSurface) -> NSMenu {
@@ -279,73 +446,77 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 private protocol ClaudeLoginHandoff {
-    func openOrFocus(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void)
+    func startLogin(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void)
 }
 
 private enum ClaudeLoginHandoffError: Error, CustomStringConvertible {
-    case failed(String)
+    case failed(ClaudeLoginFailureReason, String)
+
+    var reason: ClaudeLoginFailureReason {
+        switch self {
+        case .failed(let reason, _):
+            return reason
+        }
+    }
 
     var description: String {
         switch self {
-        case .failed(let message):
+        case .failed(_, let message):
             return message
         }
     }
 }
 
-private final class ClaudeDesktopLoginHandoff: ClaudeLoginHandoff {
+private final class ClaudeCLILoginHandoff: ClaudeLoginHandoff, @unchecked Sendable {
     private let environment: [String: String]
+    private let lock = NSLock()
+    private var activeCancellation: ClaudeLoginCancellation?
 
     init(environment: [String: String]) {
         self.environment = environment
     }
 
-    func openOrFocus(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
-        if let script = scriptedHandoffPath() {
-            run(executable: URL(fileURLWithPath: script), arguments: [], completion: completion)
-            return
-        }
-        run(
-            executable: URL(fileURLWithPath: "/usr/bin/open"),
-            arguments: ["-a", "Claude"],
-            completion: completion
-        )
-    }
+    func startLogin(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        let cancellation = ClaudeLoginCancellation()
+        lock.lock()
+        activeCancellation?.cancel()
+        activeCancellation = cancellation
+        lock.unlock()
 
-    private func scriptedHandoffPath() -> String? {
-        if let script = environment["PDTBAR_CLAUDE_HANDOFF_SCRIPT"], !script.isEmpty {
-            return script
-        }
-        return nil
-    }
-
-    private func run(
-        executable: URL,
-        arguments: [String],
-        completion: @escaping @Sendable (Result<Void, Error>) -> Void
-    ) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let process = Process()
-            process.executableURL = executable
-            process.arguments = arguments
-            let nullOutput = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/dev/null"))
-            process.standardOutput = nullOutput
-            process.standardError = nullOutput
-            do {
-                defer {
-                    try? nullOutput?.close()
-                }
-                try process.run()
-                process.waitUntilExit()
-                if process.terminationStatus == 0 {
-                    completion(.success(()))
-                } else {
-                    completion(.failure(ClaudeLoginHandoffError.failed("Claude Desktop could not be opened")))
-                }
-            } catch {
-                completion(.failure(error))
+        Task.detached(priority: .userInitiated) { [environment, cancellation, weak self] in
+            let result = await ClaudeLoginRunner.run(
+                timeout: 120,
+                environment: environment,
+                cancellation: cancellation,
+                onPhaseChange: { _ in }
+            )
+            self?.clearActiveCancellation(cancellation)
+            switch result.outcome {
+            case .success:
+                completion(.success(()))
+            case .missingBinary:
+                completion(.failure(ClaudeLoginHandoffError.failed(.missingBinary, "Claude CLI not found")))
+            case .timedOut:
+                completion(.failure(ClaudeLoginHandoffError.failed(.timedOut, "Claude login timed out")))
+            case .failed(let status):
+                completion(.failure(ClaudeLoginHandoffError.failed(
+                    .failed,
+                    "claude auth login exited with status \(status)"
+                )))
+            case .launchFailed(let message):
+                completion(.failure(ClaudeLoginHandoffError.failed(.launchFailed, message)))
+            case .cancelled:
+                break
             }
         }
+    }
+
+    private func clearActiveCancellation(_ cancellation: ClaudeLoginCancellation) {
+        lock.lock()
+        if activeCancellation === cancellation {
+            activeCancellation = nil
+        }
+        lock.unlock()
     }
 }
 
@@ -360,7 +531,10 @@ private struct ScriptedClaudeReadinessProbe {
         }
         let url = appSupportDirectory.appending(path: "pdtbar/claude-readiness.json")
         guard FileManager.default.fileExists(atPath: url.path) else {
-            return .notReady
+            if environment["PDTBAR_DISABLE_REAL_CLAUDE"] == "1" {
+                return .notReady
+            }
+            return ClaudeCLIReadinessProbe(environment: environment).check()
         }
         guard let data = try? Data(contentsOf: url),
               let script = try? JSONDecoder().decode(Script.self, from: data)
@@ -415,6 +589,732 @@ private struct ScriptedClaudeReadinessProbe {
     private struct Script: Decodable {
         var result: String
         var delaySeconds: Double?
+    }
+}
+
+private struct ClaudeCLIReadinessProbe {
+    var environment: [String: String]
+
+    func check() -> ClaudeReadinessProbeResult {
+        guard ClaudeCLIProcess.executableExists(claudePath, environment: environment) else {
+            return .missingClaudeLogin
+        }
+        do {
+            let authStatus = try ClaudeCLIProcess.run(
+                executable: claudePath,
+                arguments: ["auth", "status"],
+                timeout: min(timeoutSeconds, 10.0),
+                environment: environment
+            )
+            let explicitAuthStatus = ClaudeAuthStatusParser.loggedInStatus(stdout: authStatus.stdout)
+                ?? ClaudeAuthStatusParser.loggedInStatus(stdout: authStatus.stderr)
+            if explicitAuthStatus == false {
+                return .missingClaudeLogin
+            }
+            let result = try ClaudeCLIProcess.run(
+                executable: claudePath,
+                arguments: ["mcp", "list"],
+                timeout: timeoutSeconds,
+                environment: environment
+            )
+            let output = result.stdout + "\n" + result.stderr
+            if result.exitCode == 0, ClaudeCLIPDTMCPConnector.pdtServerIsConnected(in: output) {
+                return .ready
+            }
+            guard result.exitCode == 0 else {
+                return .missingClaudeLogin
+            }
+            return .missingPDTMCP
+        } catch {
+            return .failed
+        }
+    }
+
+    private var claudePath: String {
+        environment["PDTBAR_CLAUDE_BIN"].flatMap { $0.isEmpty ? nil : $0 } ?? "claude"
+    }
+
+    private var timeoutSeconds: TimeInterval {
+        environment["PDTBAR_CLAUDE_READINESS_TIMEOUT"].flatMap(Double.init) ?? 20.0
+    }
+}
+
+private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
+    private let environment: [String: String]
+    private let claudePath: String
+    private let model: String
+    private let timeout: TimeInterval
+    private var discoveredToolNames: [String: String] = [:]
+
+    init(environment: [String: String]) {
+        self.environment = environment
+        self.claudePath = environment["PDTBAR_CLAUDE_BIN"].flatMap { $0.isEmpty ? nil : $0 } ?? "claude"
+        self.model = environment["PDTBAR_CLAUDE_MODEL"].flatMap { $0.isEmpty ? nil : $0 } ?? "opus"
+        self.timeout = environment["PDTBAR_CLAUDE_TOOL_TIMEOUT"].flatMap(Double.init) ?? 120.0
+    }
+
+    func availableReadTools() throws -> Set<String> {
+        try availableReadTools(required: Set(PDTReadTools.requiredV1))
+    }
+
+    func availableReadTools(required: Set<String>) throws -> Set<String> {
+        guard ClaudeCLIProcess.executableExists(claudePath, environment: environment) else {
+            throw PDTMCPConnectorError.setupUnavailable("Claude CLI is unavailable")
+        }
+        let result = try ClaudeCLIProcess.run(
+            executable: claudePath,
+            arguments: ["mcp", "list"],
+            timeout: min(timeout, 30.0),
+            environment: environment
+        )
+        let output = result.stdout + "\n" + result.stderr
+        guard result.exitCode == 0,
+              Self.pdtServerIsConnected(in: output)
+        else {
+            throw PDTMCPConnectorError.setupUnavailable("Claude PDT MCP server is not connected")
+        }
+        let requiredReadTools = PDTReadTools.requiredV1.filter { required.contains($0) }
+        let resolved = try resolvedToolNames(for: requiredReadTools)
+        var available = Set(resolved.keys)
+        for tool in requiredReadTools where !available.contains(tool) {
+            if (try? resolvedToolName(for: tool)) != nil {
+                available.insert(tool)
+            }
+        }
+        return available
+    }
+
+    func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
+        guard PDTReadTools.requiredV1.contains(name) else {
+            throw PDTMCPConnectorError.nonReadTool(name)
+        }
+        guard ClaudeCLIProcess.executableExists(claudePath, environment: environment) else {
+            throw PDTMCPConnectorError.setupUnavailable("Claude CLI is unavailable")
+        }
+        let toolName = try resolvedToolName(for: name)
+        let filesBeforeCall = claudeToolResultFiles()
+        let sessionID = UUID().uuidString
+        let commandArguments = [
+            "--model", model,
+            "--allowedTools", [toolName, "ToolSearch"].joined(separator: ","),
+            "--disallowedTools", disallowedTools().joined(separator: ","),
+            "--session-id", sessionID,
+            "-p", prompt(toolName: toolName, readToolName: name, arguments: arguments),
+            "--output-format", "stream-json",
+            "--verbose",
+            "--no-session-persistence",
+        ]
+        let result = try ClaudeCLIProcess.run(
+            executable: claudePath,
+            arguments: commandArguments,
+            timeout: timeout,
+            environment: environment
+        )
+        let createdFiles = claudeToolResultFiles().subtracting(filesBeforeCall)
+        defer {
+            deleteClaudeToolResultFiles(pdtToolResultFiles(
+                in: createdFiles,
+                referencedBy: result.stdout,
+                readToolName: name,
+                sessionID: sessionID
+            ))
+        }
+        guard result.exitCode == 0 else {
+            throw PDTMCPConnectorError.transientFailure("Claude \(name) call failed")
+        }
+        return try toolResultData(for: toolName, createdFiles: createdFiles, in: result.stdout)
+    }
+
+    static func pdtServerIsConnected(in output: String) -> Bool {
+        output
+            .split(separator: "\n")
+            .contains { line in
+                let lowercasedLine = line.lowercased()
+                return lowercasedLine.contains("connected")
+                    && !lowercasedLine.contains("not connected")
+                    && !lowercasedLine.contains("disconnected")
+                    && (
+                        lowercasedLine.contains("portfolio dividend tracker")
+                            || lowercasedLine.contains("portfoliodividendtracker.com")
+                            || lowercasedLine.contains("pdt")
+                    )
+            }
+    }
+
+    private func resolvedToolName(for readToolName: String) throws -> String {
+        if let cached = discoveredToolNames[readToolName] {
+            return cached
+        }
+        if let resolved = try resolvedToolNames(for: [readToolName])[readToolName] {
+            return resolved
+        }
+        throw PDTMCPConnectorError.setupUnavailable("Claude could not find \(readToolName)")
+    }
+
+    private func resolvedToolNames(for readToolNames: [String]) throws -> [String: String] {
+        let unresolved = readToolNames.filter { discoveredToolNames[$0] == nil }
+        guard !unresolved.isEmpty else {
+            return discoveredToolNames.filter { readToolNames.contains($0.key) }
+        }
+        let sessionID = UUID().uuidString
+        let filesBeforeCall = claudeToolResultFiles()
+        let toolList = unresolved.joined(separator: ", ")
+        let result = try ClaudeCLIProcess.run(
+            executable: claudePath,
+            arguments: [
+                "--model", model,
+                "--allowedTools", "ToolSearch",
+                "--disallowedTools", toolSearchDisallowedTools().joined(separator: ","),
+                "--session-id", sessionID,
+                "-p", "Use ToolSearch to find these PDT MCP read-only tools: \(toolList). Return only {\"status\":\"redacted-ok\"}.",
+                "--output-format", "stream-json",
+                "--verbose",
+                "--no-session-persistence",
+            ],
+            timeout: min(timeout, 60.0),
+            environment: environment
+        )
+        let createdFiles = claudeToolResultFiles().subtracting(filesBeforeCall)
+        defer {
+            deleteClaudeToolResultFiles(pdtToolResultFiles(
+                in: createdFiles,
+                referencedBy: result.stdout,
+                readToolNames: unresolved,
+                sessionID: sessionID
+            ))
+        }
+        guard result.exitCode == 0 else {
+            throw PDTMCPConnectorError.setupUnavailable("Claude could not find \(toolList)")
+        }
+        let resolved = discoveredToolNames(for: unresolved, in: result.stdout)
+        discoveredToolNames.merge(resolved) { current, _ in current }
+        return discoveredToolNames.filter { readToolNames.contains($0.key) }
+    }
+
+    private func discoveredToolNames(for readToolNames: [String], in output: String) -> [String: String] {
+        readToolNames.reduce(into: [String: String]()) { resolved, readToolName in
+            if let toolName = discoveredToolName(for: readToolName, in: output) {
+                resolved[readToolName] = toolName
+            }
+        }
+    }
+
+    private func discoveredToolName(for readToolName: String, in output: String) -> String? {
+        let pattern = #"mcp__[A-Za-z0-9_.-]+__\#(NSRegularExpression.escapedPattern(for: readToolName))"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else {
+            return nil
+        }
+        let range = NSRange(output.startIndex..<output.endIndex, in: output)
+        return expression.matches(in: output, range: range).compactMap { match in
+            Range(match.range, in: output).map { String(output[$0]) }
+        }.first
+    }
+
+    private func prompt(toolName: String, readToolName: String, arguments: [String: String]) -> String {
+        let argumentData = (try? JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys])) ?? Data("{}".utf8)
+        let argumentJSON = String(decoding: argumentData, as: UTF8.self)
+        return """
+        PDTBar needs one local read-only PDT MCP result.
+
+        Rules:
+        - Call exactly this read-only PDT MCP tool: \(toolName)
+        - This is the requested PDT read tool: \(readToolName)
+        - Use exactly these JSON arguments: \(argumentJSON)
+        - Do not call any write, create, update, delete, remove, post, put, or set tool.
+        - Do not print holdings, values, account identifiers, endpoints, credentials, or raw tool output in your final answer.
+        - After the tool call, return only {"status":"redacted-ok"}.
+        """
+    }
+
+    private func disallowedTools() -> [String] {
+        [
+            "AskUserQuestion",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "DesignSync",
+            "Edit",
+            "EnterPlanMode",
+            "EnterWorktree",
+            "ExitPlanMode",
+            "ExitWorktree",
+            "Monitor",
+            "NotebookEdit",
+            "PushNotification",
+            "Read",
+            "RemoteTrigger",
+            "ScheduleWakeup",
+            "Skill",
+            "Task",
+            "TaskCreate",
+            "TaskGet",
+            "TaskList",
+            "TaskOutput",
+            "TaskStop",
+            "TaskUpdate",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "Write",
+            "mcp__*__pdt-add-*",
+            "mcp__*__pdt-create-*",
+            "mcp__*__pdt-delete-*",
+            "mcp__*__pdt-patch-*",
+            "mcp__*__pdt-post-*",
+            "mcp__*__pdt-put-*",
+            "mcp__*__pdt-remove-*",
+            "mcp__*__pdt-set-*",
+            "mcp__*__pdt-update-*",
+        ]
+    }
+
+    private func toolSearchDisallowedTools() -> [String] {
+        disallowedTools().filter { !$0.hasPrefix("mcp__") }
+    }
+
+    private func toolResultData(for toolName: String, createdFiles: Set<URL>, in output: String) throws -> Data {
+        let objects = output
+            .split(separator: "\n")
+            .compactMap { line -> [String: Any]? in
+                try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+            }
+        let matchingToolUseIDs = Set(objects.flatMap { toolUseIDs(for: toolName, in: $0) })
+        guard !matchingToolUseIDs.isEmpty else {
+            throw PDTMCPConnectorError.setupUnavailable("Claude did not call \(toolName)")
+        }
+        for object in objects {
+            if let structured = structuredToolResult(in: object, matching: matchingToolUseIDs) {
+                return try JSONSerialization.data(withJSONObject: structured, options: [.sortedKeys])
+            }
+            if let file = toolResultFile(in: object, matching: matchingToolUseIDs, createdFiles: createdFiles),
+               let data = try? Data(contentsOf: file)
+            {
+                return data
+            }
+            if let data = toolResultContentData(in: object, matching: matchingToolUseIDs) {
+                return data
+            }
+        }
+        throw PDTMCPConnectorError.transientFailure("Claude did not return structured data for \(toolName)")
+    }
+
+    private func toolUseIDs(for toolName: String, in object: Any) -> [String] {
+        if let array = object as? [Any] {
+            return array.flatMap { toolUseIDs(for: toolName, in: $0) }
+        }
+        guard let dictionary = object as? [String: Any] else {
+            return []
+        }
+        let current: [String]
+        if dictionary["type"] as? String == "tool_use",
+           dictionary["name"] as? String == toolName,
+           let id = dictionary["id"] as? String
+        {
+            current = [id]
+        } else {
+            current = []
+        }
+        return current + dictionary.values.flatMap { toolUseIDs(for: toolName, in: $0) }
+    }
+
+    private func structuredToolResult(in object: Any, matching ids: Set<String>) -> Any? {
+        if let array = object as? [Any] {
+            for item in array {
+                if let structured = structuredToolResult(in: item, matching: ids) {
+                    return structured
+                }
+            }
+            return nil
+        }
+        guard let dictionary = object as? [String: Any] else {
+            return nil
+        }
+        if dictionary["type"] as? String == "tool_result",
+           let toolUseID = dictionary["tool_use_id"] as? String,
+           ids.contains(toolUseID),
+           let structured = dictionary["structuredContent"]
+        {
+            return structured
+        }
+        for value in dictionary.values {
+            if let structured = structuredToolResult(in: value, matching: ids) {
+                return structured
+            }
+        }
+        return nil
+    }
+
+    private func toolResultContentData(in object: Any, matching ids: Set<String>) -> Data? {
+        if let array = object as? [Any] {
+            for item in array {
+                if let data = toolResultContentData(in: item, matching: ids) {
+                    return data
+                }
+            }
+            return nil
+        }
+        guard let dictionary = object as? [String: Any] else {
+            return nil
+        }
+        if dictionary["type"] as? String == "tool_result",
+           let toolUseID = dictionary["tool_use_id"] as? String,
+           ids.contains(toolUseID),
+           let content = dictionary["content"],
+           let data = jsonData(inToolResultContent: content)
+        {
+            return data
+        }
+        for value in dictionary.values {
+            if let data = toolResultContentData(in: value, matching: ids) {
+                return data
+            }
+        }
+        return nil
+    }
+
+    private func toolResultFile(in object: Any, matching ids: Set<String>, createdFiles: Set<URL>) -> URL? {
+        if let array = object as? [Any] {
+            for item in array {
+                if let file = toolResultFile(in: item, matching: ids, createdFiles: createdFiles) {
+                    return file
+                }
+            }
+            return nil
+        }
+        guard let dictionary = object as? [String: Any] else {
+            return nil
+        }
+        if dictionary["type"] as? String == "tool_result",
+           let toolUseID = dictionary["tool_use_id"] as? String,
+           ids.contains(toolUseID),
+           let content = dictionary["content"],
+           let file = savedToolResultFile(inToolResultContent: content, createdFiles: createdFiles)
+        {
+            return file
+        }
+        for value in dictionary.values {
+            if let file = toolResultFile(in: value, matching: ids, createdFiles: createdFiles) {
+                return file
+            }
+        }
+        return nil
+    }
+
+    private func jsonData(inToolResultContent content: Any) -> Data? {
+        if let text = content as? String {
+            let data = Data(text.utf8)
+            return (try? JSONSerialization.jsonObject(with: data)) == nil ? nil : data
+        }
+        if let array = content as? [Any] {
+            for item in array {
+                if let data = jsonData(inToolResultContent: item) {
+                    return data
+                }
+            }
+            return nil
+        }
+        guard let dictionary = content as? [String: Any] else {
+            return nil
+        }
+        if let text = dictionary["text"] as? String,
+           let data = jsonData(inToolResultContent: text)
+        {
+            return data
+        }
+        for value in dictionary.values {
+            if let data = jsonData(inToolResultContent: value) {
+                return data
+            }
+        }
+        return nil
+    }
+
+    private func savedToolResultFile(inToolResultContent content: Any, createdFiles: Set<URL>) -> URL? {
+        if let text = content as? String {
+            return savedToolResultFile(in: text, createdFiles: createdFiles)
+        }
+        if let array = content as? [Any] {
+            for item in array {
+                if let file = savedToolResultFile(inToolResultContent: item, createdFiles: createdFiles) {
+                    return file
+                }
+            }
+            return nil
+        }
+        guard let dictionary = content as? [String: Any] else {
+            return nil
+        }
+        if let text = dictionary["text"] as? String,
+           let file = savedToolResultFile(in: text, createdFiles: createdFiles)
+        {
+            return file
+        }
+        for value in dictionary.values {
+            if let file = savedToolResultFile(inToolResultContent: value, createdFiles: createdFiles) {
+                return file
+            }
+        }
+        return nil
+    }
+
+    private func savedToolResultFile(in content: String, createdFiles: Set<URL>) -> URL? {
+        savedToolResultFiles(in: content).first { createdFiles.contains($0) }
+    }
+
+    private func savedToolResultFiles(in content: String) -> [URL] {
+        let projectsRoot = claudeProjectsDirectory().path
+        var files: [URL] = []
+        var searchStart = content.startIndex
+        while let rootRange = content.range(of: projectsRoot, range: searchStart..<content.endIndex),
+              let extensionRange = content.range(of: ".txt", range: rootRange.lowerBound..<content.endIndex)
+        {
+            let path = String(content[rootRange.lowerBound..<extensionRange.upperBound])
+            files.append(URL(fileURLWithPath: path))
+            searchStart = extensionRange.upperBound
+        }
+        return files
+    }
+
+    private func claudeToolResultFiles(sessionID: String? = nil) -> Set<URL> {
+        let root = claudeProjectsDirectory()
+        guard let projects = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        var files = Set<URL>()
+        for project in projects {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: project.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue
+            else { continue }
+            let sessionDirectories: [URL]
+            if let sessionID {
+                sessionDirectories = [project.appending(path: sessionID)]
+            } else {
+                sessionDirectories = (try? FileManager.default.contentsOfDirectory(
+                    at: project,
+                    includingPropertiesForKeys: [.isDirectoryKey],
+                    options: [.skipsHiddenFiles]
+                )) ?? []
+            }
+            for sessionDirectory in sessionDirectories {
+                let toolResults = sessionDirectory.appending(path: "tool-results")
+                guard let toolFiles = try? FileManager.default.contentsOfDirectory(
+                    at: toolResults,
+                    includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles]
+                ) else {
+                    continue
+                }
+                files.formUnion(toolFiles.filter { $0.pathExtension == "txt" })
+            }
+        }
+        return files
+    }
+
+    private func claudeProjectsDirectory() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude/projects")
+    }
+
+    private func deleteClaudeToolResultFiles(_ files: [URL]) {
+        for file in Set(files) {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
+    private func pdtToolResultFiles(
+        in createdFiles: Set<URL>,
+        referencedBy output: String,
+        readToolName: String,
+        sessionID: String
+    ) -> [URL] {
+        pdtToolResultFiles(
+            in: createdFiles,
+            referencedBy: output,
+            readToolNames: [readToolName],
+            sessionID: sessionID
+        )
+    }
+
+    private func pdtToolResultFiles(
+        in createdFiles: Set<URL>,
+        referencedBy output: String,
+        readToolNames: [String],
+        sessionID: String
+    ) -> [URL] {
+        let deadline = Date().addingTimeInterval(1.0)
+        var sessionFiles = Set<URL>()
+        repeat {
+            sessionFiles = claudeToolResultFiles(sessionID: sessionID)
+            if sessionFiles.contains(where: { file in
+                readToolNames.contains { file.lastPathComponent.contains($0) }
+            }) {
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        } while Date() < deadline
+        let referenced = savedToolResultFiles(in: output).filter { createdFiles.contains($0) }
+        let matchingReadTool = createdFiles.union(sessionFiles).filter { file in
+            readToolNames.contains { file.lastPathComponent.contains($0) }
+        }
+        return referenced + matchingReadTool
+    }
+}
+
+private struct ClaudeCLIProcessResult {
+    var stdout: String
+    var stderr: String
+    var exitCode: Int32
+}
+
+private final class LockedDataAccumulator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        data.append(chunk)
+        lock.unlock()
+    }
+
+    func snapshot() -> Data {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return data
+    }
+}
+
+private enum ClaudeCLIProcess {
+    static func executableExists(
+        _ executable: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        resolvedExecutable(executable, environment: environment) != nil
+    }
+
+    static func resolvedExecutable(
+        _ executable: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String? {
+        if executable.contains("/") {
+            return FileManager.default.isExecutableFile(atPath: executable) ? executable : nil
+        }
+        for directory in executableSearchDirectories(environment: environment) {
+            let candidate = "\(directory)/\(executable)"
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    static func run(
+        executable: String,
+        arguments: [String],
+        timeout: TimeInterval,
+        environment: [String: String]
+    ) throws -> ClaudeCLIProcessResult {
+        guard let resolvedExecutable = resolvedExecutable(executable, environment: environment) else {
+            return ClaudeCLIProcessResult(stdout: "", stderr: "\(executable) not found", exitCode: -1)
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: resolvedExecutable)
+        process.arguments = arguments
+        let workingDirectory = FileManager.default.temporaryDirectory.appending(path: "pdtbar-claude-cli")
+        try? FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
+        process.currentDirectoryURL = workingDirectory
+        var processEnvironment = environment
+        processEnvironment["PATH"] = executableSearchDirectories(environment: environment).joined(separator: ":")
+        process.environment = processEnvironment
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        let stdoutData = LockedDataAccumulator()
+        let stderrData = LockedDataAccumulator()
+        let readers = DispatchGroup()
+        readers.enter()
+        DispatchQueue.global(qos: .utility).async {
+            stdoutData.append(stdout.fileHandleForReading.readDataToEndOfFile())
+            readers.leave()
+        }
+        readers.enter()
+        DispatchQueue.global(qos: .utility).async {
+            stderrData.append(stderr.fileHandleForReading.readDataToEndOfFile())
+            readers.leave()
+        }
+        try process.run()
+        let processGroup = setpgid(process.processIdentifier, process.processIdentifier) == 0
+            ? process.processIdentifier
+            : nil
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        if process.isRunning {
+            let descendants = TTYProcessTreeTerminator.descendantPIDs(of: process.processIdentifier)
+            process.terminate()
+            TTYProcessTreeTerminator.terminateProcessTree(
+                rootPID: process.processIdentifier,
+                processGroup: processGroup,
+                signal: SIGTERM,
+                knownDescendants: descendants
+            )
+            let waitDeadline = Date().addingTimeInterval(2.0)
+            while process.isRunning, Date() < waitDeadline {
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            if process.isRunning {
+                TTYProcessTreeTerminator.terminateProcessTree(
+                    rootPID: process.processIdentifier,
+                    processGroup: processGroup,
+                    signal: SIGKILL,
+                    knownDescendants: descendants
+                )
+            }
+            process.waitUntilExit()
+            readers.wait()
+            return ClaudeCLIProcessResult(
+                stdout: String(decoding: stdoutData.snapshot(), as: UTF8.self),
+                stderr: String(decoding: stderrData.snapshot(), as: UTF8.self),
+                exitCode: -1
+            )
+        }
+        process.waitUntilExit()
+        readers.wait()
+        return ClaudeCLIProcessResult(
+            stdout: String(decoding: stdoutData.snapshot(), as: UTF8.self),
+            stderr: String(decoding: stderrData.snapshot(), as: UTF8.self),
+            exitCode: process.terminationStatus
+        )
+    }
+
+    private static func executableSearchDirectories(environment: [String: String]) -> [String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let defaults = [
+            "\(home)/.local/bin",
+            "\(home)/bin",
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ]
+        let pathDirectories = (environment["PATH"] ?? "")
+            .split(separator: ":")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+        var seen = Set<String>()
+        return (pathDirectories + defaults).filter { directory in
+            seen.insert(directory).inserted
+        }
     }
 }
 

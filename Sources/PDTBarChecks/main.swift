@@ -102,8 +102,11 @@ try check(
     "Claude probing state should dim the icon without filling notification bars"
 )
 try check(
-    probingSurface.sections.flatMap(\.rows).map(\.title) == ["Checking Claude setup - No prompts opened"],
-    "Claude probing state should not show login UI yet"
+    probingSurface.sections.flatMap(\.rows).map(\.title) == [
+        "Checking Claude setup - No prompts opened",
+        "Log in with Claude",
+    ],
+    "Claude probing state should keep the login action available"
 )
 try check(
     ClaudeLaunchFlow.state(afterReadinessProbe: .ready) == .fetchingPortfolio,
@@ -118,6 +121,10 @@ try check(
     "missing PDT MCP probe should transition to a retryable PDT setup state"
 )
 let firstFetchDescriptor = ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio)
+let firstFetchProgressDescriptor = ClaudeLaunchFlow.descriptor(
+    for: .fetchingPortfolio,
+    fetchingElapsedSeconds: 12
+)
 try check(
     firstFetchDescriptor.statusVisual.isDimmed && firstFetchDescriptor.statusVisual.filledBarCount == 0,
     "first-fetch state should dim the icon without filling notification bars"
@@ -125,6 +132,11 @@ try check(
 try check(
     firstFetchDescriptor.sections.flatMap(\.rows).map(\.title) == ["Fetching portfolio"],
     "first-fetch state should render without the logged-out menu"
+)
+try check(
+    firstFetchProgressDescriptor.statusTitle == "Fetching portfolio 0:12"
+        && firstFetchProgressDescriptor.sections.flatMap(\.rows).map(\.detail) == ["Read-only through Claude - working for 0:12"],
+    "first-fetch state should expose elapsed working time while it is running"
 )
 try check(
     !firstFetchDescriptor.sections.flatMap(\.rows).map(\.title).contains("Log in with Claude"),
@@ -141,8 +153,12 @@ try check(
 )
 let fetchFailedDescriptor = ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed)
 try check(
-    fetchFailedDescriptor.sections.flatMap(\.rows).map(\.title) == ["Could not fetch portfolio", "Try again"],
-    "first-fetch failure should show a retry action without publishing a portfolio pulse"
+    fetchFailedDescriptor.sections.flatMap(\.rows).map(\.title) == [
+        "Could not fetch portfolio",
+        "Try again",
+        "Log in with Claude",
+    ],
+    "first-fetch failure should show retry and login actions without publishing a portfolio pulse"
 )
 try check(
     MenuBarSurfaceRenderer.render(descriptor: fetchFailedDescriptor).status.visual.isDimmed,
@@ -155,13 +171,28 @@ try check(
         && cachedRefreshDescriptor.sections.flatMap(\.rows).map(\.title).contains("Refreshing portfolio"),
     "returning launch should keep the cached pulse visible while a refresh is running"
 )
+let cachedRefreshActionDescriptor = ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: descriptor)
+try check(
+    cachedRefreshActionDescriptor.statusTitle == descriptor.statusTitle
+        && cachedRefreshActionDescriptor.sections.flatMap(\.rows).map(\.title).contains("Refresh details"),
+    "cached pulse should expose a manual details refresh action"
+)
+let backgroundFailureDescriptor = ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(cachedPulse: descriptor)
+try check(
+    backgroundFailureDescriptor.statusTitle == descriptor.statusTitle
+        && backgroundFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Details fill failed")
+        && backgroundFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Fill details again")
+        && !backgroundFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Log in with Claude"),
+    "background refresh failure should preserve the cached pulse and expose a detail-fill retry"
+)
 let cachedFailureDescriptor = ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed, cachedPulse: descriptor)
 try check(
     cachedFailureDescriptor.statusTitle == descriptor.statusTitle
         && cachedFailureDescriptor.sections.map(\.id).contains("pulse")
-        && cachedFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Could not fetch portfolio")
-        && cachedFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Try again"),
-    "returning launch fetch failure should preserve the cached pulse and expose retry"
+        && cachedFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Details fill failed")
+        && cachedFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Fill details again")
+        && !cachedFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Log in with Claude"),
+    "returning launch fetch failure should preserve the cached pulse and expose a detail-fill retry"
 )
 try check(
     cachedFailureDescriptor.statusVisual.isDimmed
@@ -174,16 +205,38 @@ try check(
     "logged-out real launch should render a Claude-only setup section"
 )
 try check(
-    setupSurface.sections.flatMap(\.rows).map(\.title) == ["Not connected - Use Claude Desktop for PDT", "Log in with Claude"],
+    setupSurface.sections.flatMap(\.rows).map(\.title) == ["Not connected - Use Claude CLI for PDT", "Log in with Claude"],
     "logged-out real launch should render Claude setup status and login rows"
 )
 try check(
-    openingClaudeDescriptor.sections.flatMap(\.rows).map(\.title) == ["Opening Claude Desktop"],
-    "login handoff should render progress while Claude Desktop is opening"
+    openingClaudeDescriptor.sections.flatMap(\.rows).map(\.title) == ["Signing in with Claude", "Try login again"],
+    "login handoff should render progress and a retry action while claude auth login is running"
 )
 try check(
-    missingClaudeDescriptor.sections.flatMap(\.rows).map(\.title) == ["Claude Desktop not found", "Log in with Claude"],
+    ClaudeLaunchFlow.action(afterLoginHandoff: .succeeded) == .recheckReadiness,
+    "successful login handoff should re-run readiness before deciding the next onboarding state"
+)
+try check(
+    ClaudeLaunchFlow.action(afterLoginHandoff: .failed) == .showMissingClaude,
+    "failed login handoff should render the retryable missing-Claude setup state"
+)
+try check(
+    missingClaudeDescriptor.sections.flatMap(\.rows).map(\.title) == ["Claude CLI not found", "Log in with Claude"],
     "failed login handoff should render missing-Claude setup state with a retryable login action"
+)
+try check(
+    ClaudeLaunchFlow.descriptor(forLoginFailure: .timedOut).sections.flatMap(\.rows).map(\.title) == [
+        "Claude login timed out",
+        "Log in with Claude",
+    ],
+    "timed-out claude auth login should render CodexBar-aligned login failure copy"
+)
+try check(
+    ClaudeLaunchFlow.descriptor(forLoginFailure: .failed).sections.flatMap(\.rows).map(\.title) == [
+        "Claude login failed",
+        "Log in with Claude",
+    ],
+    "failed claude auth login should render CodexBar-aligned login failure copy"
 )
 let missingLoginDescriptor = ClaudeLaunchFlow.descriptor(for: .missingClaudeLogin)
 try check(
@@ -196,7 +249,7 @@ try check(
 )
 let missingPDTMCPDescriptor = ClaudeLaunchFlow.descriptor(for: .missingPDTMCP)
 try check(
-    missingPDTMCPDescriptor.sections.flatMap(\.rows).map(\.title) == ["Add the PDT MCP server in Claude Desktop", "Check again"],
+    missingPDTMCPDescriptor.sections.flatMap(\.rows).map(\.title) == ["Add the PDT MCP server to Claude", "Log in with Claude", "Check again"],
     "missing PDT MCP should render product-facing setup copy with a readiness retry action"
 )
 try check(
@@ -866,7 +919,7 @@ do {
 }
 let setupErrorConnector = ScriptedPDTMCPConnector(
     responses: scriptedConnectorResponses,
-    failure: .setupUnavailable("Claude Desktop needs PDT setup")
+    failure: .setupUnavailable("Claude needs PDT setup")
 )
 do {
     _ = try PDTMCPConnectorDataSource(connector: setupErrorConnector).snapshot(asOf: "2026-03-29")

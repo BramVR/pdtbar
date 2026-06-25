@@ -133,6 +133,7 @@ private func readyLaunchSmoke(arguments: [String]) throws -> SmokeReport {
         "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
         "PDTBAR_FIXTURE": defaultFixture.path,
         "PDTBAR_SNAPSHOT_DIR": fixtureSnapshotDirectory.path,
+        "PDTBAR_DISABLE_REAL_CLAUDE": "1",
     ]) { _, new in new }
     try process.run()
     defer {
@@ -263,6 +264,7 @@ private func loggedOutLaunchSmoke(arguments: [String]) throws -> SmokeReport {
         "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
         "PDTBAR_FIXTURE": defaultFixture.path,
         "PDTBAR_SNAPSHOT_DIR": fixtureSnapshotDirectory.path,
+        "PDTBAR_DISABLE_REAL_CLAUDE": "1",
     ]) { _, new in new }
     try process.run()
     defer {
@@ -339,7 +341,11 @@ private func loggedOutLaunchSmoke(arguments: [String]) throws -> SmokeReport {
     )
     let expectedTexts = Set(["Not connected", "Log in with Claude", "Quit PDTBar"])
     let missingTargets = expectedTargets.filter { !menuSnapshot.identifiers.contains($0.accessibilityIdentifier) }
-    let missingTexts = expectedTexts.subtracting(menuSnapshot.texts)
+    let missingTexts = expectedTexts.filter { expectedText in
+        !menuSnapshot.texts.contains { observedText in
+            observedText.contains(expectedText)
+        }
+    }
     guard missingTargets.isEmpty && missingTexts.isEmpty else {
         let missingLabels = missingTargets
             .map { "\($0.accessibilityIdentifier) (\($0.title))" }
@@ -539,11 +545,14 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
 
     let successAppSupport = try options.isolatedAppSupportDirectory(prefix: "scripted-login-handoff-success-app-support")
     let successMarker = successAppSupport.appending(path: "pdtbar/claude-handoff-started")
+    let successInvocationLog = successMarker.appendingPathExtension("log")
     let successResult = successAppSupport.appending(path: "pdtbar/claude-handoff-result")
+    let successProbeLog = successAppSupport.appending(path: "pdtbar/readiness-probes.log")
     let successScript = try writeHandoffScript(
         in: successAppSupport,
         name: "handoff-success.sh",
-        delay: max(options.timeout, 1.0),
+        delay: max(options.timeout + 3.0, 4.0),
+        postSuccessDelay: max(options.timeout + 12.0, 16.0),
         exitStatus: 0
     )
     let successProcess = try launchLoginHandoffApp(
@@ -552,7 +561,8 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         handoffScript: successScript,
         marker: successMarker,
         result: successResult,
-        resultValue: "success"
+        resultValue: "success",
+        probeLog: successProbeLog
     )
     defer {
         terminate(successProcess)
@@ -575,6 +585,11 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         )
     }
     let successWasIdleBeforeClick = !FileManager.default.fileExists(atPath: successMarker.path)
+    let successInitialReadinessProbed = waitForReadinessProbeCount(
+        successProbeLog,
+        expectedCount: 1,
+        timeout: options.timeout
+    )
     let successClick = pressMenuRow(
         statusElement: successStatus,
         appElement: successAppElement,
@@ -584,43 +599,75 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
     )
     let successScriptInvoked = waitForFile(successMarker, timeout: options.timeout)
     let progressVisible = waitForStatusText(
-        "Opening Claude Desktop",
+        "Signing in with Claude",
         in: successAppElement,
         statusIdentifier: "pdtbar.status",
         timeout: options.timeout
     )
-    let successCompleted = waitForFile(successResult, timeout: options.timeout + 2.0)
-    let returnedToLoggedOut = waitForStatusText(
-        "Not connected",
+    let openingSurface = MenuBarSurfaceRenderer.render(descriptor: ClaudeLaunchFlow.descriptor(for: .openingClaude))
+    let openingTargets = requiredSetupMenuTargets(in: openingSurface)
+    let openingIDs = Set(openingTargets.map(\.accessibilityIdentifier))
+    let progressMenu = openStatusMenu(
+        successStatus,
+        appElement: successAppElement,
+        expectedMenuIdentifiers: openingIDs,
+        timeout: options.timeout
+    )
+    let progressRetryVisible = openingIDs.isSubset(of: progressMenu.snapshot?.identifiers ?? [])
+        && (progressMenu.snapshot?.texts.contains("Try login again") ?? false)
+    let successRetryClick = pressMenuRow(
+        statusElement: successStatus,
+        appElement: successAppElement,
+        rowIdentifier: "pdtbar.row.claudeSetup.login",
+        expectedMenuIdentifiers: openingIDs,
+        timeout: options.timeout
+    )
+    let successRetryInvoked = waitForHandoffInvocationCount(
+        successInvocationLog,
+        expectedCount: 2,
+        timeout: options.timeout
+    )
+    let successSupersededAttemptTerminated = waitForFileContent(
+        successInvocationLog,
+        contains: "terminated",
+        timeout: options.timeout + 2.0
+    )
+    let successLoginArgsIncluded = waitForFileContent(
+        successMarker,
+        contains: "auth login",
+        timeout: options.timeout
+    )
+    let successConfiguration = ScriptedPDTMCPConnectorConfiguration(
+        responses: try scriptedPDTConnectorResponses().mapValues { String(decoding: $0, as: UTF8.self) },
+        asOf: "2026-03-29",
+        initialCallDelaySeconds: 1.0
+    )
+    try writeFirstFetchAppScript(configuration: successConfiguration, appSupportDirectory: successAppSupport)
+    let successCompleted = waitForFile(successResult, timeout: options.timeout + 8.0)
+    let successReadinessRechecked = waitForReadinessProbeCount(
+        successProbeLog,
+        expectedCount: 2,
+        timeout: options.timeout + 6.0
+    )
+    let successReadinessProbeCount = readinessProbeCount(in: successProbeLog)
+    let successFetchingVisible = waitForStatusText(
+        "Fetching portfolio",
         in: successAppElement,
         statusIdentifier: "pdtbar.status",
         timeout: options.timeout
     )
-    let successRetrySurface = MenuBarSurfaceRenderer.render(
-        descriptor: ClaudeLaunchFlow.descriptor(for: .missingClaudeLogin)
+    let successFirstFetchSnapshot = successAppSupport.appending(path: "pdtbar/state/latest-portfolio-snapshot.json")
+    let successFirstFetchSnapshotWritten = waitForSnapshotAsOf(
+        successFirstFetchSnapshot,
+        asOf: "2026-03-29",
+        timeout: options.timeout + 8.0
     )
-    let successRetryTargets = requiredSetupMenuTargets(in: successRetrySurface)
-    let successRetryIDs = Set(successRetryTargets.map(\.accessibilityIdentifier))
-    var successSetupRetryVisible = false
-    if let returnedStatus = waitForAccessibilityElement(
-        in: successAppElement,
-        identifier: successRetrySurface.status.accessibilityIdentifier,
-        timeout: options.timeout
-    ) {
-        let openedMenu = openStatusMenu(
-            returnedStatus,
-            appElement: successAppElement,
-            expectedMenuIdentifiers: successRetryIDs,
-            timeout: options.timeout
-        )
-        let menuSnapshot = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
-            successRetryIDs,
-            in: successAppElement,
-            timeout: options.timeout
-        )
-        successSetupRetryVisible = successRetryIDs.isSubset(of: menuSnapshot.identifiers)
-            && menuSnapshot.texts.contains("Check again")
-    }
+    let successStoppedAfterOutput = waitForHandoffTerminationCount(
+        successInvocationLog,
+        expectedCount: 2,
+        timeout: options.timeout + 2.0
+    )
+    let successFirstFetchAsOf = snapshotAsOf(successFirstFetchSnapshot)
     terminate(successProcess)
 
     let failureAppSupport = try options.isolatedAppSupportDirectory(prefix: "scripted-login-handoff-failure-app-support")
@@ -630,6 +677,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         in: failureAppSupport,
         name: "handoff-failure.sh",
         delay: 0.1,
+        promptBeforeURL: false,
         exitStatus: 42
     )
     let failureProcess = try launchLoginHandoffApp(
@@ -666,19 +714,28 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         timeout: options.timeout
     )
     let failureScriptInvoked = waitForFile(failureMarker, timeout: options.timeout)
+    let failureLoginArgsIncluded = waitForFileContent(
+        failureMarker,
+        contains: "auth login",
+        timeout: options.timeout
+    )
     let failureCompleted = waitForFile(failureResult, timeout: options.timeout + 2.0)
     let missingClaudeSurface = MenuBarSurfaceRenderer.render(
-        descriptor: ClaudeLaunchFlow.descriptor(for: .missingClaude)
+        descriptor: ClaudeLaunchFlow.descriptor(forLoginFailure: .failed)
     )
     let missingClaudeTargets = requiredSetupMenuTargets(in: missingClaudeSurface)
     let missingClaudeIDs = Set(missingClaudeTargets.map(\.accessibilityIdentifier))
     let missingClaudeStatusVisible = waitForStatusText(
-        "Claude Desktop not found",
+        "Claude login failed",
         in: failureAppElement,
         statusIdentifier: missingClaudeSurface.status.accessibilityIdentifier,
         timeout: options.timeout
     )
+    if missingClaudeStatusVisible {
+        Thread.sleep(forTimeInterval: 0.3)
+    }
     let missingClaudeMenu: AccessibilitySnapshot
+    let missingClaudeOpenAttempt: String?
     if let missingClaudeStatus = waitForAccessibilityElement(
         in: failureAppElement,
         identifier: missingClaudeSurface.status.accessibilityIdentifier,
@@ -690,12 +747,14 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
             expectedMenuIdentifiers: missingClaudeIDs,
             timeout: options.timeout
         )
+        missingClaudeOpenAttempt = openedMenu.successfulAttempt ?? openedMenu.attempts.joined(separator: "; ")
         missingClaudeMenu = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
             missingClaudeIDs,
             in: failureAppElement,
             timeout: options.timeout
         )
     } else {
+        missingClaudeOpenAttempt = nil
         missingClaudeMenu = waitForAccessibilityIdentifiers(
             missingClaudeIDs,
             in: failureAppElement,
@@ -703,37 +762,65 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         )
     }
     let missingClaudeMenuVisible = missingClaudeIDs.isSubset(of: missingClaudeMenu.identifiers)
-        && missingClaudeMenu.texts.contains("Claude Desktop not found")
+        && missingClaudeMenu.texts.contains { $0.contains("Claude login failed") }
         && missingClaudeMenu.texts.contains("Log in with Claude")
 
     let proofPayload = ScriptedLoginHandoffProof(
         successIdleBeforeClick: successWasIdleBeforeClick,
+        successInitialReadinessProbed: successInitialReadinessProbed,
         successClickAttempt: successClick,
         successScriptInvoked: successScriptInvoked,
+        successLoginArgsIncluded: successLoginArgsIncluded,
         successProgressVisible: progressVisible,
+        successProgressRetryVisible: progressRetryVisible,
+        successProgressMenuOpenAttempt: progressMenu.successfulAttempt,
+        successProgressObservedIdentifiers: progressMenu.snapshot?.identifiers.sorted() ?? [],
+        successProgressObservedTexts: progressMenu.snapshot?.texts.sorted() ?? [],
+        successRetryClickAttempt: successRetryClick,
+        successRetryInvoked: successRetryInvoked,
+        successSupersededAttemptTerminated: successSupersededAttemptTerminated,
+        successStoppedAfterOutput: successStoppedAfterOutput,
         successCompleted: successCompleted,
-        successReturnedToLoggedOut: returnedToLoggedOut,
-        successSetupRetryVisible: successSetupRetryVisible,
+        successReadinessRechecked: successReadinessRechecked,
+        successReadinessProbeCount: successReadinessProbeCount,
+        successFetchingVisible: successFetchingVisible,
+        successFirstFetchSnapshotWritten: successFirstFetchSnapshotWritten,
+        successFirstFetchAsOf: successFirstFetchAsOf,
         failureIdleBeforeClick: failureWasIdleBeforeClick,
         failureClickAttempt: failureClick,
         failureScriptInvoked: failureScriptInvoked,
+        failureLoginArgsIncluded: failureLoginArgsIncluded,
         failureCompleted: failureCompleted,
         failureMissingClaudeStatusVisible: missingClaudeStatusVisible,
         failureMissingClaudeMenuVisible: missingClaudeMenuVisible,
+        failureMissingClaudeOpenAttempt: missingClaudeOpenAttempt,
+        failureMissingClaudeObservedIdentifiers: missingClaudeMenu.identifiers.sorted(),
+        failureMissingClaudeObservedTexts: missingClaudeMenu.texts.sorted(),
         rawClaudeCredentialsUsed: false
     )
     try stableJSONData(proofPayload).write(to: proof, options: .atomic)
 
     guard successWasIdleBeforeClick,
+          successInitialReadinessProbed,
           successClick != nil,
           successScriptInvoked,
+          successLoginArgsIncluded,
           progressVisible,
+          progressRetryVisible,
+          successRetryClick != nil,
+          successRetryInvoked,
+          successSupersededAttemptTerminated,
+          successStoppedAfterOutput,
           successCompleted,
-          returnedToLoggedOut,
-          successSetupRetryVisible,
+          successReadinessRechecked,
+          successReadinessProbeCount == 2,
+          successFetchingVisible,
+          successFirstFetchSnapshotWritten,
+          successFirstFetchAsOf == "2026-03-29",
           failureWasIdleBeforeClick,
           failureClick != nil,
           failureScriptInvoked,
+          failureLoginArgsIncluded,
           failureCompleted,
           missingClaudeStatusVisible,
           missingClaudeMenuVisible
@@ -741,7 +828,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         return SmokeReport(
             name: "scripted-login-handoff",
             status: SmokeStatus.failed,
-            detail: "scripted login handoff did not prove user-initiated success, retryable signed-out state, progress, and missing-Claude failure states",
+            detail: "scripted login handoff did not prove user-initiated success, in-flight retry supersession, readiness recheck, first fetch, and missing-Claude failure states",
             artifacts: [artifactPath(proof)]
         )
     }
@@ -749,7 +836,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
     return SmokeReport(
         name: "scripted-login-handoff",
         status: SmokeStatus.passed,
-        detail: "Log in with Claude invoked the scripted handoff only after menu click, showed Opening Claude Desktop, returned to a retryable signed-out state, and rendered missing-Claude state on handoff failure",
+        detail: "Log in with Claude invoked scripted claude auth login only after menu click, superseded an in-flight auth retry, rechecked readiness once, started first fetch, and rendered failed-login state on login failure",
         artifacts: [artifactPath(proof)]
     )
 }
@@ -810,7 +897,7 @@ private func scriptedSetupRetrySmoke(arguments: [String]) throws -> SmokeReport 
         name: "missing-pdt-mcp",
         initialReadiness: "missingPDTMCP",
         descriptor: missingPDTMCPDescriptor,
-        expectedTexts: ["Add the PDT MCP server in Claude Desktop", "Check again"],
+        expectedTexts: ["Add the PDT MCP server to Claude", "Log in with Claude", "Check again"],
         options: options,
         app: app,
         artifacts: artifacts
@@ -1290,7 +1377,7 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
 
     if accessibilityChecked {
         let failureSurface = MenuBarSurfaceRenderer.render(
-            descriptor: ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed, cachedPulse: cachedDescriptor)
+            descriptor: ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(cachedPulse: cachedDescriptor)
         )
         let targets = requiredSetupMenuTargets(in: failureSurface)
         let appElement = AXUIElementCreateApplication(failureProcess.processIdentifier)
@@ -1318,7 +1405,8 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
                 let identifiers = Set(targets.map(\.accessibilityIdentifier))
                 failurePulseVisible = identifiers.isSubset(of: snapshot.identifiers)
                 failureRetryVisible = snapshot.identifiers.contains("pdtbar.row.portfolioFetch.retry")
-                    && snapshot.texts.contains("Try again")
+                    && snapshot.texts.contains("Fill details again")
+                    && !snapshot.texts.contains("Log in with Claude")
             }
         }
     }
@@ -1352,7 +1440,7 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
     return SmokeReport(
         name: "scripted-returning-launch",
         status: SmokeStatus.passed,
-        detail: "returning launch kept the seeded pulse visible during refresh, replaced it after complete scripted data, and preserved it with Try again after transient failure",
+        detail: "returning launch kept the seeded pulse visible during refresh, replaced it after complete scripted data, and preserved it with a details retry after transient failure",
         artifacts: [artifactPath(proof)] + axArtifacts
     )
 }
@@ -1362,7 +1450,7 @@ private func manualClaudePDTSmoke(arguments: [String]) throws -> SmokeReport {
         return SmokeReport(
             name: "manual-claude-pdt",
             status: SmokeStatus.failed,
-            detail: "refusing manual Claude readiness proof with --bare; use normal claude -p so the logged-in Claude user and Desktop MCP setup are exercised",
+            detail: "refusing manual Claude readiness proof with --bare; use normal claude -p so the logged-in Claude CLI user and MCP setup are exercised",
             artifacts: []
         )
     }
@@ -1380,7 +1468,7 @@ private func manualClaudePDTSmoke(arguments: [String]) throws -> SmokeReport {
         return SmokeReport(
             name: "manual-claude-pdt",
             status: SmokeStatus.skipped,
-            detail: "Claude CLI unavailable on PATH; install/sign in to Claude Desktop and rerun, or pass --claude <path>",
+            detail: "Claude CLI unavailable on PATH; install/sign in with Claude and rerun, or pass --claude <path>",
             artifacts: []
         )
     }
@@ -1389,32 +1477,58 @@ private func manualClaudePDTSmoke(arguments: [String]) throws -> SmokeReport {
             return SmokeReport(
                 name: "manual-claude-pdt",
                 status: SmokeStatus.skipped,
-                detail: "Claude CLI unavailable at passed --claude path; install/sign in to Claude Desktop and rerun",
+                detail: "Claude CLI unavailable at passed --claude path; install/sign in with Claude and rerun",
                 artifacts: []
             )
         }
     }
 
     let started = Date()
-    let result: CommandResult
+    let allowedTools: [String]
     do {
+        allowedTools = try manualClaudePDTAllowedTools(
+            claudePath: claudePath,
+            model: model,
+            timeout: min(timeout, 60.0)
+        )
+    } catch {
+        return SmokeReport(
+            name: "manual-claude-pdt",
+            status: SmokeStatus.skipped,
+            detail: "local Claude/PDT setup required; ToolSearch did not resolve every required PDT read tool",
+            artifacts: []
+        )
+    }
+    let result: CommandResult
+    let sessionID = UUID().uuidString
+    let filesBeforeCall = claudeToolResultFiles()
+    do {
+        var claudeArguments = [
+            claudePath,
+            "--model", model,
+            "--disallowedTools", manualClaudePDTDisallowedTools().joined(separator: ","),
+            "--session-id", sessionID,
+            "-p", manualClaudePDTPrompt(resolvedTools: allowedTools.filter { $0.hasPrefix("mcp__") }),
+            "--output-format", "stream-json",
+            "--verbose",
+            "--no-session-persistence",
+            "--json-schema", manualClaudePDTJSONSchema(),
+        ]
+        claudeArguments.insert(contentsOf: ["--allowedTools", allowedTools.joined(separator: ",")], at: 3)
         result = try run(
             URL(fileURLWithPath: "/usr/bin/env"),
-            arguments: [
-                claudePath,
-                "--model", model,
-                "--allowedTools", manualClaudePDTAllowedTools().joined(separator: ","),
-                "--disallowedTools", manualClaudePDTDisallowedTools().joined(separator: ","),
-                "-p", manualClaudePDTPrompt(),
-                "--output-format", "stream-json",
-                "--verbose",
-                "--no-session-persistence",
-                "--json-schema", manualClaudePDTJSONSchema(),
-            ],
+            arguments: claudeArguments,
             timeout: timeout
         )
     } catch let CommandError.commandFailed(_, stdout, stderr) {
         let combined = [stdout, stderr].joined(separator: "\n")
+        let createdFiles = claudeToolResultFiles().subtracting(filesBeforeCall)
+        let referencedFiles = Set(savedClaudeToolResultFiles(in: Data(combined.utf8)))
+        deleteSavedClaudeToolResultFiles(pdtToolResultFiles(
+            in: createdFiles,
+            referencedFiles: referencedFiles,
+            sessionID: sessionID
+        ))
         guard PDTLiveUnavailableClassifier.shouldSkip(combined) || isClaudeModelSetupError(combined) else {
             return SmokeReport(
                 name: "manual-claude-pdt",
@@ -1426,10 +1540,15 @@ private func manualClaudePDTSmoke(arguments: [String]) throws -> SmokeReport {
         return SmokeReport(
             name: "manual-claude-pdt",
             status: SmokeStatus.skipped,
-            detail: "local Claude/PDT setup required; claude -p did not complete with the configured model alias or Desktop MCP setup",
+            detail: "local Claude/PDT setup required; claude -p did not complete with the configured model alias or MCP setup",
             artifacts: []
         )
     } catch CommandError.timedOut {
+        deleteSavedClaudeToolResultFiles(pdtToolResultFiles(
+            in: claudeToolResultFiles().subtracting(filesBeforeCall),
+            referencedFiles: [],
+            sessionID: sessionID
+        ))
         return SmokeReport(
             name: "manual-claude-pdt",
             status: SmokeStatus.skipped,
@@ -1439,6 +1558,13 @@ private func manualClaudePDTSmoke(arguments: [String]) throws -> SmokeReport {
     }
 
     let payload = redactedClaudePDTResponse(from: result.stdout)
+    let createdFiles = claudeToolResultFiles().subtracting(filesBeforeCall)
+    let referencedFiles = Set(savedClaudeToolResultFiles(in: result.stdout))
+    deleteSavedClaudeToolResultFiles(pdtToolResultFiles(
+        in: createdFiles,
+        referencedFiles: referencedFiles,
+        sessionID: sessionID
+    ))
 
     let required = Set(PDTReadTools.requiredV1)
     let reported = Set(payload.toolNames)
@@ -2130,18 +2256,35 @@ private struct ScriptedReturningLaunchProof: Codable {
 
 private struct ScriptedLoginHandoffProof: Codable {
     var successIdleBeforeClick: Bool
+    var successInitialReadinessProbed: Bool
     var successClickAttempt: String?
     var successScriptInvoked: Bool
+    var successLoginArgsIncluded: Bool
     var successProgressVisible: Bool
+    var successProgressRetryVisible: Bool
+    var successProgressMenuOpenAttempt: String?
+    var successProgressObservedIdentifiers: [String]
+    var successProgressObservedTexts: [String]
+    var successRetryClickAttempt: String?
+    var successRetryInvoked: Bool
+    var successSupersededAttemptTerminated: Bool
+    var successStoppedAfterOutput: Bool
     var successCompleted: Bool
-    var successReturnedToLoggedOut: Bool
-    var successSetupRetryVisible: Bool
+    var successReadinessRechecked: Bool
+    var successReadinessProbeCount: Int
+    var successFetchingVisible: Bool
+    var successFirstFetchSnapshotWritten: Bool
+    var successFirstFetchAsOf: String?
     var failureIdleBeforeClick: Bool
     var failureClickAttempt: String?
     var failureScriptInvoked: Bool
+    var failureLoginArgsIncluded: Bool
     var failureCompleted: Bool
     var failureMissingClaudeStatusVisible: Bool
     var failureMissingClaudeMenuVisible: Bool
+    var failureMissingClaudeOpenAttempt: String?
+    var failureMissingClaudeObservedIdentifiers: [String]
+    var failureMissingClaudeObservedTexts: [String]
     var rawClaudeCredentialsUsed: Bool
 }
 
@@ -2213,11 +2356,18 @@ private func waitForStatusText(
     statusIdentifier: String,
     timeout: TimeInterval
 ) -> Bool {
+    func matchesExpectedStatus(_ text: String) -> Bool {
+        text == expected ||
+            text == "PDTBar \(expected)" ||
+            text.hasPrefix("\(expected) ") ||
+            text.hasPrefix("PDTBar \(expected) ")
+    }
+
     let deadline = Date().addingTimeInterval(timeout)
     repeat {
         if let status = findAccessibilityElement(in: root, identifier: statusIdentifier) {
             let texts = accessibilityTexts(in: status)
-            if texts.contains(expected) || texts.contains("PDTBar \(expected)") {
+            if texts.contains(where: matchesExpectedStatus) {
                 return true
             }
         }
@@ -2225,7 +2375,7 @@ private func waitForStatusText(
     } while Date() < deadline
     if let status = findAccessibilityElement(in: root, identifier: statusIdentifier) {
         let texts = accessibilityTexts(in: status)
-        return texts.contains(expected) || texts.contains("PDTBar \(expected)")
+        return texts.contains(where: matchesExpectedStatus)
     }
     return false
 }
@@ -2670,6 +2820,19 @@ private func waitForFile(_ url: URL, timeout: TimeInterval) -> Bool {
     return FileManager.default.fileExists(atPath: url.path)
 }
 
+private func waitForFileContent(_ url: URL, contains needle: String, timeout: TimeInterval) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    repeat {
+        if let text = try? String(contentsOf: url, encoding: .utf8),
+           text.contains(needle)
+        {
+            return true
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+    } while Date() < deadline
+    return (try? String(contentsOf: url, encoding: .utf8))?.contains(needle) == true
+}
+
 private func waitForSnapshotAsOf(_ url: URL, asOf: String, timeout: TimeInterval) -> Bool {
     let deadline = Date().addingTimeInterval(timeout)
     repeat {
@@ -2785,8 +2948,12 @@ private func realClaudeFlowAXScenario(
     )
 
     let statusVisible = expectedStatusTextVisible
-        && (statusText.contains(surface.status.accessibilityLabel)
-            || statusText.contains(surface.status.title))
+        && statusText.contains { observed in
+            observed == surface.status.accessibilityLabel ||
+                observed == surface.status.title ||
+                observed.hasPrefix("\(surface.status.accessibilityLabel) ") ||
+                observed.hasPrefix("\(surface.status.title) ")
+        }
     let menuIdentifiersVisible = expectedMenuIdentifiers.isSubset(of: menuSnapshot.identifiers)
     let menuTextVisible = expectedTexts.allSatisfy { expected in
         menuSnapshot.texts.contains { observed in
@@ -2877,7 +3044,11 @@ private func scriptedSetupRetryScenario(
             output: evidence
         )
         initialMenuVisible = expectedIDs.isSubset(of: menuSnapshot.identifiers)
-            && expectedTexts.isSubset(of: menuSnapshot.texts)
+            && expectedTexts.allSatisfy { expected in
+                menuSnapshot.texts.contains { observed in
+                    observed.contains(expected)
+                }
+            }
 
         let configuration = ScriptedPDTMCPConnectorConfiguration(
             responses: try scriptedPDTConnectorResponses().mapValues { String(decoding: $0, as: UTF8.self) },
@@ -2997,26 +3168,85 @@ private func readinessProbeCount(in log: URL) -> Int {
         .count
 }
 
+private func waitForReadinessProbeCount(_ log: URL, expectedCount: Int, timeout: TimeInterval) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    repeat {
+        if readinessProbeCount(in: log) >= expectedCount {
+            return true
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+    } while Date() < deadline
+    return readinessProbeCount(in: log) >= expectedCount
+}
+
+private func handoffInvocationCount(in log: URL) -> Int {
+    guard let content = try? String(contentsOf: log, encoding: .utf8) else {
+        return 0
+    }
+    return content
+        .split(separator: "\n")
+        .filter { $0.hasPrefix("started ") }
+        .count
+}
+
+private func waitForHandoffInvocationCount(_ log: URL, expectedCount: Int, timeout: TimeInterval) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    repeat {
+        if handoffInvocationCount(in: log) >= expectedCount {
+            return true
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+    } while Date() < deadline
+    return handoffInvocationCount(in: log) >= expectedCount
+}
+
+private func handoffTerminationCount(in log: URL) -> Int {
+    guard let content = try? String(contentsOf: log, encoding: .utf8) else {
+        return 0
+    }
+    return content
+        .split(separator: "\n")
+        .filter { $0.hasPrefix("terminated ") }
+        .count
+}
+
+private func waitForHandoffTerminationCount(_ log: URL, expectedCount: Int, timeout: TimeInterval) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    repeat {
+        if handoffTerminationCount(in: log) >= expectedCount {
+            return true
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+    } while Date() < deadline
+    return handoffTerminationCount(in: log) >= expectedCount
+}
+
 private func launchLoginHandoffApp(
     _ app: URL,
     appSupportDirectory: URL,
     handoffScript: URL,
     marker: URL,
     result: URL,
-    resultValue: String
+    resultValue: String,
+    probeLog: URL? = nil
 ) throws -> Process {
     let process = Process()
     process.executableURL = app
     process.arguments = []
     var environment = ProcessInfo.processInfo.environment
     environment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
-    process.environment = environment.merging([
+    var scriptedEnvironment = [
         "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
-        "PDTBAR_CLAUDE_HANDOFF_SCRIPT": handoffScript.path,
+        "PDTBAR_CLAUDE_BIN": handoffScript.path,
         "PDTBAR_CLAUDE_HANDOFF_MARKER": marker.path,
         "PDTBAR_CLAUDE_HANDOFF_RESULT": result.path,
         "PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE": resultValue,
-    ]) { _, new in new }
+        "PDTBAR_DISABLE_REAL_CLAUDE": "1",
+    ]
+    if let probeLog {
+        scriptedEnvironment["PDTBAR_CLAUDE_READINESS_LOG"] = probeLog.path
+    }
+    process.environment = environment.merging(scriptedEnvironment) { _, new in new }
     try process.run()
     return process
 }
@@ -3025,6 +3255,8 @@ private func writeHandoffScript(
     in appSupportDirectory: URL,
     name: String,
     delay: TimeInterval,
+    promptBeforeURL: Bool = true,
+    postSuccessDelay: TimeInterval = 0,
     exitStatus: Int32
 ) throws -> URL {
     let directory = appSupportDirectory.appending(path: "pdtbar")
@@ -3032,9 +3264,27 @@ private func writeHandoffScript(
     let script = directory.appending(path: name)
     let content = """
     #!/bin/sh
-    printf started > "$PDTBAR_CLAUDE_HANDOFF_MARKER"
+    printf 'started %s pid=%s\\n' "$*" "$$" >> "$PDTBAR_CLAUDE_HANDOFF_MARKER.log"
+    trap 'printf "terminated pid=%s\\n" "$$" >> "$PDTBAR_CLAUDE_HANDOFF_MARKER.log"; exit 143' TERM INT HUP
+    printf 'started %s' "$*" > "$PDTBAR_CLAUDE_HANDOFF_MARKER"
+    if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
+    \(promptBeforeURL ? "  printf 'press ENTER to open in browser\\n'" : "  :")
+      printf 'https://claude.ai/login\\n'
+      IFS= read -r _ || true
+      if [ \(exitStatus) -eq 0 ]; then
+        :
+      else
+        printf 'Claude login failed\\n'
+      fi
+    fi
     sleep \(String(format: "%.2f", delay))
-    printf "%s" "$PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE" > "$PDTBAR_CLAUDE_HANDOFF_RESULT"
+    if [ "$1" = "auth" ] && [ "$2" = "login" ] && [ \(exitStatus) -eq 0 ]; then
+      printf "%s" "$PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE" > "$PDTBAR_CLAUDE_HANDOFF_RESULT"
+      printf 'Successfully logged in\\n'
+      sleep \(String(format: "%.2f", postSuccessDelay))
+    else
+      printf "%s" "$PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE" > "$PDTBAR_CLAUDE_HANDOFF_RESULT"
+    fi
     exit \(exitStatus)
     """
     try Data(content.utf8).write(to: script, options: .atomic)
@@ -3190,7 +3440,7 @@ private func scriptedPDTConnectorScenarioResults(
     }
 
     for (name, failure) in [
-        ("auth-setup-error", PDTMCPConnectorError.setupUnavailable("Claude Desktop needs PDT setup")),
+        ("auth-setup-error", PDTMCPConnectorError.setupUnavailable("Claude needs PDT setup")),
         ("transient-failure", PDTMCPConnectorError.transientFailure("Claude call timed out")),
     ] {
         do {
@@ -3500,14 +3750,17 @@ private func toolNames(in object: Any) -> Set<String> {
     return names
 }
 
-private func manualClaudePDTPrompt() -> String {
-    let tools = PDTReadTools.requiredV1.joined(separator: "\n- ")
+private func manualClaudePDTPrompt(resolvedTools: [String]) -> String {
+    let tools = zip(PDTReadTools.requiredV1, resolvedTools).map { readTool, resolvedTool in
+        "\(readTool): \(resolvedTool)"
+    }.joined(separator: "\n- ")
     return """
-    PDTBar manual smoke. Use the Claude Desktop PDT MCP setup for read-only proof.
+    PDTBar manual smoke. Use the Claude CLI PDT MCP setup for read-only proof.
 
     Rules:
+    - Call each resolved PDT MCP tool listed below exactly once.
     - Use normal Claude tool access only. Do not use bare mode.
-    - Call only these read-only PDT tools:
+    - Call only these resolved read-only PDT tools:
     - \(tools)
     - Do not call any write/mutate tool.
     - Do not include holdings, values, account identifiers, payload fields, endpoints, credentials, or raw tool output in your answer.
@@ -3527,14 +3780,47 @@ private func manualClaudePDTJSONSchema() -> String {
     """
 }
 
-private func manualClaudePDTAllowedTools() -> [String] {
-    let configuredDesktopNames = PDTReadTools.requiredV1.map {
-        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__\($0)"
+private func manualClaudePDTAllowedTools(
+    claudePath: String,
+    model: String,
+    timeout: TimeInterval
+) throws -> [String] {
+    let result = try run(
+        URL(fileURLWithPath: "/usr/bin/env"),
+        arguments: [
+            claudePath,
+            "--model", model,
+            "--allowedTools", "ToolSearch",
+            "--disallowedTools", manualClaudePDTToolSearchDisallowedTools().joined(separator: ","),
+            "-p", "Use ToolSearch to find these PDT MCP read-only tools: \(PDTReadTools.requiredV1.joined(separator: ", ")). Return only {\"status\":\"redacted-ok\"}.",
+            "--output-format", "stream-json",
+            "--verbose",
+            "--no-session-persistence",
+        ],
+        timeout: timeout
+    )
+    let output = String(decoding: result.stdout, as: UTF8.self)
+    let resolved = Dictionary(uniqueKeysWithValues: PDTReadTools.requiredV1.compactMap { readTool -> (String, String)? in
+        guard let toolName = manualClaudePDTToolName(readTool: readTool, in: output) else {
+            return nil
+        }
+        return (readTool, toolName)
+    })
+    guard resolved.count == PDTReadTools.requiredV1.count else {
+        throw PDTMCPConnectorError.setupUnavailable("ToolSearch did not resolve all PDT read tools")
     }
-    let renamedServerNames = PDTReadTools.requiredV1.map {
-        "mcp__*__\($0)"
+    return PDTReadTools.requiredV1.compactMap { resolved[$0] } + ["StructuredOutput", "ToolSearch"]
+}
+
+private func manualClaudePDTToolName(readTool: String, in output: String) -> String? {
+    let pattern = #"mcp__[A-Za-z0-9_.-]+__\#(NSRegularExpression.escapedPattern(for: readTool))"#
+    guard let expression = try? NSRegularExpression(pattern: pattern) else {
+        return nil
     }
-    return configuredDesktopNames + renamedServerNames + ["StructuredOutput", "ToolSearch"]
+    let range = NSRange(output.startIndex..<output.endIndex, in: output)
+    return expression.matches(in: output, range: range).compactMap { match in
+        Range(match.range, in: output).map { String(output[$0]) }
+    }.first
 }
 
 private func manualClaudePDTDisallowedTools() -> [String] {
@@ -3568,16 +3854,20 @@ private func manualClaudePDTDisallowedTools() -> [String] {
         "WebSearch",
         "Workflow",
         "Write",
-        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-add-*",
-        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-create-*",
-        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-delete-*",
-        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-patch-*",
-        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-post-*",
-        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-put-*",
-        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-remove-*",
-        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-set-*",
-        "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-update-*",
+        "mcp__*__pdt-add-*",
+        "mcp__*__pdt-create-*",
+        "mcp__*__pdt-delete-*",
+        "mcp__*__pdt-patch-*",
+        "mcp__*__pdt-post-*",
+        "mcp__*__pdt-put-*",
+        "mcp__*__pdt-remove-*",
+        "mcp__*__pdt-set-*",
+        "mcp__*__pdt-update-*",
     ]
+}
+
+private func manualClaudePDTToolSearchDisallowedTools() -> [String] {
+    manualClaudePDTDisallowedTools().filter { !$0.hasPrefix("mcp__") }
 }
 
 private func redactedClaudePDTResponse(from data: Data) -> RedactedClaudePDTResponse {
@@ -3597,6 +3887,92 @@ private func redactedClaudePDTResponse(from data: Data) -> RedactedClaudePDTResp
         nonReadPDTToolNames: telemetryNonReadPDTToolNames,
         toolResultErrorCount: telemetryToolResultErrorCount
     )
+}
+
+private func savedClaudeToolResultFiles(in data: Data) -> [URL] {
+    guard let text = String(data: data, encoding: .utf8) else {
+        return []
+    }
+    let projectsRoot = claudeProjectsDirectory().path
+    var files: [URL] = []
+    var searchStart = text.startIndex
+    while let rootRange = text.range(of: projectsRoot, range: searchStart..<text.endIndex),
+          let extensionRange = text.range(of: ".txt", range: rootRange.lowerBound..<text.endIndex)
+    {
+        let path = String(text[rootRange.lowerBound..<extensionRange.upperBound])
+        files.append(URL(fileURLWithPath: path))
+        searchStart = extensionRange.upperBound
+    }
+    return files
+}
+
+private func deleteSavedClaudeToolResultFiles(_ files: [URL]) {
+    for file in Set(files) {
+        try? FileManager.default.removeItem(at: file)
+    }
+}
+
+private func pdtToolResultFiles(in createdFiles: Set<URL>, referencedFiles: Set<URL>, sessionID: String) -> [URL] {
+    let deadline = Date().addingTimeInterval(1.0)
+    var sessionFiles = Set<URL>()
+    repeat {
+        sessionFiles = claudeToolResultFiles(sessionID: sessionID)
+        if sessionFiles.contains(where: { file in
+            PDTReadTools.requiredV1.contains { file.lastPathComponent.contains($0) }
+        }) {
+            break
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+    } while Date() < deadline
+    let referenced = createdFiles.intersection(referencedFiles)
+    let matchingReadTool = createdFiles.union(sessionFiles).filter { file in
+        PDTReadTools.requiredV1.contains { file.lastPathComponent.contains($0) }
+    }
+    return Array(referenced.union(matchingReadTool))
+}
+
+private func claudeToolResultFiles(sessionID: String? = nil) -> Set<URL> {
+    let root = claudeProjectsDirectory()
+    guard let projects = try? FileManager.default.contentsOfDirectory(
+        at: root,
+        includingPropertiesForKeys: [.isDirectoryKey],
+        options: [.skipsHiddenFiles]
+    ) else {
+        return []
+    }
+    var files = Set<URL>()
+    for project in projects {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: project.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else { continue }
+        let sessionDirectories: [URL]
+        if let sessionID {
+            sessionDirectories = [project.appending(path: sessionID)]
+        } else {
+            sessionDirectories = (try? FileManager.default.contentsOfDirectory(
+                at: project,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+        }
+        for sessionDirectory in sessionDirectories {
+            let toolResults = sessionDirectory.appending(path: "tool-results")
+            guard let toolFiles = try? FileManager.default.contentsOfDirectory(
+                at: toolResults,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else {
+                continue
+            }
+            files.formUnion(toolFiles.filter { $0.pathExtension == "txt" })
+        }
+    }
+    return files
+}
+
+private func claudeProjectsDirectory() -> URL {
+    FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude/projects")
 }
 
 private func streamJSONObjects(from data: Data) -> [[String: Any]] {

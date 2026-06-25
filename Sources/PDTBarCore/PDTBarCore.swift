@@ -974,6 +974,36 @@ public final class ClaudeReadinessProbeGate {
     }
 }
 
+public final class ClaudeLoginAttemptGate {
+    private let lock = NSLock()
+    private var nextAttempt = 0
+    private var activeAttempt: Int?
+
+    public init() {}
+
+    public func begin() -> Int {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        nextAttempt += 1
+        activeAttempt = nextAttempt
+        return nextAttempt
+    }
+
+    public func finish(_ attempt: Int) -> Bool {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        guard activeAttempt == attempt else {
+            return false
+        }
+        activeAttempt = nil
+        return true
+    }
+}
+
 public enum ClaudeLaunchState: Equatable {
     case probingClaude
     case loggedOut
@@ -984,6 +1014,59 @@ public enum ClaudeLaunchState: Equatable {
     case probeFailed
     case fetchingPortfolio
     case portfolioFetchFailed
+}
+
+public enum ClaudeAuthStatusParser {
+    public static func isLoggedIn(stdout: String) -> Bool {
+        loggedInStatus(stdout: stdout) == true
+    }
+
+    public static func loggedInStatus(stdout: String) -> Bool? {
+        for line in stdout.split(whereSeparator: \.isNewline) {
+            if let loggedIn = loggedInStatusFromJSONObject(String(line)) {
+                return loggedIn
+            }
+        }
+        return loggedInStatusFromJSONObject(stdout)
+    }
+
+    private static func loggedInStatusFromJSONObject(_ output: String) -> Bool? {
+        let jsonOutput = firstJSONObject(in: output) ?? output
+        guard let data = jsonOutput.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let loggedIn = object["loggedIn"] as? Bool
+        else {
+            return nil
+        }
+        return loggedIn
+    }
+
+    private static func firstJSONObject(in output: String) -> String? {
+        guard let start = output.firstIndex(of: "{"),
+              let end = output.lastIndex(of: "}"),
+              start <= end
+        else {
+            return nil
+        }
+        return String(output[start...end])
+    }
+}
+
+public enum ClaudeLoginHandoffOutcome: Equatable {
+    case succeeded
+    case failed
+}
+
+public enum ClaudeLoginHandoffAction: Equatable {
+    case recheckReadiness
+    case showMissingClaude
+}
+
+public enum ClaudeLoginFailureReason: Equatable, Sendable {
+    case missingBinary
+    case timedOut
+    case failed
+    case launchFailed
 }
 
 public enum ClaudeLaunchFlow {
@@ -1005,7 +1088,20 @@ public enum ClaudeLaunchFlow {
         }
     }
 
-    public static func descriptor(for state: ClaudeLaunchState, cachedPulse: MenuDescriptor? = nil) -> MenuDescriptor {
+    public static func action(afterLoginHandoff outcome: ClaudeLoginHandoffOutcome) -> ClaudeLoginHandoffAction {
+        switch outcome {
+        case .succeeded:
+            return .recheckReadiness
+        case .failed:
+            return .showMissingClaude
+        }
+    }
+
+    public static func descriptor(
+        for state: ClaudeLaunchState,
+        cachedPulse: MenuDescriptor? = nil,
+        fetchingElapsedSeconds: Int? = nil
+    ) -> MenuDescriptor {
         if let cachedPulse {
             switch state {
             case .probingClaude:
@@ -1028,16 +1124,15 @@ public enum ClaudeLaunchFlow {
                             id: "portfolioFetch.refreshing",
                             role: .fetchStatus,
                             title: "Refreshing portfolio",
-                            detail: "Keeping last pulse visible"
+                            detail: fetchingDetail(
+                                elapsedSeconds: fetchingElapsedSeconds,
+                                fallback: "Keeping last pulse visible"
+                            )
                         ),
                     ]
                 )
             case .portfolioFetchFailed:
-                return cachedPulseDescriptor(
-                    cachedPulse,
-                    statusVisual: cachedPulse.statusVisual.withDimming(true),
-                    rows: portfolioFetchFailureRows()
-                )
+                return descriptorForBackgroundRefreshFailure(cachedPulse: cachedPulse)
             case .loggedOut, .openingClaude, .missingClaude, .missingClaudeLogin, .missingPDTMCP, .probeFailed:
                 break
             }
@@ -1059,6 +1154,11 @@ public enum ClaudeLaunchFlow {
                                 title: "Checking Claude setup",
                                 detail: "No prompts opened"
                             ),
+                            MenuRow(
+                                id: "claudeSetup.login",
+                                role: .setupLogin,
+                                title: "Log in with Claude"
+                            ),
                         ]
                     ),
                 ]
@@ -1067,7 +1167,7 @@ public enum ClaudeLaunchFlow {
             return ClaudeSetupMenuDescriptor.loggedOut()
         case .openingClaude:
             return MenuDescriptor(
-                statusTitle: "Opening Claude Desktop",
+                statusTitle: "Signing in with Claude",
                 statusVisual: StatusVisualState(isDimmed: true),
                 sections: [
                     MenuSection(
@@ -1077,8 +1177,13 @@ public enum ClaudeLaunchFlow {
                             MenuRow(
                                 id: "claudeSetup.opening",
                                 role: .setupStatus,
-                                title: "Opening Claude Desktop",
-                                detail: "Finish setup there"
+                                title: "Signing in with Claude",
+                                detail: "Finish the Claude auth login flow"
+                            ),
+                            MenuRow(
+                                id: "claudeSetup.login",
+                                role: .setupLogin,
+                                title: "Try login again"
                             ),
                         ]
                     ),
@@ -1115,9 +1220,19 @@ public enum ClaudeLaunchFlow {
                 ]
             )
         case .fetchingPortfolio:
+            let detail = fetchingDetail(
+                elapsedSeconds: fetchingElapsedSeconds,
+                fallback: "Read-only through Claude"
+            )
+            let statusTitle = fetchingElapsedSeconds.map {
+                "Fetching portfolio \(formatElapsedSeconds($0))"
+            } ?? "Fetching portfolio"
             return MenuDescriptor(
-                statusTitle: "Fetching portfolio",
-                statusVisual: StatusVisualState(isDimmed: true),
+                statusTitle: statusTitle,
+                statusVisual: StatusVisualState(
+                    isDimmed: true,
+                    statusCopy: statusTitle
+                ),
                 sections: [
                     MenuSection(
                         id: "portfolioFetch",
@@ -1127,7 +1242,7 @@ public enum ClaudeLaunchFlow {
                                 id: "portfolioFetch.status",
                                 role: .fetchStatus,
                                 title: "Fetching portfolio",
-                                detail: "Read-only through Claude"
+                                detail: detail
                             ),
                         ]
                     ),
@@ -1146,6 +1261,94 @@ public enum ClaudeLaunchFlow {
                 ]
             )
         }
+    }
+
+    public static func descriptorWithRefreshDetailsAction(cachedPulse: MenuDescriptor) -> MenuDescriptor {
+        cachedPulseDescriptor(
+            cachedPulse,
+            rows: [
+                MenuRow(
+                    id: "portfolioFetch.refreshDetails",
+                    role: .fetchRetry,
+                    title: "Refresh details",
+                    detail: "Fill income and detail data"
+                ),
+            ]
+        )
+    }
+
+    public static func descriptorForBackgroundRefreshFailure(cachedPulse: MenuDescriptor) -> MenuDescriptor {
+        cachedPulseDescriptor(
+            cachedPulse,
+            statusVisual: cachedPulse.statusVisual.withDimming(true),
+            rows: [
+                MenuRow(
+                    id: "portfolioFetch.backgroundFailed",
+                    role: .fetchStatus,
+                    title: "Details fill failed",
+                    detail: "Last pulse is still visible"
+                ),
+                MenuRow(
+                    id: "portfolioFetch.retry",
+                    role: .fetchRetry,
+                    title: "Fill details again"
+                ),
+            ]
+        )
+    }
+
+    public static func formatElapsedSeconds(_ seconds: Int) -> String {
+        let safeSeconds = max(0, seconds)
+        return "\(safeSeconds / 60):\(String(format: "%02d", safeSeconds % 60))"
+    }
+
+    private static func fetchingDetail(elapsedSeconds: Int?, fallback: String) -> String {
+        guard let elapsedSeconds else {
+            return fallback
+        }
+        return "\(fallback) - working for \(formatElapsedSeconds(elapsedSeconds))"
+    }
+
+    public static func descriptor(forLoginFailure reason: ClaudeLoginFailureReason) -> MenuDescriptor {
+        let title: String
+        let detail: String
+        switch reason {
+        case .missingBinary:
+            title = "Claude CLI not found"
+            detail = "Install Claude Code CLI"
+        case .timedOut:
+            title = "Claude login timed out"
+            detail = "Try again"
+        case .failed:
+            title = "Claude login failed"
+            detail = "Try again"
+        case .launchFailed:
+            title = "Could not start claude auth login"
+            detail = "Try again"
+        }
+        return MenuDescriptor(
+            statusTitle: title,
+            statusVisual: StatusVisualState(isDimmed: true),
+            sections: [
+                MenuSection(
+                    id: "claudeSetup",
+                    title: "Claude",
+                    rows: [
+                        MenuRow(
+                            id: "claudeSetup.loginFailure",
+                            role: .setupFailure,
+                            title: title,
+                            detail: detail
+                        ),
+                        MenuRow(
+                            id: "claudeSetup.login",
+                            role: .setupLogin,
+                            title: "Log in with Claude"
+                        ),
+                    ]
+                ),
+            ]
+        )
     }
 
     private static func cachedPulseDescriptor(
@@ -1181,6 +1384,11 @@ public enum ClaudeLaunchFlow {
                 role: .fetchRetry,
                 title: "Try again"
             ),
+            MenuRow(
+                id: "claudeSetup.login",
+                role: .setupLogin,
+                title: "Log in with Claude"
+            ),
         ]
     }
 }
@@ -1199,7 +1407,7 @@ public enum ClaudeSetupMenuDescriptor {
                             id: "claudeSetup.status",
                             role: .setupStatus,
                             title: "Not connected",
-                            detail: "Use Claude Desktop for PDT"
+                            detail: "Use Claude CLI for PDT"
                         ),
                         MenuRow(
                             id: "claudeSetup.login",
@@ -1214,7 +1422,7 @@ public enum ClaudeSetupMenuDescriptor {
 
     public static func missingClaude() -> MenuDescriptor {
         MenuDescriptor(
-            statusTitle: "Claude Desktop not found",
+            statusTitle: "Claude CLI not found",
             statusVisual: StatusVisualState(isDimmed: true),
             sections: [
                 MenuSection(
@@ -1224,8 +1432,8 @@ public enum ClaudeSetupMenuDescriptor {
                         MenuRow(
                             id: "claudeSetup.missingClaude",
                             role: .setupFailure,
-                            title: "Claude Desktop not found",
-                            detail: "Install or open Claude Desktop"
+                            title: "Claude CLI not found",
+                            detail: "Install Claude Code CLI"
                         ),
                         MenuRow(
                             id: "claudeSetup.login",
@@ -1251,7 +1459,7 @@ public enum ClaudeSetupMenuDescriptor {
                             id: "claudeSetup.status",
                             role: .setupStatus,
                             title: "Not connected",
-                            detail: "Sign in with Claude Desktop"
+                            detail: "Sign in with Claude CLI"
                         ),
                         MenuRow(
                             id: "claudeSetup.login",
@@ -1271,7 +1479,7 @@ public enum ClaudeSetupMenuDescriptor {
 
     public static func missingPDTMCP() -> MenuDescriptor {
         MenuDescriptor(
-            statusTitle: "Add the PDT MCP server in Claude Desktop",
+            statusTitle: "Add the PDT MCP server to Claude",
             statusVisual: StatusVisualState(isDimmed: true),
             sections: [
                 MenuSection(
@@ -1281,8 +1489,13 @@ public enum ClaudeSetupMenuDescriptor {
                         MenuRow(
                             id: "claudeSetup.missingPDTMCP",
                             role: .setupFailure,
-                            title: "Add the PDT MCP server in Claude Desktop",
+                            title: "Add the PDT MCP server to Claude",
                             detail: "Then check again"
+                        ),
+                        MenuRow(
+                            id: "claudeSetup.login",
+                            role: .setupLogin,
+                            title: "Log in with Claude"
                         ),
                         MenuRow(
                             id: "claudeSetup.retry",
@@ -1983,7 +2196,14 @@ public enum PDTReadTools {
 
 public protocol PDTMCPConnector {
     func availableReadTools() throws -> Set<String>
+    func availableReadTools(required: Set<String>) throws -> Set<String>
     func callReadTool(_ name: String, arguments: [String: String]) throws -> Data
+}
+
+public extension PDTMCPConnector {
+    func availableReadTools(required: Set<String>) throws -> Set<String> {
+        try availableReadTools().intersection(required)
+    }
 }
 
 public enum PDTMCPConnectorError: Error, CustomStringConvertible, Equatable {
@@ -2011,17 +2231,27 @@ public enum PDTMCPConnectorError: Error, CustomStringConvertible, Equatable {
 
 public struct PDTMCPConnectorDataSource: PortfolioDataSource {
     public var connector: any PDTMCPConnector
+    public var liveOptions: PDTLiveDataSourceOptions
 
-    public init(connector: any PDTMCPConnector) {
+    public init(
+        connector: any PDTMCPConnector,
+        liveOptions: PDTLiveDataSourceOptions = PDTLiveDataSourceOptions()
+    ) {
         self.connector = connector
+        self.liveOptions = liveOptions
     }
 
     public func snapshot(asOf: String? = nil) throws -> PortfolioSnapshot {
-        let missing = PDTReadTools.missingRequiredV1Tools(in: try connector.availableReadTools())
+        let requiredTools = Set(liveOptions.requiredReadTools)
+        let availableTools = try connector.availableReadTools(required: requiredTools)
+        let missing = liveOptions.requiredReadTools.filter { !availableTools.contains($0) }
         guard missing.isEmpty else {
             throw PDTMCPConnectorError.missingRequiredReadTools(missing)
         }
-        return try PDTLiveDataSource(toolClient: PDTMCPConnectorToolClient(connector: connector)).snapshot(asOf: asOf)
+        return try PDTLiveDataSource(
+            toolClient: PDTMCPConnectorToolClient(connector: connector),
+            options: liveOptions
+        ).snapshot(asOf: asOf)
     }
 }
 
@@ -2285,11 +2515,64 @@ public enum PDTLiveUnavailableClassifier {
     }
 }
 
+public struct PDTLiveDataSourceOptions: Equatable, Sendable {
+    public var includeDistributions: Bool
+    public var includeXRayHoldings: Bool
+    public var includeIncomeEvents: Bool
+    public var includeDividends: Bool
+    public var includeIncomeQuoteLookups: Bool
+    public var includePriceSeries: Bool
+
+    public init(
+        includeDistributions: Bool = true,
+        includeXRayHoldings: Bool = true,
+        includeIncomeEvents: Bool = true,
+        includeDividends: Bool = true,
+        includeIncomeQuoteLookups: Bool = true,
+        includePriceSeries: Bool = true
+    ) {
+        self.includeDistributions = includeDistributions
+        self.includeXRayHoldings = includeXRayHoldings
+        self.includeIncomeEvents = includeIncomeEvents
+        self.includeDividends = includeDividends
+        self.includeIncomeQuoteLookups = includeIncomeQuoteLookups
+        self.includePriceSeries = includePriceSeries
+    }
+
+    public var requiredReadTools: [String] {
+        var tools = ["pdt-get-portfolio-holdings"]
+        if includeDistributions {
+            tools.append("pdt-get-portfolio-distributions")
+        }
+        if includeXRayHoldings {
+            tools.append("pdt-list-x-ray-holdings")
+        }
+        if includeIncomeEvents {
+            tools.append("pdt-list-calendar-events")
+        }
+        if includeDividends {
+            tools.append("pdt-list-dividends")
+        }
+        if includeIncomeQuoteLookups {
+            tools.append("pdt-get-symbol-quote")
+        }
+        if includePriceSeries {
+            tools.append("pdt-list-symbol-prices")
+        }
+        return tools
+    }
+}
+
 public struct PDTLiveDataSource: PortfolioDataSource {
     public var toolClient: any PDTLiveToolClient
+    public var options: PDTLiveDataSourceOptions
 
-    public init(toolClient: any PDTLiveToolClient) {
+    public init(
+        toolClient: any PDTLiveToolClient,
+        options: PDTLiveDataSourceOptions = PDTLiveDataSourceOptions()
+    ) {
         self.toolClient = toolClient
+        self.options = options
     }
 
     public func snapshot(asOf: String? = nil) throws -> PortfolioSnapshot {
@@ -2306,16 +2589,24 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             "pdt-get-portfolio-holdings",
             data: toolClient.callReadTool("pdt-get-portfolio-holdings", arguments: [:])
         )
-        let distributionsEnvelope: LiveDistributionsEnvelope = try decodeLiveTool(
-            "pdt-get-portfolio-distributions",
-            data: toolClient.callReadTool("pdt-get-portfolio-distributions", arguments: [:])
-        )
-        let xRayHoldings = try liveXRayHoldings()
-        let calendarEnvelope: LiveCalendarEventsEnvelope = try decodeLiveTool(
-            "pdt-list-calendar-events",
-            data: toolClient.callReadTool("pdt-list-calendar-events", arguments: incomeDateRange)
-        )
-        let dividends = try liveDividends(arguments: dividendDateRange)
+        let distributionsEnvelope: LiveDistributionsEnvelope? = options.includeDistributions
+            ? try decodeLiveTool(
+                "pdt-get-portfolio-distributions",
+                data: toolClient.callReadTool("pdt-get-portfolio-distributions", arguments: [:])
+            )
+            : nil
+        let xRayHoldings = options.includeXRayHoldings ? try liveXRayHoldings() : []
+        let calendarEvents: [LiveCalendarEvent]
+        if options.includeIncomeEvents {
+            let calendarEnvelope: LiveCalendarEventsEnvelope = try decodeLiveTool(
+                "pdt-list-calendar-events",
+                data: toolClient.callReadTool("pdt-list-calendar-events", arguments: incomeDateRange)
+            )
+            calendarEvents = calendarEnvelope.data
+        } else {
+            calendarEvents = []
+        }
+        let dividends = options.includeDividends ? try liveDividends(arguments: dividendDateRange) : []
 
         let openHoldings = holdingsEnvelope.holdings
             .filter { $0.closedAt == nil }
@@ -2329,22 +2620,26 @@ public struct PDTLiveDataSource: PortfolioDataSource {
                     priceAsOf: dayPrefix($0.currentPriceDate)
                 )
             }
-        let quoteIDsBySymbolID = try liveQuoteIDsBySymbolID(for: openHoldings)
+        let quoteIDsBySymbolID = options.includeIncomeQuoteLookups
+            ? try liveQuoteIDsBySymbolID(for: openHoldings)
+            : [:]
         let dividendsByQuoteID = Dictionary(
             grouping: dividends,
             by: \.symbolQuoteId
         )
         let currency = openHoldings.first?.worth.currency ?? "EUR"
-        let priceSeries = try livePriceSeries(for: openHoldings, asOf: snapshotAsOf)
+        let priceSeries = options.includePriceSeries
+            ? try livePriceSeries(for: openHoldings, asOf: snapshotAsOf)
+            : []
 
         return PortfolioSnapshot(
             asOf: snapshotAsOf,
             totalValue: sumWorth(openHoldings, currency: currency),
             openHoldings: openHoldings,
-            sectors: distributionsEnvelope.sectors.map(\.summary),
-            assetTypes: distributionsEnvelope.assetTypes.map(\.summary),
+            sectors: distributionsEnvelope?.sectors.map(\.summary) ?? [],
+            assetTypes: distributionsEnvelope?.assetTypes.map(\.summary) ?? [],
             xRayHoldings: xRayHoldings,
-            incomeEvents: calendarEnvelope.data.filter { $0.type != "no-events-today" }.map {
+            incomeEvents: calendarEvents.filter { $0.type != "no-events-today" }.map {
                 let quoteId = $0.symbolId.flatMap { quoteIDsBySymbolID[$0] }
                 let amount = $0.type == "ex-dividend" && !$0.isEstimated
                     ? latestLiveDividendAmount(for: quoteId, dividendsByQuoteID: dividendsByQuoteID)

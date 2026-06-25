@@ -32,7 +32,7 @@ Quiet at the top, everything available underneath.
 
 ## Current connection model
 
-PDTBar is Claude-only. No-argument launch probes the user's existing Claude Desktop login and PDT MCP server, then performs the first read-only PDT fetch when ready. If setup is missing, the menu offers `Log in with Claude` and `Check again`; PDTBar does not implement generic OAuth, Codex login, API-key entry, token paste, raw MCP JSON, or a mcporter runtime path.
+PDTBar is Claude-only. No-argument launch probes the user's existing Claude CLI login and PDT MCP server, then performs the first read-only PDT fetch when ready. If setup is missing, the menu offers `Log in with Claude` and `Check again`; PDTBar does not implement generic OAuth, Codex login, API-key entry, token paste, raw MCP JSON, or a mcporter runtime path.
 
 ## What it is NOT
 
