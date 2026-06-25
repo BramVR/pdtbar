@@ -185,8 +185,8 @@ try check(
     "logged-out real launch should render Claude setup status and login rows"
 )
 try check(
-    openingClaudeDescriptor.sections.flatMap(\.rows).map(\.title) == ["Signing in with Claude"],
-    "login handoff should render progress while claude auth login is running"
+    openingClaudeDescriptor.sections.flatMap(\.rows).map(\.title) == ["Signing in with Claude", "Try login again"],
+    "login handoff should render progress and a retry action while claude auth login is running"
 )
 try check(
     ClaudeLaunchFlow.action(afterLoginHandoff: .succeeded) == .recheckReadiness,

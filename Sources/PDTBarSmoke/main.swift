@@ -545,12 +545,13 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
 
     let successAppSupport = try options.isolatedAppSupportDirectory(prefix: "scripted-login-handoff-success-app-support")
     let successMarker = successAppSupport.appending(path: "pdtbar/claude-handoff-started")
+    let successInvocationLog = successMarker.appendingPathExtension("log")
     let successResult = successAppSupport.appending(path: "pdtbar/claude-handoff-result")
     let successProbeLog = successAppSupport.appending(path: "pdtbar/readiness-probes.log")
     let successScript = try writeHandoffScript(
         in: successAppSupport,
         name: "handoff-success.sh",
-        delay: max(options.timeout, 1.0),
+        delay: max(options.timeout + 3.0, 4.0),
         exitStatus: 0
     )
     let successProcess = try launchLoginHandoffApp(
@@ -602,6 +603,34 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         statusIdentifier: "pdtbar.status",
         timeout: options.timeout
     )
+    let openingSurface = MenuBarSurfaceRenderer.render(descriptor: ClaudeLaunchFlow.descriptor(for: .openingClaude))
+    let openingTargets = requiredSetupMenuTargets(in: openingSurface)
+    let openingIDs = Set(openingTargets.map(\.accessibilityIdentifier))
+    let progressMenu = openStatusMenu(
+        successStatus,
+        appElement: successAppElement,
+        expectedMenuIdentifiers: openingIDs,
+        timeout: options.timeout
+    )
+    let progressRetryVisible = openingIDs.isSubset(of: progressMenu.snapshot?.identifiers ?? [])
+        && (progressMenu.snapshot?.texts.contains("Try login again") ?? false)
+    let successRetryClick = pressMenuRow(
+        statusElement: successStatus,
+        appElement: successAppElement,
+        rowIdentifier: "pdtbar.row.claudeSetup.login",
+        expectedMenuIdentifiers: openingIDs,
+        timeout: options.timeout
+    )
+    let successRetryInvoked = waitForHandoffInvocationCount(
+        successInvocationLog,
+        expectedCount: 2,
+        timeout: options.timeout
+    )
+    let successSupersededAttemptTerminated = waitForFileContent(
+        successInvocationLog,
+        contains: "terminated",
+        timeout: options.timeout + 2.0
+    )
     let successLoginArgsIncluded = waitForFileContent(
         successMarker,
         contains: "auth login",
@@ -613,12 +642,13 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         initialCallDelaySeconds: 1.0
     )
     try writeFirstFetchAppScript(configuration: successConfiguration, appSupportDirectory: successAppSupport)
-    let successCompleted = waitForFile(successResult, timeout: options.timeout + 2.0)
+    let successCompleted = waitForFile(successResult, timeout: options.timeout + 8.0)
     let successReadinessRechecked = waitForReadinessProbeCount(
         successProbeLog,
         expectedCount: 2,
-        timeout: options.timeout + 2.0
+        timeout: options.timeout + 6.0
     )
+    let successReadinessProbeCount = readinessProbeCount(in: successProbeLog)
     let successFetchingVisible = waitForStatusText(
         "Fetching portfolio",
         in: successAppElement,
@@ -629,7 +659,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
     let successFirstFetchSnapshotWritten = waitForSnapshotAsOf(
         successFirstFetchSnapshot,
         asOf: "2026-03-29",
-        timeout: options.timeout + 4.0
+        timeout: options.timeout + 8.0
     )
     let successFirstFetchAsOf = snapshotAsOf(successFirstFetchSnapshot)
     terminate(successProcess)
@@ -735,9 +765,16 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         successScriptInvoked: successScriptInvoked,
         successLoginArgsIncluded: successLoginArgsIncluded,
         successProgressVisible: progressVisible,
+        successProgressRetryVisible: progressRetryVisible,
+        successProgressMenuOpenAttempt: progressMenu.successfulAttempt,
+        successProgressObservedIdentifiers: progressMenu.snapshot?.identifiers.sorted() ?? [],
+        successProgressObservedTexts: progressMenu.snapshot?.texts.sorted() ?? [],
+        successRetryClickAttempt: successRetryClick,
+        successRetryInvoked: successRetryInvoked,
+        successSupersededAttemptTerminated: successSupersededAttemptTerminated,
         successCompleted: successCompleted,
         successReadinessRechecked: successReadinessRechecked,
-        successReadinessProbeCount: readinessProbeCount(in: successProbeLog),
+        successReadinessProbeCount: successReadinessProbeCount,
         successFetchingVisible: successFetchingVisible,
         successFirstFetchSnapshotWritten: successFirstFetchSnapshotWritten,
         successFirstFetchAsOf: successFirstFetchAsOf,
@@ -761,8 +798,13 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
           successScriptInvoked,
           successLoginArgsIncluded,
           progressVisible,
+          progressRetryVisible,
+          successRetryClick != nil,
+          successRetryInvoked,
+          successSupersededAttemptTerminated,
           successCompleted,
           successReadinessRechecked,
+          successReadinessProbeCount == 2,
           successFetchingVisible,
           successFirstFetchSnapshotWritten,
           successFirstFetchAsOf == "2026-03-29",
@@ -777,7 +819,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         return SmokeReport(
             name: "scripted-login-handoff",
             status: SmokeStatus.failed,
-            detail: "scripted login handoff did not prove user-initiated success, readiness recheck, first fetch, and missing-Claude failure states",
+            detail: "scripted login handoff did not prove user-initiated success, in-flight retry supersession, readiness recheck, first fetch, and missing-Claude failure states",
             artifacts: [artifactPath(proof)]
         )
     }
@@ -785,7 +827,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
     return SmokeReport(
         name: "scripted-login-handoff",
         status: SmokeStatus.passed,
-        detail: "Log in with Claude invoked scripted claude auth login only after menu click, showed Signing in with Claude, rechecked readiness, started first fetch, and rendered failed-login state on login failure",
+        detail: "Log in with Claude invoked scripted claude auth login only after menu click, superseded an in-flight auth retry, rechecked readiness once, started first fetch, and rendered failed-login state on login failure",
         artifacts: [artifactPath(proof)]
     )
 }
@@ -2172,6 +2214,13 @@ private struct ScriptedLoginHandoffProof: Codable {
     var successScriptInvoked: Bool
     var successLoginArgsIncluded: Bool
     var successProgressVisible: Bool
+    var successProgressRetryVisible: Bool
+    var successProgressMenuOpenAttempt: String?
+    var successProgressObservedIdentifiers: [String]
+    var successProgressObservedTexts: [String]
+    var successRetryClickAttempt: String?
+    var successRetryInvoked: Bool
+    var successSupersededAttemptTerminated: Bool
     var successCompleted: Bool
     var successReadinessRechecked: Bool
     var successReadinessProbeCount: Int
@@ -2885,6 +2934,27 @@ private func waitForReadinessProbeCount(_ log: URL, expectedCount: Int, timeout:
     return readinessProbeCount(in: log) >= expectedCount
 }
 
+private func handoffInvocationCount(in log: URL) -> Int {
+    guard let content = try? String(contentsOf: log, encoding: .utf8) else {
+        return 0
+    }
+    return content
+        .split(separator: "\n")
+        .filter { $0.hasPrefix("started ") }
+        .count
+}
+
+private func waitForHandoffInvocationCount(_ log: URL, expectedCount: Int, timeout: TimeInterval) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    repeat {
+        if handoffInvocationCount(in: log) >= expectedCount {
+            return true
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+    } while Date() < deadline
+    return handoffInvocationCount(in: log) >= expectedCount
+}
+
 private func launchLoginHandoffApp(
     _ app: URL,
     appSupportDirectory: URL,
@@ -2926,6 +2996,8 @@ private func writeHandoffScript(
     let script = directory.appending(path: name)
     let content = """
     #!/bin/sh
+    printf 'started %s pid=%s\\n' "$*" "$$" >> "$PDTBAR_CLAUDE_HANDOFF_MARKER.log"
+    trap 'printf "terminated pid=%s\\n" "$$" >> "$PDTBAR_CLAUDE_HANDOFF_MARKER.log"; exit 143' TERM INT HUP
     printf 'started %s' "$*" > "$PDTBAR_CLAUDE_HANDOFF_MARKER"
     if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
       printf 'https://claude.ai/login\\n'

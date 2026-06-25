@@ -24,6 +24,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var portfolioFetchInFlight = false
     private var portfolioRefreshInFlight = false
     private let claudeReadinessProbeGate = ClaudeReadinessProbeGate()
+    private let claudeLoginAttemptGate = ClaudeLoginAttemptGate()
 
     init(options: PDTBarLaunchOptions) {
         self.options = options
@@ -190,25 +191,29 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func loginWithClaude(_ sender: NSMenuItem) {
+        let attempt = claudeLoginAttemptGate.begin()
         installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .openingClaude))
         loginHandoff.startLogin { [weak self] result in
             DispatchQueue.main.async {
+                guard let self, self.claudeLoginAttemptGate.finish(attempt) else {
+                    return
+                }
                 switch result {
                 case .success:
                     switch ClaudeLaunchFlow.action(afterLoginHandoff: .succeeded) {
                     case .recheckReadiness:
-                        self?.startClaudeReadinessProbe()
+                        self.startClaudeReadinessProbe()
                     case .showMissingClaude:
-                        self?.installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .missingClaude))
+                        self.installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .missingClaude))
                     }
                 case .failure(let error):
                     FileHandle.standardError.write(Data("pdtbar: Claude handoff failed: \(error)\n".utf8))
                     if let handoffError = error as? ClaudeLoginHandoffError {
-                        self?.installMenuBarItem(
+                        self.installMenuBarItem(
                             ClaudeLaunchFlow.descriptor(forLoginFailure: handoffError.reason)
                         )
                     } else {
-                        self?.installMenuBarItem(
+                        self.installMenuBarItem(
                             ClaudeLaunchFlow.descriptor(forLoginFailure: .failed)
                         )
                     }
@@ -404,20 +409,30 @@ private enum ClaudeLoginHandoffError: Error, CustomStringConvertible {
     }
 }
 
-private final class ClaudeCLILoginHandoff: ClaudeLoginHandoff {
+private final class ClaudeCLILoginHandoff: ClaudeLoginHandoff, @unchecked Sendable {
     private let environment: [String: String]
+    private let lock = NSLock()
+    private var activeCancellation: ClaudeLoginCancellation?
 
     init(environment: [String: String]) {
         self.environment = environment
     }
 
     func startLogin(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
-        Task.detached(priority: .userInitiated) { [environment] in
+        let cancellation = ClaudeLoginCancellation()
+        lock.lock()
+        activeCancellation?.cancel()
+        activeCancellation = cancellation
+        lock.unlock()
+
+        Task.detached(priority: .userInitiated) { [environment, cancellation, weak self] in
             let result = await ClaudeLoginRunner.run(
                 timeout: 120,
                 environment: environment,
+                cancellation: cancellation,
                 onPhaseChange: { _ in }
             )
+            self?.clearActiveCancellation(cancellation)
             switch result.outcome {
             case .success:
                 completion(.success(()))
@@ -432,8 +447,18 @@ private final class ClaudeCLILoginHandoff: ClaudeLoginHandoff {
                 )))
             case .launchFailed(let message):
                 completion(.failure(ClaudeLoginHandoffError.failed(.launchFailed, message)))
+            case .cancelled:
+                break
             }
         }
+    }
+
+    private func clearActiveCancellation(_ cancellation: ClaudeLoginCancellation) {
+        lock.lock()
+        if activeCancellation === cancellation {
+            activeCancellation = nil
+        }
+        lock.unlock()
     }
 }
 

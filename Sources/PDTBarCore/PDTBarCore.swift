@@ -753,6 +753,36 @@ public final class ClaudeReadinessProbeGate {
     }
 }
 
+public final class ClaudeLoginAttemptGate {
+    private let lock = NSLock()
+    private var nextAttempt = 0
+    private var activeAttempt: Int?
+
+    public init() {}
+
+    public func begin() -> Int {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        nextAttempt += 1
+        activeAttempt = nextAttempt
+        return nextAttempt
+    }
+
+    public func finish(_ attempt: Int) -> Bool {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        guard activeAttempt == attempt else {
+            return false
+        }
+        activeAttempt = nil
+        return true
+    }
+}
+
 public enum ClaudeLaunchState: Equatable {
     case probingClaude
     case loggedOut
@@ -888,7 +918,12 @@ public enum ClaudeLaunchFlow {
                                 id: "claudeSetup.opening",
                                 role: .setupStatus,
                                 title: "Signing in with Claude",
-                                detail: "Finish the claude auth login flow"
+                                detail: "Finish the Claude auth login flow"
+                            ),
+                            MenuRow(
+                                id: "claudeSetup.login",
+                                role: .setupLogin,
+                                title: "Try login again"
                             ),
                         ]
                     ),

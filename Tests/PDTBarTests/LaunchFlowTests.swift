@@ -79,10 +79,13 @@ struct ClaudeLaunchFlowTests {
 
     @Test("Setup descriptors expose retryable onboarding actions")
     func setupDescriptorsExposeRetryableOnboardingActions() {
+        let openingClaude = ClaudeLaunchFlow.descriptor(for: .openingClaude)
         let missingLogin = ClaudeLaunchFlow.descriptor(for: .missingClaudeLogin)
         let missingPDTMCP = ClaudeLaunchFlow.descriptor(for: .missingPDTMCP)
         let missingClaude = ClaudeLaunchFlow.descriptor(for: .missingClaude)
 
+        #expect(rowTitles(in: openingClaude) == ["Signing in with Claude", "Try login again"])
+        #expect(openingClaude.sections.flatMap(\.rows).last?.role == .setupLogin)
         #expect(rowTitles(in: missingLogin) == ["Not connected", "Log in with Claude", "Check again"])
         #expect(missingLogin.sections.flatMap(\.rows).last?.role == .setupRetry)
         #expect(rowTitles(in: missingPDTMCP) == ["Add the PDT MCP server to Claude", "Check again"])
@@ -140,6 +143,23 @@ struct ClaudeLaunchFlowTests {
         gate.finish()
         #expect(gate.begin())
         gate.finish()
+    }
+
+    @Test("Login attempt gate ignores stale completions after retry")
+    func loginAttemptGateIgnoresStaleCompletionsAfterRetry() {
+        let gate = ClaudeLoginAttemptGate()
+
+        let firstAttempt = gate.begin()
+        let retryAttempt = gate.begin()
+
+        #expect(!gate.finish(firstAttempt))
+        #expect(gate.finish(retryAttempt))
+        #expect(!gate.finish(retryAttempt))
+
+        let laterAttempt = gate.begin()
+        #expect(laterAttempt != firstAttempt)
+        #expect(!gate.finish(firstAttempt))
+        #expect(gate.finish(laterAttempt))
     }
 }
 

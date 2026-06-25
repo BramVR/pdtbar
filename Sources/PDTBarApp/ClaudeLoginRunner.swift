@@ -16,6 +16,7 @@ struct ClaudeLoginRunner {
             case failed(status: Int32)
             case missingBinary
             case launchFailed(String)
+            case cancelled
         }
 
         let outcome: Outcome
@@ -26,6 +27,7 @@ struct ClaudeLoginRunner {
     static func run(
         timeout: TimeInterval = 120,
         environment: [String: String] = ProcessInfo.processInfo.environment,
+        cancellation: ClaudeLoginCancellation = ClaudeLoginCancellation(),
         onPhaseChange: @escaping @Sendable (Phase) -> Void
     ) async -> Result {
         await withCheckedContinuation { continuation in
@@ -33,6 +35,7 @@ struct ClaudeLoginRunner {
                 continuation.resume(returning: self.runBlocking(
                     timeout: timeout,
                     environment: environment,
+                    cancellation: cancellation,
                     onPhaseChange: onPhaseChange
                 ))
             }
@@ -42,6 +45,7 @@ struct ClaudeLoginRunner {
     private static func runBlocking(
         timeout: TimeInterval,
         environment: [String: String],
+        cancellation: ClaudeLoginCancellation,
         onPhaseChange: @escaping @Sendable (Phase) -> Void
     ) -> Result {
         onPhaseChange(.requesting)
@@ -49,6 +53,7 @@ struct ClaudeLoginRunner {
             let runResult = try self.runPTY(
                 timeout: timeout,
                 environment: environment,
+                cancellation: cancellation,
                 onPhaseChange: onPhaseChange
             )
             if runResult.exitStatus == 0 {
@@ -68,11 +73,16 @@ struct ClaudeLoginRunner {
             return Result(outcome: .timedOut, output: runResult.output, authLink: nil)
         } catch LoginError.binaryNotFound {
             return Result(outcome: .missingBinary, output: "", authLink: nil)
-        } catch let LoginError.timedOut(text) {
-            return Result(outcome: .timedOut, output: text, authLink: self.firstLink(in: text))
-        } catch let LoginError.failed(status, text) {
-            return Result(outcome: .failed(status: status), output: text, authLink: self.firstLink(in: text))
         } catch {
+            if cancellation.isCancelled {
+                return Result(outcome: .cancelled, output: "", authLink: nil)
+            }
+            if case let LoginError.timedOut(text) = error {
+                return Result(outcome: .timedOut, output: text, authLink: self.firstLink(in: text))
+            }
+            if case let LoginError.failed(status, text) = error {
+                return Result(outcome: .failed(status: status), output: text, authLink: self.firstLink(in: text))
+            }
             return Result(outcome: .launchFailed(error.localizedDescription), output: "", authLink: nil)
         }
     }
@@ -92,8 +102,12 @@ struct ClaudeLoginRunner {
     private static func runPTY(
         timeout: TimeInterval,
         environment: [String: String],
+        cancellation: ClaudeLoginCancellation,
         onPhaseChange: @escaping @Sendable (Phase) -> Void
     ) throws -> PTYRunResult {
+        guard !cancellation.isCancelled else {
+            throw LoginError.timedOut(text: "")
+        }
         let runner = TTYCommandRunner()
         let successSubstrings = ["Successfully logged in", "Login successful", "Logged in successfully"]
         var options = TTYCommandRunner.Options(
@@ -112,6 +126,7 @@ struct ClaudeLoginRunner {
                 binary: environment["PDTBAR_CLAUDE_BIN"]?.nilIfEmpty ?? "claude",
                 send: "",
                 options: options,
+                isCancelled: { cancellation.isCancelled },
                 onURLDetected: { onPhaseChange(.waitingBrowser) }
             )
             return PTYRunResult(
@@ -142,6 +157,25 @@ struct ClaudeLoginRunner {
             url.unicodeScalars.removeLast()
         }
         return url
+    }
+}
+
+final class ClaudeLoginCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return cancelled
     }
 }
 
@@ -216,6 +250,7 @@ private struct TTYCommandRunner {
         case binaryNotFound(String)
         case launchFailed(String)
         case timedOut
+        case cancelled
 
         var errorDescription: String? {
             switch self {
@@ -225,6 +260,8 @@ private struct TTYCommandRunner {
                 "Failed to launch process: \(msg)"
             case .timedOut:
                 "PTY command timed out."
+            case .cancelled:
+                "PTY command cancelled."
             }
         }
     }
@@ -269,8 +306,12 @@ private struct TTYCommandRunner {
         binary: String,
         send script: String,
         options: Options = Options(),
+        isCancelled: (@Sendable () -> Bool)? = nil,
         onURLDetected: (@Sendable () -> Void)? = nil
     ) throws -> Result {
+        if isCancelled?() == true {
+            throw Error.cancelled
+        }
         let resolved: String
         if binary.contains("/"), FileManager.default.isExecutableFile(atPath: binary) {
             resolved = binary
@@ -442,6 +483,9 @@ private struct TTYCommandRunner {
 
         usleep(UInt32(options.initialDelay * 1_000_000))
 
+        if isCancelled?() == true {
+            throw Error.cancelled
+        }
         if !trimmed.isEmpty {
             try send(trimmed)
             try send("\r")
@@ -523,6 +567,9 @@ private struct TTYCommandRunner {
         }
 
         while Date() < deadline {
+            if isCancelled?() == true {
+                throw Error.cancelled
+            }
             let readResult = readDrainChunk()
             let newData = switch readResult {
             case let .data(data):
@@ -550,6 +597,10 @@ private struct TTYCommandRunner {
             if case .closed = readResult, !proc.isRunning { break }
             if !proc.isRunning { break }
             usleep(60000)
+        }
+
+        if isCancelled?() == true {
+            throw Error.cancelled
         }
 
         if stoppedEarly {
