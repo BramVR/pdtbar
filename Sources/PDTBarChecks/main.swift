@@ -171,13 +171,28 @@ try check(
         && cachedRefreshDescriptor.sections.flatMap(\.rows).map(\.title).contains("Refreshing portfolio"),
     "returning launch should keep the cached pulse visible while a refresh is running"
 )
+let cachedRefreshActionDescriptor = ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: descriptor)
+try check(
+    cachedRefreshActionDescriptor.statusTitle == descriptor.statusTitle
+        && cachedRefreshActionDescriptor.sections.flatMap(\.rows).map(\.title).contains("Refresh details"),
+    "cached pulse should expose a manual details refresh action"
+)
+let backgroundFailureDescriptor = ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(cachedPulse: descriptor)
+try check(
+    backgroundFailureDescriptor.statusTitle == descriptor.statusTitle
+        && backgroundFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Details fill failed")
+        && backgroundFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Fill details again")
+        && !backgroundFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Log in with Claude"),
+    "background refresh failure should preserve the cached pulse and expose a detail-fill retry"
+)
 let cachedFailureDescriptor = ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed, cachedPulse: descriptor)
 try check(
     cachedFailureDescriptor.statusTitle == descriptor.statusTitle
         && cachedFailureDescriptor.sections.map(\.id).contains("pulse")
-        && cachedFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Could not fetch portfolio")
-        && cachedFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Try again"),
-    "returning launch fetch failure should preserve the cached pulse and expose retry"
+        && cachedFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Details fill failed")
+        && cachedFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Fill details again")
+        && !cachedFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Log in with Claude"),
+    "returning launch fetch failure should preserve the cached pulse and expose a detail-fill retry"
 )
 try check(
     cachedFailureDescriptor.statusVisual.isDimmed

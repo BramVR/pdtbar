@@ -120,6 +120,8 @@ struct ClaudeLaunchFlowTests {
         let cachedPulse = try quietFixtureDescriptor()
         let cachedRefresh = ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio, cachedPulse: cachedPulse)
         let cachedFailure = ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed, cachedPulse: cachedPulse)
+        let cachedRefreshAction = ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: cachedPulse)
+        let backgroundFailure = ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(cachedPulse: cachedPulse)
 
         #expect(rowTitles(in: firstFetch) == ["Fetching portfolio"])
         #expect(!rowTitles(in: firstFetch).contains("Log in with Claude"))
@@ -131,7 +133,13 @@ struct ClaudeLaunchFlowTests {
         #expect(cachedFailure.statusVisual.isDimmed)
         #expect(cachedFailure.statusVisual.barHeights == cachedPulse.statusVisual.barHeights)
         #expect(cachedFailure.statusVisual.filledBarCount == cachedPulse.statusVisual.filledBarCount)
-        #expect(rowTitles(in: cachedFailure).contains("Try again"))
+        #expect(rowTitles(in: cachedFailure).contains("Details fill failed"))
+        #expect(rowTitles(in: cachedFailure).contains("Fill details again"))
+        #expect(!rowTitles(in: cachedFailure).contains("Log in with Claude"))
+        #expect(rowTitles(in: cachedRefreshAction).contains("Refresh details"))
+        #expect(rowTitles(in: backgroundFailure).contains("Details fill failed"))
+        #expect(rowTitles(in: backgroundFailure).contains("Fill details again"))
+        #expect(!rowTitles(in: backgroundFailure).contains("Log in with Claude"))
     }
 
     @Test("Claude auth status parser reads logged-in JSON from stdout")

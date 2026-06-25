@@ -911,11 +911,7 @@ public enum ClaudeLaunchFlow {
                     ]
                 )
             case .portfolioFetchFailed:
-                return cachedPulseDescriptor(
-                    cachedPulse,
-                    statusVisual: cachedPulse.statusVisual.withDimming(true),
-                    rows: portfolioFetchFailureRows()
-                )
+                return descriptorForBackgroundRefreshFailure(cachedPulse: cachedPulse)
             case .loggedOut, .openingClaude, .missingClaude, .missingClaudeLogin, .missingPDTMCP, .probeFailed:
                 break
             }
@@ -1044,6 +1040,40 @@ public enum ClaudeLaunchFlow {
                 ]
             )
         }
+    }
+
+    public static func descriptorWithRefreshDetailsAction(cachedPulse: MenuDescriptor) -> MenuDescriptor {
+        cachedPulseDescriptor(
+            cachedPulse,
+            rows: [
+                MenuRow(
+                    id: "portfolioFetch.refreshDetails",
+                    role: .fetchRetry,
+                    title: "Refresh details",
+                    detail: "Fill income and detail data"
+                ),
+            ]
+        )
+    }
+
+    public static func descriptorForBackgroundRefreshFailure(cachedPulse: MenuDescriptor) -> MenuDescriptor {
+        cachedPulseDescriptor(
+            cachedPulse,
+            statusVisual: cachedPulse.statusVisual.withDimming(true),
+            rows: [
+                MenuRow(
+                    id: "portfolioFetch.backgroundFailed",
+                    role: .fetchStatus,
+                    title: "Details fill failed",
+                    detail: "Last pulse is still visible"
+                ),
+                MenuRow(
+                    id: "portfolioFetch.retry",
+                    role: .fetchRetry,
+                    title: "Fill details again"
+                ),
+            ]
+        )
     }
 
     public static func formatElapsedSeconds(_ seconds: Int) -> String {

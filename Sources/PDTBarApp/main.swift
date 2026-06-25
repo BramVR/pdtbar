@@ -135,7 +135,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         stopPortfolioFetchProgressTimer()
         if let descriptor = outcome.descriptor {
             cachedPulseDescriptor = descriptor
-            installMenuBarItem(descriptor)
+            installPortfolioPulseDescriptor(descriptor)
             if outcome.shouldStartBackgroundRefresh {
                 startBackgroundPortfolioRefresh()
             }
@@ -225,12 +225,16 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         portfolioRefreshInFlight = false
         if let descriptor = outcome.descriptor {
             cachedPulseDescriptor = descriptor
-            installMenuBarItem(descriptor)
+            installPortfolioPulseDescriptor(descriptor)
             return
         }
         let errorDescription = outcome.errorDescription ?? "unknown error"
         FileHandle.standardError.write(Data("pdtbar: background refresh failed: \(errorDescription)\n".utf8))
-        installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed, cachedPulse: cachedPulseDescriptor))
+        if let cachedPulseDescriptor {
+            installMenuBarItem(ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(cachedPulse: cachedPulseDescriptor))
+        } else {
+            installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed))
+        }
     }
 
     @objc private func retryClaudeReadiness(_ sender: NSMenuItem) {
@@ -345,6 +349,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.setAccessibilityLabel(surface.status.accessibilityLabel)
         item.button?.setAccessibilityIdentifier(surface.status.accessibilityIdentifier)
         item.menu = makeMenu(from: surface)
+    }
+
+    private func installPortfolioPulseDescriptor(_ descriptor: MenuDescriptor) {
+        installMenuBarItem(ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: descriptor))
     }
 
     private func makeMenu(from surface: MenuBarSurface) -> NSMenu {
@@ -610,11 +618,11 @@ private struct ClaudeCLIReadinessProbe {
                 environment: environment
             )
             let output = result.stdout + "\n" + result.stderr
+            if result.exitCode == 0, ClaudeCLIPDTMCPConnector.pdtServerIsConnected(in: output) {
+                return .ready
+            }
             guard result.exitCode == 0 else {
                 return .missingClaudeLogin
-            }
-            if ClaudeCLIPDTMCPConnector.pdtServerIsConnected(in: output) {
-                return .ready
             }
             return .missingPDTMCP
         } catch {
@@ -665,8 +673,10 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
         else {
             throw PDTMCPConnectorError.setupUnavailable("Claude PDT MCP server is not connected")
         }
-        var available = Set<String>()
-        for tool in PDTReadTools.requiredV1 where required.contains(tool) {
+        let requiredReadTools = PDTReadTools.requiredV1.filter { required.contains($0) }
+        let resolved = try resolvedToolNames(for: requiredReadTools)
+        var available = Set(resolved.keys)
+        for tool in requiredReadTools where !available.contains(tool) {
             if (try? resolvedToolName(for: tool)) != nil {
                 available.insert(tool)
             }
@@ -735,8 +745,20 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
         if let cached = discoveredToolNames[readToolName] {
             return cached
         }
+        if let resolved = try resolvedToolNames(for: [readToolName])[readToolName] {
+            return resolved
+        }
+        throw PDTMCPConnectorError.setupUnavailable("Claude could not find \(readToolName)")
+    }
+
+    private func resolvedToolNames(for readToolNames: [String]) throws -> [String: String] {
+        let unresolved = readToolNames.filter { discoveredToolNames[$0] == nil }
+        guard !unresolved.isEmpty else {
+            return discoveredToolNames.filter { readToolNames.contains($0.key) }
+        }
         let sessionID = UUID().uuidString
         let filesBeforeCall = claudeToolResultFiles()
+        let toolList = unresolved.joined(separator: ", ")
         let result = try ClaudeCLIProcess.run(
             executable: claudePath,
             arguments: [
@@ -744,7 +766,7 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
                 "--allowedTools", "ToolSearch",
                 "--disallowedTools", toolSearchDisallowedTools().joined(separator: ","),
                 "--session-id", sessionID,
-                "-p", "Use ToolSearch to find the PDT MCP read-only tool named \(readToolName). Return only {\"status\":\"redacted-ok\"}.",
+                "-p", "Use ToolSearch to find these PDT MCP read-only tools: \(toolList). Return only {\"status\":\"redacted-ok\"}.",
                 "--output-format", "stream-json",
                 "--verbose",
                 "--no-session-persistence",
@@ -757,17 +779,24 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
             deleteClaudeToolResultFiles(pdtToolResultFiles(
                 in: createdFiles,
                 referencedBy: result.stdout,
-                readToolName: readToolName,
+                readToolNames: unresolved,
                 sessionID: sessionID
             ))
         }
-        guard result.exitCode == 0,
-              let toolName = discoveredToolName(for: readToolName, in: result.stdout)
-        else {
-            throw PDTMCPConnectorError.setupUnavailable("Claude could not find \(readToolName)")
+        guard result.exitCode == 0 else {
+            throw PDTMCPConnectorError.setupUnavailable("Claude could not find \(toolList)")
         }
-        discoveredToolNames[readToolName] = toolName
-        return toolName
+        let resolved = discoveredToolNames(for: unresolved, in: result.stdout)
+        discoveredToolNames.merge(resolved) { current, _ in current }
+        return discoveredToolNames.filter { readToolNames.contains($0.key) }
+    }
+
+    private func discoveredToolNames(for readToolNames: [String], in output: String) -> [String: String] {
+        readToolNames.reduce(into: [String: String]()) { resolved, readToolName in
+            if let toolName = discoveredToolName(for: readToolName, in: output) {
+                resolved[readToolName] = toolName
+            }
+        }
     }
 
     private func discoveredToolName(for readToolName: String, in output: String) -> String? {
@@ -1103,17 +1132,35 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
         readToolName: String,
         sessionID: String
     ) -> [URL] {
+        pdtToolResultFiles(
+            in: createdFiles,
+            referencedBy: output,
+            readToolNames: [readToolName],
+            sessionID: sessionID
+        )
+    }
+
+    private func pdtToolResultFiles(
+        in createdFiles: Set<URL>,
+        referencedBy output: String,
+        readToolNames: [String],
+        sessionID: String
+    ) -> [URL] {
         let deadline = Date().addingTimeInterval(1.0)
         var sessionFiles = Set<URL>()
         repeat {
             sessionFiles = claudeToolResultFiles(sessionID: sessionID)
-            if sessionFiles.contains(where: { $0.lastPathComponent.contains(readToolName) }) {
+            if sessionFiles.contains(where: { file in
+                readToolNames.contains { file.lastPathComponent.contains($0) }
+            }) {
                 break
             }
             Thread.sleep(forTimeInterval: 0.1)
         } while Date() < deadline
         let referenced = savedToolResultFiles(in: output).filter { createdFiles.contains($0) }
-        let matchingReadTool = createdFiles.union(sessionFiles).filter { $0.lastPathComponent.contains(readToolName) }
+        let matchingReadTool = createdFiles.union(sessionFiles).filter { file in
+            readToolNames.contains { file.lastPathComponent.contains($0) }
+        }
         return referenced + matchingReadTool
     }
 }

@@ -1377,7 +1377,7 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
 
     if accessibilityChecked {
         let failureSurface = MenuBarSurfaceRenderer.render(
-            descriptor: ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed, cachedPulse: cachedDescriptor)
+            descriptor: ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(cachedPulse: cachedDescriptor)
         )
         let targets = requiredSetupMenuTargets(in: failureSurface)
         let appElement = AXUIElementCreateApplication(failureProcess.processIdentifier)
@@ -1405,7 +1405,8 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
                 let identifiers = Set(targets.map(\.accessibilityIdentifier))
                 failurePulseVisible = identifiers.isSubset(of: snapshot.identifiers)
                 failureRetryVisible = snapshot.identifiers.contains("pdtbar.row.portfolioFetch.retry")
-                    && snapshot.texts.contains("Try again")
+                    && snapshot.texts.contains("Fill details again")
+                    && !snapshot.texts.contains("Log in with Claude")
             }
         }
     }
@@ -1439,7 +1440,7 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
     return SmokeReport(
         name: "scripted-returning-launch",
         status: SmokeStatus.passed,
-        detail: "returning launch kept the seeded pulse visible during refresh, replaced it after complete scripted data, and preserved it with Try again after transient failure",
+        detail: "returning launch kept the seeded pulse visible during refresh, replaced it after complete scripted data, and preserved it with a details retry after transient failure",
         artifacts: [artifactPath(proof)] + axArtifacts
     )
 }
@@ -1543,6 +1544,11 @@ private func manualClaudePDTSmoke(arguments: [String]) throws -> SmokeReport {
             artifacts: []
         )
     } catch CommandError.timedOut {
+        deleteSavedClaudeToolResultFiles(pdtToolResultFiles(
+            in: claudeToolResultFiles().subtracting(filesBeforeCall),
+            referencedFiles: [],
+            sessionID: sessionID
+        ))
         return SmokeReport(
             name: "manual-claude-pdt",
             status: SmokeStatus.skipped,

@@ -157,7 +157,7 @@ a delayed scripted refresh, and verifies the cached pulse stays visible while th
 refresh is in progress. It then verifies complete refreshed data replaces the
 snapshot and pulse only after the scripted fetch finishes. A second
 transient-failure launch proves the previous snapshot stays in place and the
-menu shows `Could not fetch portfolio` plus `Try again`. Proof artifacts contain
+menu shows `Details fill failed` plus `Fill details again`. Proof artifacts contain
 paths, selectors, status text, as-of dates, and booleans only.
 
 Read-only live PDT pulse smoke:
