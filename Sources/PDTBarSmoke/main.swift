@@ -1879,6 +1879,7 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         )
     }
 
+    movePointerToNeutralMenuArea(in: menuSnapshot)
     let screenshot = try? captureRealUserMenuScreenshot(
         snapshot: menuSnapshot,
         expectedMenuIdentifiers: expectedMenuIdentifiers,
@@ -2375,6 +2376,19 @@ private func captureRealUserMenuScreenshot(
     return screenshot
 }
 
+private func movePointerToNeutralMenuArea(in snapshot: AccessibilitySnapshot) {
+    let neutralIdentifiers = [
+        "pdtbar.section.income",
+        "pdtbar.section.pulse",
+        "pdtbar.section.allocation",
+    ]
+    guard let rect = neutralIdentifiers.compactMap({ snapshot.framesByIdentifier[$0]?.rect }).first else {
+        return
+    }
+    moveMouse(to: CGPoint(x: rect.minX + 24, y: rect.midY))
+    Thread.sleep(forTimeInterval: 0.2)
+}
+
 private func peekabooScreenshotTool(_ peekaboo: URL) -> URL? {
     guard FileManager.default.isExecutableFile(atPath: peekaboo.path) else {
         return nil
@@ -2571,6 +2585,12 @@ private func click(point: CGPoint) {
     down?.post(tap: .cghidEventTap)
     Thread.sleep(forTimeInterval: 0.05)
     up?.post(tap: .cghidEventTap)
+}
+
+private func moveMouse(to point: CGPoint) {
+    let source = CGEventSource(stateID: .hidSystemState)
+    let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)
+    move?.post(tap: .cghidEventTap)
 }
 
 private func format(point: CGPoint) -> String {
