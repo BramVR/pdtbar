@@ -530,20 +530,45 @@ private func incomeEventChildren(for event: IncomeEventSummary, rowID: String? =
     let baseID = rowID ?? incomeEventRowID(for: event)
     return [
         MenuRow(id: "\(baseID).date", title: "Date", detail: event.date),
-        MenuRow(id: "\(baseID).kind", title: "Kind", detail: event.kind),
+        MenuRow(id: "\(baseID).kind", title: "Kind", detail: incomeEventKindLabel(for: event.kind)),
         MenuRow(id: "\(baseID).state", title: "State", detail: event.estimated ? "Estimated" : "Confirmed"),
         event.amount.map {
             MenuRow(id: "\(baseID).amount", title: "Amount", detail: display($0))
         },
-        event.changePercent.map {
-            MenuRow(id: "\(baseID).change", title: "Change", detail: signedPercent($0))
+        incomeEventChangeDetail(for: event).map {
+            MenuRow(id: "\(baseID).change", title: "Change", detail: $0)
         },
     ].compactMap { $0 }
 }
 
 private func incomeEventDetail(for event: IncomeEventSummary) -> String {
-    let amount = event.amount.map { "; \(display($0))" } ?? ""
-    return "\(event.kind) on \(event.date)\(amount)"
+    let parts = [
+        "\(incomeEventKindLabel(for: event.kind)) on \(event.date)",
+        event.estimated ? "estimated" : "confirmed",
+        event.amount.map(display),
+        incomeEventChangeDetail(for: event),
+    ].compactMap { $0 }
+    return parts.joined(separator: "; ")
+}
+
+private func incomeEventKindLabel(for kind: String) -> String {
+    switch kind {
+    case "ex-dividend":
+        return "Ex-dividend date"
+    case "payment-dividend":
+        return "Dividend payment date"
+    default:
+        return kind
+    }
+}
+
+private func incomeEventChangeDetail(for event: IncomeEventSummary) -> String? {
+    guard let changePercent = event.changePercent,
+          let priorAmount = event.priorAmount
+    else {
+        return nil
+    }
+    return "\(signedPercent(changePercent)) from \(display(priorAmount))"
 }
 
 private func incomeEventRowID(for event: IncomeEventSummary) -> String {
@@ -2083,7 +2108,7 @@ public enum PressureEngine {
                     holdingIdentity: identity,
                     eventDate: event.date,
                     amount: event.amount,
-                    changePercent: event.changePercent,
+                    changePercent: event.priorAmount == nil ? nil : event.changePercent,
                     supportingDataSlotIDs: ["income.calendar"]
                 )
             }

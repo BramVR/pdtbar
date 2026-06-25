@@ -1151,7 +1151,7 @@ let incomeNextRow = incomeRows.first { $0.id == "income.next" }
 try check(
     incomeNextRow?.role == .incomeNext
         && incomeNextRow?.title == "Next income: Lumen Luxury"
-        && incomeNextRow?.detail == "payment-dividend on 2026-06-22",
+        && incomeNextRow?.detail == "Dividend payment date on 2026-06-22; confirmed",
     "income section should expose the next income event"
 )
 try check(
@@ -1162,6 +1162,11 @@ try check(
     ],
     "income next-event row should expose stable detail row ids"
 )
+try check(
+    incomeNextRow?.children.first { $0.id.hasSuffix(".kind") }?.detail == "Dividend payment date"
+        && incomeNextRow?.children.first { $0.id.hasSuffix(".state") }?.detail == "Confirmed",
+    "income next-event details should render descriptive kind and confirmed state"
+)
 let incomeOverflowRow = incomeRows.first { $0.id == "income.overflow.later" }
 try check(
     incomeOverflowRow?.role == .incomeDrillDown
@@ -1170,6 +1175,11 @@ try check(
             "income.overflow.later.income.quote.9003.payment-dividend.2026-07-10",
         ],
     "income overflow row should expose later events through native children"
+)
+try check(
+    incomeOverflowRow?.children.first?.detail == "Dividend payment date on 2026-07-10; estimated"
+        && incomeOverflowRow?.children.first?.children.first { $0.id.hasSuffix(".state") }?.detail == "Estimated",
+    "income overflow rows should visibly mark estimated payment events"
 )
 try check(
     Set(allRows(in: incomeRows).map(\.id)).count == allRows(in: incomeRows).count,
@@ -1193,6 +1203,29 @@ try check(
             && $0.holdingIdentity == nil
     },
     "income engine should not drop non-estimated ex-dividend events without quote resolution"
+)
+var estimatedOnlyIncomeSnapshot = try PDTFixtureDataSource.snapshot(from: incomeFixture)
+estimatedOnlyIncomeSnapshot.incomeEvents = [
+    IncomeEventSummary(
+        date: "2026-06-24",
+        kind: "ex-dividend",
+        symbolName: "Estimated Pressure Co",
+        estimated: true,
+        quoteId: 9011
+    ),
+]
+let estimatedOnlyIncomeModel = PressureEngine.buildModel(from: estimatedOnlyIncomeSnapshot)
+try check(
+    !estimatedOnlyIncomeModel.rankedAttentionItems.contains { $0.facet == "income" },
+    "estimated-only income events should stay out of pressure attention items"
+)
+let estimatedOnlyIncomeRows = MenuDescriptorRenderer.render(model: estimatedOnlyIncomeModel)
+    .sections
+    .first { $0.id == "income" }?
+    .rows ?? []
+try check(
+    estimatedOnlyIncomeRows.first { $0.id == "income.next" }?.detail == "Ex-dividend date on 2026-06-24; estimated",
+    "estimated-only income events should remain browsable with visible estimated state"
 )
 
 let correctionFixtureDirectory = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-income-correction-fixture")
@@ -1291,6 +1324,75 @@ let futureNextOverflowRows = MenuDescriptorRenderer.render(model: futureNextInco
 try check(
     futureNextOverflowRows.map(\.id) == ["income.overflow.next"],
     "future next-date overflow should not duplicate into the later bucket"
+)
+
+var semanticIncomeModel = decoded
+semanticIncomeModel.asOf = "2026-06-22"
+semanticIncomeModel.facetSnapshots.income.upcomingEvents = [
+    IncomeEventSummary(
+        date: "2026-06-24",
+        kind: "payment-dividend",
+        symbolName: "Same Day Pay",
+        estimated: false,
+        quoteId: 9401
+    ),
+    IncomeEventSummary(
+        date: "2026-06-24",
+        kind: "ex-dividend",
+        symbolName: "Same Day Ex",
+        estimated: false,
+        quoteId: 9400,
+        amount: Money(value: "78.00", currency: "EUR"),
+        priorAmount: Money(value: "66.00", currency: "EUR"),
+        changePercent: 0.1818
+    ),
+    IncomeEventSummary(
+        date: "2026-06-26",
+        kind: "payment-dividend",
+        symbolName: "Estimated Pay",
+        estimated: true,
+        quoteId: 9402,
+        amount: Money(value: "10.00", currency: "EUR"),
+        changePercent: -0.25
+    ),
+]
+let semanticIncomeRows = MenuDescriptorRenderer.render(model: semanticIncomeModel)
+    .sections
+    .first { $0.id == "income" }?
+    .rows ?? []
+try check(
+    semanticIncomeRows.map(\.title) == [
+        "Income window",
+        "Next income: Same Day Ex",
+        "Same Day Pay",
+        "Estimated Pay",
+    ],
+    "income events should order by date first and ex-dividend priority on the same date"
+)
+let semanticNextRow = try require(
+    semanticIncomeRows.first { $0.id == "income.next" },
+    "semantic income rows should include a next row"
+)
+try check(
+    semanticNextRow.detail == "Ex-dividend date on 2026-06-24; confirmed; EUR 78.00; +18.2% from EUR 66.00",
+    "ex-dividend rows should render descriptive copy, amount, change, and confirmed state"
+)
+try check(
+    semanticNextRow.children.first { $0.id.hasSuffix(".change") }?.detail == "+18.2% from EUR 66.00",
+    "income change details should include prior amount when available"
+)
+try check(
+    semanticIncomeRows.first { $0.id == "income.quote.9401.payment-dividend.2026-06-24" }?.detail == "Dividend payment date on 2026-06-24; confirmed",
+    "payment rows should render distinct descriptive copy"
+)
+let unsafeEstimatedPayRow = try require(
+    semanticIncomeRows.first { $0.id == "income.quote.9402.payment-dividend.2026-06-26" },
+    "semantic income rows should include estimated payment row"
+)
+try check(
+    unsafeEstimatedPayRow.detail == "Dividend payment date on 2026-06-26; estimated; EUR 10.00"
+        && unsafeEstimatedPayRow.children.contains { $0.id.hasSuffix(".change") } == false,
+    "income rows should show estimated state and omit unsafe change details"
 )
 
 let concentrationRun = try PressureRunner.run(

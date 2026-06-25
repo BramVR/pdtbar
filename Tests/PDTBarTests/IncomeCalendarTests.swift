@@ -87,13 +87,15 @@ struct IncomeCalendarTests {
     func descriptorRendersSummaryAndNextRows() {
         let intent = IncomeCalendar.build(
             events: [
-                incomeEvent(date: "2026-07-10", kind: "payment-dividend", name: "Helix Pharma A/S", quoteId: 9003),
+                incomeEvent(date: "2026-07-10", kind: "payment-dividend", name: "Helix Pharma A/S", estimated: true, quoteId: 9003),
                 incomeEvent(
                     date: "2026-06-24",
                     kind: "ex-dividend",
                     name: "Helix Pharma A/S",
                     quoteId: 9003,
-                    amount: Money(value: "78.00", currency: "EUR")
+                    amount: Money(value: "78.00", currency: "EUR"),
+                    priorAmount: Money(value: "66.00", currency: "EUR"),
+                    changePercent: 0.1818
                 ),
             ],
             asOf: "2026-06-22"
@@ -113,21 +115,48 @@ struct IncomeCalendarTests {
         ])
         #expect(rows.first?.role == .incomeSummary)
         #expect(rows.first?.title == "Income window")
-        #expect(rows.first?.detail == "2 confirmed events through 2026-07-10")
+        #expect(rows.first?.detail == "2 events through 2026-07-10; 1 confirmed, 1 estimated")
         let nextRow = rows.first { $0.id == "income.next" }
         #expect(nextRow?.role == .incomeNext)
         #expect(nextRow?.title == "Next income: Helix Pharma A/S")
-        #expect(nextRow?.detail == "ex-dividend on 2026-06-24; EUR 78.00")
+        #expect(nextRow?.detail == "Ex-dividend date on 2026-06-24; confirmed; EUR 78.00; +18.2% from EUR 66.00")
         #expect(nextRow?.children.map(\.id) == [
             "income.quote.9003.ex-dividend.2026-06-24.date",
             "income.quote.9003.ex-dividend.2026-06-24.kind",
             "income.quote.9003.ex-dividend.2026-06-24.state",
             "income.quote.9003.ex-dividend.2026-06-24.amount",
+            "income.quote.9003.ex-dividend.2026-06-24.change",
         ])
+        #expect(nextRow?.children.first { $0.id.hasSuffix(".kind") }?.detail == "Ex-dividend date")
+        #expect(nextRow?.children.first { $0.id.hasSuffix(".change") }?.detail == "+18.2% from EUR 66.00")
         let previewRow = rows.first { $0.id == "income.quote.9003.payment-dividend.2026-07-10" }
         #expect(previewRow?.role == .incomeEvent)
         #expect(previewRow?.title == "Helix Pharma A/S")
-        #expect(previewRow?.detail == "payment-dividend on 2026-07-10")
+        #expect(previewRow?.detail == "Dividend payment date on 2026-07-10; estimated")
+        #expect(previewRow?.children.first { $0.id.hasSuffix(".kind") }?.detail == "Dividend payment date")
+    }
+
+    @Test("Descriptor omits unsafe income change details")
+    func descriptorOmitsUnsafeIncomeChangeDetails() {
+        let intent = IncomeCalendar.build(
+            events: [
+                incomeEvent(
+                    date: "2026-06-24",
+                    kind: "ex-dividend",
+                    name: "Unsafe Change Co",
+                    quoteId: 9220,
+                    amount: Money(value: "10.00", currency: "EUR"),
+                    changePercent: -0.25
+                ),
+            ],
+            asOf: "2026-06-22"
+        )
+
+        let nextRow = IncomeCalendarDescriptor.rows(for: intent)
+            .first { $0.id == "income.next" }
+
+        #expect(nextRow?.detail == "Ex-dividend date on 2026-06-24; confirmed; EUR 10.00")
+        #expect(nextRow?.children.map(\.id).contains("income.quote.9220.ex-dividend.2026-06-24.change") == false)
     }
 
     @Test("Descriptor caps long previews and reaches overflow through as-of buckets")
@@ -214,7 +243,9 @@ private func incomeEvent(
     name: String,
     estimated: Bool = false,
     quoteId: Int,
-    amount: Money? = nil
+    amount: Money? = nil,
+    priorAmount: Money? = nil,
+    changePercent: Double? = nil
 ) -> IncomeEventSummary {
     IncomeEventSummary(
         date: date,
@@ -222,7 +253,9 @@ private func incomeEvent(
         symbolName: name,
         estimated: estimated,
         quoteId: quoteId,
-        amount: amount
+        amount: amount,
+        priorAmount: priorAmount,
+        changePercent: changePercent
     )
 }
 
