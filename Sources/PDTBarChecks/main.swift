@@ -1310,6 +1310,98 @@ try check(
     "estimated-only income events should remain browsable with visible estimated state"
 )
 
+var joinedHoldingIncomeSnapshot = snapshot
+joinedHoldingIncomeSnapshot.incomeEvents = [
+    IncomeEventSummary(
+        date: "2026-06-25",
+        kind: "ex-dividend",
+        symbolName: "Nova Lithography",
+        estimated: false,
+        quoteId: 9001
+    ),
+]
+let joinedHoldingIncomeRows = MenuDescriptorRenderer.render(
+    model: PressureEngine.buildModel(from: joinedHoldingIncomeSnapshot)
+)
+    .sections
+    .first { $0.id == "allocation" }?
+    .rows ?? []
+let joinedHoldingIncomeRow = try require(
+    joinedHoldingIncomeRows.first { $0.id == "allocation.9001" },
+    "joined holding income check should find the holding row"
+)
+try check(
+    joinedHoldingIncomeRow.children.first { $0.id == "allocation.9001.nextIncome" }?.detail
+        == "Ex-dividend date on 2026-06-25; confirmed",
+    "holding drill-down should show next joined ex-dividend event"
+)
+
+var estimatedHoldingIncomeSnapshot = snapshot
+estimatedHoldingIncomeSnapshot.incomeEvents = [
+    IncomeEventSummary(
+        date: "2026-06-26",
+        kind: "payment-dividend",
+        symbolName: "Nova Lithography",
+        estimated: true,
+        quoteId: 9001
+    ),
+]
+let estimatedHoldingIncomeModel = PressureEngine.buildModel(from: estimatedHoldingIncomeSnapshot)
+let estimatedHoldingIncomeRow = try require(
+    MenuDescriptorRenderer.render(model: estimatedHoldingIncomeModel)
+        .sections
+        .first { $0.id == "allocation" }?
+        .rows
+        .first { $0.id == "allocation.9001" },
+    "estimated holding income check should find the holding row"
+)
+try check(
+    estimatedHoldingIncomeRow.children.first { $0.id == "allocation.9001.nextIncome" }?.detail
+        == "Dividend payment date on 2026-06-26; estimated",
+    "holding drill-down should label estimated payment events without urgency"
+)
+try check(
+    estimatedHoldingIncomeModel.rankedAttentionItems.isEmpty,
+    "estimated holding income event should not create pressure by itself"
+)
+
+var absentHoldingIncomeSnapshot = snapshot
+absentHoldingIncomeSnapshot.incomeEvents = [
+    IncomeEventSummary(
+        date: "2026-06-25",
+        kind: "ex-dividend",
+        symbolName: "Symbol-only Income Co",
+        estimated: false,
+        symbolId: 5001
+    ),
+    IncomeEventSummary(
+        date: "not-a-date",
+        kind: "payment-dividend",
+        symbolName: "Nova Lithography",
+        estimated: false,
+        quoteId: 9001
+    ),
+    IncomeEventSummary(
+        date: "2026-06-25",
+        kind: "ex-dividend",
+        symbolName: "Unheld Income Co",
+        estimated: false,
+        quoteId: 9999
+    ),
+]
+let absentHoldingIncomeRow = try require(
+    MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: absentHoldingIncomeSnapshot))
+        .sections
+        .first { $0.id == "allocation" }?
+        .rows
+        .first { $0.id == "allocation.9001" },
+    "absent holding income check should find the holding row"
+)
+try check(
+    !absentHoldingIncomeRow.children.contains { $0.id == "allocation.9001.nextIncome" },
+    "holding drill-down should omit income row when no joined valid event exists"
+)
+
 let correctionFixtureDirectory = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-income-correction-fixture")
 defer {
     try? FileManager.default.removeItem(at: correctionFixtureDirectory.directory)

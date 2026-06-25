@@ -281,6 +281,7 @@ public struct HoldingSummary: Codable, Equatable {
     public var worth: Money
     public var price: Money?
     public var recentMove: PriceMoveSummary?
+    public var nextIncomeEvent: IncomeEventSummary?
     public var averageBuyPrice: Money?
     public var gainLoss: Money?
     public var gainLossPercentage: Double?
@@ -2100,6 +2101,15 @@ public enum MenuDescriptorRenderer {
                 )
             )
         }
+        if let nextIncomeEvent = holding.nextIncomeEvent {
+            rows.append(
+                MenuRow(
+                    id: "allocation.\(holding.quoteId).nextIncome",
+                    title: "Next income",
+                    detail: incomeEventDetail(for: nextIncomeEvent)
+                )
+            )
+        }
         if let averageBuyPrice = holding.averageBuyPrice {
             rows.append(
                 MenuRow(
@@ -2191,6 +2201,7 @@ public enum PressureEngine {
         let worstPriceAsOf = snapshot.openHoldings.map(\.priceAsOf).min()
         let freshnessStale = isFreshnessStale(worstPriceAsOf: worstPriceAsOf, asOf: snapshot.asOf)
         let recentMovesByQuoteID = recentMoves(from: snapshot.priceSeries)
+        let nextIncomeEventsByQuoteID = nextIncomeEventsByQuoteID(from: snapshot)
         var supportingDataSlots = [
             SupportingDataSlot(
                 id: "allocation.holdings",
@@ -2257,6 +2268,7 @@ public enum PressureEngine {
                                 worth: $0.worth,
                                 price: validMoney($0.price),
                                 recentMove: recentMovesByQuoteID[$0.quoteId],
+                                nextIncomeEvent: nextIncomeEventsByQuoteID[$0.quoteId],
                                 averageBuyPrice: $0.averageBuyPrice,
                                 gainLoss: $0.gainLoss,
                                 gainLossPercentage: $0.gainLossPercentage
@@ -2400,6 +2412,59 @@ public enum PressureEngine {
             return lhs.name < rhs.name
         }
         return lhs.quoteId < rhs.quoteId
+    }
+
+    private static func nextIncomeEventsByQuoteID(from snapshot: PortfolioSnapshot) -> [Int: IncomeEventSummary] {
+        let openQuoteIDs = Set(snapshot.openHoldings.map(\.quoteId))
+        return snapshot.incomeEvents
+            .filter { isHoldingIncomeEventKind($0.kind) }
+            .filter { event in
+                guard let quoteId = event.quoteId,
+                      openQuoteIDs.contains(quoteId),
+                      let eventDate = dayDate(from: event.date),
+                      let asOfDate = dayDate(from: snapshot.asOf)
+                else {
+                    return false
+                }
+                return eventDate >= asOfDate
+            }
+            .sorted(by: incomeEventRanksBefore)
+            .reduce(into: [Int: IncomeEventSummary]()) { eventsByQuoteID, event in
+                guard let quoteId = event.quoteId,
+                      eventsByQuoteID[quoteId] == nil
+                else {
+                    return
+                }
+                eventsByQuoteID[quoteId] = event
+            }
+    }
+
+    private static func incomeEventRanksBefore(_ lhs: IncomeEventSummary, _ rhs: IncomeEventSummary) -> Bool {
+        if lhs.date != rhs.date {
+            return lhs.date < rhs.date
+        }
+        if lhs.kind != rhs.kind {
+            return incomeEventPriority(lhs.kind) < incomeEventPriority(rhs.kind)
+        }
+        if lhs.symbolName != rhs.symbolName {
+            return lhs.symbolName < rhs.symbolName
+        }
+        return (lhs.quoteId ?? Int.max) < (rhs.quoteId ?? Int.max)
+    }
+
+    private static func incomeEventPriority(_ kind: String) -> Int {
+        switch kind {
+        case "ex-dividend":
+            return 0
+        case "payment-dividend":
+            return 1
+        default:
+            return 2
+        }
+    }
+
+    private static func isHoldingIncomeEventKind(_ kind: String) -> Bool {
+        kind == "ex-dividend" || kind == "payment-dividend"
     }
 
     private static func bigMoverItems(from snapshot: PortfolioSnapshot, priorSnapshot: PortfolioSnapshot?) -> [AttentionItem] {
