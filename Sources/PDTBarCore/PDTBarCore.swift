@@ -1730,8 +1730,8 @@ public enum MenuDescriptorRenderer {
         return [leftShoulder, 1.0, rightShoulder]
     }
 
-    private static func concentrationShoulderHeight(for normalizedWeight: Double) -> Double {
-        let clampedWeight = max(0.0, min(0.5, normalizedWeight))
+    private static func concentrationShoulderHeight(for portfolioWeight: Double) -> Double {
+        let clampedWeight = max(0.0, min(0.5, portfolioWeight))
         let pressure = sqrt(clampedWeight / 0.5)
         return rounded(0.42 + (0.48 * pressure), places: 3)
     }

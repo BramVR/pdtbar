@@ -421,7 +421,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                     width: barWidth,
                     height: height
                 )
-                let barPath = NSBezierPath(roundedRect: rect, xRadius: 2.2, yRadius: 2.2)
+                let barPath = NSBezierPath(roundedRect: rect, xRadius: 2.5, yRadius: 2.5)
                 if index < visual.filledBarCount {
                     NSGraphicsContext.saveGraphicsState()
                     barPath.addClip()
