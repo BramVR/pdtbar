@@ -552,6 +552,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         in: successAppSupport,
         name: "handoff-success.sh",
         delay: max(options.timeout + 3.0, 4.0),
+        postSuccessDelay: max(options.timeout + 12.0, 16.0),
         exitStatus: 0
     )
     let successProcess = try launchLoginHandoffApp(
@@ -660,6 +661,11 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         successFirstFetchSnapshot,
         asOf: "2026-03-29",
         timeout: options.timeout + 8.0
+    )
+    let successStoppedAfterOutput = waitForHandoffTerminationCount(
+        successInvocationLog,
+        expectedCount: 2,
+        timeout: options.timeout + 2.0
     )
     let successFirstFetchAsOf = snapshotAsOf(successFirstFetchSnapshot)
     terminate(successProcess)
@@ -772,6 +778,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         successRetryClickAttempt: successRetryClick,
         successRetryInvoked: successRetryInvoked,
         successSupersededAttemptTerminated: successSupersededAttemptTerminated,
+        successStoppedAfterOutput: successStoppedAfterOutput,
         successCompleted: successCompleted,
         successReadinessRechecked: successReadinessRechecked,
         successReadinessProbeCount: successReadinessProbeCount,
@@ -802,6 +809,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
           successRetryClick != nil,
           successRetryInvoked,
           successSupersededAttemptTerminated,
+          successStoppedAfterOutput,
           successCompleted,
           successReadinessRechecked,
           successReadinessProbeCount == 2,
@@ -2221,6 +2229,7 @@ private struct ScriptedLoginHandoffProof: Codable {
     var successRetryClickAttempt: String?
     var successRetryInvoked: Bool
     var successSupersededAttemptTerminated: Bool
+    var successStoppedAfterOutput: Bool
     var successCompleted: Bool
     var successReadinessRechecked: Bool
     var successReadinessProbeCount: Int
@@ -2955,6 +2964,27 @@ private func waitForHandoffInvocationCount(_ log: URL, expectedCount: Int, timeo
     return handoffInvocationCount(in: log) >= expectedCount
 }
 
+private func handoffTerminationCount(in log: URL) -> Int {
+    guard let content = try? String(contentsOf: log, encoding: .utf8) else {
+        return 0
+    }
+    return content
+        .split(separator: "\n")
+        .filter { $0.hasPrefix("terminated ") }
+        .count
+}
+
+private func waitForHandoffTerminationCount(_ log: URL, expectedCount: Int, timeout: TimeInterval) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    repeat {
+        if handoffTerminationCount(in: log) >= expectedCount {
+            return true
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+    } while Date() < deadline
+    return handoffTerminationCount(in: log) >= expectedCount
+}
+
 private func launchLoginHandoffApp(
     _ app: URL,
     appSupportDirectory: URL,
@@ -2989,6 +3019,7 @@ private func writeHandoffScript(
     in appSupportDirectory: URL,
     name: String,
     delay: TimeInterval,
+    postSuccessDelay: TimeInterval = 0,
     exitStatus: Int32
 ) throws -> URL {
     let directory = appSupportDirectory.appending(path: "pdtbar")
@@ -3009,9 +3040,12 @@ private func writeHandoffScript(
     fi
     sleep \(String(format: "%.2f", delay))
     if [ "$1" = "auth" ] && [ "$2" = "login" ] && [ \(exitStatus) -eq 0 ]; then
+      printf "%s" "$PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE" > "$PDTBAR_CLAUDE_HANDOFF_RESULT"
       printf 'Successfully logged in\\n'
+      sleep \(String(format: "%.2f", postSuccessDelay))
+    else
+      printf "%s" "$PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE" > "$PDTBAR_CLAUDE_HANDOFF_RESULT"
     fi
-    printf "%s" "$PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE" > "$PDTBAR_CLAUDE_HANDOFF_RESULT"
     exit \(exitStatus)
     """
     try Data(content.utf8).write(to: script, options: .atomic)

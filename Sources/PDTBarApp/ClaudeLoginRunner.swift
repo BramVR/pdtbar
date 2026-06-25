@@ -56,7 +56,7 @@ struct ClaudeLoginRunner {
                 cancellation: cancellation,
                 onPhaseChange: onPhaseChange
             )
-            if runResult.exitStatus == 0 {
+            if runResult.exitStatus == 0 || self.outputLooksSuccessful(runResult.output) {
                 return Result(
                     outcome: .success,
                     output: runResult.output,
@@ -109,7 +109,15 @@ struct ClaudeLoginRunner {
             throw LoginError.timedOut(text: "")
         }
         let runner = TTYCommandRunner()
-        let successSubstrings = ["Successfully logged in", "Login successful", "Logged in successfully"]
+        let successSubstrings = [
+            "Successfully logged in",
+            "Login successful",
+            "Logged in successfully",
+            "Authentication successful",
+            "Authentication complete",
+            "Successfully authenticated",
+            "Authenticated successfully",
+        ]
         var options = TTYCommandRunner.Options(
             rows: 50,
             cols: 160,
@@ -118,7 +126,15 @@ struct ClaudeLoginRunner {
         )
         options.extraArgs = ["auth", "login"]
         options.stopOnURL = false
-        options.sendOnSubstrings = Dictionary(uniqueKeysWithValues: successSubstrings.map { ($0, "\r") })
+        options.stopOnSubstrings = successSubstrings
+        options.sendOnSubstrings = [
+            "Press Enter": "\r",
+            "press Enter": "\r",
+            "press enter": "\r",
+            "Press Return": "\r",
+            "press Return": "\r",
+            "press return": "\r",
+        ]
         options.sendEnterEvery = 1.0
         options.settleAfterStop = 0.35
         do {
@@ -157,6 +173,20 @@ struct ClaudeLoginRunner {
             url.unicodeScalars.removeLast()
         }
         return url
+    }
+
+    private static func outputLooksSuccessful(_ text: String) -> Bool {
+        let normalized = TTYCommandRunner.normalizedNeedleText(text)
+        let successNeedles = [
+            "successfully logged in",
+            "login successful",
+            "logged in successfully",
+            "authentication successful",
+            "authentication complete",
+            "successfully authenticated",
+            "authenticated successfully",
+        ]
+        return successNeedles.contains { normalized.contains($0) }
     }
 }
 
@@ -559,8 +589,15 @@ private struct TTYCommandRunner {
                 }
             }
 
-            if allowStop, !stopNeedles.isEmpty, stopNeedles.contains(where: { scanData.range(of: $0) != nil }) {
-                return true
+            if allowStop, !stopNeedles.isEmpty {
+                let recentTextNormalized = Self.normalizedNeedleText(recentText)
+                for index in stopNeedles.indices {
+                    if scanData.range(of: stopNeedles[index]) != nil ||
+                        recentTextNormalized.contains(Self.normalizedNeedleText(options.stopOnSubstrings[index]))
+                    {
+                        return true
+                    }
+                }
             }
 
             return false
@@ -674,6 +711,18 @@ private struct TTYCommandRunner {
         }
 
         return .closed
+    }
+
+    static func normalizedNeedleText(_ text: String) -> String {
+        let withoutCarriageReturns = text.replacingOccurrences(of: "\r", with: "")
+        let pattern = "\u{001B}\\[[0-?]*[ -/]*[@-~]"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return withoutCarriageReturns.lowercased()
+        }
+        let range = NSRange(withoutCarriageReturns.startIndex..<withoutCarriageReturns.endIndex, in: withoutCarriageReturns)
+        return regex
+            .stringByReplacingMatches(in: withoutCarriageReturns, options: [], range: range, withTemplate: "")
+            .lowercased()
     }
 
     private static func enrichedEnvironment(
