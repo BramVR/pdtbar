@@ -596,21 +596,22 @@ public struct FreshnessSnapshot: Codable, Equatable {
 }
 
 public struct StatusVisualState: Codable, Equatable {
+    public static let defaultBarHeights = [0.5, 1.0, 0.667]
+
     public var barHeights: [Double]
     public var filledBarCount: Int
     public var isDimmed: Bool
     public var statusCopy: String
 
     public init(
-        barHeights: [Double] = [0.5, 1.0, 0.667],
+        barHeights: [Double] = StatusVisualState.defaultBarHeights,
         filledBarCount: Int = 0,
         isDimmed: Bool = false,
         statusCopy: String = ""
     ) {
         self.barHeights = Array(barHeights.prefix(3))
-        let fallbackHeights = [0.5, 1.0, 0.667]
         while self.barHeights.count < 3 {
-            self.barHeights.append(fallbackHeights[self.barHeights.count])
+            self.barHeights.append(StatusVisualState.defaultBarHeights[self.barHeights.count])
         }
         if self.barHeights.count > 1 {
             self.barHeights[1] = 1.0
@@ -630,7 +631,8 @@ public struct StatusVisualState: Codable, Equatable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
-            barHeights: try container.decodeIfPresent([Double].self, forKey: .barHeights) ?? [0.5, 1.0, 0.667],
+            barHeights: try container.decodeIfPresent([Double].self, forKey: .barHeights)
+                ?? StatusVisualState.defaultBarHeights,
             filledBarCount: try container.decodeIfPresent(Int.self, forKey: .filledBarCount) ?? 0,
             isDimmed: try container.decodeIfPresent(Bool.self, forKey: .isDimmed) ?? false,
             statusCopy: try container.decodeIfPresent(String.self, forKey: .statusCopy) ?? ""
@@ -1727,9 +1729,9 @@ public enum MenuDescriptorRenderer {
         }
         let scale = concentrationSideScale(from: sortedWeights)
         return [
-            rounded(0.5 * scale, places: 3),
-            1.0,
-            min(1.0, rounded(0.667 * scale, places: 3)),
+            rounded(StatusVisualState.defaultBarHeights[0] * scale, places: 3),
+            StatusVisualState.defaultBarHeights[1],
+            min(1.0, rounded(StatusVisualState.defaultBarHeights[2] * scale, places: 3)),
         ]
     }
 
