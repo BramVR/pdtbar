@@ -136,6 +136,46 @@ struct IncomeCalendarTests {
         #expect(previewRow?.children.first { $0.id.hasSuffix(".kind") }?.detail == "Dividend payment date")
     }
 
+    @Test("Descriptor preserves income event action targets on event rows and detail children")
+    func descriptorPreservesIncomeEventActionTargets() {
+        let intent = IncomeCalendar.build(
+            events: [
+                incomeEvent(
+                    date: "2026-06-24",
+                    kind: "ex-dividend",
+                    name: "Targetable Income Co",
+                    estimated: true,
+                    quoteId: 9230
+                ),
+            ],
+            asOf: "2026-06-22"
+        )
+
+        let nextRow = IncomeCalendarDescriptor.rows(for: intent)
+            .first { $0.id == "income.next" }
+        let target = nextRow?.actionTarget
+
+        #expect(target?.kind == .incomeEvent)
+        #expect(target?.id == "income.quote.9230.ex-dividend.2026-06-24")
+        #expect(target?.incomeEvent?.eventID == "income.quote.9230.ex-dividend.2026-06-24")
+        #expect(target?.incomeEvent?.rowID == "income.next")
+        #expect(target?.incomeEvent?.quoteId == 9230)
+        #expect(target?.incomeEvent?.date == "2026-06-24")
+        #expect(target?.incomeEvent?.kind == "ex-dividend")
+        #expect(target?.incomeEvent?.symbolName == "Targetable Income Co")
+        #expect(target?.incomeEvent?.estimated == true)
+        #expect(nextRow?.children.map(\.role) == [
+            .incomeEventDate,
+            .incomeEventKind,
+            .incomeEventState,
+        ])
+        #expect(nextRow?.children.allSatisfy { child in
+            child.actionTarget?.kind == .incomeEvent
+                && child.actionTarget?.incomeEvent?.eventID == target?.incomeEvent?.eventID
+                && child.actionTarget?.incomeEvent?.rowID == child.id
+        } == true)
+    }
+
     @Test("Descriptor omits unsafe income change details")
     func descriptorOmitsUnsafeIncomeChangeDetails() {
         let intent = IncomeCalendar.build(

@@ -1203,6 +1203,38 @@ try check(
     "income next-event row should expose stable detail row ids"
 )
 try check(
+    incomeNextRow?.actionTarget?.kind == .incomeEvent
+        && incomeNextRow?.actionTarget?.id == "income.symbol.5007.payment-dividend.2026-06-22"
+        && incomeNextRow?.actionTarget?.incomeEvent?.eventID == "income.symbol.5007.payment-dividend.2026-06-22"
+        && incomeNextRow?.actionTarget?.incomeEvent?.rowID == "income.next"
+        && incomeNextRow?.actionTarget?.incomeEvent?.symbolId == 5007
+        && incomeNextRow?.actionTarget?.incomeEvent?.quoteId == nil
+        && incomeNextRow?.actionTarget?.incomeEvent?.date == "2026-06-22"
+        && incomeNextRow?.actionTarget?.incomeEvent?.kind == "payment-dividend"
+        && incomeNextRow?.actionTarget?.incomeEvent?.symbolName == "Lumen Luxury"
+        && incomeNextRow?.actionTarget?.incomeEvent?.estimated == false,
+    "income next-event row should expose an inert action target with stable event identity"
+)
+try check(
+    incomeNextRow?.children.map(\.role) == [
+        .incomeEventDate,
+        .incomeEventKind,
+        .incomeEventState,
+    ],
+    "income next-event detail rows should expose typed detail roles"
+)
+try check(
+    incomeNextRow?.children.allSatisfy { child in
+        child.actionTarget?.kind == .incomeEvent
+            && child.actionTarget?.id == "income.symbol.5007.payment-dividend.2026-06-22"
+            && child.actionTarget?.incomeEvent?.eventID == "income.symbol.5007.payment-dividend.2026-06-22"
+            && child.actionTarget?.incomeEvent?.rowID == child.id
+            && child.actionTarget?.incomeEvent?.symbolId == 5007
+            && child.actionTarget?.incomeEvent?.kind == "payment-dividend"
+    } == true,
+    "income next-event detail rows should preserve parent event identity for future actions"
+)
+try check(
     incomeNextRow?.children.first { $0.id.hasSuffix(".kind") }?.detail == "Dividend payment date"
         && incomeNextRow?.children.first { $0.id.hasSuffix(".state") }?.detail == "Confirmed",
     "income next-event details should render descriptive kind and confirmed state"
@@ -1220,6 +1252,16 @@ try check(
     incomeOverflowRow?.children.first?.detail == "Dividend payment date on 2026-07-10; estimated"
         && incomeOverflowRow?.children.first?.children.first { $0.id.hasSuffix(".state") }?.detail == "Estimated",
     "income overflow rows should visibly mark estimated payment events"
+)
+try check(
+    incomeOverflowRow?.children.first?.actionTarget?.id == "income.quote.9003.payment-dividend.2026-07-10"
+        && incomeOverflowRow?.children.first?.actionTarget?.incomeEvent?.rowID
+            == "income.overflow.later.income.quote.9003.payment-dividend.2026-07-10"
+        && incomeOverflowRow?.children.first?.children.allSatisfy { child in
+            child.actionTarget?.incomeEvent?.eventID == "income.quote.9003.payment-dividend.2026-07-10"
+                && child.actionTarget?.incomeEvent?.rowID == child.id
+        } == true,
+    "income overflow event rows and details should keep canonical event targets despite grouped row ids"
 )
 try check(
     Set(allRows(in: incomeRows).map(\.id)).count == allRows(in: incomeRows).count,

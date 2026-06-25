@@ -426,6 +426,7 @@ public enum IncomeCalendarDescriptor {
                 return MenuRow(
                     id: "income.next",
                     role: .incomeNext,
+                    actionTarget: incomeEventActionTarget(for: event, rowID: "income.next"),
                     title: "Next income: \(event.symbolName)",
                     detail: incomeEventDetail(for: event),
                     children: incomeEventChildren(for: event)
@@ -520,6 +521,7 @@ private func incomeEventRow(for event: IncomeEventSummary, id: String) -> MenuRo
     MenuRow(
         id: id,
         role: .incomeEvent,
+        actionTarget: incomeEventActionTarget(for: event, rowID: id),
         title: event.symbolName,
         detail: incomeEventDetail(for: event),
         children: incomeEventChildren(for: event, rowID: id)
@@ -528,17 +530,45 @@ private func incomeEventRow(for event: IncomeEventSummary, id: String) -> MenuRo
 
 private func incomeEventChildren(for event: IncomeEventSummary, rowID: String? = nil) -> [MenuRow] {
     let baseID = rowID ?? incomeEventRowID(for: event)
+    func child(_ suffix: String, role: MenuRowRole, title: String, detail: String) -> MenuRow {
+        let id = "\(baseID).\(suffix)"
+        return MenuRow(
+            id: id,
+            role: role,
+            actionTarget: incomeEventActionTarget(for: event, rowID: id),
+            title: title,
+            detail: detail
+        )
+    }
     return [
-        MenuRow(id: "\(baseID).date", title: "Date", detail: event.date),
-        MenuRow(id: "\(baseID).kind", title: "Kind", detail: incomeEventKindLabel(for: event.kind)),
-        MenuRow(id: "\(baseID).state", title: "State", detail: event.estimated ? "Estimated" : "Confirmed"),
+        child("date", role: .incomeEventDate, title: "Date", detail: event.date),
+        child("kind", role: .incomeEventKind, title: "Kind", detail: incomeEventKindLabel(for: event.kind)),
+        child("state", role: .incomeEventState, title: "State", detail: event.estimated ? "Estimated" : "Confirmed"),
         event.amount.map {
-            MenuRow(id: "\(baseID).amount", title: "Amount", detail: display($0))
+            child("amount", role: .incomeEventAmount, title: "Amount", detail: display($0))
         },
         incomeEventChangeDetail(for: event).map {
-            MenuRow(id: "\(baseID).change", title: "Change", detail: $0)
+            child("change", role: .incomeEventChange, title: "Change", detail: $0)
         },
     ].compactMap { $0 }
+}
+
+private func incomeEventActionTarget(for event: IncomeEventSummary, rowID: String) -> MenuRowActionTarget {
+    let eventID = incomeEventRowID(for: event)
+    return MenuRowActionTarget(
+        kind: .incomeEvent,
+        id: eventID,
+        incomeEvent: IncomeEventActionTarget(
+            eventID: eventID,
+            rowID: rowID,
+            date: event.date,
+            kind: event.kind,
+            symbolName: event.symbolName,
+            estimated: event.estimated,
+            symbolId: event.symbolId,
+            quoteId: event.quoteId
+        )
+    )
 }
 
 private func incomeEventDetail(for event: IncomeEventSummary) -> String {
@@ -756,6 +786,11 @@ public enum MenuRowRole: String, Codable, Equatable {
     case incomeSummary
     case incomeNext
     case incomeEvent
+    case incomeEventDate
+    case incomeEventKind
+    case incomeEventState
+    case incomeEventAmount
+    case incomeEventChange
     case incomeDrillDown
     case bigMoverSummary
     case freshnessSummary
@@ -778,10 +813,62 @@ public enum MenuRowRole: String, Codable, Equatable {
     }
 }
 
+public enum MenuRowActionTargetKind: String, Codable, Equatable {
+    case incomeEvent
+}
+
+public struct IncomeEventActionTarget: Codable, Equatable {
+    public var eventID: String
+    public var rowID: String
+    public var date: String
+    public var kind: String
+    public var symbolName: String
+    public var estimated: Bool
+    public var symbolId: Int?
+    public var quoteId: Int?
+
+    public init(
+        eventID: String,
+        rowID: String,
+        date: String,
+        kind: String,
+        symbolName: String,
+        estimated: Bool,
+        symbolId: Int? = nil,
+        quoteId: Int? = nil
+    ) {
+        self.eventID = eventID
+        self.rowID = rowID
+        self.date = date
+        self.kind = kind
+        self.symbolName = symbolName
+        self.estimated = estimated
+        self.symbolId = symbolId
+        self.quoteId = quoteId
+    }
+}
+
+public struct MenuRowActionTarget: Codable, Equatable {
+    public var kind: MenuRowActionTargetKind
+    public var id: String
+    public var incomeEvent: IncomeEventActionTarget?
+
+    public init(
+        kind: MenuRowActionTargetKind,
+        id: String,
+        incomeEvent: IncomeEventActionTarget? = nil
+    ) {
+        self.kind = kind
+        self.id = id
+        self.incomeEvent = incomeEvent
+    }
+}
+
 public struct MenuRow: Codable, Equatable {
     public var id: String
     public var role: MenuRowRole
     public var accessibilityIdentifier: String
+    public var actionTarget: MenuRowActionTarget?
     public var title: String
     public var detail: String?
     public var children: [MenuRow]
@@ -790,6 +877,7 @@ public struct MenuRow: Codable, Equatable {
         id: String = "",
         role: MenuRowRole = .row,
         accessibilityIdentifier: String? = nil,
+        actionTarget: MenuRowActionTarget? = nil,
         title: String,
         detail: String? = nil,
         children: [MenuRow] = []
@@ -797,6 +885,7 @@ public struct MenuRow: Codable, Equatable {
         self.id = id
         self.role = role
         self.accessibilityIdentifier = accessibilityIdentifier ?? Self.defaultAccessibilityIdentifier(for: id)
+        self.actionTarget = actionTarget
         self.title = title
         self.detail = detail
         self.children = children
@@ -806,6 +895,7 @@ public struct MenuRow: Codable, Equatable {
         case id
         case role
         case accessibilityIdentifier
+        case actionTarget
         case title
         case detail
         case children
@@ -818,6 +908,7 @@ public struct MenuRow: Codable, Equatable {
         role = id == "quiet" && decodedRole == .pulseAttention ? .pulseQuiet : decodedRole
         accessibilityIdentifier = try container.decodeIfPresent(String.self, forKey: .accessibilityIdentifier)
             ?? Self.defaultAccessibilityIdentifier(for: id)
+        actionTarget = try container.decodeIfPresent(MenuRowActionTarget.self, forKey: .actionTarget)
         title = try container.decode(String.self, forKey: .title)
         detail = try container.decodeIfPresent(String.self, forKey: .detail)
         children = try container.decodeIfPresent([MenuRow].self, forKey: .children) ?? []
@@ -885,6 +976,7 @@ public struct MenuBarRowSurface: Codable, Equatable {
     public var role: MenuRowRole
     public var title: String
     public var accessibilityIdentifier: String
+    public var actionTarget: MenuRowActionTarget?
     public var children: [MenuBarRowSurface]
 
     public init(
@@ -892,12 +984,14 @@ public struct MenuBarRowSurface: Codable, Equatable {
         role: MenuRowRole,
         title: String,
         accessibilityIdentifier: String,
+        actionTarget: MenuRowActionTarget? = nil,
         children: [MenuBarRowSurface] = []
     ) {
         self.id = id
         self.role = role
         self.title = title
         self.accessibilityIdentifier = accessibilityIdentifier
+        self.actionTarget = actionTarget
         self.children = children
     }
 }
@@ -1572,6 +1666,7 @@ public enum MenuBarSurfaceRenderer {
             role: row.role,
             title: row.detail.map { "\(row.title) - \($0)" } ?? row.title,
             accessibilityIdentifier: row.accessibilityIdentifier,
+            actionTarget: row.actionTarget,
             children: row.children.map(renderRow)
         )
     }
