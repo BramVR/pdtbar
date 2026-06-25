@@ -2959,28 +2959,31 @@ private func captureMenuScreenshot(
     let rawScreenshot = artifacts.appending(path: "\(name)-screen.png")
     let screenshot = artifacts.appending(path: "\(name)-menu.png")
     try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let menuBounds = menuFrameBounds(snapshot: snapshot, expectedMenuIdentifiers: expectedMenuIdentifiers)
+    let captureBounds = screenshotCaptureBounds(containing: menuBounds)
+    let displayRegion = "\(Int(captureBounds.minX)),\(Int(captureBounds.minY)),\(Int(captureBounds.width)),\(Int(captureBounds.height))"
     _ = try run(
         peekaboo,
         arguments: [
             "image",
-            "--mode", "screen",
+            "--mode", "area",
+            "--region", displayRegion,
             "--path", rawScreenshot.path,
             "--json",
             "--no-remote",
         ],
         timeout: 20
     )
+    defer {
+        try? FileManager.default.removeItem(at: rawScreenshot)
+    }
     try cropMenuScreenshot(
         rawScreenshot,
         to: screenshot,
         snapshot: snapshot,
         expectedMenuIdentifiers: expectedMenuIdentifiers,
-        displayBounds: displayBounds(containing: menuFrameBounds(
-            snapshot: snapshot,
-            expectedMenuIdentifiers: expectedMenuIdentifiers
-        ))
+        displayBounds: captureBounds
     )
-    try? FileManager.default.removeItem(at: rawScreenshot)
     guard imageHasVisiblePixels(screenshot) else {
         try? FileManager.default.removeItem(at: screenshot)
         return nil
@@ -3096,6 +3099,24 @@ private func displayBounds(containing rect: CGRect?) -> CGRect {
         .max { left, right in
             left.intersection(rect).area < right.intersection(rect).area
         } ?? CGDisplayBounds(CGMainDisplayID())
+}
+
+private func screenshotCaptureBounds(containing rect: CGRect?) -> CGRect {
+    let display = displayBounds(containing: rect)
+    guard let rect, !rect.isNull, !rect.isEmpty else {
+        return CGRect(
+            x: max(display.minX, 0),
+            y: max(display.minY, 0),
+            width: min(display.width, 900),
+            height: min(display.height, 600)
+        ).integral
+    }
+    let padded = rect.insetBy(dx: -40, dy: -40)
+    let clamped = padded.intersection(display)
+    guard !clamped.isNull, !clamped.isEmpty else {
+        return rect.integral
+    }
+    return clamped.integral
 }
 
 private func imageDimensions(of image: URL) throws -> (width: Int, height: Int) {
