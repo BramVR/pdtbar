@@ -1518,6 +1518,193 @@ public enum ClaudeLaunchFlow {
     }
 }
 
+public enum PDTOnboardingEffect: Equatable {
+    case none
+    case probeReadiness
+    case startLoginHandoff
+    case startFirstFetch
+}
+
+public struct PDTOnboardingUpdate: Equatable {
+    public var state: ClaudeLaunchState
+    public var descriptor: MenuDescriptor
+    public var effect: PDTOnboardingEffect
+
+    public init(
+        state: ClaudeLaunchState,
+        descriptor: MenuDescriptor,
+        effect: PDTOnboardingEffect = .none
+    ) {
+        self.state = state
+        self.descriptor = descriptor
+        self.effect = effect
+    }
+}
+
+public enum PDTOnboardingLoginResult: Equatable {
+    case succeeded
+    case failed(ClaudeLoginFailureReason)
+}
+
+public enum PDTOnboardingFetchResult: Equatable {
+    case succeeded(MenuDescriptor)
+    case failed(String)
+}
+
+public final class PDTOnboardingCoordinator {
+    private var cachedPulse: MenuDescriptor?
+    public private(set) var state: ClaudeLaunchState = .probingClaude
+
+    public init(cachedPulse: MenuDescriptor? = nil) {
+        self.cachedPulse = cachedPulse
+    }
+
+    public func launch(cachedPulse: MenuDescriptor? = nil) -> PDTOnboardingUpdate {
+        if let cachedPulse {
+            self.cachedPulse = cachedPulse
+        }
+        return beginReadinessProbe()
+    }
+
+    public func beginReadinessProbe() -> PDTOnboardingUpdate {
+        update(state: .probingClaude, effect: .probeReadiness)
+    }
+
+    public func completeReadinessProbe(_ result: ClaudeReadinessProbeResult) -> PDTOnboardingUpdate {
+        let nextState = ClaudeLaunchFlow.state(afterReadinessProbe: result)
+        let effect: PDTOnboardingEffect = nextState == .fetchingPortfolio ? .startFirstFetch : .none
+        return update(state: nextState, effect: effect)
+    }
+
+    public func beginLoginHandoff() -> PDTOnboardingUpdate {
+        update(state: .openingClaude, effect: .startLoginHandoff)
+    }
+
+    public func completeLoginHandoff(_ result: PDTOnboardingLoginResult) -> PDTOnboardingUpdate {
+        switch result {
+        case .succeeded:
+            switch ClaudeLaunchFlow.action(afterLoginHandoff: .succeeded) {
+            case .recheckReadiness:
+                return beginReadinessProbe()
+            case .showMissingClaude:
+                return update(state: .missingClaude)
+            }
+        case .failed(let reason):
+            state = .missingClaude
+            return PDTOnboardingUpdate(
+                state: state,
+                descriptor: ClaudeLaunchFlow.descriptor(forLoginFailure: reason)
+            )
+        }
+    }
+
+    public func beginFirstFetch(fetchingElapsedSeconds: Int? = nil) -> PDTOnboardingUpdate {
+        update(state: .fetchingPortfolio, fetchingElapsedSeconds: fetchingElapsedSeconds)
+    }
+
+    public func completeFirstFetch(_ result: PDTOnboardingFetchResult) -> PDTOnboardingUpdate {
+        switch result {
+        case .succeeded(let descriptor):
+            cachedPulse = descriptor
+            state = .fetchingPortfolio
+            return PDTOnboardingUpdate(
+                state: state,
+                descriptor: ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: descriptor)
+            )
+        case .failed:
+            return update(state: .portfolioFetchFailed)
+        }
+    }
+
+    public func descriptor(for state: ClaudeLaunchState, fetchingElapsedSeconds: Int? = nil) -> MenuDescriptor {
+        ClaudeLaunchFlow.descriptor(
+            for: state,
+            cachedPulse: cachedPulse,
+            fetchingElapsedSeconds: fetchingElapsedSeconds
+        )
+    }
+
+    private func update(
+        state: ClaudeLaunchState,
+        effect: PDTOnboardingEffect = .none,
+        fetchingElapsedSeconds: Int? = nil
+    ) -> PDTOnboardingUpdate {
+        self.state = state
+        return PDTOnboardingUpdate(
+            state: state,
+            descriptor: descriptor(for: state, fetchingElapsedSeconds: fetchingElapsedSeconds),
+            effect: effect
+        )
+    }
+}
+
+public struct PDTOnboardingRunnerDependencies {
+    public var loadCachedPulse: () -> MenuDescriptor?
+    public var readinessProbe: () -> ClaudeReadinessProbeResult
+    public var loginHandoff: () -> PDTOnboardingLoginResult
+    public var firstFetch: () -> PDTOnboardingFetchResult
+
+    public init(
+        loadCachedPulse: @escaping () -> MenuDescriptor?,
+        readinessProbe: @escaping () -> ClaudeReadinessProbeResult,
+        loginHandoff: @escaping () -> PDTOnboardingLoginResult,
+        firstFetch: @escaping () -> PDTOnboardingFetchResult
+    ) {
+        self.loadCachedPulse = loadCachedPulse
+        self.readinessProbe = readinessProbe
+        self.loginHandoff = loginHandoff
+        self.firstFetch = firstFetch
+    }
+}
+
+public final class PDTOnboardingRunner {
+    private let coordinator: PDTOnboardingCoordinator
+    private let dependencies: PDTOnboardingRunnerDependencies
+    private let render: (PDTOnboardingUpdate) -> Void
+
+    public init(
+        coordinator: PDTOnboardingCoordinator = PDTOnboardingCoordinator(),
+        dependencies: PDTOnboardingRunnerDependencies,
+        render: @escaping (PDTOnboardingUpdate) -> Void
+    ) {
+        self.coordinator = coordinator
+        self.dependencies = dependencies
+        self.render = render
+    }
+
+    public func launch() {
+        handle(coordinator.launch(cachedPulse: dependencies.loadCachedPulse()))
+    }
+
+    public func retryReadiness() {
+        handle(coordinator.beginReadinessProbe())
+    }
+
+    public func loginWithClaude() {
+        handle(coordinator.beginLoginHandoff())
+    }
+
+    public func retryFirstFetch() {
+        handle(coordinator.beginFirstFetch())
+        handle(coordinator.completeFirstFetch(dependencies.firstFetch()))
+    }
+
+    private func handle(_ update: PDTOnboardingUpdate) {
+        render(update)
+        switch update.effect {
+        case .none:
+            return
+        case .probeReadiness:
+            handle(coordinator.completeReadinessProbe(dependencies.readinessProbe()))
+        case .startLoginHandoff:
+            handle(coordinator.completeLoginHandoff(dependencies.loginHandoff()))
+        case .startFirstFetch:
+            handle(coordinator.beginFirstFetch())
+            handle(coordinator.completeFirstFetch(dependencies.firstFetch()))
+        }
+    }
+}
+
 public enum ClaudeSetupMenuDescriptor {
     public static func loggedOut() -> MenuDescriptor {
         MenuDescriptor(

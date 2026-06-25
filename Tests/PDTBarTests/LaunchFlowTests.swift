@@ -198,6 +198,242 @@ struct ClaudeLaunchFlowTests {
     }
 }
 
+@Suite("PDT onboarding runner")
+struct PDTOnboardingRunnerTests {
+    @Test("Fresh setup login handoff success rechecks readiness and starts first fetch")
+    func freshSetupLoginHandoffSuccessRechecksReadinessAndStartsFirstFetch() throws {
+        let fetchedDescriptor = try quietFixtureDescriptor()
+        var readinessResults: [ClaudeReadinessProbeResult] = [.missingClaudeLogin, .ready]
+        var handoffCalls = 0
+        var fetchCalls = 0
+        var renderedStates: [ClaudeLaunchState] = []
+        var renderedTitles: [String] = []
+
+        let runner = PDTOnboardingRunner(
+            dependencies: PDTOnboardingRunnerDependencies(
+                loadCachedPulse: { nil },
+                readinessProbe: {
+                    readinessResults.removeFirst()
+                },
+                loginHandoff: {
+                    handoffCalls += 1
+                    return .succeeded
+                },
+                firstFetch: {
+                    fetchCalls += 1
+                    return .succeeded(fetchedDescriptor)
+                }
+            ),
+            render: {
+                renderedStates.append($0.state)
+                renderedTitles.append($0.descriptor.statusTitle)
+            }
+        )
+
+        runner.launch()
+        #expect(renderedStates == [.probingClaude, .missingClaudeLogin])
+        #expect(handoffCalls == 0)
+        #expect(fetchCalls == 0)
+
+        runner.loginWithClaude()
+
+        #expect(renderedStates == [
+            .probingClaude,
+            .missingClaudeLogin,
+            .openingClaude,
+            .probingClaude,
+            .fetchingPortfolio,
+            .fetchingPortfolio,
+            .fetchingPortfolio,
+        ])
+        #expect(renderedTitles.last == fetchedDescriptor.statusTitle)
+        #expect(handoffCalls == 1)
+        #expect(fetchCalls == 1)
+        #expect(readinessResults.isEmpty)
+    }
+
+    @Test("Login handoff failure shows missing Claude copy and does not fetch")
+    func loginHandoffFailureShowsMissingClaudeCopyAndDoesNotFetch() {
+        var handoffCalls = 0
+        var fetchCalls = 0
+        var renderedTitles: [String] = []
+
+        let runner = PDTOnboardingRunner(
+            dependencies: PDTOnboardingRunnerDependencies(
+                loadCachedPulse: { nil },
+                readinessProbe: { .missingClaudeLogin },
+                loginHandoff: {
+                    handoffCalls += 1
+                    return .failed(.missingBinary)
+                },
+                firstFetch: {
+                    fetchCalls += 1
+                    return .failed("unexpected fetch")
+                }
+            ),
+            render: { renderedTitles.append($0.descriptor.statusTitle) }
+        )
+
+        runner.launch()
+        runner.loginWithClaude()
+
+        #expect(renderedTitles.last == "Claude CLI not found")
+        #expect(handoffCalls == 1)
+        #expect(fetchCalls == 0)
+    }
+
+    @Test("Readiness failures map to setup states without live fetch")
+    func readinessFailuresMapToSetupStatesWithoutLiveFetch() {
+        let cases: [(ClaudeReadinessProbeResult, String)] = [
+            (.missingClaudeLogin, "Not connected"),
+            (.missingPDTMCP, "Add the PDT MCP server to Claude"),
+            (.failed, "Could not check Claude"),
+        ]
+
+        for (probeResult, expectedTitle) in cases {
+            var fetchCalls = 0
+            var renderedTitles: [String] = []
+
+            let runner = PDTOnboardingRunner(
+                dependencies: PDTOnboardingRunnerDependencies(
+                    loadCachedPulse: { nil },
+                    readinessProbe: { probeResult },
+                    loginHandoff: { .failed(.failed) },
+                    firstFetch: {
+                        fetchCalls += 1
+                        return .failed("unexpected fetch")
+                    }
+                ),
+                render: { renderedTitles.append($0.descriptor.statusTitle) }
+            )
+
+            runner.launch()
+
+            #expect(renderedTitles == ["Checking Claude", expectedTitle])
+            #expect(fetchCalls == 0)
+        }
+    }
+
+    @Test("Fetch failure shows retryable fetch copy")
+    func fetchFailureShowsRetryableFetchCopy() {
+        var fetchCalls = 0
+        var renderedTitles: [String] = []
+
+        let runner = PDTOnboardingRunner(
+            dependencies: PDTOnboardingRunnerDependencies(
+                loadCachedPulse: { nil },
+                readinessProbe: { .ready },
+                loginHandoff: { .succeeded },
+                firstFetch: {
+                    fetchCalls += 1
+                    return .failed("scripted first fetch failed")
+                }
+            ),
+            render: { renderedTitles.append($0.descriptor.statusTitle) }
+        )
+
+        runner.launch()
+
+        #expect(renderedTitles == [
+            "Checking Claude",
+            "Fetching portfolio",
+            "Fetching portfolio",
+            "Could not fetch portfolio",
+        ])
+        #expect(fetchCalls == 1)
+    }
+
+    @Test("Fetch retry invokes first fetch again")
+    func fetchRetryInvokesFirstFetchAgain() throws {
+        let fetchedDescriptor = try quietFixtureDescriptor()
+        var fetchResults: [PDTOnboardingFetchResult] = [
+            .failed("scripted first fetch failed"),
+            .succeeded(fetchedDescriptor),
+        ]
+        var renderedTitles: [String] = []
+
+        let runner = PDTOnboardingRunner(
+            dependencies: PDTOnboardingRunnerDependencies(
+                loadCachedPulse: { nil },
+                readinessProbe: { .ready },
+                loginHandoff: { .succeeded },
+                firstFetch: {
+                    fetchResults.removeFirst()
+                }
+            ),
+            render: { renderedTitles.append($0.descriptor.statusTitle) }
+        )
+
+        runner.launch()
+        runner.retryFirstFetch()
+
+        #expect(fetchResults.isEmpty)
+        #expect(renderedTitles.last == fetchedDescriptor.statusTitle)
+    }
+
+    @Test("Coordinator preserves cached pulse supplied at initialization")
+    func coordinatorPreservesCachedPulseSuppliedAtInitialization() throws {
+        let cachedPulse = try quietFixtureDescriptor()
+        let coordinator = PDTOnboardingCoordinator(cachedPulse: cachedPulse)
+
+        let update = coordinator.launch()
+
+        #expect(update.descriptor.statusTitle == cachedPulse.statusTitle)
+        #expect(rowTitles(in: update.descriptor).contains("Checking Claude setup"))
+    }
+
+    @Test("Coordinator uses latest fetched pulse for later refresh states")
+    func coordinatorUsesLatestFetchedPulseForLaterRefreshStates() throws {
+        let stalePulse = try quietFixtureDescriptor()
+        let freshPulse = MenuDescriptor(
+            statusTitle: "Fresh scripted pulse",
+            sections: [
+                MenuSection(
+                    id: "pulse",
+                    title: "Pulse",
+                    rows: [MenuRow(id: "pulse.status", title: "Fresh scripted pulse")]
+                ),
+            ]
+        )
+        let coordinator = PDTOnboardingCoordinator(cachedPulse: stalePulse)
+
+        _ = coordinator.completeFirstFetch(.succeeded(freshPulse))
+        let refresh = coordinator.beginFirstFetch()
+
+        #expect(refresh.descriptor.statusTitle == "Fresh scripted pulse")
+        #expect(rowTitles(in: refresh.descriptor).contains("Refreshing portfolio"))
+    }
+
+    @Test("Returning launch preserves cached pulse when fetch fails")
+    func returningLaunchPreservesCachedPulseWhenFetchFails() throws {
+        let cachedPulse = try quietFixtureDescriptor()
+        var fetchCalls = 0
+        var renderedDescriptors: [MenuDescriptor] = []
+
+        let runner = PDTOnboardingRunner(
+            dependencies: PDTOnboardingRunnerDependencies(
+                loadCachedPulse: { cachedPulse },
+                readinessProbe: { .ready },
+                loginHandoff: { .succeeded },
+                firstFetch: {
+                    fetchCalls += 1
+                    return .failed("scripted details fill failed")
+                }
+            ),
+            render: { renderedDescriptors.append($0.descriptor) }
+        )
+
+        runner.launch()
+
+        let finalDescriptor = try #require(renderedDescriptors.last)
+        #expect(finalDescriptor.statusTitle == cachedPulse.statusTitle)
+        #expect(rowTitles(in: finalDescriptor).contains("Details fill failed"))
+        #expect(rowTitles(in: finalDescriptor).contains("Fill details again"))
+        #expect(!rowTitles(in: finalDescriptor).contains("Log in with Claude"))
+        #expect(fetchCalls == 1)
+    }
+}
+
 @Suite("Launch surface")
 struct LaunchSurfaceTests {
     @Test("Quiet fixture descriptor renders stable launch surface")
