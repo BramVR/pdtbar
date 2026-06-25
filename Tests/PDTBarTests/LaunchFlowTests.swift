@@ -62,16 +62,19 @@ struct ClaudeLaunchFlowTests {
         #expect(ClaudeLaunchFlow.action(afterLoginHandoff: .failed) == .showMissingClaude)
     }
 
-    @Test("Probing Claude descriptor does not expose login UI")
-    func probingDescriptorDoesNotExposeLoginUI() {
+    @Test("Probing Claude descriptor keeps login action available")
+    func probingDescriptorKeepsLoginActionAvailable() {
         let descriptor = ClaudeLaunchFlow.descriptor(for: .probingClaude)
         let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
 
         #expect(descriptor.statusTitle == "Checking Claude")
         #expect(descriptor.statusVisual.isDimmed)
         #expect(descriptor.statusVisual.filledBarCount == 0)
-        #expect(surface.sections.flatMap(\.rows).map(\.title) == ["Checking Claude setup - No prompts opened"])
-        #expect(!surface.sections.flatMap(\.rows).map(\.title).contains("Log in with Claude"))
+        #expect(surface.sections.flatMap(\.rows).map(\.title) == [
+            "Checking Claude setup - No prompts opened",
+            "Log in with Claude",
+        ])
+        #expect(surface.sections.flatMap(\.rows).last?.role == .setupLogin)
     }
 
     @Test("Setup descriptors expose retryable onboarding actions")
@@ -97,7 +100,7 @@ struct ClaudeLaunchFlowTests {
 
         #expect(rowTitles(in: firstFetch) == ["Fetching portfolio"])
         #expect(!rowTitles(in: firstFetch).contains("Log in with Claude"))
-        #expect(rowTitles(in: fetchFailed) == ["Could not fetch portfolio", "Try again"])
+        #expect(rowTitles(in: fetchFailed) == ["Could not fetch portfolio", "Try again", "Log in with Claude"])
         #expect(MenuBarSurfaceRenderer.render(descriptor: fetchFailed).status.visual.isDimmed)
         #expect(cachedRefresh.statusTitle == cachedPulse.statusTitle)
         #expect(cachedRefresh.sections.map(\.id).contains("pulse"))

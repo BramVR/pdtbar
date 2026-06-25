@@ -857,6 +857,11 @@ public enum ClaudeLaunchFlow {
                                 title: "Checking Claude setup",
                                 detail: "No prompts opened"
                             ),
+                            MenuRow(
+                                id: "claudeSetup.login",
+                                role: .setupLogin,
+                                title: "Log in with Claude"
+                            ),
                         ]
                     ),
                 ]
@@ -978,6 +983,11 @@ public enum ClaudeLaunchFlow {
                 id: "portfolioFetch.retry",
                 role: .fetchRetry,
                 title: "Try again"
+            ),
+            MenuRow(
+                id: "claudeSetup.login",
+                role: .setupLogin,
+                title: "Log in with Claude"
             ),
         ]
     }

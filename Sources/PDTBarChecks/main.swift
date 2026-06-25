@@ -102,8 +102,11 @@ try check(
     "Claude probing state should dim the icon without filling notification bars"
 )
 try check(
-    probingSurface.sections.flatMap(\.rows).map(\.title) == ["Checking Claude setup - No prompts opened"],
-    "Claude probing state should not show login UI yet"
+    probingSurface.sections.flatMap(\.rows).map(\.title) == [
+        "Checking Claude setup - No prompts opened",
+        "Log in with Claude",
+    ],
+    "Claude probing state should keep the login action available"
 )
 try check(
     ClaudeLaunchFlow.state(afterReadinessProbe: .ready) == .fetchingPortfolio,
@@ -141,8 +144,12 @@ try check(
 )
 let fetchFailedDescriptor = ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed)
 try check(
-    fetchFailedDescriptor.sections.flatMap(\.rows).map(\.title) == ["Could not fetch portfolio", "Try again"],
-    "first-fetch failure should show a retry action without publishing a portfolio pulse"
+    fetchFailedDescriptor.sections.flatMap(\.rows).map(\.title) == [
+        "Could not fetch portfolio",
+        "Try again",
+        "Log in with Claude",
+    ],
+    "first-fetch failure should show retry and login actions without publishing a portfolio pulse"
 )
 try check(
     MenuBarSurfaceRenderer.render(descriptor: fetchFailedDescriptor).status.visual.isDimmed,
