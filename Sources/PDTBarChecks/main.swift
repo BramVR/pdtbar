@@ -594,7 +594,7 @@ let incompleteAllocationRow = try require(
 )
 try check(
     incompleteAllocationRow.role == .allocationHolding
-        && incompleteAllocationRow.detail == "11.7% of portfolio",
+        && incompleteAllocationRow.detail == "11.7%",
     "allocation drill-down should fall back when current weight or threshold is missing"
 )
 
@@ -1245,7 +1245,7 @@ try check(
     "allocation drill-down should list every open holding"
 )
 try check(
-    allocationDrillDownRow?.detail == "24.2% of portfolio; concentration line 20.0%",
+    allocationDrillDownRow?.detail == "24.2%; concentration line 20.0%",
     "descriptor should expose allocation drill-down for the item"
 )
 try check(

@@ -1192,13 +1192,13 @@ public enum MenuDescriptorRenderer {
                             guard let currentWeight = item.currentWeight,
                                   let threshold = item.threshold
                             else { return nil }
-                            return "\(percent(currentWeight)) of portfolio; concentration line \(percent(threshold))"
+                            return "\(percent(currentWeight)); concentration line \(percent(threshold))"
                         }
                         return MenuRow(
                             id: "allocation.\(holding.quoteId)",
                             role: drillDownDetail == nil ? .allocationHolding : .allocationDrillDown,
                             title: holding.name,
-                            detail: drillDownDetail ?? "\(percent(holding.weight)) of portfolio",
+                            detail: drillDownDetail ?? percent(holding.weight),
                             children: allocationChildren(for: holding, attention: attention)
                         )
                     }
