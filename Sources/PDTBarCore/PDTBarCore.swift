@@ -3502,7 +3502,6 @@ public enum PressureRunner {
         }
         return PulseReadFilter.apply(to: model, readState: readState)
     }
-
 }
 
 public struct SnapshotStore: Sendable {

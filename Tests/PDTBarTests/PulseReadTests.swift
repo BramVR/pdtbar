@@ -52,7 +52,11 @@ struct PulseReadTests {
 
         var changedSnapshot = snapshot
         changedSnapshot.openHoldings[0].weight = 0.265
-        let changedModel = PressureEngine.buildModel(from: changedSnapshot, priorSnapshot: snapshot)
+        let changedModel = PressureEngine.buildModel(
+            from: changedSnapshot,
+            priorSnapshot: snapshot,
+            readState: PulseReadState(readFingerprints: [originalItem.readFingerprint])
+        )
         let filtered = PulseReadFilter.apply(
             to: changedModel,
             readState: PulseReadState(readFingerprints: [originalItem.readFingerprint])
@@ -60,6 +64,17 @@ struct PulseReadTests {
 
         #expect(filtered.rankedAttentionItems.first?.holdingIdentity?.quoteId == originalItem.holdingIdentity?.quoteId)
         #expect(filtered.rankedAttentionItems.first?.readFingerprint != originalItem.readFingerprint)
+    }
+
+    @Test("Unread concentration drift stays quiet when already above threshold")
+    func unreadConcentrationDriftStaysQuietWhenAlreadyAboveThreshold() throws {
+        let snapshot = try fixtureSnapshot("concentration-pressure.json")
+        var changedSnapshot = snapshot
+        changedSnapshot.openHoldings[0].weight = 0.265
+
+        let changedModel = PressureEngine.buildModel(from: changedSnapshot, priorSnapshot: snapshot)
+
+        #expect(changedModel.rankedAttentionItems.allSatisfy { $0.holdingIdentity?.quoteId != 9001 })
     }
 
     @Test("Same material concentration remains read after prior-aware refresh and cached relaunch")
