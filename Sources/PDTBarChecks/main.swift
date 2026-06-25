@@ -121,6 +121,10 @@ try check(
     "missing PDT MCP probe should transition to a retryable PDT setup state"
 )
 let firstFetchDescriptor = ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio)
+let firstFetchProgressDescriptor = ClaudeLaunchFlow.descriptor(
+    for: .fetchingPortfolio,
+    fetchingElapsedSeconds: 12
+)
 try check(
     firstFetchDescriptor.statusVisual.isDimmed && firstFetchDescriptor.statusVisual.filledBarCount == 0,
     "first-fetch state should dim the icon without filling notification bars"
@@ -128,6 +132,11 @@ try check(
 try check(
     firstFetchDescriptor.sections.flatMap(\.rows).map(\.title) == ["Fetching portfolio"],
     "first-fetch state should render without the logged-out menu"
+)
+try check(
+    firstFetchProgressDescriptor.statusTitle == "Fetching portfolio 0:12"
+        && firstFetchProgressDescriptor.sections.flatMap(\.rows).map(\.detail) == ["Read-only through Claude - working for 0:12"],
+    "first-fetch state should expose elapsed working time while it is running"
 )
 try check(
     !firstFetchDescriptor.sections.flatMap(\.rows).map(\.title).contains("Log in with Claude"),
@@ -225,7 +234,7 @@ try check(
 )
 let missingPDTMCPDescriptor = ClaudeLaunchFlow.descriptor(for: .missingPDTMCP)
 try check(
-    missingPDTMCPDescriptor.sections.flatMap(\.rows).map(\.title) == ["Add the PDT MCP server to Claude", "Check again"],
+    missingPDTMCPDescriptor.sections.flatMap(\.rows).map(\.title) == ["Add the PDT MCP server to Claude", "Log in with Claude", "Check again"],
     "missing PDT MCP should render product-facing setup copy with a readiness retry action"
 )
 try check(

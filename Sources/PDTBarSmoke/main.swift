@@ -677,6 +677,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         in: failureAppSupport,
         name: "handoff-failure.sh",
         delay: 0.1,
+        promptBeforeURL: false,
         exitStatus: 42
     )
     let failureProcess = try launchLoginHandoffApp(
@@ -896,7 +897,7 @@ private func scriptedSetupRetrySmoke(arguments: [String]) throws -> SmokeReport 
         name: "missing-pdt-mcp",
         initialReadiness: "missingPDTMCP",
         descriptor: missingPDTMCPDescriptor,
-        expectedTexts: ["Add the PDT MCP server to Claude", "Check again"],
+        expectedTexts: ["Add the PDT MCP server to Claude", "Log in with Claude", "Check again"],
         options: options,
         app: app,
         artifacts: artifacts
@@ -2317,11 +2318,18 @@ private func waitForStatusText(
     statusIdentifier: String,
     timeout: TimeInterval
 ) -> Bool {
+    func matchesExpectedStatus(_ text: String) -> Bool {
+        text == expected ||
+            text == "PDTBar \(expected)" ||
+            text.hasPrefix("\(expected) ") ||
+            text.hasPrefix("PDTBar \(expected) ")
+    }
+
     let deadline = Date().addingTimeInterval(timeout)
     repeat {
         if let status = findAccessibilityElement(in: root, identifier: statusIdentifier) {
             let texts = accessibilityTexts(in: status)
-            if texts.contains(expected) || texts.contains("PDTBar \(expected)") {
+            if texts.contains(where: matchesExpectedStatus) {
                 return true
             }
         }
@@ -2329,7 +2337,7 @@ private func waitForStatusText(
     } while Date() < deadline
     if let status = findAccessibilityElement(in: root, identifier: statusIdentifier) {
         let texts = accessibilityTexts(in: status)
-        return texts.contains(expected) || texts.contains("PDTBar \(expected)")
+        return texts.contains(where: matchesExpectedStatus)
     }
     return false
 }
@@ -2716,8 +2724,12 @@ private func realClaudeFlowAXScenario(
     )
 
     let statusVisible = expectedStatusTextVisible
-        && (statusText.contains(surface.status.accessibilityLabel)
-            || statusText.contains(surface.status.title))
+        && statusText.contains { observed in
+            observed == surface.status.accessibilityLabel ||
+                observed == surface.status.title ||
+                observed.hasPrefix("\(surface.status.accessibilityLabel) ") ||
+                observed.hasPrefix("\(surface.status.title) ")
+        }
     let menuIdentifiersVisible = expectedMenuIdentifiers.isSubset(of: menuSnapshot.identifiers)
     let menuTextVisible = expectedTexts.allSatisfy { expected in
         menuSnapshot.texts.contains { observed in
@@ -3019,6 +3031,7 @@ private func writeHandoffScript(
     in appSupportDirectory: URL,
     name: String,
     delay: TimeInterval,
+    promptBeforeURL: Bool = true,
     postSuccessDelay: TimeInterval = 0,
     exitStatus: Int32
 ) throws -> URL {
@@ -3031,7 +3044,9 @@ private func writeHandoffScript(
     trap 'printf "terminated pid=%s\\n" "$$" >> "$PDTBAR_CLAUDE_HANDOFF_MARKER.log"; exit 143' TERM INT HUP
     printf 'started %s' "$*" > "$PDTBAR_CLAUDE_HANDOFF_MARKER"
     if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
+    \(promptBeforeURL ? "  printf 'press ENTER to open in browser\\n'" : "  :")
       printf 'https://claude.ai/login\\n'
+      IFS= read -r _ || true
       if [ \(exitStatus) -eq 0 ]; then
         :
       else

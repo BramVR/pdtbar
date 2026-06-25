@@ -88,7 +88,7 @@ struct ClaudeLaunchFlowTests {
         #expect(openingClaude.sections.flatMap(\.rows).last?.role == .setupLogin)
         #expect(rowTitles(in: missingLogin) == ["Not connected", "Log in with Claude", "Check again"])
         #expect(missingLogin.sections.flatMap(\.rows).last?.role == .setupRetry)
-        #expect(rowTitles(in: missingPDTMCP) == ["Add the PDT MCP server to Claude", "Check again"])
+        #expect(rowTitles(in: missingPDTMCP) == ["Add the PDT MCP server to Claude", "Log in with Claude", "Check again"])
         #expect(missingPDTMCP.sections.flatMap(\.rows).last?.role == .setupRetry)
         #expect(rowTitles(in: missingClaude) == ["Claude CLI not found", "Log in with Claude"])
     }
@@ -132,6 +132,33 @@ struct ClaudeLaunchFlowTests {
         #expect(cachedFailure.statusVisual.barHeights == cachedPulse.statusVisual.barHeights)
         #expect(cachedFailure.statusVisual.filledBarCount == cachedPulse.statusVisual.filledBarCount)
         #expect(rowTitles(in: cachedFailure).contains("Try again"))
+    }
+
+    @Test("Claude auth status parser reads logged-in JSON from stdout")
+    func claudeAuthStatusParserReadsLoggedInJSONFromStdout() {
+        let noisyStdout = """
+        notice
+        {"loggedIn":true,"authMethod":"oauth"}
+        """
+
+        #expect(ClaudeAuthStatusParser.isLoggedIn(stdout: #"{"loggedIn":true}"#))
+        #expect(ClaudeAuthStatusParser.isLoggedIn(stdout: noisyStdout))
+        #expect(!ClaudeAuthStatusParser.isLoggedIn(stdout: #"{"loggedIn":false}"#))
+        #expect(!ClaudeAuthStatusParser.isLoggedIn(stdout: "not json"))
+        #expect(ClaudeAuthStatusParser.loggedInStatus(stdout: "not json") == nil)
+    }
+
+    @Test("Fetching descriptor exposes elapsed working time")
+    func fetchingDescriptorExposesElapsedWorkingTime() {
+        let descriptor = ClaudeLaunchFlow.descriptor(
+            for: .fetchingPortfolio,
+            fetchingElapsedSeconds: 12
+        )
+
+        #expect(descriptor.statusTitle == "Fetching portfolio 0:12")
+        #expect(rowTitles(in: descriptor) == ["Fetching portfolio"])
+        #expect(descriptor.sections.flatMap(\.rows).map(\.detail) == ["Read-only through Claude - working for 0:12"])
+        #expect(MenuBarSurfaceRenderer.render(descriptor: descriptor).status.accessibilityLabel == "PDTBar Fetching portfolio 0:12")
     }
 
     @Test("Readiness probe gate serializes setup probes")

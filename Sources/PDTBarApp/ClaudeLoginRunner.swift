@@ -128,6 +128,16 @@ struct ClaudeLoginRunner {
         options.stopOnURL = false
         options.stopOnSubstrings = successSubstrings
         options.sendOnSubstrings = [
+            "Enter to open": "\r",
+            "enter to open": "\r",
+            "Return to open": "\r",
+            "return to open": "\r",
+            "Press Enter to open": "\r",
+            "press Enter to open": "\r",
+            "press enter to open": "\r",
+            "Press Return to open": "\r",
+            "press Return to open": "\r",
+            "press return to open": "\r",
             "Press Enter": "\r",
             "press Enter": "\r",
             "press enter": "\r",
@@ -137,6 +147,7 @@ struct ClaudeLoginRunner {
         ]
         options.sendEnterEvery = 1.0
         options.settleAfterStop = 0.35
+        options.debugLogPath = environment["PDTBAR_CLAUDE_LOGIN_DEBUG_LOG"]?.nilIfEmpty
         do {
             let result = try runner.run(
                 binary: environment["PDTBAR_CLAUDE_BIN"]?.nilIfEmpty ?? "claude",
@@ -209,7 +220,7 @@ final class ClaudeLoginCancellation: @unchecked Sendable {
     }
 }
 
-private struct TTYProcessTreeTerminator {
+struct TTYProcessTreeTerminator {
     static func descendantPIDs(of rootPID: pid_t) -> [pid_t] {
         guard rootPID > 0 else { return [] }
         var seen: Set<pid_t> = [rootPID]
@@ -274,6 +285,7 @@ private struct TTYCommandRunner {
         var stopOnURL = false
         var stopOnSubstrings: [String] = []
         var settleAfterStop: TimeInterval = 0.25
+        var debugLogPath: String?
     }
 
     enum Error: Swift.Error, LocalizedError, Sendable {
@@ -332,6 +344,62 @@ private struct TTYCommandRunner {
         case closed
     }
 
+    private final class DebugLog: @unchecked Sendable {
+        private let url: URL
+        private let lock = NSLock()
+
+        init?(path: String?) {
+            guard let path, !path.isEmpty else { return nil }
+            self.url = URL(fileURLWithPath: path)
+            try? FileManager.default.createDirectory(
+                at: self.url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            append("debug log started")
+        }
+
+        func append(_ message: String) {
+            let line = "\(Self.timestamp()) \(Self.redact(message))\n"
+            guard let data = line.data(using: .utf8) else { return }
+            lock.lock()
+            defer {
+                lock.unlock()
+            }
+            if FileManager.default.fileExists(atPath: url.path),
+               let handle = try? FileHandle(forWritingTo: url)
+            {
+                defer {
+                    try? handle.close()
+                }
+                _ = try? handle.seekToEnd()
+                _ = try? handle.write(contentsOf: data)
+            } else {
+                try? data.write(to: url, options: .atomic)
+            }
+        }
+
+        private static func timestamp() -> String {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return formatter.string(from: Date())
+        }
+
+        private static func redact(_ text: String) -> String {
+            var redacted = text
+            redacted = redacted.replacingOccurrences(
+                of: #"https?://\S+"#,
+                with: "[redacted-url]",
+                options: .regularExpression
+            )
+            redacted = redacted.replacingOccurrences(
+                of: #"[A-Za-z0-9_\-]{40,}"#,
+                with: "[redacted-token]",
+                options: .regularExpression
+            )
+            return redacted
+        }
+    }
+
     func run(
         binary: String,
         send script: String,
@@ -342,14 +410,17 @@ private struct TTYCommandRunner {
         if isCancelled?() == true {
             throw Error.cancelled
         }
+        let debugLog = DebugLog(path: options.debugLogPath)
         let resolved: String
         if binary.contains("/"), FileManager.default.isExecutableFile(atPath: binary) {
             resolved = binary
         } else if let hit = Self.which(binary, environment: options.baseEnvironment ?? ProcessInfo.processInfo.environment) {
             resolved = hit
         } else {
+            debugLog?.append("binary not found: \(binary)")
             throw Error.binaryNotFound(binary)
         }
+        debugLog?.append("launching \(resolved) \(options.extraArgs.joined(separator: " "))")
 
         var primaryFD: Int32 = -1
         var secondaryFD: Int32 = -1
@@ -461,7 +532,9 @@ private struct TTYCommandRunner {
         do {
             try proc.run()
             didLaunch = true
+            debugLog?.append("process launched pid=\(proc.processIdentifier)")
         } catch {
+            debugLog?.append("launch failed: \(error.localizedDescription)")
             throw Error.launchFailed(error.localizedDescription)
         }
 
@@ -514,11 +587,13 @@ private struct TTYCommandRunner {
         usleep(UInt32(options.initialDelay * 1_000_000))
 
         if isCancelled?() == true {
+            debugLog?.append("cancelled before initial send")
             throw Error.cancelled
         }
         if !trimmed.isEmpty {
             try send(trimmed)
             try send("\r")
+            debugLog?.append("sent initial script")
         }
 
         let stopNeedles = options.stopOnSubstrings.map { Data($0.utf8) }
@@ -538,6 +613,8 @@ private struct TTYCommandRunner {
         var stoppedEarly = false
         var urlSeen = false
         var triggeredSends = Set<Data>()
+        var triggeredSendPayloads = Set<Data>()
+        var sentAuthPromptEnter = false
         var recentText = ""
         var lastOutputAt = Date()
 
@@ -562,15 +639,21 @@ private struct TTYCommandRunner {
 
             if allowSends, !sendNeedles.isEmpty {
                 let recentTextCollapsed = recentText.replacingOccurrences(of: "\r", with: "")
+                let recentTextNormalized = Self.normalizedNeedleText(recentText)
                 for item in sendNeedles where !triggeredSends.contains(item.needle) {
                     let matched = scanData.range(of: item.needle) != nil ||
                         recentText.contains(item.needleString) ||
-                        recentTextCollapsed.contains(item.needleString)
+                        recentTextCollapsed.contains(item.needleString) ||
+                        recentTextNormalized.contains(Self.normalizedNeedleText(item.needleString))
                     if matched {
-                        if let keysString = String(data: item.keys, encoding: .utf8) {
-                            try? send(keysString)
-                        } else {
-                            try? writeAllToPrimary(item.keys)
+                        if triggeredSendPayloads.insert(item.keys).inserted {
+                            if let keysString = String(data: item.keys, encoding: .utf8) {
+                                try? send(keysString)
+                            } else {
+                                try? writeAllToPrimary(item.keys)
+                            }
+                            sentAuthPromptEnter = true
+                            debugLog?.append("matched send substring: \(item.needleString)")
                         }
                         triggeredSends.insert(item.needle)
                     }
@@ -581,7 +664,12 @@ private struct TTYCommandRunner {
                 if !urlSeen {
                     urlSeen = true
                     onURLDetected?()
-                    try? send("\r")
+                    if !sentAuthPromptEnter, !Self.looksLikeCodeEntryPrompt(recentText) {
+                        try? send("\r")
+                        sentAuthPromptEnter = true
+                        debugLog?.append("url detected; sent fallback enter")
+                    }
+                    debugLog?.append("url detected")
                     lastEnter = Date()
                 }
                 if allowStop, options.stopOnURL {
@@ -605,6 +693,7 @@ private struct TTYCommandRunner {
 
         while Date() < deadline {
             if isCancelled?() == true {
+                debugLog?.append("cancelled")
                 throw Error.cancelled
             }
             let readResult = readDrainChunk()
@@ -613,6 +702,9 @@ private struct TTYCommandRunner {
                 data
             case .wouldBlock, .closed:
                 Data()
+            }
+            if !newData.isEmpty {
+                debugLog?.append("output chunk bytes=\(newData.count)")
             }
             if processChunk(newData, allowSends: true, allowStop: true) {
                 stoppedEarly = true
@@ -628,6 +720,7 @@ private struct TTYCommandRunner {
 
             if !urlSeen, let every = options.sendEnterEvery, Date().timeIntervalSince(lastEnter) >= every {
                 try? send("\r")
+                debugLog?.append("sent periodic enter")
                 lastEnter = Date()
             }
 
@@ -637,6 +730,7 @@ private struct TTYCommandRunner {
         }
 
         if isCancelled?() == true {
+            debugLog?.append("cancelled after loop")
             throw Error.cancelled
         }
 
@@ -669,11 +763,15 @@ private struct TTYCommandRunner {
         }
 
         let terminationStatus = proc.isRunning ? nil : proc.terminationStatus
+        debugLog?.append("finished running=\(proc.isRunning) status=\(terminationStatus.map(String.init) ?? "nil")")
         let text = String(data: buffer, encoding: .utf8) ?? ""
         if text.isEmpty, let terminationStatus {
             return Result(text: text, terminationStatus: terminationStatus)
         }
-        guard !text.isEmpty else { throw Error.timedOut }
+        guard !text.isEmpty else {
+            debugLog?.append("timed out with empty output")
+            throw Error.timedOut
+        }
         return Result(text: text, terminationStatus: terminationStatus)
     }
 
@@ -723,6 +821,21 @@ private struct TTYCommandRunner {
         return regex
             .stringByReplacingMatches(in: withoutCarriageReturns, options: [], range: range, withTemplate: "")
             .lowercased()
+    }
+
+    private static func looksLikeCodeEntryPrompt(_ text: String) -> Bool {
+        let normalized = normalizedNeedleText(text)
+        let codeNeedles = [
+            "paste code",
+            "paste the code",
+            "paste your code",
+            "code here",
+            "enter code",
+            "enter the code",
+            "authorization code",
+            "if prompted",
+        ]
+        return codeNeedles.contains { normalized.contains($0) }
     }
 
     private static func enrichedEnvironment(

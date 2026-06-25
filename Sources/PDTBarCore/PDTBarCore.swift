@@ -795,6 +795,42 @@ public enum ClaudeLaunchState: Equatable {
     case portfolioFetchFailed
 }
 
+public enum ClaudeAuthStatusParser {
+    public static func isLoggedIn(stdout: String) -> Bool {
+        loggedInStatus(stdout: stdout) == true
+    }
+
+    public static func loggedInStatus(stdout: String) -> Bool? {
+        for line in stdout.split(whereSeparator: \.isNewline) {
+            if let loggedIn = loggedInStatusFromJSONObject(String(line)) {
+                return loggedIn
+            }
+        }
+        return loggedInStatusFromJSONObject(stdout)
+    }
+
+    private static func loggedInStatusFromJSONObject(_ output: String) -> Bool? {
+        let jsonOutput = firstJSONObject(in: output) ?? output
+        guard let data = jsonOutput.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let loggedIn = object["loggedIn"] as? Bool
+        else {
+            return nil
+        }
+        return loggedIn
+    }
+
+    private static func firstJSONObject(in output: String) -> String? {
+        guard let start = output.firstIndex(of: "{"),
+              let end = output.lastIndex(of: "}"),
+              start <= end
+        else {
+            return nil
+        }
+        return String(output[start...end])
+    }
+}
+
 public enum ClaudeLoginHandoffOutcome: Equatable {
     case succeeded
     case failed
@@ -840,7 +876,11 @@ public enum ClaudeLaunchFlow {
         }
     }
 
-    public static func descriptor(for state: ClaudeLaunchState, cachedPulse: MenuDescriptor? = nil) -> MenuDescriptor {
+    public static func descriptor(
+        for state: ClaudeLaunchState,
+        cachedPulse: MenuDescriptor? = nil,
+        fetchingElapsedSeconds: Int? = nil
+    ) -> MenuDescriptor {
         if let cachedPulse {
             switch state {
             case .probingClaude:
@@ -863,7 +903,10 @@ public enum ClaudeLaunchFlow {
                             id: "portfolioFetch.refreshing",
                             role: .fetchStatus,
                             title: "Refreshing portfolio",
-                            detail: "Keeping last pulse visible"
+                            detail: fetchingDetail(
+                                elapsedSeconds: fetchingElapsedSeconds,
+                                fallback: "Keeping last pulse visible"
+                            )
                         ),
                     ]
                 )
@@ -960,9 +1003,19 @@ public enum ClaudeLaunchFlow {
                 ]
             )
         case .fetchingPortfolio:
+            let detail = fetchingDetail(
+                elapsedSeconds: fetchingElapsedSeconds,
+                fallback: "Read-only through Claude"
+            )
+            let statusTitle = fetchingElapsedSeconds.map {
+                "Fetching portfolio \(formatElapsedSeconds($0))"
+            } ?? "Fetching portfolio"
             return MenuDescriptor(
-                statusTitle: "Fetching portfolio",
-                statusVisual: StatusVisualState(isDimmed: true),
+                statusTitle: statusTitle,
+                statusVisual: StatusVisualState(
+                    isDimmed: true,
+                    statusCopy: statusTitle
+                ),
                 sections: [
                     MenuSection(
                         id: "portfolioFetch",
@@ -972,7 +1025,7 @@ public enum ClaudeLaunchFlow {
                                 id: "portfolioFetch.status",
                                 role: .fetchStatus,
                                 title: "Fetching portfolio",
-                                detail: "Read-only through Claude"
+                                detail: detail
                             ),
                         ]
                     ),
@@ -991,6 +1044,18 @@ public enum ClaudeLaunchFlow {
                 ]
             )
         }
+    }
+
+    public static func formatElapsedSeconds(_ seconds: Int) -> String {
+        let safeSeconds = max(0, seconds)
+        return "\(safeSeconds / 60):\(String(format: "%02d", safeSeconds % 60))"
+    }
+
+    private static func fetchingDetail(elapsedSeconds: Int?, fallback: String) -> String {
+        guard let elapsedSeconds else {
+            return fallback
+        }
+        return "\(fallback) - working for \(formatElapsedSeconds(elapsedSeconds))"
     }
 
     public static func descriptor(forLoginFailure reason: ClaudeLoginFailureReason) -> MenuDescriptor {
@@ -1175,6 +1240,11 @@ public enum ClaudeSetupMenuDescriptor {
                             role: .setupFailure,
                             title: "Add the PDT MCP server to Claude",
                             detail: "Then check again"
+                        ),
+                        MenuRow(
+                            id: "claudeSetup.login",
+                            role: .setupLogin,
+                            title: "Log in with Claude"
                         ),
                         MenuRow(
                             id: "claudeSetup.retry",

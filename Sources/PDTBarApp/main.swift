@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import PDTBarCore
 
@@ -23,6 +24,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cachedPulseDescriptor: MenuDescriptor?
     private var portfolioFetchInFlight = false
     private var portfolioRefreshInFlight = false
+    private var portfolioFetchStartedAt: Date?
+    private var portfolioFetchProgressTimer: Timer?
     private let claudeReadinessProbeGate = ClaudeReadinessProbeGate()
     private let claudeLoginAttemptGate = ClaudeLoginAttemptGate()
 
@@ -88,7 +91,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         portfolioFetchInFlight = true
-        installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio, cachedPulse: cachedPulseDescriptor))
         do {
             let configuration = try firstFetchConnectorConfiguration()
             if configuration.shouldStartBackgroundRefresh && cachedPulseDescriptor != nil {
@@ -96,6 +98,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 startBackgroundPortfolioRefresh()
                 return
             }
+            portfolioFetchStartedAt = Date()
+            installPortfolioFetchProgressMenu(cancelOpenMenu: true)
+            startPortfolioFetchProgressTimer()
             let snapshotStore = SnapshotStore(directory: firstFetchStateDirectory())
             DispatchQueue.global(qos: .userInitiated).async {
                 let outcome: PortfolioFetchOutcome
@@ -127,6 +132,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func finishFirstPortfolioFetch(_ outcome: PortfolioFetchOutcome) {
         portfolioFetchInFlight = false
+        stopPortfolioFetchProgressTimer()
         if let descriptor = outcome.descriptor {
             cachedPulseDescriptor = descriptor
             installMenuBarItem(descriptor)
@@ -138,6 +144,47 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let errorDescription = outcome.errorDescription ?? "unknown error"
         FileHandle.standardError.write(Data("pdtbar: first fetch failed: \(errorDescription)\n".utf8))
         installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed, cachedPulse: cachedPulseDescriptor))
+    }
+
+    private func startPortfolioFetchProgressTimer() {
+        portfolioFetchProgressTimer?.invalidate()
+        let timer = Timer(
+            timeInterval: 1.0,
+            target: self,
+            selector: #selector(updatePortfolioFetchProgress(_:)),
+            userInfo: nil,
+            repeats: true
+        )
+        portfolioFetchProgressTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopPortfolioFetchProgressTimer() {
+        portfolioFetchProgressTimer?.invalidate()
+        portfolioFetchProgressTimer = nil
+        portfolioFetchStartedAt = nil
+    }
+
+    @objc private func updatePortfolioFetchProgress(_ timer: Timer) {
+        guard portfolioFetchInFlight else {
+            stopPortfolioFetchProgressTimer()
+            return
+        }
+        installPortfolioFetchProgressMenu(cancelOpenMenu: false)
+    }
+
+    private func installPortfolioFetchProgressMenu(cancelOpenMenu: Bool) {
+        let elapsedSeconds = portfolioFetchStartedAt.map {
+            Int(Date().timeIntervalSince($0))
+        } ?? 0
+        installMenuBarItem(
+            ClaudeLaunchFlow.descriptor(
+                for: .fetchingPortfolio,
+                cachedPulse: cachedPulseDescriptor,
+                fetchingElapsedSeconds: elapsedSeconds
+            ),
+            cancelOpenMenu: cancelOpenMenu
+        )
     }
 
     @objc private func retryPortfolioFetch(_ sender: NSMenuItem) {
@@ -277,7 +324,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         options.appSupportDirectory ?? defaultAppSupportDirectory()
     }
 
-    private func installMenuBarItem(_ descriptor: MenuDescriptor) {
+    private func installMenuBarItem(_ descriptor: MenuDescriptor, cancelOpenMenu: Bool = true) {
         let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
         let item: NSStatusItem
         if let statusItem {
@@ -285,6 +332,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             statusItem = item
+        }
+        if cancelOpenMenu {
+            item.menu?.cancelTracking()
         }
         item.length = NSStatusItem.squareLength
         item.button?.title = surface.status.menuBarTitle
@@ -542,6 +592,17 @@ private struct ClaudeCLIReadinessProbe {
             return .missingClaudeLogin
         }
         do {
+            let authStatus = try ClaudeCLIProcess.run(
+                executable: claudePath,
+                arguments: ["auth", "status"],
+                timeout: min(timeoutSeconds, 10.0),
+                environment: environment
+            )
+            let explicitAuthStatus = ClaudeAuthStatusParser.loggedInStatus(stdout: authStatus.stdout)
+                ?? ClaudeAuthStatusParser.loggedInStatus(stdout: authStatus.stderr)
+            if explicitAuthStatus == false {
+                return .missingClaudeLogin
+            }
             let result = try ClaudeCLIProcess.run(
                 executable: claudePath,
                 arguments: ["mcp", "list"],
@@ -1142,12 +1203,34 @@ private enum ClaudeCLIProcess {
             readers.leave()
         }
         try process.run()
+        let processGroup = setpgid(process.processIdentifier, process.processIdentifier) == 0
+            ? process.processIdentifier
+            : nil
         let deadline = Date().addingTimeInterval(timeout)
         while process.isRunning && Date() < deadline {
             Thread.sleep(forTimeInterval: 0.1)
         }
         if process.isRunning {
+            let descendants = TTYProcessTreeTerminator.descendantPIDs(of: process.processIdentifier)
             process.terminate()
+            TTYProcessTreeTerminator.terminateProcessTree(
+                rootPID: process.processIdentifier,
+                processGroup: processGroup,
+                signal: SIGTERM,
+                knownDescendants: descendants
+            )
+            let waitDeadline = Date().addingTimeInterval(2.0)
+            while process.isRunning, Date() < waitDeadline {
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            if process.isRunning {
+                TTYProcessTreeTerminator.terminateProcessTree(
+                    rootPID: process.processIdentifier,
+                    processGroup: processGroup,
+                    signal: SIGKILL,
+                    knownDescendants: descendants
+                )
+            }
             process.waitUntilExit()
             readers.wait()
             return ClaudeCLIProcessResult(
