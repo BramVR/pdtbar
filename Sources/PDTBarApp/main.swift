@@ -629,7 +629,12 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
         )
         let createdFiles = claudeToolResultFiles().subtracting(filesBeforeCall)
         defer {
-            deleteClaudeToolResultFiles(savedToolResultFiles(in: result.stdout).filter { createdFiles.contains($0) })
+            deleteClaudeToolResultFiles(pdtToolResultFiles(
+                in: createdFiles,
+                referencedBy: result.stdout,
+                readToolName: name,
+                sessionID: sessionID
+            ))
         }
         guard result.exitCode == 0 else {
             throw PDTMCPConnectorError.transientFailure("Claude \(name) call failed")
@@ -664,7 +669,7 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
             arguments: [
                 "--model", model,
                 "--allowedTools", "ToolSearch",
-                "--disallowedTools", disallowedTools().joined(separator: ","),
+                "--disallowedTools", toolSearchDisallowedTools().joined(separator: ","),
                 "--session-id", sessionID,
                 "-p", "Use ToolSearch to find the PDT MCP read-only tool named \(readToolName). Return only {\"status\":\"redacted-ok\"}.",
                 "--output-format", "stream-json",
@@ -676,7 +681,12 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
         )
         let createdFiles = claudeToolResultFiles().subtracting(filesBeforeCall)
         defer {
-            deleteClaudeToolResultFiles(savedToolResultFiles(in: result.stdout).filter { createdFiles.contains($0) })
+            deleteClaudeToolResultFiles(pdtToolResultFiles(
+                in: createdFiles,
+                referencedBy: result.stdout,
+                readToolName: readToolName,
+                sessionID: sessionID
+            ))
         }
         guard result.exitCode == 0,
               let toolName = discoveredToolName(for: readToolName, in: result.stdout)
@@ -755,6 +765,10 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
             "mcp__*__pdt-set-*",
             "mcp__*__pdt-update-*",
         ]
+    }
+
+    private func toolSearchDisallowedTools() -> [String] {
+        disallowedTools().filter { !$0.hasPrefix("mcp__") }
     }
 
     private func toolResultData(for toolName: String, createdFiles: Set<URL>, in output: String) throws -> Data {
@@ -947,44 +961,87 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
     }
 
     private func savedToolResultFiles(in content: String) -> [URL] {
-        let pattern = #"(/[^\s]+/tool-results/[^\s]+\.txt)"#
-        guard let expression = try? NSRegularExpression(pattern: pattern) else {
-            return []
+        let projectsRoot = claudeProjectsDirectory().path
+        var files: [URL] = []
+        var searchStart = content.startIndex
+        while let rootRange = content.range(of: projectsRoot, range: searchStart..<content.endIndex),
+              let extensionRange = content.range(of: ".txt", range: rootRange.lowerBound..<content.endIndex)
+        {
+            let path = String(content[rootRange.lowerBound..<extensionRange.upperBound])
+            files.append(URL(fileURLWithPath: path))
+            searchStart = extensionRange.upperBound
         }
-        let range = NSRange(content.startIndex..<content.endIndex, in: content)
-        return expression.matches(in: content, range: range).compactMap { match in
-            guard let matchRange = Range(match.range(at: 1), in: content) else {
-                return nil
-            }
-            return URL(fileURLWithPath: String(content[matchRange]))
-        }
+        return files
     }
 
-    private func claudeToolResultFiles() -> Set<URL> {
-        let root = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude/projects")
-        guard let enumerator = FileManager.default.enumerator(
+    private func claudeToolResultFiles(sessionID: String? = nil) -> Set<URL> {
+        let root = claudeProjectsDirectory()
+        guard let projects = try? FileManager.default.contentsOfDirectory(
             at: root,
-            includingPropertiesForKeys: nil,
+            includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else {
             return []
         }
         var files = Set<URL>()
-        for case let file as URL in enumerator {
-            guard file.path.contains("/tool-results/"),
-                  file.pathExtension == "txt"
-            else {
-                continue
+        for project in projects {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: project.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue
+            else { continue }
+            let sessionDirectories: [URL]
+            if let sessionID {
+                sessionDirectories = [project.appending(path: sessionID)]
+            } else {
+                sessionDirectories = (try? FileManager.default.contentsOfDirectory(
+                    at: project,
+                    includingPropertiesForKeys: [.isDirectoryKey],
+                    options: [.skipsHiddenFiles]
+                )) ?? []
             }
-            files.insert(file)
+            for sessionDirectory in sessionDirectories {
+                let toolResults = sessionDirectory.appending(path: "tool-results")
+                guard let toolFiles = try? FileManager.default.contentsOfDirectory(
+                    at: toolResults,
+                    includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles]
+                ) else {
+                    continue
+                }
+                files.formUnion(toolFiles.filter { $0.pathExtension == "txt" })
+            }
         }
         return files
+    }
+
+    private func claudeProjectsDirectory() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude/projects")
     }
 
     private func deleteClaudeToolResultFiles(_ files: [URL]) {
         for file in Set(files) {
             try? FileManager.default.removeItem(at: file)
         }
+    }
+
+    private func pdtToolResultFiles(
+        in createdFiles: Set<URL>,
+        referencedBy output: String,
+        readToolName: String,
+        sessionID: String
+    ) -> [URL] {
+        let deadline = Date().addingTimeInterval(1.0)
+        var sessionFiles = Set<URL>()
+        repeat {
+            sessionFiles = claudeToolResultFiles(sessionID: sessionID)
+            if sessionFiles.contains(where: { $0.lastPathComponent.contains(readToolName) }) {
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        } while Date() < deadline
+        let referenced = savedToolResultFiles(in: output).filter { createdFiles.contains($0) }
+        let matchingReadTool = createdFiles.union(sessionFiles).filter { $0.lastPathComponent.contains(readToolName) }
+        return referenced + matchingReadTool
     }
 }
 
@@ -1087,6 +1144,7 @@ private enum ClaudeCLIProcess {
                 exitCode: -1
             )
         }
+        process.waitUntilExit()
         readers.wait()
         return ClaudeCLIProcessResult(
             stdout: String(decoding: stdoutData.snapshot(), as: UTF8.self),

@@ -1434,12 +1434,14 @@ private func manualClaudePDTSmoke(arguments: [String]) throws -> SmokeReport {
         )
     }
     let result: CommandResult
+    let sessionID = UUID().uuidString
     let filesBeforeCall = claudeToolResultFiles()
     do {
         var claudeArguments = [
             claudePath,
             "--model", model,
             "--disallowedTools", manualClaudePDTDisallowedTools().joined(separator: ","),
+            "--session-id", sessionID,
             "-p", manualClaudePDTPrompt(resolvedTools: allowedTools.filter { $0.hasPrefix("mcp__") }),
             "--output-format", "stream-json",
             "--verbose",
@@ -1456,7 +1458,11 @@ private func manualClaudePDTSmoke(arguments: [String]) throws -> SmokeReport {
         let combined = [stdout, stderr].joined(separator: "\n")
         let createdFiles = claudeToolResultFiles().subtracting(filesBeforeCall)
         let referencedFiles = Set(savedClaudeToolResultFiles(in: Data(combined.utf8)))
-        deleteSavedClaudeToolResultFiles(Array(createdFiles.intersection(referencedFiles)))
+        deleteSavedClaudeToolResultFiles(pdtToolResultFiles(
+            in: createdFiles,
+            referencedFiles: referencedFiles,
+            sessionID: sessionID
+        ))
         guard PDTLiveUnavailableClassifier.shouldSkip(combined) || isClaudeModelSetupError(combined) else {
             return SmokeReport(
                 name: "manual-claude-pdt",
@@ -1483,7 +1489,11 @@ private func manualClaudePDTSmoke(arguments: [String]) throws -> SmokeReport {
     let payload = redactedClaudePDTResponse(from: result.stdout)
     let createdFiles = claudeToolResultFiles().subtracting(filesBeforeCall)
     let referencedFiles = Set(savedClaudeToolResultFiles(in: result.stdout))
-    deleteSavedClaudeToolResultFiles(Array(createdFiles.intersection(referencedFiles)))
+    deleteSavedClaudeToolResultFiles(pdtToolResultFiles(
+        in: createdFiles,
+        referencedFiles: referencedFiles,
+        sessionID: sessionID
+    ))
 
     let required = Set(PDTReadTools.requiredV1)
     let reported = Set(payload.toolNames)
@@ -3396,7 +3406,7 @@ private func manualClaudePDTAllowedTools(
             claudePath,
             "--model", model,
             "--allowedTools", "ToolSearch",
-            "--disallowedTools", manualClaudePDTDisallowedTools().joined(separator: ","),
+            "--disallowedTools", manualClaudePDTToolSearchDisallowedTools().joined(separator: ","),
             "-p", "Use ToolSearch to find these PDT MCP read-only tools: \(PDTReadTools.requiredV1.joined(separator: ", ")). Return only {\"status\":\"redacted-ok\"}.",
             "--output-format", "stream-json",
             "--verbose",
@@ -3471,6 +3481,10 @@ private func manualClaudePDTDisallowedTools() -> [String] {
     ]
 }
 
+private func manualClaudePDTToolSearchDisallowedTools() -> [String] {
+    manualClaudePDTDisallowedTools().filter { !$0.hasPrefix("mcp__") }
+}
+
 private func redactedClaudePDTResponse(from data: Data) -> RedactedClaudePDTResponse {
     let streamObjects = streamJSONObjects(from: data)
     let rawToolUseNames = streamObjects.flatMap(toolUseNames)
@@ -3494,17 +3508,17 @@ private func savedClaudeToolResultFiles(in data: Data) -> [URL] {
     guard let text = String(data: data, encoding: .utf8) else {
         return []
     }
-    let pattern = #"(/[^\s]+/tool-results/[^\s]+\.txt)"#
-    guard let expression = try? NSRegularExpression(pattern: pattern) else {
-        return []
+    let projectsRoot = claudeProjectsDirectory().path
+    var files: [URL] = []
+    var searchStart = text.startIndex
+    while let rootRange = text.range(of: projectsRoot, range: searchStart..<text.endIndex),
+          let extensionRange = text.range(of: ".txt", range: rootRange.lowerBound..<text.endIndex)
+    {
+        let path = String(text[rootRange.lowerBound..<extensionRange.upperBound])
+        files.append(URL(fileURLWithPath: path))
+        searchStart = extensionRange.upperBound
     }
-    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-    return expression.matches(in: text, range: range).compactMap { match -> URL? in
-        guard let matchRange = Range(match.range(at: 1), in: text) else {
-            return nil
-        }
-        return URL(fileURLWithPath: String(text[matchRange]))
-    }
+    return files
 }
 
 private func deleteSavedClaudeToolResultFiles(_ files: [URL]) {
@@ -3513,25 +3527,67 @@ private func deleteSavedClaudeToolResultFiles(_ files: [URL]) {
     }
 }
 
-private func claudeToolResultFiles() -> Set<URL> {
-    let root = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude/projects")
-    guard let enumerator = FileManager.default.enumerator(
+private func pdtToolResultFiles(in createdFiles: Set<URL>, referencedFiles: Set<URL>, sessionID: String) -> [URL] {
+    let deadline = Date().addingTimeInterval(1.0)
+    var sessionFiles = Set<URL>()
+    repeat {
+        sessionFiles = claudeToolResultFiles(sessionID: sessionID)
+        if sessionFiles.contains(where: { file in
+            PDTReadTools.requiredV1.contains { file.lastPathComponent.contains($0) }
+        }) {
+            break
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+    } while Date() < deadline
+    let referenced = createdFiles.intersection(referencedFiles)
+    let matchingReadTool = createdFiles.union(sessionFiles).filter { file in
+        PDTReadTools.requiredV1.contains { file.lastPathComponent.contains($0) }
+    }
+    return Array(referenced.union(matchingReadTool))
+}
+
+private func claudeToolResultFiles(sessionID: String? = nil) -> Set<URL> {
+    let root = claudeProjectsDirectory()
+    guard let projects = try? FileManager.default.contentsOfDirectory(
         at: root,
-        includingPropertiesForKeys: nil,
+        includingPropertiesForKeys: [.isDirectoryKey],
         options: [.skipsHiddenFiles]
     ) else {
         return []
     }
     var files = Set<URL>()
-    for case let file as URL in enumerator {
-        guard file.path.contains("/tool-results/"),
-              file.pathExtension == "txt"
-        else {
-            continue
+    for project in projects {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: project.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else { continue }
+        let sessionDirectories: [URL]
+        if let sessionID {
+            sessionDirectories = [project.appending(path: sessionID)]
+        } else {
+            sessionDirectories = (try? FileManager.default.contentsOfDirectory(
+                at: project,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
         }
-        files.insert(file)
+        for sessionDirectory in sessionDirectories {
+            let toolResults = sessionDirectory.appending(path: "tool-results")
+            guard let toolFiles = try? FileManager.default.contentsOfDirectory(
+                at: toolResults,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else {
+                continue
+            }
+            files.formUnion(toolFiles.filter { $0.pathExtension == "txt" })
+        }
     }
     return files
+}
+
+private func claudeProjectsDirectory() -> URL {
+    FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude/projects")
 }
 
 private func streamJSONObjects(from data: Data) -> [[String: Any]] {
