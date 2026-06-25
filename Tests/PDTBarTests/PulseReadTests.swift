@@ -16,6 +16,15 @@ struct PulseReadTests {
         #expect(reloaded.contains("pulse:v1:test:fingerprint"))
     }
 
+    @Test("Corrupt read state falls back to empty")
+    func corruptReadStateFallsBackToEmpty() throws {
+        let store = try temporaryPulseReadStore()
+        try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
+        try Data("not-json".utf8).write(to: store.directory.appending(path: "pulse-read-state.json"))
+
+        #expect(try store.load().readFingerprints.isEmpty)
+    }
+
     @Test("Same fingerprint hides attention but keeps facet drill-down facts visible")
     func sameFingerprintHidesAttentionOnly() throws {
         let snapshot = try fixtureSnapshot("concentration-pressure.json")

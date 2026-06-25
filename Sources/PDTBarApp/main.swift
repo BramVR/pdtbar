@@ -149,9 +149,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         portfolioFetchInFlight = false
         stopPortfolioFetchProgressTimer()
         if let descriptor = outcome.descriptor {
-            cachedPulseModel = outcome.model
-            cachedPulseDescriptor = descriptor
-            installMenuBarItem(onboardingCoordinator.completeFirstFetch(.succeeded(descriptor)).descriptor)
+            let refreshed = descriptorApplyingCurrentReadState(model: outcome.model, fallback: descriptor)
+            cachedPulseModel = refreshed.model
+            cachedPulseDescriptor = refreshed.descriptor
+            installMenuBarItem(onboardingCoordinator.completeFirstFetch(.succeeded(refreshed.descriptor)).descriptor)
             if outcome.shouldStartBackgroundRefresh {
                 startBackgroundPortfolioRefresh()
             }
@@ -240,9 +241,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private func finishBackgroundPortfolioRefresh(_ outcome: PortfolioFetchOutcome) {
         portfolioRefreshInFlight = false
         if let descriptor = outcome.descriptor {
-            cachedPulseModel = outcome.model
-            cachedPulseDescriptor = descriptor
-            installPortfolioPulseDescriptor(descriptor)
+            let refreshed = descriptorApplyingCurrentReadState(model: outcome.model, fallback: descriptor)
+            cachedPulseModel = refreshed.model
+            cachedPulseDescriptor = refreshed.descriptor
+            installPortfolioPulseDescriptor(refreshed.descriptor)
             return
         }
         let errorDescription = outcome.errorDescription ?? "unknown error"
@@ -383,6 +385,21 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installPortfolioPulseDescriptor(_ descriptor: MenuDescriptor) {
         installMenuBarItem(onboardingCoordinator.completeFirstFetch(.succeeded(descriptor)).descriptor)
+    }
+
+    private func descriptorApplyingCurrentReadState(
+        model: PortfolioPulseModel?,
+        fallback descriptor: MenuDescriptor
+    ) -> (model: PortfolioPulseModel?, descriptor: MenuDescriptor) {
+        guard let model else {
+            return (nil, descriptor)
+        }
+        let readStore = PulseReadStore(directory: currentSnapshotDirectory())
+        guard let readState = try? readStore.load() else {
+            return (model, descriptor)
+        }
+        let filteredModel = PulseReadFilter.apply(to: model, readState: readState)
+        return (filteredModel, MenuDescriptorRenderer.render(model: filteredModel))
     }
 
     private func makeMenu(from surface: MenuBarSurface) -> NSMenu {
