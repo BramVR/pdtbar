@@ -2349,7 +2349,8 @@ private func captureRealUserMenuScreenshot(
     let rawScreenshot = artifacts.appending(path: "pdtbar-real-user-pulse-screen.png")
     let screenshot = artifacts.appending(path: "pdtbar-real-user-pulse-menu.png")
     try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-    let displayBounds = CGDisplayBounds(CGMainDisplayID())
+    let menuBounds = menuFrameBounds(snapshot: snapshot, expectedMenuIdentifiers: expectedMenuIdentifiers)
+    let displayBounds = displayBounds(containing: menuBounds)
     let displayRegion = "\(Int(displayBounds.minX)),\(Int(displayBounds.minY)),\(Int(displayBounds.width)),\(Int(displayBounds.height))"
     _ = try run(
         peekaboo,
@@ -2367,7 +2368,8 @@ private func captureRealUserMenuScreenshot(
         rawScreenshot,
         to: screenshot,
         snapshot: snapshot,
-        expectedMenuIdentifiers: expectedMenuIdentifiers
+        expectedMenuIdentifiers: expectedMenuIdentifiers,
+        displayBounds: displayBounds
     )
     try? FileManager.default.removeItem(at: rawScreenshot)
     return screenshot
@@ -2388,15 +2390,12 @@ private func cropMenuScreenshot(
     _ source: URL,
     to destination: URL,
     snapshot: AccessibilitySnapshot,
-    expectedMenuIdentifiers: Set<String>
+    expectedMenuIdentifiers: Set<String>,
+    displayBounds: CGRect
 ) throws {
     let dimensions = try imageDimensions(of: source)
-    let displayBounds = CGDisplayBounds(CGMainDisplayID())
     let scaleX = Double(dimensions.width) / max(Double(displayBounds.width), 1)
     let scaleY = Double(dimensions.height) / max(Double(displayBounds.height), 1)
-    let frameRects = expectedMenuIdentifiers
-        .compactMap { snapshot.framesByIdentifier[$0]?.rect }
-        .filter { !$0.isNull && !$0.isEmpty && $0.width > 0 && $0.height > 0 }
     let fallback = CGRect(
         x: max(0, Double(dimensions.width - min(dimensions.width, 1700) - 20)),
         y: 20,
@@ -2404,8 +2403,7 @@ private func cropMenuScreenshot(
         height: Double(min(dimensions.height, 760))
     )
     let sourceRect: CGRect
-    let bounds = frameRects.reduce(nil as CGRect?) { partial, rect in partial?.union(rect) ?? rect }
-    if let bounds {
+    if let bounds = menuFrameBounds(snapshot: snapshot, expectedMenuIdentifiers: expectedMenuIdentifiers) {
         let minX = bounds.minX
         let minY = bounds.minY - 8
         let maxX = bounds.maxX + 40
@@ -2419,9 +2417,12 @@ private func cropMenuScreenshot(
     } else {
         sourceRect = fallback
     }
-    let clamped = sourceRect.intersection(
-        CGRect(x: 0, y: 0, width: dimensions.width, height: dimensions.height)
-    )
+    let imageRect = CGRect(x: 0, y: 0, width: dimensions.width, height: dimensions.height)
+    let candidate = sourceRect.intersection(imageRect)
+    let clamped = candidate.isNull || candidate.isEmpty ? fallback.intersection(imageRect) : candidate
+    guard !clamped.isNull, !clamped.isEmpty else {
+        throw CommandError.commandFailed("sips", "", "empty screenshot crop")
+    }
     let width = max(1, Int(clamped.width.rounded(.up)))
     let height = max(1, Int(clamped.height.rounded(.up)))
     let offsetX = max(0, Int(clamped.minX.rounded(.down)))
@@ -2437,6 +2438,36 @@ private func cropMenuScreenshot(
         ],
         timeout: 20
     )
+}
+
+private func menuFrameBounds(
+    snapshot: AccessibilitySnapshot,
+    expectedMenuIdentifiers: Set<String>
+) -> CGRect? {
+    expectedMenuIdentifiers
+        .compactMap { snapshot.framesByIdentifier[$0]?.rect }
+        .filter { !$0.isNull && !$0.isEmpty && $0.width > 0 && $0.height > 0 }
+        .reduce(nil as CGRect?) { partial, rect in partial?.union(rect) ?? rect }
+}
+
+private func displayBounds(containing rect: CGRect?) -> CGRect {
+    guard let rect, !rect.isNull, !rect.isEmpty else {
+        return CGDisplayBounds(CGMainDisplayID())
+    }
+    var displayCount: UInt32 = 0
+    guard CGGetActiveDisplayList(0, nil, &displayCount) == .success, displayCount > 0 else {
+        return CGDisplayBounds(CGMainDisplayID())
+    }
+    var displays = Array(repeating: CGDirectDisplayID(), count: Int(displayCount))
+    guard CGGetActiveDisplayList(displayCount, &displays, &displayCount) == .success else {
+        return CGDisplayBounds(CGMainDisplayID())
+    }
+    return displays
+        .prefix(Int(displayCount))
+        .map { CGDisplayBounds($0) }
+        .max { left, right in
+            left.intersection(rect).area < right.intersection(rect).area
+        } ?? CGDisplayBounds(CGMainDisplayID())
 }
 
 private func imageDimensions(of image: URL) throws -> (width: Int, height: Int) {
@@ -3804,6 +3835,15 @@ private extension String {
             }
             return Int(parts[1])
         }.first
+    }
+}
+
+private extension CGRect {
+    var area: CGFloat {
+        guard !isNull, !isEmpty else {
+            return 0
+        }
+        return width * height
     }
 }
 
