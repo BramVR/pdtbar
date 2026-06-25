@@ -278,15 +278,16 @@ try check(!descriptor.statusVisual.isDimmed, "quiet descriptor should not dim a 
 try check(descriptor.statusVisual.statusCopy == descriptor.statusTitle, "quiet descriptor visual should expose full status copy")
 try check(descriptor.statusVisual.barHeights.count == 3, "quiet descriptor should expose three concentration bars")
 try check(
-    StatusVisualState().barHeights == [0.38, 0.55, 0.38],
-    "unknown weights should default to a calm gaussian concentration shape"
+    StatusVisualState().barHeights == [0.5, 1.0, 0.667],
+    "unknown weights should default to the deterministic concentration-stack silhouette"
 )
 try check(
-    descriptor.statusVisual.barHeights[0] == descriptor.statusVisual.barHeights[2]
-        && descriptor.statusVisual.barHeights[0] == 0.38
-        && descriptor.statusVisual.barHeights[1] > descriptor.statusVisual.barHeights[0]
-        && descriptor.statusVisual.barHeights[1] < 0.8,
-    "diversified quiet descriptor should keep a modest middle bar between stable side bars"
+    descriptor.statusVisual.barHeights[1] == 1.0,
+    "diversified quiet descriptor should render the middle concentration bar at max height"
+)
+try check(
+    descriptor.statusVisual.barHeights == StatusVisualState().barHeights,
+    "missing X-ray data should use the deterministic fallback silhouette"
 )
 var twoETFDirectModel = decoded
 twoETFDirectModel.facetSnapshots.allocation.openHoldingCount = 2
@@ -300,8 +301,39 @@ twoETFLikeModel.facetSnapshots.allocation.xRayHoldings = decoded.facetSnapshots.
 }
 let twoETFXRayHeights = MenuDescriptorRenderer.render(model: twoETFLikeModel).statusVisual.barHeights
 try check(
-    twoETFXRayHeights[0] == twoETFDirectHeights[0] && twoETFXRayHeights[1] < twoETFDirectHeights[1],
-    "X-ray look-through weights should drive concentration bars when a diversified portfolio is held through two ETFs"
+    twoETFDirectHeights == StatusVisualState().barHeights
+        && twoETFXRayHeights[0] != twoETFDirectHeights[0]
+        && twoETFXRayHeights[2] > twoETFXRayHeights[0]
+        && twoETFXRayHeights[1] == 1.0
+        && twoETFDirectHeights[1] == 1.0,
+    "X-ray look-through weights should scale the side silhouette while the middle bar remains max height"
+)
+var concentratedXRayModel = twoETFDirectModel
+concentratedXRayModel.facetSnapshots.allocation.xRayHoldings = [
+    XRayHoldingSummary(weight: 0.5),
+    XRayHoldingSummary(weight: 0.5),
+]
+let concentratedXRayHeights = MenuDescriptorRenderer.render(model: concentratedXRayModel).statusVisual.barHeights
+try check(
+    concentratedXRayHeights[0] < twoETFXRayHeights[0]
+        && concentratedXRayHeights[2] < twoETFXRayHeights[2]
+        && concentratedXRayHeights[1] == 1.0,
+    "high X-ray concentration should scale side bars downward from the default silhouette"
+)
+var skewedXRayModel = twoETFDirectModel
+skewedXRayModel.facetSnapshots.allocation.xRayHoldings = [
+    XRayHoldingSummary(weight: 0.62),
+    XRayHoldingSummary(weight: 0.18),
+    XRayHoldingSummary(weight: 0.10),
+    XRayHoldingSummary(weight: 0.06),
+    XRayHoldingSummary(weight: 0.04),
+]
+let skewedXRayHeights = MenuDescriptorRenderer.render(model: skewedXRayModel).statusVisual.barHeights
+try check(
+    skewedXRayHeights[0] < twoETFXRayHeights[0]
+        && skewedXRayHeights[2] > skewedXRayHeights[0]
+        && skewedXRayHeights[1] == 1.0,
+    "skewed X-ray concentration should lower the side silhouette while keeping the right side taller than the left"
 )
 try check(descriptorObject.keys.contains("statusBadge"), "descriptor JSON should explicitly encode statusBadge")
 try check(descriptorObject.keys.contains("statusVisual"), "descriptor JSON should encode the plain status visual state")
@@ -338,11 +370,11 @@ let shortVisual = try JSONDecoder().decode(
     """.utf8)
 )
 try check(
-    shortVisual.barHeights == [0.9, 0.45, 0.45]
+    shortVisual.barHeights == [0.9, 1.0, 0.667]
         && shortVisual.filledBarCount == 3
         && shortVisual.isDimmed
         && shortVisual.statusCopy == "Decoded status",
-    "decoded status visual state should preserve its normalized plain state"
+    "decoded status visual state should normalize to a max-height middle bar and capped fill count"
 )
 try check(
     launchSurface.status.accessibilityIdentifier == "pdtbar.status",
@@ -819,6 +851,14 @@ try check(
 try check(
     scriptedLiveRun.model.facetSnapshots.allocation.xRayHoldings?.map(\.weight) == [0.25, 0.005],
     "live data source should normalize X-ray percentage weights including sub-1% holdings"
+)
+let partialXRayHeights = MenuDescriptorRenderer.render(model: scriptedLiveRun.model).statusVisual.barHeights
+try check(
+    partialXRayHeights[0] < 0.8
+        && partialXRayHeights[1] == 1.0
+        && partialXRayHeights[0] > StatusVisualState().barHeights[0]
+        && partialXRayHeights[2] > StatusVisualState().barHeights[2],
+    "partial X-ray coverage should use absolute portfolio weights instead of renormalizing to a full distribution"
 )
 try check(
     scriptedLiveRun.model.rankedAttentionItems.map(\.id).contains("allocation.concentration.9101"),
@@ -1473,13 +1513,12 @@ try check(
     "concentration pressure should not repeat when the prior snapshot was already over the line"
 )
 try check(
-    concentrationRun.descriptor.statusVisual.barHeights[0] == concentrationRun.descriptor.statusVisual.barHeights[2]
-        && concentrationRun.descriptor.statusVisual.barHeights[0] == descriptor.statusVisual.barHeights[0],
-    "concentration descriptor should keep stable side bars"
+    concentrationRun.descriptor.statusVisual.barHeights == StatusVisualState().barHeights,
+    "concentration fixture without X-ray data should keep the fallback silhouette"
 )
 try check(
-    concentrationRun.descriptor.statusVisual.barHeights[1] > descriptor.statusVisual.barHeights[1],
-    "concentrated portfolio should raise the middle bar above the diversified quiet portfolio"
+    concentrationRun.descriptor.statusVisual.barHeights[1] == 1.0,
+    "concentration fixture should keep the middle bar at max visual height"
 )
 try check(
     concentrationSurface.status.badge == "1",

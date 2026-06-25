@@ -4156,10 +4156,10 @@ private func menuProofCardSVG(card: MenuProofCard, x: Int, y: Int, width: Int, h
 }
 
 private func statusIconSVG(visual: StatusVisualState, x: Int, y: Int, scale: Double) -> String {
-    let barWidth = 4.4 * scale
-    let gap = 2.4 * scale
-    let maxHeight = 13.0 * scale
-    let baseline = Double(y) + (16.0 * scale)
+    let barWidth = 5.0 * scale
+    let gap = 2.0 * scale
+    let maxHeight = 16.2 * scale
+    let baseline = Double(y) + (17.4 * scale)
     let fillOpacity = visual.isDimmed ? 0.36 : 0.72
     let outlineOpacity = visual.isDimmed ? 0.42 : 0.86
     let bars = visual.barHeights.prefix(3).enumerated().map { index, rawHeight in
@@ -4167,11 +4167,11 @@ private func statusIconSVG(visual: StatusVisualState, x: Int, y: Int, scale: Dou
         let barX = Double(x) + Double(index) * (barWidth + gap)
         let barY = baseline - height
         let fill = index < visual.filledBarCount
-            ? "<rect x=\"\(svgNumber(barX))\" y=\"\(svgNumber(barY))\" width=\"\(svgNumber(barWidth))\" height=\"\(svgNumber(height))\" rx=\"\(svgNumber(2.2 * scale))\" fill=\"#ffffff\" opacity=\"\(svgNumber(fillOpacity))\"/>"
+            ? "<rect x=\"\(svgNumber(barX))\" y=\"\(svgNumber(barY))\" width=\"\(svgNumber(barWidth))\" height=\"\(svgNumber(height))\" rx=\"\(svgNumber(2.5 * scale))\" fill=\"#ffffff\" opacity=\"\(svgNumber(fillOpacity))\"/>"
             : ""
         return [
             fill,
-            "<rect x=\"\(svgNumber(barX))\" y=\"\(svgNumber(barY))\" width=\"\(svgNumber(barWidth))\" height=\"\(svgNumber(height))\" rx=\"\(svgNumber(2.2 * scale))\" fill=\"none\" stroke=\"#ffffff\" stroke-width=\"\(svgNumber(1.15 * scale))\" opacity=\"\(svgNumber(outlineOpacity))\"/>",
+            "<rect x=\"\(svgNumber(barX))\" y=\"\(svgNumber(barY))\" width=\"\(svgNumber(barWidth))\" height=\"\(svgNumber(height))\" rx=\"\(svgNumber(2.5 * scale))\" fill=\"none\" stroke=\"#ffffff\" stroke-width=\"\(svgNumber(1.2 * scale))\" opacity=\"\(svgNumber(outlineOpacity))\"/>",
         ]
         .filter { !$0.isEmpty }
         .joined(separator: "\n")
