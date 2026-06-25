@@ -101,20 +101,99 @@ struct IncomeCalendarTests {
 
         let rows = IncomeCalendarDescriptor.rows(for: intent)
 
-        #expect(rows.map(\.id) == ["income.summary", "income.next"])
-        #expect(rows.map(\.accessibilityIdentifier) == ["pdtbar.row.income.summary", "pdtbar.row.income.next"])
+        #expect(rows.map(\.id) == [
+            "income.summary",
+            "income.next",
+            "income.quote.9003.payment-dividend.2026-07-10",
+        ])
+        #expect(rows.map(\.accessibilityIdentifier) == [
+            "pdtbar.row.income.summary",
+            "pdtbar.row.income.next",
+            "pdtbar.row.income.quote.9003.payment-dividend.2026-07-10",
+        ])
         #expect(rows.first?.role == .incomeSummary)
         #expect(rows.first?.title == "Income window")
         #expect(rows.first?.detail == "2 confirmed events through 2026-07-10")
-        #expect(rows.last?.role == .incomeNext)
-        #expect(rows.last?.title == "Next income: Helix Pharma A/S")
-        #expect(rows.last?.detail == "ex-dividend on 2026-06-24; EUR 78.00")
-        #expect(rows.last?.children.map(\.id) == [
+        let nextRow = rows.first { $0.id == "income.next" }
+        #expect(nextRow?.role == .incomeNext)
+        #expect(nextRow?.title == "Next income: Helix Pharma A/S")
+        #expect(nextRow?.detail == "ex-dividend on 2026-06-24; EUR 78.00")
+        #expect(nextRow?.children.map(\.id) == [
             "income.quote.9003.ex-dividend.2026-06-24.date",
             "income.quote.9003.ex-dividend.2026-06-24.kind",
             "income.quote.9003.ex-dividend.2026-06-24.state",
             "income.quote.9003.ex-dividend.2026-06-24.amount",
         ])
+        let previewRow = rows.first { $0.id == "income.quote.9003.payment-dividend.2026-07-10" }
+        #expect(previewRow?.role == .incomeEvent)
+        #expect(previewRow?.title == "Helix Pharma A/S")
+        #expect(previewRow?.detail == "payment-dividend on 2026-07-10")
+    }
+
+    @Test("Descriptor caps long previews and reaches overflow through as-of buckets")
+    func descriptorCapsLongPreviewsAndReachesOverflowThroughBuckets() {
+        let intent = IncomeCalendar.build(
+            events: [
+                incomeEvent(date: "2026-06-22", kind: "payment-dividend", name: "Anchor Pay A", quoteId: 9200),
+                incomeEvent(date: "2026-06-22", kind: "payment-dividend", name: "Anchor Pay B", quoteId: 9201),
+                incomeEvent(date: "2026-06-22", kind: "payment-dividend", name: "Anchor Pay C", quoteId: 9202),
+                incomeEvent(date: "2026-06-22", kind: "payment-dividend", name: "Overflow Next", quoteId: 9203),
+                incomeEvent(date: "2026-06-23", kind: "ex-dividend", name: "Near Ex", quoteId: 9206),
+                incomeEvent(date: "2026-06-26", kind: "ex-dividend", name: "Overflow Week", quoteId: 9204),
+                incomeEvent(date: "2026-07-01", kind: "payment-dividend", name: "Overflow Later", quoteId: 9205),
+            ],
+            asOf: "2026-06-22"
+        )
+
+        let rows = IncomeCalendarDescriptor.rows(for: intent)
+        let previewRows = rows.filter { $0.role == .incomeNext || $0.role == .incomeEvent }
+        let overflowRows = rows.filter { $0.role == .incomeDrillDown }
+
+        #expect(previewRows.map(\.title) == [
+            "Next income: Anchor Pay A",
+            "Anchor Pay B",
+            "Anchor Pay C",
+        ])
+        #expect(overflowRows.map(\.id) == [
+            "income.overflow.next",
+            "income.overflow.this-week",
+            "income.overflow.later",
+        ])
+        #expect(overflowRows.first { $0.id == "income.overflow.next" }?.children.map(\.title) == [
+            "Overflow Next",
+        ])
+        #expect(overflowRows.first { $0.id == "income.overflow.this-week" }?.children.map(\.title) == [
+            "Near Ex",
+            "Overflow Week",
+        ])
+        #expect(overflowRows.first { $0.id == "income.overflow.later" }?.children.map(\.title) == [
+            "Overflow Later",
+        ])
+        #expect(allRowIDs(in: rows).count == Set(allRowIDs(in: rows)).count)
+        #expect(allRowIDs(in: rows).allSatisfy { !$0.isEmpty })
+        #expect(allRowIDs(in: rows).allSatisfy { id in
+            rowsByID(in: rows)[id]?.accessibilityIdentifier == "pdtbar.row.\(id)"
+        })
+    }
+
+    @Test("Descriptor assigns future next-date overflow to one bucket")
+    func descriptorAssignsFutureNextDateOverflowToOneBucket() {
+        let intent = IncomeCalendar.build(
+            events: [
+                incomeEvent(date: "2026-07-01", kind: "payment-dividend", name: "Future Pay A", quoteId: 9210),
+                incomeEvent(date: "2026-07-01", kind: "payment-dividend", name: "Future Pay B", quoteId: 9211),
+                incomeEvent(date: "2026-07-01", kind: "payment-dividend", name: "Future Pay C", quoteId: 9212),
+                incomeEvent(date: "2026-07-01", kind: "payment-dividend", name: "Future Pay D", quoteId: 9213),
+            ],
+            asOf: "2026-06-22"
+        )
+
+        let overflowRows = IncomeCalendarDescriptor.rows(for: intent)
+            .filter { $0.role == .incomeDrillDown }
+
+        #expect(overflowRows.map(\.id) == ["income.overflow.next"])
+        #expect(overflowRows.first?.children.map(\.title) == ["Future Pay D"])
+        #expect(allRowIDs(in: overflowRows).count == Set(allRowIDs(in: overflowRows)).count)
     }
 
     @Test("Descriptor preserves explicit empty state")
@@ -145,4 +224,17 @@ private func incomeEvent(
         quoteId: quoteId,
         amount: amount
     )
+}
+
+private func allRowIDs(in rows: [MenuRow]) -> [String] {
+    rows.flatMap { row in
+        [row.id] + allRowIDs(in: row.children)
+    }
+}
+
+private func rowsByID(in rows: [MenuRow]) -> [String: MenuRow] {
+    rows.reduce(into: [:]) { result, row in
+        result[row.id] = row
+        result.merge(rowsByID(in: row.children)) { _, child in child }
+    }
 }

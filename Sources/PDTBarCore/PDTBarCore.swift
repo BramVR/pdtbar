@@ -405,6 +405,8 @@ public enum IncomeCalendar {
 }
 
 public enum IncomeCalendarDescriptor {
+    public static let previewLimit = 3
+
     public static func rows(for intent: IncomeCalendarIntent) -> [MenuRow] {
         guard let nextEvent = intent.nextEvent else {
             return [
@@ -417,6 +419,22 @@ public enum IncomeCalendarDescriptor {
             ]
         }
 
+        let previewEvents = Array(intent.events.prefix(previewLimit))
+        let overflowEvents = Array(intent.events.dropFirst(previewLimit))
+        let previewRows = previewEvents.enumerated().map { index, event in
+            if index == 0 {
+                return MenuRow(
+                    id: "income.next",
+                    role: .incomeNext,
+                    title: "Next income: \(event.symbolName)",
+                    detail: incomeEventDetail(for: event),
+                    children: incomeEventChildren(for: event)
+                )
+            }
+            return incomeEventRow(for: event, id: incomeEventRowID(for: event))
+        }
+        let overflowRows = overflowGroups(for: overflowEvents, nextDate: nextEvent.date, asOf: intent.asOf)
+
         return [
             MenuRow(
                 id: "income.summary",
@@ -424,14 +442,7 @@ public enum IncomeCalendarDescriptor {
                 title: "Income window",
                 detail: summaryDetail(for: intent.summary)
             ),
-            MenuRow(
-                id: "income.next",
-                role: .incomeNext,
-                title: "Next income: \(nextEvent.symbolName)",
-                detail: incomeEventDetail(for: nextEvent),
-                children: incomeEventChildren(for: nextEvent)
-            ),
-        ]
+        ] + previewRows + overflowRows
     }
 
     private static func summaryDetail(for summary: IncomeCalendarSummary) -> String {
@@ -449,18 +460,83 @@ public enum IncomeCalendarDescriptor {
         }
         return "\(summary.eventCount) \(eventWord)\(window); \(summary.confirmedCount) confirmed, \(summary.estimatedCount) estimated"
     }
+
+    private static func overflowGroups(for events: [IncomeEventSummary], nextDate: String, asOf: String) -> [MenuRow] {
+        let buckets = IncomeOverflowBucket.allCases.map { bucket in
+            let bucketEvents = events.filter { bucket.contains($0, nextDate: nextDate, asOf: asOf) }
+            return (bucket, bucketEvents)
+        }
+
+        return buckets.compactMap { bucket, bucketEvents in
+            guard !bucketEvents.isEmpty else { return nil }
+            let groupID = "income.overflow.\(bucket.id)"
+            return MenuRow(
+                id: groupID,
+                role: .incomeDrillDown,
+                title: bucket.title,
+                detail: bucketEvents.count == 1 ? "1 event" : "\(bucketEvents.count) events",
+                children: bucketEvents.map { event in
+                    incomeEventRow(for: event, id: "\(groupID).\(incomeEventRowID(for: event))")
+                }
+            )
+        }
+    }
 }
 
-private func incomeEventChildren(for event: IncomeEventSummary) -> [MenuRow] {
-    [
-        MenuRow(id: "\(incomeEventRowID(for: event)).date", title: "Date", detail: event.date),
-        MenuRow(id: "\(incomeEventRowID(for: event)).kind", title: "Kind", detail: event.kind),
-        MenuRow(id: "\(incomeEventRowID(for: event)).state", title: "State", detail: event.estimated ? "Estimated" : "Confirmed"),
+private enum IncomeOverflowBucket: CaseIterable {
+    case next
+    case thisWeek
+    case later
+
+    var id: String {
+        switch self {
+        case .next: "next"
+        case .thisWeek: "this-week"
+        case .later: "later"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .next: "Next"
+        case .thisWeek: "This week"
+        case .later: "Later"
+        }
+    }
+
+    func contains(_ event: IncomeEventSummary, nextDate: String, asOf: String) -> Bool {
+        switch self {
+        case .next:
+            return event.date == nextDate
+        case .thisWeek:
+            return event.date != nextDate && event.date <= dayString(asOf, addingDays: 7)
+        case .later:
+            return event.date != nextDate && event.date > dayString(asOf, addingDays: 7)
+        }
+    }
+}
+
+private func incomeEventRow(for event: IncomeEventSummary, id: String) -> MenuRow {
+    MenuRow(
+        id: id,
+        role: .incomeEvent,
+        title: event.symbolName,
+        detail: incomeEventDetail(for: event),
+        children: incomeEventChildren(for: event, rowID: id)
+    )
+}
+
+private func incomeEventChildren(for event: IncomeEventSummary, rowID: String? = nil) -> [MenuRow] {
+    let baseID = rowID ?? incomeEventRowID(for: event)
+    return [
+        MenuRow(id: "\(baseID).date", title: "Date", detail: event.date),
+        MenuRow(id: "\(baseID).kind", title: "Kind", detail: event.kind),
+        MenuRow(id: "\(baseID).state", title: "State", detail: event.estimated ? "Estimated" : "Confirmed"),
         event.amount.map {
-            MenuRow(id: "\(incomeEventRowID(for: event)).amount", title: "Amount", detail: display($0))
+            MenuRow(id: "\(baseID).amount", title: "Amount", detail: display($0))
         },
         event.changePercent.map {
-            MenuRow(id: "\(incomeEventRowID(for: event)).change", title: "Change", detail: signedPercent($0))
+            MenuRow(id: "\(baseID).change", title: "Change", detail: signedPercent($0))
         },
     ].compactMap { $0 }
 }
