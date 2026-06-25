@@ -53,6 +53,32 @@ struct PulseReadTests {
         #expect(filtered.rankedAttentionItems.first?.readFingerprint != originalItem.readFingerprint)
     }
 
+    @Test("Same material concentration remains read after prior-aware refresh and cached relaunch")
+    func sameMaterialConcentrationRemainsReadAfterRefreshAndRelaunch() throws {
+        let snapshot = try fixtureSnapshot("concentration-pressure.json")
+        let originalItem = try #require(PressureEngine.buildModel(from: snapshot).rankedAttentionItems.first)
+        let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-read-refresh-test")
+        let readStore = PulseReadStore(directory: snapshotStore.directory)
+
+        try readStore.markRead(originalItem.readFingerprint)
+        _ = try snapshotStore.commitCurrentSnapshot(snapshot)
+        let refresh = try PressureRunner.run(
+            dataSource: StaticPortfolioDataSource(snapshot: snapshot),
+            snapshotStore: snapshotStore,
+            pulseReadStore: readStore
+        )
+        let maybeCachedDescriptor = try PressureRunner.cachedPulseDescriptor(
+            snapshotStore: snapshotStore,
+            pulseReadStore: readStore
+        )
+        let cachedDescriptor = try #require(maybeCachedDescriptor)
+
+        #expect(refresh.model.rankedAttentionItems.isEmpty)
+        #expect(try readStore.load().contains(originalItem.readFingerprint))
+        #expect(cachedDescriptor.statusBadge == nil)
+        #expect(cachedDescriptor.statusTitle.contains("All caught up"))
+    }
+
     @Test("Fingerprints include facet material facts")
     func fingerprintsIncludeFacetMaterialFacts() throws {
         let concentration = try #require(
@@ -131,4 +157,16 @@ private func temporaryPulseReadStore() throws -> PulseReadStore {
     let directory = FileManager.default.temporaryDirectory
         .appending(path: "pdtbar-pulse-read-tests-\(UUID().uuidString)")
     return PulseReadStore(directory: directory)
+}
+
+private struct StaticPortfolioDataSource: PortfolioDataSource {
+    var fixedSnapshot: PortfolioSnapshot
+
+    init(snapshot: PortfolioSnapshot) {
+        fixedSnapshot = snapshot
+    }
+
+    func snapshot(asOf: String?) throws -> PortfolioSnapshot {
+        fixedSnapshot
+    }
 }
