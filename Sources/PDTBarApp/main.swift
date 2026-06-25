@@ -20,6 +20,7 @@ private struct FirstFetchConnectorConfiguration: @unchecked Sendable {
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let options: PDTBarLaunchOptions
     private let loginHandoff: ClaudeLoginHandoff
+    private let onboardingCoordinator = PDTOnboardingCoordinator()
     private var statusItem: NSStatusItem?
     private var cachedPulseDescriptor: MenuDescriptor?
     private var portfolioFetchInFlight = false
@@ -48,9 +49,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private func launch() throws {
         switch options.mode {
         case .claudeFirst:
-            cachedPulseDescriptor = loadCachedPulseDescriptor()
-            installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .probingClaude, cachedPulse: cachedPulseDescriptor))
-            startClaudeReadinessProbe()
+            let cachedPulse = loadCachedPulseDescriptor()
+            cachedPulseDescriptor = cachedPulse
+            handleOnboardingUpdate(onboardingCoordinator.launch(cachedPulse: cachedPulse))
         case let .fixture(fixture):
             let dataSource = PDTFixtureDataSource(fixture: fixture)
             let descriptor = try PressureRunner.run(
@@ -65,7 +66,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         guard claudeReadinessProbeGate.begin() else {
             return
         }
-        installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .probingClaude, cachedPulse: cachedPulseDescriptor))
+        installMenuBarItem(onboardingCoordinator.beginReadinessProbe().descriptor)
         let probe = ScriptedClaudeReadinessProbe(
             appSupportDirectory: appSupportDirectory(),
             environment: ProcessInfo.processInfo.environment
@@ -77,11 +78,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
                 self.claudeReadinessProbeGate.finish()
-                let state = ClaudeLaunchFlow.state(afterReadinessProbe: result)
-                self.installMenuBarItem(ClaudeLaunchFlow.descriptor(for: state, cachedPulse: self.cachedPulseDescriptor))
-                if state == .fetchingPortfolio {
-                    self.startFirstPortfolioFetch()
-                }
+                self.handleOnboardingUpdate(self.onboardingCoordinator.completeReadinessProbe(result))
             }
         }
     }
@@ -91,6 +88,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         portfolioFetchInFlight = true
+        installMenuBarItem(onboardingCoordinator.beginFirstFetch().descriptor)
         do {
             let configuration = try firstFetchConnectorConfiguration()
             if configuration.shouldStartBackgroundRefresh && cachedPulseDescriptor != nil {
@@ -135,7 +133,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         stopPortfolioFetchProgressTimer()
         if let descriptor = outcome.descriptor {
             cachedPulseDescriptor = descriptor
-            installPortfolioPulseDescriptor(descriptor)
+            installMenuBarItem(onboardingCoordinator.completeFirstFetch(.succeeded(descriptor)).descriptor)
             if outcome.shouldStartBackgroundRefresh {
                 startBackgroundPortfolioRefresh()
             }
@@ -143,7 +141,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let errorDescription = outcome.errorDescription ?? "unknown error"
         FileHandle.standardError.write(Data("pdtbar: first fetch failed: \(errorDescription)\n".utf8))
-        installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed, cachedPulse: cachedPulseDescriptor))
+        installMenuBarItem(onboardingCoordinator.completeFirstFetch(.failed(errorDescription)).descriptor)
     }
 
     private func startPortfolioFetchProgressTimer() {
@@ -178,11 +176,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             Int(Date().timeIntervalSince($0))
         } ?? 0
         installMenuBarItem(
-            ClaudeLaunchFlow.descriptor(
-                for: .fetchingPortfolio,
-                cachedPulse: cachedPulseDescriptor,
-                fetchingElapsedSeconds: elapsedSeconds
-            ),
+            onboardingCoordinator.beginFirstFetch(fetchingElapsedSeconds: elapsedSeconds).descriptor,
             cancelOpenMenu: cancelOpenMenu
         )
     }
@@ -243,7 +237,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func loginWithClaude(_ sender: NSMenuItem) {
         let attempt = claudeLoginAttemptGate.begin()
-        installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .openingClaude))
+        installMenuBarItem(onboardingCoordinator.beginLoginHandoff().descriptor)
         loginHandoff.startLogin { [weak self] result in
             DispatchQueue.main.async {
                 guard let self, self.claudeLoginAttemptGate.finish(attempt) else {
@@ -251,25 +245,32 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 switch result {
                 case .success:
-                    switch ClaudeLaunchFlow.action(afterLoginHandoff: .succeeded) {
-                    case .recheckReadiness:
-                        self.startClaudeReadinessProbe()
-                    case .showMissingClaude:
-                        self.installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .missingClaude))
-                    }
+                    self.handleOnboardingUpdate(self.onboardingCoordinator.completeLoginHandoff(.succeeded))
                 case .failure(let error):
                     FileHandle.standardError.write(Data("pdtbar: Claude handoff failed: \(error)\n".utf8))
                     if let handoffError = error as? ClaudeLoginHandoffError {
-                        self.installMenuBarItem(
-                            ClaudeLaunchFlow.descriptor(forLoginFailure: handoffError.reason)
+                        self.handleOnboardingUpdate(
+                            self.onboardingCoordinator.completeLoginHandoff(.failed(handoffError.reason))
                         )
                     } else {
-                        self.installMenuBarItem(
-                            ClaudeLaunchFlow.descriptor(forLoginFailure: .failed)
-                        )
+                        self.handleOnboardingUpdate(self.onboardingCoordinator.completeLoginHandoff(.failed(.failed)))
                     }
                 }
             }
+        }
+    }
+
+    private func handleOnboardingUpdate(_ update: PDTOnboardingUpdate) {
+        installMenuBarItem(update.descriptor)
+        switch update.effect {
+        case .none:
+            return
+        case .probeReadiness:
+            startClaudeReadinessProbe()
+        case .startLoginHandoff:
+            return
+        case .startFirstFetch:
+            startFirstPortfolioFetch()
         }
     }
 
@@ -352,7 +353,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func installPortfolioPulseDescriptor(_ descriptor: MenuDescriptor) {
-        installMenuBarItem(ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: descriptor))
+        installMenuBarItem(onboardingCoordinator.completeFirstFetch(.succeeded(descriptor)).descriptor)
     }
 
     private func makeMenu(from surface: MenuBarSurface) -> NSMenu {
