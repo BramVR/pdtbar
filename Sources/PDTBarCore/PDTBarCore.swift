@@ -279,7 +279,6 @@ public extension AttentionItem {
             "pulse:v1:allocation",
             identity,
             "threshold-bp:\(basisPoints(threshold))",
-            "severity:\(fingerprintToken(severity))",
         ].joined(separator: ":") + ":"
     }
 }

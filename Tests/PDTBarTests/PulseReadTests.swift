@@ -66,6 +66,27 @@ struct PulseReadTests {
         #expect(filtered.rankedAttentionItems.first?.readFingerprint != originalItem.readFingerprint)
     }
 
+    @Test("Changed concentration severity resurfaces")
+    func changedConcentrationSeverityResurfaces() throws {
+        var snapshot = try fixtureSnapshot("concentration-pressure.json")
+        snapshot.openHoldings[0].weight = 0.270
+        let originalItem = try #require(PressureEngine.buildModel(from: snapshot).rankedAttentionItems.first)
+        var changedSnapshot = snapshot
+        changedSnapshot.openHoldings[0].weight = 0.290
+        let readState = PulseReadState(readFingerprints: [originalItem.readFingerprint])
+
+        let changedModel = PressureEngine.buildModel(
+            from: changedSnapshot,
+            priorSnapshot: snapshot,
+            readState: readState
+        )
+        let filtered = PulseReadFilter.apply(to: changedModel, readState: readState)
+
+        #expect(originalItem.severity == "medium")
+        #expect(filtered.rankedAttentionItems.first?.severity == "high")
+        #expect(filtered.rankedAttentionItems.first?.holdingIdentity?.quoteId == originalItem.holdingIdentity?.quoteId)
+    }
+
     @Test("Unread concentration drift stays quiet when already above threshold")
     func unreadConcentrationDriftStaysQuietWhenAlreadyAboveThreshold() throws {
         let snapshot = try fixtureSnapshot("concentration-pressure.json")
