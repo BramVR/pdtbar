@@ -362,9 +362,9 @@ public struct IncomeCalendarSummary: Codable, Equatable {
 public enum IncomeCalendar {
     public static func build(events: [IncomeEventSummary], asOf: String) -> IncomeCalendarIntent {
         let sortedEvents = events
-            .filter { isIncomeCalendarKind($0.kind) }
+            .filter { isIncomeCalendarEventKind($0.kind) }
             .filter { $0.date >= asOf }
-            .sorted(by: ranksBefore)
+            .sorted(by: incomeCalendarEventRanksBefore)
         return IncomeCalendarIntent(
             asOf: asOf,
             summary: IncomeCalendarSummary(
@@ -377,36 +377,6 @@ public enum IncomeCalendar {
             nextEvent: sortedEvents.first,
             events: sortedEvents
         )
-    }
-
-    private static func ranksBefore(_ lhs: IncomeEventSummary, _ rhs: IncomeEventSummary) -> Bool {
-        if lhs.date != rhs.date {
-            return lhs.date < rhs.date
-        }
-        let lhsPriority = eventPriority(lhs.kind)
-        let rhsPriority = eventPriority(rhs.kind)
-        if lhsPriority != rhsPriority {
-            return lhsPriority < rhsPriority
-        }
-        if lhs.symbolName != rhs.symbolName {
-            return lhs.symbolName < rhs.symbolName
-        }
-        return incomeEventRowID(for: lhs) < incomeEventRowID(for: rhs)
-    }
-
-    private static func eventPriority(_ kind: String) -> Int {
-        switch kind {
-        case "ex-dividend":
-            return 0
-        case "payment-dividend":
-            return 1
-        default:
-            return 2
-        }
-    }
-
-    private static func isIncomeCalendarKind(_ kind: String) -> Bool {
-        kind == "ex-dividend" || kind == "payment-dividend"
     }
 }
 
@@ -612,6 +582,36 @@ private func incomeEventRowID(for event: IncomeEventSummary) -> String {
         ?? event.symbolId.map { "symbol.\($0)" }
         ?? "portfolio"
     return "income.\(identity).\(event.kind).\(event.date)"
+}
+
+private func incomeCalendarEventRanksBefore(_ lhs: IncomeEventSummary, _ rhs: IncomeEventSummary) -> Bool {
+    if lhs.date != rhs.date {
+        return lhs.date < rhs.date
+    }
+    let lhsPriority = incomeCalendarEventPriority(lhs.kind)
+    let rhsPriority = incomeCalendarEventPriority(rhs.kind)
+    if lhsPriority != rhsPriority {
+        return lhsPriority < rhsPriority
+    }
+    if lhs.symbolName != rhs.symbolName {
+        return lhs.symbolName < rhs.symbolName
+    }
+    return incomeEventRowID(for: lhs) < incomeEventRowID(for: rhs)
+}
+
+private func incomeCalendarEventPriority(_ kind: String) -> Int {
+    switch kind {
+    case "ex-dividend":
+        return 0
+    case "payment-dividend":
+        return 1
+    default:
+        return 2
+    }
+}
+
+private func isIncomeCalendarEventKind(_ kind: String) -> Bool {
+    kind == "ex-dividend" || kind == "payment-dividend"
 }
 
 public struct BigMoversSnapshot: Codable, Equatable {
@@ -2415,20 +2415,23 @@ public enum PressureEngine {
     }
 
     private static func nextIncomeEventsByQuoteID(from snapshot: PortfolioSnapshot) -> [Int: IncomeEventSummary] {
+        guard let asOfDate = dayDate(from: snapshot.asOf) else {
+            return [:]
+        }
+
         let openQuoteIDs = Set(snapshot.openHoldings.map(\.quoteId))
         return snapshot.incomeEvents
-            .filter { isHoldingIncomeEventKind($0.kind) }
+            .filter { isIncomeCalendarEventKind($0.kind) }
             .filter { event in
                 guard let quoteId = event.quoteId,
                       openQuoteIDs.contains(quoteId),
-                      let eventDate = dayDate(from: event.date),
-                      let asOfDate = dayDate(from: snapshot.asOf)
+                      let eventDate = dayDate(from: event.date)
                 else {
                     return false
                 }
                 return eventDate >= asOfDate
             }
-            .sorted(by: incomeEventRanksBefore)
+            .sorted(by: incomeCalendarEventRanksBefore)
             .reduce(into: [Int: IncomeEventSummary]()) { eventsByQuoteID, event in
                 guard let quoteId = event.quoteId,
                       eventsByQuoteID[quoteId] == nil
@@ -2437,34 +2440,6 @@ public enum PressureEngine {
                 }
                 eventsByQuoteID[quoteId] = event
             }
-    }
-
-    private static func incomeEventRanksBefore(_ lhs: IncomeEventSummary, _ rhs: IncomeEventSummary) -> Bool {
-        if lhs.date != rhs.date {
-            return lhs.date < rhs.date
-        }
-        if lhs.kind != rhs.kind {
-            return incomeEventPriority(lhs.kind) < incomeEventPriority(rhs.kind)
-        }
-        if lhs.symbolName != rhs.symbolName {
-            return lhs.symbolName < rhs.symbolName
-        }
-        return (lhs.quoteId ?? Int.max) < (rhs.quoteId ?? Int.max)
-    }
-
-    private static func incomeEventPriority(_ kind: String) -> Int {
-        switch kind {
-        case "ex-dividend":
-            return 0
-        case "payment-dividend":
-            return 1
-        default:
-            return 2
-        }
-    }
-
-    private static func isHoldingIncomeEventKind(_ kind: String) -> Bool {
-        kind == "ex-dividend" || kind == "payment-dividend"
     }
 
     private static func bigMoverItems(from snapshot: PortfolioSnapshot, priorSnapshot: PortfolioSnapshot?) -> [AttentionItem] {
