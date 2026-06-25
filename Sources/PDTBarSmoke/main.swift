@@ -1793,7 +1793,7 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
     let expectedMenuIdentifiers = Set(expectedTargets.map(\.accessibilityIdentifier))
     let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
     try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-    let screenshotPeekaboo = try peekabooScreenshotTool(
+    let screenshotPeekaboo = peekabooScreenshotTool(
         options.peekaboo ?? URL(fileURLWithPath: "/opt/homebrew/bin/peekaboo")
     )
 
@@ -2375,11 +2375,13 @@ private func captureRealUserMenuScreenshot(
     return screenshot
 }
 
-private func peekabooScreenshotTool(_ peekaboo: URL) throws -> URL? {
+private func peekabooScreenshotTool(_ peekaboo: URL) -> URL? {
     guard FileManager.default.isExecutableFile(atPath: peekaboo.path) else {
         return nil
     }
-    let permissionJSON = try run(peekaboo, arguments: ["permissions", "--json"], timeout: 15).stdout
+    guard let permissionJSON = try? run(peekaboo, arguments: ["permissions", "--json"], timeout: 15).stdout else {
+        return nil
+    }
     guard requiredMissingPermissions(from: permissionJSON)?.isEmpty == true else {
         return nil
     }
