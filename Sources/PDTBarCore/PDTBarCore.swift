@@ -1190,15 +1190,15 @@ public enum MenuDescriptorRenderer {
                         }
                         let drillDownDetail = attention.flatMap { item -> String? in
                             guard let currentWeight = item.currentWeight,
-                                  let threshold = item.threshold
+                                  item.threshold != nil
                             else { return nil }
-                            return "\(percent(currentWeight)) of portfolio; concentration line \(percent(threshold))"
+                            return percent(currentWeight)
                         }
                         return MenuRow(
                             id: "allocation.\(holding.quoteId)",
                             role: drillDownDetail == nil ? .allocationHolding : .allocationDrillDown,
                             title: holding.name,
-                            detail: drillDownDetail ?? "\(percent(holding.weight)) of portfolio",
+                            detail: drillDownDetail ?? percent(holding.weight),
                             children: allocationChildren(for: holding, attention: attention)
                         )
                     }
@@ -1413,7 +1413,7 @@ public enum PressureEngine {
 
     public static func buildModel(from snapshot: PortfolioSnapshot, priorSnapshot: PortfolioSnapshot? = nil) -> PortfolioPulseModel {
         let rankedItems = ranked(
-            concentrationItems(from: snapshot)
+            concentrationItems(from: snapshot, priorSnapshot: priorSnapshot)
                 + incomeItems(from: snapshot)
                 + bigMoverItems(from: snapshot, priorSnapshot: priorSnapshot)
         )
@@ -1586,9 +1586,16 @@ public enum PressureEngine {
         return lhs.id < rhs.id
     }
 
-    private static func concentrationItems(from snapshot: PortfolioSnapshot) -> [AttentionItem] {
-        snapshot.openHoldings
-            .filter { $0.weight >= concentrationThreshold }
+    private static func concentrationItems(from snapshot: PortfolioSnapshot, priorSnapshot: PortfolioSnapshot?) -> [AttentionItem] {
+        let priorHoldings = priorSnapshot?.openHoldings.reduce(into: [Int: NormalizedHolding]()) { holdings, holding in
+            holdings[holding.quoteId] = holding
+        }
+        return snapshot.openHoldings
+            .filter { holding in
+                guard holding.weight >= concentrationThreshold else { return false }
+                guard priorSnapshot != nil else { return true }
+                return (priorHoldings?[holding.quoteId]?.weight ?? 0) < concentrationThreshold
+            }
             .sorted(by: ranksByAllocation)
             .enumerated()
             .map { offset, holding in
@@ -1598,7 +1605,7 @@ public enum PressureEngine {
                     facet: "allocation",
                     rank: offset + 1,
                     title: "\(holding.name) concentration",
-                    detail: concentrationDetail(for: holding),
+                    detail: percent(holding.weight),
                     severity: score >= 0.8 ? "high" : "medium",
                     score: score,
                     holdingIdentity: HoldingIdentity(name: holding.name, quoteId: holding.quoteId),
@@ -1607,11 +1614,6 @@ public enum PressureEngine {
                     supportingDataSlotIDs: ["allocation.holdings"]
                 )
             }
-    }
-
-    private static func concentrationDetail(for holding: NormalizedHolding) -> String {
-        let relation = holding.weight == concentrationThreshold ? "at" : "above"
-        return "\(holding.name) is \(percent(holding.weight)) of the portfolio, \(relation) the \(percent(concentrationThreshold)) concentration line."
     }
 
     private static func ranksByAllocation(_ lhs: NormalizedHolding, _ rhs: NormalizedHolding) -> Bool {

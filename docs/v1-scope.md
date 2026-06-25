@@ -32,7 +32,7 @@ Concretely, v1 is "done" when:
 
 Pick the highest-signal, lowest-data-dependency facets first:
 
-- **Allocation / concentration** — a position's weight crosses a line (e.g. >20%, or drifted by >N points). *Absolute thresholds work on day one with no history.*
+- **Allocation / concentration** — a position's weight crosses a line (e.g. >20%, or drifted by >N points). *Absolute thresholds work on day one with no history; once prior state exists, repeat alerts require a fresh crossing from below the line.*
 - **Income events** — a dividend cut/raise, a payment landed, or an ex-dividend date within N days. *Mostly forward-looking calendar data.*
 - **Big movers** — a holding moved more than X% over the window. *Needs a little history (see below).*
 
@@ -47,7 +47,7 @@ Pressure is **change over time**, so the engine must remember prior state. This 
 The two hardest moments are day one and a calm day. Handle them deliberately:
 
 - **Cold start (no prior snapshot):** "what changed" signals can't fire yet, so lean on the **absolute-threshold** signals that need no history — concentration too high, cash too high, ex-dividend within N days. The bar must be useful on the *first* run, not after a day of data. Take the first snapshot on connect.
-- **Quiet day (nothing crosses a threshold):** show a real **"all quiet"** state with the glanceable context (value / next payment) still present and the drill-down still reachable. Silence is a designed state, not an empty screen.
+- **Quiet day (nothing crosses a threshold):** show a real **"all quiet"** state with the glanceable context (value / next payment) still present and the drill-down still reachable. A holding that was already above the concentration line in the prior snapshot is quiet unless it freshly crosses from below. Silence is a designed state, not an empty screen.
 
 ## Explicitly deferred (add only when earned)
 
