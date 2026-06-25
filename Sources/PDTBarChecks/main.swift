@@ -1655,6 +1655,16 @@ try Data("""
         "closedAt": null
       }
     ]
+  },
+  "listSymbolPrices": {
+    "data": [
+      { "date": "2026-06-22", "closeAdjusted": "50.00", "symbolQuoteId": 9601 },
+      { "date": "2026-06-19", "closeAdjusted": "47.50", "symbolQuoteId": 9601 },
+      { "date": "2026-06-18", "closeAdjusted": "45.00", "symbolQuoteId": 9601 },
+      { "date": "2026-06-22", "closeAdjusted": "not-a-number", "symbolQuoteId": 9602 },
+      { "date": "2026-06-21", "closeAdjusted": "25.00", "symbolQuoteId": 9602 },
+      { "date": "2026-06-22", "closeAdjusted": "40.00", "symbolQuoteId": 9603 }
+    ]
   }
 }
 """.utf8).write(to: holdingFactsFixture)
@@ -1686,6 +1696,10 @@ try check(
         && holdingFactsChildren.first { $0.title == "Gain/loss %" }?.detail == "+25.0%",
     "allocation drill-down should render unrealised gain/loss fields instead of total lifetime fields"
 )
+try check(
+    holdingFactsChildren.first { $0.title == "Recent move" }?.detail == "+11.1% from 2026-06-18 to 2026-06-22",
+    "allocation drill-down should render recent move percent with date window context"
+)
 let fallbackFactsChildren = try require(
     holdingFactsDescriptor.sections.first { $0.id == "allocation" }?
         .rows.first { $0.title == "Fallback Facts Holding" }?
@@ -1696,6 +1710,10 @@ try check(
     fallbackFactsChildren.first { $0.title == "Average buy price" }?.detail == "EUR 25.00",
     "allocation drill-down should compute average buy price from total and shares fallback"
 )
+try check(
+    fallbackFactsChildren.map(\.title).contains("Recent move") == false,
+    "allocation drill-down should omit recent move when price data is malformed"
+)
 let sparseFactsChildren = try require(
     holdingFactsDescriptor.sections.first { $0.id == "allocation" }?
         .rows.first { $0.title == "Sparse Facts Holding" }?
@@ -1705,6 +1723,7 @@ let sparseFactsChildren = try require(
 try check(
     sparseFactsChildren.map(\.title).allSatisfy { ![
         "Price",
+        "Recent move",
         "Average buy price",
         "Gain/loss",
         "Gain/loss %",

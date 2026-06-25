@@ -280,6 +280,7 @@ public struct HoldingSummary: Codable, Equatable {
     public var weight: Double
     public var worth: Money
     public var price: Money?
+    public var recentMove: PriceMoveSummary?
     public var averageBuyPrice: Money?
     public var gainLoss: Money?
     public var gainLossPercentage: Double?
@@ -2090,6 +2091,15 @@ public enum MenuDescriptorRenderer {
                 )
             )
         }
+        if let recentMove = holding.recentMove {
+            rows.append(
+                MenuRow(
+                    id: "allocation.\(holding.quoteId).recentMove",
+                    title: "Recent move",
+                    detail: "\(signedPercent(recentMove.percentChange)) from \(recentMove.fromDate) to \(recentMove.toDate)"
+                )
+            )
+        }
         if let averageBuyPrice = holding.averageBuyPrice {
             rows.append(
                 MenuRow(
@@ -2180,6 +2190,7 @@ public enum PressureEngine {
         let totalValue = snapshot.totalValue
         let worstPriceAsOf = snapshot.openHoldings.map(\.priceAsOf).min()
         let freshnessStale = isFreshnessStale(worstPriceAsOf: worstPriceAsOf, asOf: snapshot.asOf)
+        let recentMovesByQuoteID = recentMoves(from: snapshot.priceSeries)
         var supportingDataSlots = [
             SupportingDataSlot(
                 id: "allocation.holdings",
@@ -2245,6 +2256,7 @@ public enum PressureEngine {
                                 weight: $0.weight,
                                 worth: $0.worth,
                                 price: validMoney($0.price),
+                                recentMove: recentMovesByQuoteID[$0.quoteId],
                                 averageBuyPrice: $0.averageBuyPrice,
                                 gainLoss: $0.gainLoss,
                                 gainLossPercentage: $0.gainLossPercentage
@@ -2511,6 +2523,53 @@ public enum PressureEngine {
             )
         }
         .max { abs($0.percentChange) < abs($1.percentChange) }
+    }
+
+    private static func recentMoves(from prices: [PricePoint]) -> [Int: PriceMoveSummary] {
+        Dictionary(
+            uniqueKeysWithValues: Dictionary(grouping: prices, by: \.quoteId)
+                .compactMap { quoteId, points -> (Int, PriceMoveSummary)? in
+                    guard let summary = recentMove(quoteId: quoteId, points: points) else {
+                        return nil
+                    }
+                    return (quoteId, summary)
+                }
+        )
+    }
+
+    private static func recentMove(quoteId: Int, points: [PricePoint]) -> PriceMoveSummary? {
+        guard points.count >= 2 else { return nil }
+        let datedPoints: [(point: PricePoint, date: Date, close: Decimal)] = points.compactMap { point in
+            guard let date = dayDate(from: point.date),
+                  let close = posixDecimal(point.closeAdjusted),
+                  close > 0
+            else {
+                return nil
+            }
+            return (point, date, close)
+        }
+        guard datedPoints.count == points.count else { return nil }
+
+        let sorted = datedPoints.sorted {
+            if $0.date != $1.date {
+                return $0.date < $1.date
+            }
+            return $0.point.closeAdjusted < $1.point.closeAdjusted
+        }
+        guard let first = sorted.first,
+              let last = sorted.last,
+              first.date < last.date
+        else {
+            return nil
+        }
+
+        let change = (last.close - first.close) / first.close
+        return PriceMoveSummary(
+            quoteId: quoteId,
+            fromDate: first.point.date,
+            toDate: last.point.date,
+            percentChange: rounded(Double(truncating: change as NSDecimalNumber), places: 4)
+        )
     }
 }
 
