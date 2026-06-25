@@ -112,6 +112,36 @@ struct PulseReadTests {
         #expect(try readStore.load().contains(bigMover.readFingerprint))
     }
 
+    @Test("Partial refresh preserves omitted facet read state")
+    func partialRefreshPreservesOmittedFacetReadState() throws {
+        let incomeItem = try #require(
+            PressureEngine.buildModel(from: fixtureSnapshot("income-event.json"))
+                .rankedAttentionItems
+                .first { $0.facet == "income" }
+        )
+        let bigMover = try #require(
+            bigMoverRun().model.rankedAttentionItems.first { $0.facet == "bigMovers" }
+        )
+        let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-partial-refresh-read-test")
+        let readStore = PulseReadStore(directory: snapshotStore.directory)
+        var partialSnapshot = try fixtureSnapshot("concentration-pressure.json")
+        partialSnapshot.incomeEvents = []
+        partialSnapshot.dividendRowCount = 0
+        partialSnapshot.priceSeries = []
+
+        try readStore.markRead(incomeItem.readFingerprint)
+        try readStore.markRead(bigMover.readFingerprint)
+        _ = try PressureRunner.run(
+            dataSource: StaticPortfolioDataSource(snapshot: partialSnapshot),
+            snapshotStore: snapshotStore,
+            pulseReadStore: readStore
+        )
+        let readState = try readStore.load()
+
+        #expect(readState.contains(incomeItem.readFingerprint))
+        #expect(readState.contains(bigMover.readFingerprint))
+    }
+
     @Test("Fingerprints include facet material facts")
     func fingerprintsIncludeFacetMaterialFacts() throws {
         let concentration = try #require(
