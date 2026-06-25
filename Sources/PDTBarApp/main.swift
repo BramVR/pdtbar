@@ -199,8 +199,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                     dataSource: PDTMCPConnectorDataSource(
                         connector: ClaudeCLIPDTMCPConnector(environment: environment),
                         liveOptions: PDTLiveDataSourceOptions(
-                            includeIncomeQuoteLookups: false,
-                            includePriceSeries: false
+                            includeIncomeQuoteLookups: false
                         )
                     ),
                     snapshotStore: snapshotStore
