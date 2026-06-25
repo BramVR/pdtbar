@@ -3153,38 +3153,43 @@ private func imageHasVisiblePixels(_ image: URL) -> Bool {
     let bytesPerRow = width * bytesPerPixel
     var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
     let colorSpace = CGColorSpaceCreateDeviceRGB()
-    guard let context = CGContext(
-        data: &pixels,
-        width: width,
-        height: height,
-        bitsPerComponent: 8,
-        bytesPerRow: bytesPerRow,
-        space: colorSpace,
-        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-    ) else {
-        return false
-    }
-    context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-    let sampleStride = max(bytesPerPixel, pixels.count / 256 / bytesPerPixel * bytesPerPixel)
-    var minLuma = Double.greatestFiniteMagnitude
-    var maxLuma = 0.0
-    var visibleSamples = 0
-    var index = 0
-    while index + 3 < pixels.count {
-        let alpha = pixels[index + 3]
-        if alpha > 8 {
-            let luma = 0.2126 * Double(pixels[index])
-                + 0.7152 * Double(pixels[index + 1])
-                + 0.0722 * Double(pixels[index + 2])
-            minLuma = min(minLuma, luma)
-            maxLuma = max(maxLuma, luma)
-            if luma > 24 {
-                visibleSamples += 1
-            }
+    return pixels.withUnsafeMutableBytes { buffer in
+        guard let context = CGContext(
+            data: buffer.baseAddress,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return false
         }
-        index += sampleStride
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let sampleStride = max(bytesPerPixel, buffer.count / 256 / bytesPerPixel * bytesPerPixel)
+        var minLuma = Double.greatestFiniteMagnitude
+        var maxLuma = 0.0
+        var visibleSamples = 0
+        var index = 0
+        while index + 3 < buffer.count {
+            let red = buffer[index]
+            let green = buffer[index + 1]
+            let blue = buffer[index + 2]
+            let alpha = buffer[index + 3]
+            if alpha > 8 {
+                let luma = 0.2126 * Double(red)
+                    + 0.7152 * Double(green)
+                    + 0.0722 * Double(blue)
+                minLuma = min(minLuma, luma)
+                maxLuma = max(maxLuma, luma)
+                if luma > 24 {
+                    visibleSamples += 1
+                }
+            }
+            index += sampleStride
+        }
+        return visibleSamples > 2 && maxLuma > minLuma + 16
     }
-    return visibleSamples > 2 && maxLuma > minLuma + 16
 }
 
 private func accessibilityTexts(in element: AXUIElement) -> Set<String> {
