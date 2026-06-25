@@ -1192,7 +1192,7 @@ try check(
     "attention item should expose threshold"
 )
 try check(
-    concentrationItem.detail == "Above concentration line at 24.2%.",
+    concentrationItem.detail == "24.2%",
     "cold-start concentration copy should stay compact"
 )
 try check(!concentrationItem.detail.localizedCaseInsensitiveContains("sell"), "copy should not prescribe selling")
@@ -1215,8 +1215,8 @@ let crossingConcentrationModel = PressureEngine.buildModel(
     priorSnapshot: quietPriorSnapshot
 )
 try check(
-    crossingConcentrationModel.rankedAttentionItems.first?.detail == "Crossed concentration line at 24.2%.",
-    "concentration copy should say crossed when prior snapshot was below the line"
+    crossingConcentrationModel.rankedAttentionItems.first?.detail == "24.2%",
+    "concentration copy should stay compact when prior snapshot was below the line"
 )
 let repeatedConcentrationModel = PressureEngine.buildModel(
     from: concentrationSnapshot,
@@ -1341,7 +1341,7 @@ try check(
 )
 try check(
     thresholdModel.rankedAttentionItems.first?.detail
-        == "At concentration line: 20.0%.",
+        == "20.0%",
     "threshold concentration copy should describe equality compactly"
 )
 

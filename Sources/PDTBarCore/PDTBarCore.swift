@@ -1605,10 +1605,7 @@ public enum PressureEngine {
                     facet: "allocation",
                     rank: offset + 1,
                     title: "\(holding.name) concentration",
-                    detail: concentrationDetail(
-                        for: holding,
-                        priorWeight: priorSnapshot == nil ? nil : priorHoldings?[holding.quoteId]?.weight
-                    ),
+                    detail: percent(holding.weight),
                     severity: score >= 0.8 ? "high" : "medium",
                     score: score,
                     holdingIdentity: HoldingIdentity(name: holding.name, quoteId: holding.quoteId),
@@ -1617,16 +1614,6 @@ public enum PressureEngine {
                     supportingDataSlotIDs: ["allocation.holdings"]
                 )
             }
-    }
-
-    private static func concentrationDetail(for holding: NormalizedHolding, priorWeight: Double?) -> String {
-        if priorWeight != nil {
-            return "Crossed concentration line at \(percent(holding.weight))."
-        }
-        if holding.weight == concentrationThreshold {
-            return "At concentration line: \(percent(holding.weight))."
-        }
-        return "Above concentration line at \(percent(holding.weight))."
     }
 
     private static func ranksByAllocation(_ lhs: NormalizedHolding, _ rhs: NormalizedHolding) -> Bool {
