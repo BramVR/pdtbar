@@ -98,6 +98,28 @@ struct PulseReadTests {
         #expect(changedModel.rankedAttentionItems.allSatisfy { $0.holdingIdentity?.quoteId != 9001 })
     }
 
+    @Test("Fresh concentration re-crossing resets old read state")
+    func freshConcentrationRecrossingResetsOldReadState() throws {
+        var readSnapshot = try fixtureSnapshot("concentration-pressure.json")
+        readSnapshot.openHoldings[0].weight = 0.240
+        let originalItem = try #require(PressureEngine.buildModel(from: readSnapshot).rankedAttentionItems.first)
+        var priorSnapshot = readSnapshot
+        priorSnapshot.openHoldings[0].weight = 0.190
+        let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-recross-read-test")
+        let readStore = PulseReadStore(directory: snapshotStore.directory)
+
+        try readStore.markRead(originalItem.readFingerprint)
+        _ = try snapshotStore.commitCurrentSnapshot(priorSnapshot)
+        let refresh = try PressureRunner.run(
+            dataSource: StaticPortfolioDataSource(snapshot: readSnapshot),
+            snapshotStore: snapshotStore,
+            pulseReadStore: readStore
+        )
+
+        #expect(refresh.model.rankedAttentionItems.first?.readFingerprint == originalItem.readFingerprint)
+        #expect(!((try readStore.load()).contains(originalItem.readFingerprint)))
+    }
+
     @Test("Same material concentration remains read after prior-aware refresh and cached relaunch")
     func sameMaterialConcentrationRemainsReadAfterRefreshAndRelaunch() throws {
         let snapshot = try fixtureSnapshot("concentration-pressure.json")

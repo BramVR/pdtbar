@@ -153,6 +153,7 @@ public struct AttentionItem: Codable, Equatable {
     public var changePercent: Double?
     public var windowStart: String?
     public var windowEnd: String?
+    public var resetsReadState: Bool
     public var supportingDataSlotIDs: [String]
 
     public init(
@@ -177,6 +178,7 @@ public struct AttentionItem: Codable, Equatable {
         changePercent: Double? = nil,
         windowStart: String? = nil,
         windowEnd: String? = nil,
+        resetsReadState: Bool = false,
         supportingDataSlotIDs: [String]
     ) {
         self.id = id
@@ -200,6 +202,7 @@ public struct AttentionItem: Codable, Equatable {
         self.changePercent = changePercent
         self.windowStart = windowStart
         self.windowEnd = windowEnd
+        self.resetsReadState = resetsReadState
         self.supportingDataSlotIDs = supportingDataSlotIDs
     }
 
@@ -226,6 +229,7 @@ public struct AttentionItem: Codable, Equatable {
         changePercent = try container.decodeIfPresent(Double.self, forKey: .changePercent)
         windowStart = try container.decodeIfPresent(String.self, forKey: .windowStart)
         windowEnd = try container.decodeIfPresent(String.self, forKey: .windowEnd)
+        resetsReadState = try container.decodeIfPresent(Bool.self, forKey: .resetsReadState) ?? false
         supportingDataSlotIDs = try container.decode([String].self, forKey: .supportingDataSlotIDs)
     }
 }
@@ -2557,18 +2561,21 @@ public enum PressureEngine {
         }
         let readFingerprints = readState.map { Set($0.readFingerprints) } ?? []
         return concentrationMaterialItems(from: snapshot)
-            .filter { item in
-                guard priorSnapshot != nil else { return true }
+            .compactMap { item in
+                guard priorSnapshot != nil else { return item }
                 let priorWeight = item.holdingIdentity.flatMap { priorHoldings?[$0.quoteId]?.weight } ?? 0
                 if priorWeight < concentrationThreshold {
-                    return true
+                    var freshItem = item
+                    freshItem.resetsReadState = true
+                    return freshItem
                 }
                 guard let prefix = item.concentrationReadFingerprintPrefix else {
-                    return false
+                    return nil
                 }
-                return readFingerprints.contains { fingerprint in
+                let changedReadFingerprintExists = readFingerprints.contains { fingerprint in
                     fingerprint.hasPrefix(prefix) && fingerprint != item.readFingerprint
                 }
+                return changedReadFingerprintExists ? item : nil
             }
     }
 
@@ -3467,8 +3474,13 @@ public enum PressureRunner {
         } catch {
             priorSnapshot = nil
         }
-        let readState = try pulseReadStore?.load()
-        let rawModel = PressureEngine.buildModel(from: snapshot, priorSnapshot: priorSnapshot, readState: readState)
+        let loadedReadState = try pulseReadStore?.load()
+        let rawModel = PressureEngine.buildModel(from: snapshot, priorSnapshot: priorSnapshot, readState: loadedReadState)
+        let readState = try readStateAfterResettingReappearedItems(
+            in: rawModel,
+            loadedReadState: loadedReadState,
+            pulseReadStore: pulseReadStore
+        )
         let model = modelAfterApplyingReadState(rawModel, readState: readState)
         let commit = try snapshotStore.commitCurrentSnapshot(snapshot)
         let descriptor = MenuDescriptorRenderer.render(model: model)
@@ -3490,6 +3502,34 @@ public enum PressureRunner {
             return model
         }
         return PulseReadFilter.apply(to: model, readState: readState)
+    }
+
+    private static func readStateAfterResettingReappearedItems(
+        in model: PortfolioPulseModel,
+        loadedReadState: PulseReadState?,
+        pulseReadStore: PulseReadStore?
+    ) throws -> PulseReadState? {
+        guard let loadedReadState,
+              let pulseReadStore
+        else {
+            return loadedReadState
+        }
+        let reappearedFingerprints = Set(
+            model.rankedAttentionItems
+                .filter(\.resetsReadState)
+                .map(\.readFingerprint)
+        )
+        guard !reappearedFingerprints.isEmpty else {
+            return loadedReadState
+        }
+        let resetState = PulseReadState(
+            schemaVersion: loadedReadState.schemaVersion,
+            readFingerprints: loadedReadState.readFingerprints.filter { !reappearedFingerprints.contains($0) }
+        )
+        if resetState != loadedReadState {
+            try pulseReadStore.save(resetState)
+        }
+        return resetState
     }
 }
 
