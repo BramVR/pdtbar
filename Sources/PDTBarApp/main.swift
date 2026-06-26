@@ -35,6 +35,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let claudeReadinessProbeGate = ClaudeReadinessProbeGate()
     private let claudeLoginAttemptGate = ClaudeLoginAttemptGate()
     private let menuActionDispatcher = MenuActionDispatcher()
+    private let menuItemViewWidth: CGFloat = 400
 
     init(options: PDTBarLaunchOptions) {
         self.options = options
@@ -493,7 +494,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func makeSectionHeadingView(title: String, accessibilityIdentifier: String) -> NSView {
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 28))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: 28))
+        container.autoresizingMask = [.width]
         container.setAccessibilityIdentifier(accessibilityIdentifier)
 
         let titleField = NSTextField(labelWithString: title)
@@ -566,7 +568,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func makeStaticMenuRowView(title: String, detail: String?, accessibilityIdentifier: String) -> NSView {
         let hasDetail = detail?.isEmpty == false
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: hasDetail ? 42 : 30))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: hasDetail ? 42 : 30))
+        container.autoresizingMask = [.width]
         if !accessibilityIdentifier.isEmpty {
             container.setAccessibilityIdentifier(accessibilityIdentifier)
         }

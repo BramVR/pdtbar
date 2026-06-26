@@ -284,9 +284,12 @@ try check(
     "logged-out real launch should render a Claude-only setup section"
 )
 try check(
-    setupSurface.sections.flatMap(\.rows).map(\.title) == ["Not connected", "Log in with Claude"]
-        && setupSurface.sections.flatMap(\.rows).map(\.detail) == ["Use Claude CLI for PDT", nil],
-    "logged-out real launch should render Claude setup status and login rows"
+    setupSurface.sections.flatMap(\.rows).map(\.title) == ["Not connected", "Log in with Claude"],
+    "logged-out real launch should render Claude setup title and login rows"
+)
+try check(
+    setupSurface.sections.flatMap(\.rows).map(\.detail) == ["Use Claude CLI for PDT", nil],
+    "logged-out real launch should expose setup detail as secondary row text"
 )
 try check(
     openingClaudeDescriptor.sections.flatMap(\.rows).map(\.title) == ["Signing in with Claude", "Try login again"],
