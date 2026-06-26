@@ -151,6 +151,9 @@ public struct AttentionItem: Codable, Equatable {
     public var eventDate: String?
     public var amount: Money?
     public var changePercent: Double?
+    public var windowStart: String?
+    public var windowEnd: String?
+    public var resetsReadState: Bool
     public var supportingDataSlotIDs: [String]
 
     public init(
@@ -173,6 +176,9 @@ public struct AttentionItem: Codable, Equatable {
         eventDate: String? = nil,
         amount: Money? = nil,
         changePercent: Double? = nil,
+        windowStart: String? = nil,
+        windowEnd: String? = nil,
+        resetsReadState: Bool = false,
         supportingDataSlotIDs: [String]
     ) {
         self.id = id
@@ -194,6 +200,9 @@ public struct AttentionItem: Codable, Equatable {
         self.eventDate = eventDate
         self.amount = amount
         self.changePercent = changePercent
+        self.windowStart = windowStart
+        self.windowEnd = windowEnd
+        self.resetsReadState = resetsReadState
         self.supportingDataSlotIDs = supportingDataSlotIDs
     }
 
@@ -218,7 +227,182 @@ public struct AttentionItem: Codable, Equatable {
         eventDate = try container.decodeIfPresent(String.self, forKey: .eventDate)
         amount = try container.decodeIfPresent(Money.self, forKey: .amount)
         changePercent = try container.decodeIfPresent(Double.self, forKey: .changePercent)
+        windowStart = try container.decodeIfPresent(String.self, forKey: .windowStart)
+        windowEnd = try container.decodeIfPresent(String.self, forKey: .windowEnd)
+        resetsReadState = try container.decodeIfPresent(Bool.self, forKey: .resetsReadState) ?? false
         supportingDataSlotIDs = try container.decode([String].self, forKey: .supportingDataSlotIDs)
+    }
+}
+
+public extension AttentionItem {
+    private var readFingerprintIdentity: String {
+        holdingIdentity.map { "quote:\($0.quoteId)" }
+            ?? "id:\(fingerprintToken(id))"
+    }
+
+    var readFingerprint: String {
+        switch facet {
+        case "allocation":
+            return [
+                "pulse:v1:allocation",
+                readFingerprintIdentity,
+                "threshold-bp:\(fingerprintBasisPoints(threshold))",
+                "severity:\(fingerprintToken(severity))",
+                "weight-bucket-bp:\(bucketBasisPoints(currentWeight, bucketSize: 100))",
+            ].joined(separator: ":")
+        case "income":
+            return [
+                "pulse:v1:income",
+                readFingerprintIdentity,
+                "date:\(eventDate ?? "unknown")",
+                "amount:\(moneyFingerprint(amount))",
+                "change-bp:\(fingerprintBasisPoints(changePercent))",
+            ].joined(separator: ":")
+        case "bigMovers":
+            return [
+                "pulse:v1:bigMovers",
+                readFingerprintIdentity,
+                "window:\(windowStart ?? "unknown")..\(windowEnd ?? "unknown")",
+                "move-bucket-bp:\(bucketBasisPoints(moveSize, bucketSize: 100))",
+            ].joined(separator: ":")
+        default:
+            return [
+                "pulse:v1",
+                fingerprintToken(facet),
+                readFingerprintIdentity,
+                "severity:\(fingerprintToken(severity))",
+                "score-bp:\(fingerprintBasisPoints(score))",
+            ].joined(separator: ":")
+        }
+    }
+
+    var staleReadPruningPrefix: String? {
+        switch facet {
+        case "income":
+            return ["pulse:v1:income", readFingerprintIdentity].joined(separator: ":") + ":"
+        case "bigMovers":
+            return ["pulse:v1:bigMovers", readFingerprintIdentity].joined(separator: ":") + ":"
+        default:
+            return nil
+        }
+    }
+
+    var concentrationReadFingerprintPrefix: String? {
+        guard facet == "allocation" else {
+            return nil
+        }
+        return [
+            "pulse:v1:allocation",
+            readFingerprintIdentity,
+            "threshold-bp:\(fingerprintBasisPoints(threshold))",
+        ].joined(separator: ":") + ":"
+    }
+}
+
+public struct PulseReadState: Codable, Equatable, Sendable {
+    public var schemaVersion: Int
+    public var readFingerprints: [String]
+
+    public init(schemaVersion: Int = 1, readFingerprints: [String] = []) {
+        self.schemaVersion = schemaVersion
+        self.readFingerprints = Array(Set(readFingerprints)).sorted()
+    }
+
+    public func contains(_ fingerprint: String) -> Bool {
+        Set(readFingerprints).contains(fingerprint)
+    }
+}
+
+public struct PulseReadStore: Sendable {
+    public var directory: URL
+    private static let mutationQueue = DispatchQueue(label: "PDTBarCore.PulseReadStore.mutation")
+
+    public init(directory: URL) {
+        self.directory = directory
+    }
+
+    public func load() throws -> PulseReadState {
+        try Self.mutationQueue.sync {
+            try loadUnlocked()
+        }
+    }
+
+    public func save(_ state: PulseReadState) throws {
+        try Self.mutationQueue.sync {
+            try saveUnlocked(state)
+        }
+    }
+
+    public func markRead(_ fingerprint: String) throws {
+        try Self.mutationQueue.sync {
+            var state = try loadUnlocked()
+            state = PulseReadState(
+                schemaVersion: state.schemaVersion,
+                readFingerprints: state.readFingerprints + [fingerprint]
+            )
+            try saveUnlocked(state)
+        }
+    }
+
+    public func removeReadFingerprints(_ fingerprints: Set<String>) throws -> PulseReadState {
+        try Self.mutationQueue.sync {
+            let state = try loadUnlocked()
+            let resetState = PulseReadState(
+                schemaVersion: state.schemaVersion,
+                readFingerprints: state.readFingerprints.filter { !fingerprints.contains($0) }
+            )
+            if resetState != state {
+                try saveUnlocked(resetState)
+            }
+            return resetState
+        }
+    }
+
+    private func loadUnlocked() throws -> PulseReadState {
+        let target = stateFile
+        guard FileManager.default.fileExists(atPath: target.path) else {
+            return PulseReadState()
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: target)
+        } catch {
+            if !FileManager.default.fileExists(atPath: target.path) {
+                return PulseReadState()
+            }
+            throw error
+        }
+        guard let state = try? JSONDecoder().decode(PulseReadState.self, from: data) else {
+            return PulseReadState()
+        }
+        return state
+    }
+
+    private func saveUnlocked(_ state: PulseReadState) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try stableJSONData(state).write(to: stateFile, options: .atomic)
+    }
+
+    private var stateFile: URL {
+        directory.appending(path: "pulse-read-state.json")
+    }
+}
+
+public enum PulseReadFilter {
+    public static func apply(to model: PortfolioPulseModel, readState: PulseReadState) -> PortfolioPulseModel {
+        let visibleItems = model.rankedAttentionItems.filter { !readState.contains($0.readFingerprint) }
+        var filtered = model
+        filtered.rankedAttentionItems = visibleItems
+        filtered.attentionItems = visibleItems
+        filtered.allQuiet = visibleItems.isEmpty
+        if visibleItems.isEmpty, !model.rankedAttentionItems.isEmpty {
+            filtered.allQuietSignal = AllQuietSignal(
+                title: "All caught up",
+                detail: "No unread items.",
+                totalValue: model.allQuietSignal.totalValue
+            )
+        }
+        return filtered
     }
 }
 
@@ -787,6 +971,7 @@ public enum MenuRowRole: String, Codable, Equatable {
     case pulseQuiet
     case pulseAttention
     case pulseAttentionExpansion
+    case pulseMarkRead
     case allocationHolding
     case allocationDrillDown
     case incomeEmpty
@@ -883,6 +1068,7 @@ public struct MenuRow: Codable, Equatable {
     public var actionTarget: MenuRowActionTarget?
     public var title: String
     public var detail: String?
+    public var actionPayload: String?
     public var children: [MenuRow]
 
     public init(
@@ -892,6 +1078,7 @@ public struct MenuRow: Codable, Equatable {
         actionTarget: MenuRowActionTarget? = nil,
         title: String,
         detail: String? = nil,
+        actionPayload: String? = nil,
         children: [MenuRow] = []
     ) {
         self.id = id
@@ -900,6 +1087,7 @@ public struct MenuRow: Codable, Equatable {
         self.actionTarget = actionTarget
         self.title = title
         self.detail = detail
+        self.actionPayload = actionPayload
         self.children = children
     }
 
@@ -910,6 +1098,7 @@ public struct MenuRow: Codable, Equatable {
         case actionTarget
         case title
         case detail
+        case actionPayload
         case children
     }
 
@@ -923,6 +1112,7 @@ public struct MenuRow: Codable, Equatable {
         actionTarget = try container.decodeIfPresent(MenuRowActionTarget.self, forKey: .actionTarget)
         title = try container.decode(String.self, forKey: .title)
         detail = try container.decodeIfPresent(String.self, forKey: .detail)
+        actionPayload = try container.decodeIfPresent(String.self, forKey: .actionPayload)
         children = try container.decodeIfPresent([MenuRow].self, forKey: .children) ?? []
     }
 
@@ -989,6 +1179,7 @@ public struct MenuBarRowSurface: Codable, Equatable {
     public var title: String
     public var accessibilityIdentifier: String
     public var actionTarget: MenuRowActionTarget?
+    public var actionPayload: String?
     public var children: [MenuBarRowSurface]
 
     public init(
@@ -997,6 +1188,7 @@ public struct MenuBarRowSurface: Codable, Equatable {
         title: String,
         accessibilityIdentifier: String,
         actionTarget: MenuRowActionTarget? = nil,
+        actionPayload: String? = nil,
         children: [MenuBarRowSurface] = []
     ) {
         self.id = id
@@ -1004,6 +1196,7 @@ public struct MenuBarRowSurface: Codable, Equatable {
         self.title = title
         self.accessibilityIdentifier = accessibilityIdentifier
         self.actionTarget = actionTarget
+        self.actionPayload = actionPayload
         self.children = children
     }
 }
@@ -1866,6 +2059,7 @@ public enum MenuBarSurfaceRenderer {
             title: row.detail.map { "\(row.title) - \($0)" } ?? row.title,
             accessibilityIdentifier: row.accessibilityIdentifier,
             actionTarget: row.actionTarget,
+            actionPayload: row.actionPayload,
             children: row.children.map(renderRow)
         )
     }
@@ -2073,6 +2267,14 @@ public enum MenuDescriptorRenderer {
                 )
             )
         }
+        rows.append(
+            MenuRow(
+                id: "\(item.id).markRead",
+                role: .pulseMarkRead,
+                title: "Mark as read",
+                actionPayload: item.readFingerprint
+            )
+        )
         return rows
     }
 
@@ -2212,9 +2414,13 @@ public enum PressureEngine {
     public static let bigMoverThreshold = 0.10
     private static let freshnessBusinessDayGrace = 1
 
-    public static func buildModel(from snapshot: PortfolioSnapshot, priorSnapshot: PortfolioSnapshot? = nil) -> PortfolioPulseModel {
+    public static func buildModel(
+        from snapshot: PortfolioSnapshot,
+        priorSnapshot: PortfolioSnapshot? = nil,
+        readState: PulseReadState? = nil
+    ) -> PortfolioPulseModel {
         let rankedItems = ranked(
-            concentrationItems(from: snapshot, priorSnapshot: priorSnapshot)
+            concentrationItems(from: snapshot, priorSnapshot: priorSnapshot, readState: readState)
                 + incomeItems(from: snapshot)
                 + bigMoverItems(from: snapshot, priorSnapshot: priorSnapshot)
         )
@@ -2396,16 +2602,37 @@ public enum PressureEngine {
         return lhs.id < rhs.id
     }
 
-    private static func concentrationItems(from snapshot: PortfolioSnapshot, priorSnapshot: PortfolioSnapshot?) -> [AttentionItem] {
+    private static func concentrationItems(
+        from snapshot: PortfolioSnapshot,
+        priorSnapshot: PortfolioSnapshot?,
+        readState: PulseReadState?
+    ) -> [AttentionItem] {
         let priorHoldings = priorSnapshot?.openHoldings.reduce(into: [Int: NormalizedHolding]()) { holdings, holding in
             holdings[holding.quoteId] = holding
         }
-        return snapshot.openHoldings
-            .filter { holding in
-                guard holding.weight >= concentrationThreshold else { return false }
-                guard priorSnapshot != nil else { return true }
-                return (priorHoldings?[holding.quoteId]?.weight ?? 0) < concentrationThreshold
+        let readFingerprints = readState.map { Set($0.readFingerprints) } ?? []
+        return concentrationMaterialItems(from: snapshot)
+            .compactMap { item in
+                guard priorSnapshot != nil else { return item }
+                let priorWeight = item.holdingIdentity.flatMap { priorHoldings?[$0.quoteId]?.weight } ?? 0
+                if priorWeight < concentrationThreshold {
+                    var freshItem = item
+                    freshItem.resetsReadState = true
+                    return freshItem
+                }
+                guard let prefix = item.concentrationReadFingerprintPrefix else {
+                    return nil
+                }
+                let changedReadFingerprintExists = readFingerprints.contains { fingerprint in
+                    fingerprint.hasPrefix(prefix) && fingerprint != item.readFingerprint
+                }
+                return changedReadFingerprintExists ? item : nil
             }
+    }
+
+    private static func concentrationMaterialItems(from snapshot: PortfolioSnapshot) -> [AttentionItem] {
+        snapshot.openHoldings
+            .filter { $0.weight >= concentrationThreshold }
             .sorted(by: ranksByAllocation)
             .enumerated()
             .map { offset, holding in
@@ -2504,6 +2731,8 @@ public enum PressureEngine {
                 beforeWeight: priorHolding.weight,
                 afterWeight: holding.weight,
                 valueCurrency: price.currency,
+                windowStart: priorSnapshot.asOf,
+                windowEnd: snapshot.asOf,
                 supportingDataSlotIDs: ["bigMovers.priorSnapshot", "bigMovers.prices"]
             )
         }
@@ -2870,16 +3099,19 @@ public final class PDTCoalescedFirstPortfolioFetch {
     private var result: PressureRunResult?
     private let dataSource: any PortfolioDataSource
     private let snapshotStore: SnapshotStore
+    private let pulseReadStore: PulseReadStore?
     private let asOf: String?
 
     public init(
         dataSource: any PortfolioDataSource,
         snapshotStore: SnapshotStore,
-        asOf: String? = nil
+        asOf: String? = nil,
+        pulseReadStore: PulseReadStore? = nil
     ) {
         self.dataSource = dataSource
         self.snapshotStore = snapshotStore
         self.asOf = asOf
+        self.pulseReadStore = pulseReadStore
     }
 
     public func fetch() throws -> PressureRunResult {
@@ -2893,7 +3125,8 @@ public final class PDTCoalescedFirstPortfolioFetch {
         let freshResult = try PressureRunner.run(
             dataSource: dataSource,
             snapshotStore: snapshotStore,
-            asOf: asOf
+            asOf: asOf,
+            pulseReadStore: pulseReadStore
         )
         result = freshResult
         return freshResult
@@ -3250,11 +3483,17 @@ public struct PDTLiveDataSource: PortfolioDataSource {
 }
 
 public enum PressureRunner {
-    public static func cachedPulseDescriptor(snapshotStore: SnapshotStore) throws -> MenuDescriptor? {
+    public static func cachedPulseDescriptor(
+        snapshotStore: SnapshotStore,
+        pulseReadStore: PulseReadStore? = nil
+    ) throws -> MenuDescriptor? {
         guard let snapshot = try snapshotStore.loadPriorSnapshot() else {
             return nil
         }
-        return MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: snapshot))
+        let readState = displayReadState(from: pulseReadStore)
+        let rawModel = PressureEngine.buildModel(from: snapshot, readState: readState)
+        let model = modelAfterApplyingReadState(rawModel, readState: readState)
+        return MenuDescriptorRenderer.render(model: model)
     }
 
     public static func seedPriorSnapshot(
@@ -3276,7 +3515,8 @@ public enum PressureRunner {
     public static func run(
         dataSource: any PortfolioDataSource,
         snapshotStore: SnapshotStore,
-        asOf: String? = nil
+        asOf: String? = nil,
+        pulseReadStore: PulseReadStore? = nil
     ) throws -> PressureRunResult {
         let snapshot = try dataSource.snapshot(asOf: asOf)
         let priorSnapshot: PortfolioSnapshot?
@@ -3285,10 +3525,24 @@ public enum PressureRunner {
         } catch {
             priorSnapshot = nil
         }
-        let model = PressureEngine.buildModel(from: snapshot, priorSnapshot: priorSnapshot)
+        let loadedReadState = displayReadState(from: pulseReadStore)
+        let rawModel = PressureEngine.buildModel(from: snapshot, priorSnapshot: priorSnapshot, readState: loadedReadState)
+        let readState = try readStateAfterResettingReappearedItems(
+            in: rawModel,
+            loadedReadState: loadedReadState,
+            pulseReadStore: pulseReadStore
+        )
+        let model = modelAfterApplyingReadState(rawModel, readState: readState)
         let commit = try snapshotStore.commitCurrentSnapshot(snapshot)
         let descriptor = MenuDescriptorRenderer.render(model: model)
         return PressureRunResult(model: model, snapshotCommit: commit, descriptor: descriptor)
+    }
+
+    private static func displayReadState(from pulseReadStore: PulseReadStore?) -> PulseReadState? {
+        guard let pulseReadStore else {
+            return nil
+        }
+        return try? pulseReadStore.load()
     }
 
     public static func run(fixture: URL, snapshotDirectory: URL) throws -> PressureRunResult {
@@ -3296,6 +3550,60 @@ public enum PressureRunner {
             dataSource: PDTFixtureDataSource(fixture: fixture),
             snapshotStore: SnapshotStore(directory: snapshotDirectory)
         )
+    }
+
+    private static func modelAfterApplyingReadState(
+        _ model: PortfolioPulseModel,
+        readState: PulseReadState?
+    ) -> PortfolioPulseModel {
+        guard let readState else {
+            return model
+        }
+        return PulseReadFilter.apply(to: model, readState: readState)
+    }
+
+    private static func readStateAfterResettingReappearedItems(
+        in model: PortfolioPulseModel,
+        loadedReadState: PulseReadState?,
+        pulseReadStore: PulseReadStore?
+    ) throws -> PulseReadState? {
+        guard let loadedReadState,
+              let pulseReadStore
+        else {
+            return loadedReadState
+        }
+        let reappearedFingerprints = Set(
+            model.rankedAttentionItems
+                .filter(\.resetsReadState)
+                .map(\.readFingerprint)
+        )
+        let staleFingerprints = staleReadFingerprints(in: model, readState: loadedReadState)
+        let fingerprintsToRemove = reappearedFingerprints.union(staleFingerprints)
+        guard !fingerprintsToRemove.isEmpty else {
+            return loadedReadState
+        }
+        return try pulseReadStore.removeReadFingerprints(fingerprintsToRemove)
+    }
+
+    private static func staleReadFingerprints(
+        in model: PortfolioPulseModel,
+        readState: PulseReadState
+    ) -> Set<String> {
+        var currentFingerprintsByPrefix: [String: Set<String>] = [:]
+        for item in model.rankedAttentionItems {
+            guard let prefix = item.staleReadPruningPrefix else {
+                continue
+            }
+            currentFingerprintsByPrefix[prefix, default: []].insert(item.readFingerprint)
+        }
+        guard !currentFingerprintsByPrefix.isEmpty else {
+            return []
+        }
+        return Set(readState.readFingerprints.filter { fingerprint in
+            currentFingerprintsByPrefix.contains { prefix, currentFingerprints in
+                fingerprint.hasPrefix(prefix) && !currentFingerprints.contains(fingerprint)
+            }
+        })
     }
 }
 
@@ -4022,6 +4330,53 @@ private func dayFormatter() -> DateFormatter {
 
 private func display(_ money: Money) -> String {
     "\(money.currency) \(decimalString(money.value, places: 2))"
+}
+
+private func fingerprintToken(_ value: String) -> String {
+    value.lowercased()
+        .map { character -> Character in
+            if character.isLetter || character.isNumber {
+                return character
+            }
+            return "-"
+        }
+        .reduce(into: "") { result, character in
+            if character == "-", result.last == "-" {
+                return
+            }
+            result.append(character)
+        }
+        .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+}
+
+private func moneyFingerprint(_ money: Money?) -> String {
+    guard let money else {
+        return "none"
+    }
+    let value = Decimal(string: money.value).map { canonicalDecimalString($0, places: 2) } ?? money.value
+    return "\(money.currency):\(value)"
+}
+
+private func fingerprintBasisPoints(_ value: Double?) -> String {
+    guard let value else {
+        return "missing"
+    }
+    return String(basisPoints(value))
+}
+
+private func basisPoints(_ value: Double) -> Int {
+    return Int((value * 10_000).rounded())
+}
+
+private func bucketBasisPoints(_ value: Double?, bucketSize: Int) -> String {
+    guard let value else {
+        return "missing"
+    }
+    guard bucketSize > 0 else {
+        return String(basisPoints(value))
+    }
+    let points = basisPoints(value)
+    return String(Int((Double(points) / Double(bucketSize)).rounded()) * bucketSize)
 }
 
 private func percent(_ value: Double) -> String {

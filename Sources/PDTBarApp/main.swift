@@ -5,6 +5,7 @@ import PDTBarAppSupport
 import PDTBarCore
 
 private struct PortfolioFetchOutcome: @unchecked Sendable {
+    var model: PortfolioPulseModel?
     var descriptor: MenuDescriptor?
     var errorDescription: String?
     var shouldStartBackgroundRefresh = false
@@ -23,11 +24,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let loginHandoff: ClaudeLoginHandoff
     private let onboardingCoordinator = PDTOnboardingCoordinator()
     private var statusItem: NSStatusItem?
+    private var cachedPulseModel: PortfolioPulseModel?
     private var cachedPulseDescriptor: MenuDescriptor?
     private var portfolioFetchInFlight = false
     private var portfolioRefreshInFlight = false
     private var portfolioFetchStartedAt: Date?
     private var portfolioFetchProgressTimer: Timer?
+    private var activeSnapshotDirectory: URL?
     private let claudeReadinessProbeGate = ClaudeReadinessProbeGate()
     private let claudeLoginAttemptGate = ClaudeLoginAttemptGate()
     private let menuActionDispatcher = MenuActionDispatcher()
@@ -51,16 +54,22 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private func launch() throws {
         switch options.mode {
         case .claudeFirst:
+            activeSnapshotDirectory = firstFetchStateDirectory()
             let cachedPulse = loadCachedPulseDescriptor()
             cachedPulseDescriptor = cachedPulse
             handleOnboardingUpdate(onboardingCoordinator.launch(cachedPulse: cachedPulse))
         case let .fixture(fixture):
             let dataSource = PDTFixtureDataSource(fixture: fixture)
-            let descriptor = try PressureRunner.run(
+            let snapshotDirectory = try fixtureSnapshotDirectory()
+            activeSnapshotDirectory = snapshotDirectory
+            let result = try PressureRunner.run(
                 dataSource: dataSource,
-                snapshotStore: SnapshotStore(directory: try fixtureSnapshotDirectory())
-            ).descriptor
-            installMenuBarItem(descriptor)
+                snapshotStore: SnapshotStore(directory: snapshotDirectory),
+                pulseReadStore: PulseReadStore(directory: snapshotDirectory)
+            )
+            cachedPulseModel = result.model
+            cachedPulseDescriptor = result.descriptor
+            installMenuBarItem(result.descriptor)
         }
     }
 
@@ -101,7 +110,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             portfolioFetchStartedAt = Date()
             installPortfolioFetchProgressMenu(cancelOpenMenu: true)
             startPortfolioFetchProgressTimer()
-            let snapshotStore = SnapshotStore(directory: firstFetchStateDirectory())
+            let stateDirectory = firstFetchStateDirectory()
+            activeSnapshotDirectory = stateDirectory
+            let snapshotStore = SnapshotStore(directory: stateDirectory)
+            let pulseReadStore = PulseReadStore(directory: stateDirectory)
             DispatchQueue.global(qos: .userInitiated).async {
                 let outcome: PortfolioFetchOutcome
                 do {
@@ -111,22 +123,25 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                             liveOptions: configuration.liveOptions
                         ),
                         snapshotStore: snapshotStore,
-                        asOf: configuration.asOf
+                        asOf: configuration.asOf,
+                        pulseReadStore: pulseReadStore
                     )
+                    let result = try fetch.fetch()
                     outcome = PortfolioFetchOutcome(
-                        descriptor: try fetch.fetch().descriptor,
+                        model: result.model,
+                        descriptor: result.descriptor,
                         errorDescription: nil,
                         shouldStartBackgroundRefresh: configuration.shouldStartBackgroundRefresh
                     )
                 } catch {
-                    outcome = PortfolioFetchOutcome(descriptor: nil, errorDescription: "\(error)")
+                    outcome = PortfolioFetchOutcome(model: nil, descriptor: nil, errorDescription: "\(error)")
                 }
                 DispatchQueue.main.async { [weak self] in
                     self?.finishFirstPortfolioFetch(outcome)
                 }
             }
         } catch {
-            finishFirstPortfolioFetch(PortfolioFetchOutcome(descriptor: nil, errorDescription: "\(error)"))
+            finishFirstPortfolioFetch(PortfolioFetchOutcome(model: nil, descriptor: nil, errorDescription: "\(error)"))
         }
     }
 
@@ -134,8 +149,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         portfolioFetchInFlight = false
         stopPortfolioFetchProgressTimer()
         if let descriptor = outcome.descriptor {
-            cachedPulseDescriptor = descriptor
-            installMenuBarItem(onboardingCoordinator.completeFirstFetch(.succeeded(descriptor)).descriptor)
+            let refreshed = descriptorApplyingCurrentReadState(model: outcome.model, fallback: descriptor)
+            cachedPulseModel = refreshed.model
+            cachedPulseDescriptor = refreshed.descriptor
+            installMenuBarItem(onboardingCoordinator.completeFirstFetch(.succeeded(refreshed.descriptor)).descriptor)
             if outcome.shouldStartBackgroundRefresh {
                 startBackgroundPortfolioRefresh()
             }
@@ -192,7 +209,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         portfolioRefreshInFlight = true
-        let snapshotStore = SnapshotStore(directory: firstFetchStateDirectory())
+        let stateDirectory = firstFetchStateDirectory()
+        activeSnapshotDirectory = stateDirectory
+        let snapshotStore = SnapshotStore(directory: stateDirectory)
+        let pulseReadStore = PulseReadStore(directory: stateDirectory)
         let environment = ProcessInfo.processInfo.environment
         DispatchQueue.global(qos: .utility).async {
             let outcome: PortfolioFetchOutcome
@@ -204,11 +224,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                             includeIncomeQuoteLookups: false
                         )
                     ),
-                    snapshotStore: snapshotStore
+                    snapshotStore: snapshotStore,
+                    pulseReadStore: pulseReadStore
                 )
-                outcome = PortfolioFetchOutcome(descriptor: try fetch.fetch().descriptor, errorDescription: nil)
+                let result = try fetch.fetch()
+                outcome = PortfolioFetchOutcome(model: result.model, descriptor: result.descriptor, errorDescription: nil)
             } catch {
-                outcome = PortfolioFetchOutcome(descriptor: nil, errorDescription: "\(error)")
+                outcome = PortfolioFetchOutcome(model: nil, descriptor: nil, errorDescription: "\(error)")
             }
             DispatchQueue.main.async { [weak self] in
                 self?.finishBackgroundPortfolioRefresh(outcome)
@@ -219,8 +241,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private func finishBackgroundPortfolioRefresh(_ outcome: PortfolioFetchOutcome) {
         portfolioRefreshInFlight = false
         if let descriptor = outcome.descriptor {
-            cachedPulseDescriptor = descriptor
-            installPortfolioPulseDescriptor(descriptor)
+            let refreshed = descriptorApplyingCurrentReadState(model: outcome.model, fallback: descriptor)
+            cachedPulseModel = refreshed.model
+            cachedPulseDescriptor = refreshed.descriptor
+            installPortfolioPulseDescriptor(refreshed.descriptor)
             return
         }
         let errorDescription = outcome.errorDescription ?? "unknown error"
@@ -310,9 +334,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         appSupportDirectory().appending(path: "pdtbar/state")
     }
 
+    private func currentSnapshotDirectory() -> URL {
+        activeSnapshotDirectory ?? firstFetchStateDirectory()
+    }
+
     private func loadCachedPulseDescriptor() -> MenuDescriptor? {
-        try? PressureRunner.cachedPulseDescriptor(
-            snapshotStore: SnapshotStore(directory: firstFetchStateDirectory())
+        let directory = currentSnapshotDirectory()
+        return try? PressureRunner.cachedPulseDescriptor(
+            snapshotStore: SnapshotStore(directory: directory),
+            pulseReadStore: PulseReadStore(directory: directory)
         )
     }
 
@@ -357,6 +387,21 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         installMenuBarItem(onboardingCoordinator.completeFirstFetch(.succeeded(descriptor)).descriptor)
     }
 
+    private func descriptorApplyingCurrentReadState(
+        model: PortfolioPulseModel?,
+        fallback descriptor: MenuDescriptor
+    ) -> (model: PortfolioPulseModel?, descriptor: MenuDescriptor) {
+        guard let model else {
+            return (nil, descriptor)
+        }
+        let readStore = PulseReadStore(directory: currentSnapshotDirectory())
+        guard let readState = try? readStore.load() else {
+            return (model, descriptor)
+        }
+        let filteredModel = PulseReadFilter.apply(to: model, readState: readState)
+        return (filteredModel, MenuDescriptorRenderer.render(model: filteredModel))
+    }
+
     private func makeMenu(from surface: MenuBarSurface) -> NSMenu {
         let menu = NSMenu()
         for section in surface.sections {
@@ -398,6 +443,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 item.action = #selector(MenuActionDispatcher.copyMenuRowAction(_:))
                 item.representedObject = row.actionTarget
             }
+            if row.role == .pulseMarkRead, let fingerprint = row.actionPayload {
+                item.target = self
+                item.action = #selector(markPulseItemRead(_:))
+                item.representedObject = fingerprint
+            }
         } else {
             let submenu = NSMenu()
             for child in row.children {
@@ -406,6 +456,35 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             item.submenu = submenu
         }
         return item
+    }
+
+    @objc private func markPulseItemRead(_ sender: NSMenuItem) {
+        guard let fingerprint = sender.representedObject as? String else {
+            return
+        }
+        do {
+            let directory = currentSnapshotDirectory()
+            let readStore = PulseReadStore(directory: directory)
+            try readStore.markRead(fingerprint)
+            if let cachedPulseModel {
+                let filteredModel = PulseReadFilter.apply(to: cachedPulseModel, readState: try readStore.load())
+                let descriptor = MenuDescriptorRenderer.render(model: filteredModel)
+                self.cachedPulseModel = filteredModel
+                cachedPulseDescriptor = descriptor
+                installPortfolioPulseDescriptor(descriptor)
+                return
+            }
+            guard let descriptor = try PressureRunner.cachedPulseDescriptor(
+                snapshotStore: SnapshotStore(directory: directory),
+                pulseReadStore: readStore
+            ) else {
+                return
+            }
+            cachedPulseDescriptor = descriptor
+            installPortfolioPulseDescriptor(descriptor)
+        } catch {
+            FileHandle.standardError.write(Data("pdtbar: mark read failed: \(error)\n".utf8))
+        }
     }
 
     private func makeConcentrationStackStatusImage(from visual: StatusVisualState) -> NSImage {

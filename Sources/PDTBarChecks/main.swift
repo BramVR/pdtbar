@@ -55,6 +55,56 @@ try check(
 
 let descriptor = MenuDescriptorRenderer.render(model: decoded)
 let launchSurface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
+let pressureFixture = packageRoot.appending(path: "docs/pdt/fixtures/concentration-pressure.json")
+let pressureSnapshot = try PDTFixtureDataSource.snapshot(from: pressureFixture)
+let pressureModel = PressureEngine.buildModel(from: pressureSnapshot)
+let pressureItem = try require(
+    pressureModel.rankedAttentionItems.first,
+    "pressure fixture should emit an attention item for read-state checks"
+)
+try check(
+    pressureItem.readFingerprint.contains("quote:9001")
+        && pressureItem.readFingerprint.contains("threshold-bp:2000")
+        && pressureItem.readFingerprint.contains("weight-bucket-bp:2400"),
+    "concentration read fingerprint should include holding identity, threshold, severity, and weight bucket"
+)
+let readStore = try temporaryPulseReadStore()
+let emptyReadState = try readStore.load()
+try check(emptyReadState.readFingerprints.isEmpty, "read store should load empty when no local state exists")
+try readStore.markRead(pressureItem.readFingerprint)
+let reloadedReadState = try PulseReadStore(directory: readStore.directory).load()
+try check(
+    reloadedReadState.contains(pressureItem.readFingerprint),
+    "read store should persist marked fingerprints across reload"
+)
+let filteredPressure = PulseReadFilter.apply(to: pressureModel, readState: try readStore.load())
+let filteredDescriptor = MenuDescriptorRenderer.render(model: filteredPressure)
+try check(filteredPressure.rankedAttentionItems.isEmpty, "same read fingerprint should hide Pulse attention rows")
+try check(filteredDescriptor.statusBadge == nil, "same read fingerprint should clear status badge count")
+try check(filteredDescriptor.statusVisual.filledBarCount == 0, "same read fingerprint should clear status fill count")
+try check(filteredDescriptor.statusTitle.contains("All caught up"), "all-read pressure should render caught-up copy")
+try check(
+    filteredDescriptor.sections.first { $0.id == "allocation" }?.rows.contains { $0.title == "Nova Lithography" } == true,
+    "read attention should not hide allocation drill-down facts"
+)
+var changedPressureSnapshot = pressureSnapshot
+changedPressureSnapshot.openHoldings[0].weight = 0.265
+let changedPressureModel = PressureEngine.buildModel(from: changedPressureSnapshot)
+let changedFilteredPressure = PulseReadFilter.apply(to: changedPressureModel, readState: try readStore.load())
+try check(
+    changedFilteredPressure.rankedAttentionItems.first?.holdingIdentity?.quoteId == pressureItem.holdingIdentity?.quoteId
+        && changedFilteredPressure.rankedAttentionItems.first?.readFingerprint != pressureItem.readFingerprint,
+    "changed material fingerprint should resurface as unread"
+)
+let markReadRow = MenuDescriptorRenderer.render(model: pressureModel)
+    .sections
+    .flatMap(\.rows)
+    .flatMap(\.children)
+    .first { $0.role == .pulseMarkRead }
+try check(
+    markReadRow?.title == "Mark as read" && markReadRow?.actionPayload == pressureItem.readFingerprint,
+    "attention row should expose one Mark as read action with the material fingerprint payload"
+)
 let noArgumentLaunch = try PDTBarLaunchOptionParser.parse(
     arguments: [],
     environment: [
@@ -2187,6 +2237,13 @@ private func require<T>(_ value: T?, _ message: String) throws -> T {
         throw CheckFailure(message)
     }
     return value
+}
+
+private func temporaryPulseReadStore() throws -> PulseReadStore {
+    let directory = FileManager.default.temporaryDirectory
+        .appending(path: "pdtbar-checks-pulse-read-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    return PulseReadStore(directory: directory)
 }
 
 private struct CheckFailure: Error, CustomStringConvertible {

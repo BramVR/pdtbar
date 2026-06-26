@@ -46,6 +46,7 @@ swift run pdtbar-checks
 swift run pdtbar-smoke scripted-pdt-connector
 swift run pdtbar-smoke scripted-login-handoff
 swift run pdtbar-smoke scripted-setup-retry
+swift run pdtbar-smoke scripted-pulse-mark-read
 swift run pdtbar-smoke scripted-first-fetch
 swift run pdtbar-smoke scripted-returning-launch
 swift run pdtbar-smoke real-claude-flow-ax
@@ -101,6 +102,18 @@ connected`, `Log in with Claude`, and `Check again`; missing PDT MCP renders
 `Check again` reruns readiness once before the scripted first fetch. The proof
 artifact contains selectors, probe counts, status booleans, and redacted
 first-fetch state only.
+
+Scripted Pulse mark-read proof:
+
+```bash
+swift run pdtbar-smoke scripted-pulse-mark-read
+```
+
+This uses isolated state and sanitized fixtures only. It exercises the
+descriptor `Mark as read` action payload, persists the local fingerprint, proves
+the same fingerprint is hidden across a cached reload, and proves changed
+material data resurfaces as unread. Proof artifacts contain only fixture names,
+selectors/status booleans, and redacted state.
 
 Manual Claude `-p` PDT reachability smoke:
 

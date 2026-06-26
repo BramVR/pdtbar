@@ -44,6 +44,8 @@ do {
         report = try scriptedLoginHandoffSmoke(arguments: Array(arguments.dropFirst()))
     case "scripted-setup-retry":
         report = try scriptedSetupRetrySmoke(arguments: Array(arguments.dropFirst()))
+    case "scripted-pulse-mark-read":
+        report = try scriptedPulseMarkReadSmoke(arguments: Array(arguments.dropFirst()))
     case "logged-out-launch":
         report = try loggedOutLaunchSmoke(arguments: Array(arguments.dropFirst()))
     case "ready-launch":
@@ -77,6 +79,7 @@ do {
       pdtbar-smoke scripted-returning-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-login-handoff [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-setup-retry [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
+      pdtbar-smoke scripted-pulse-mark-read [--artifacts <dir>]
       pdtbar-smoke logged-out-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke ready-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke real-claude-flow-ax [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
@@ -1019,6 +1022,85 @@ private func copyHoldingIdentifierActionSmoke() -> SmokeReport {
         status: SmokeStatus.passed,
         detail: "AppKit dispatcher copied sanitized holding identifier from explicit action metadata using an isolated pasteboard",
         artifacts: []
+    )
+}
+
+private func scriptedPulseMarkReadSmoke(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let proof = artifacts.appending(path: "pdtbar-scripted-pulse-mark-read-proof.json")
+    let stateDirectory = try options.temporarySnapshotDirectory(prefix: "scripted-pulse-mark-read-state")
+    let snapshotStore = SnapshotStore(directory: stateDirectory)
+    let readStore = PulseReadStore(directory: stateDirectory)
+    let pressureFixture = packageRoot.appending(path: "docs/pdt/fixtures/concentration-pressure.json")
+    let initialRun = try PressureRunner.run(
+        dataSource: PDTFixtureDataSource(fixture: pressureFixture),
+        snapshotStore: snapshotStore,
+        pulseReadStore: readStore
+    )
+    let firstItem = try require(
+        initialRun.model.rankedAttentionItems.first,
+        "scripted mark-read smoke requires pressure fixture attention"
+    )
+    let markReadAction = try require(
+        initialRun.descriptor.sections
+            .flatMap(\.rows)
+            .flatMap(\.children)
+            .first { $0.role == .pulseMarkRead },
+        "pressure descriptor should expose Mark as read action"
+    )
+    let clickedPayload = try require(markReadAction.actionPayload, "Mark as read action should carry fingerprint")
+    try readStore.markRead(clickedPayload)
+    let afterClickDescriptor = try require(
+        try PressureRunner.cachedPulseDescriptor(snapshotStore: snapshotStore, pulseReadStore: readStore),
+        "cached descriptor should reload after scripted Mark as read click"
+    )
+    let reloadedReadStore = PulseReadStore(directory: stateDirectory)
+    let relaunchDescriptor = try require(
+        try PressureRunner.cachedPulseDescriptor(snapshotStore: snapshotStore, pulseReadStore: reloadedReadStore),
+        "cached descriptor should reload after read-state relaunch"
+    )
+    var changedSnapshot = try PDTFixtureDataSource.snapshot(from: pressureFixture)
+    changedSnapshot.openHoldings[0].weight = 0.265
+    let changedRun = try PressureRunner.run(
+        dataSource: StaticPortfolioDataSource(snapshot: changedSnapshot),
+        snapshotStore: snapshotStore,
+        pulseReadStore: reloadedReadStore
+    )
+    let resurfacedItem = changedRun.model.rankedAttentionItems.first
+    let payloadMatchesFirstItem = clickedPayload == firstItem.readFingerprint
+    let afterClickHidden = afterClickDescriptor.statusBadge == nil
+        && afterClickDescriptor.statusTitle.contains("All caught up")
+    let relaunchHidden = relaunchDescriptor.statusBadge == nil
+        && relaunchDescriptor.statusTitle.contains("All caught up")
+    let changedResurfaced = resurfacedItem?.holdingIdentity?.quoteId == firstItem.holdingIdentity?.quoteId
+        && resurfacedItem?.readFingerprint != clickedPayload
+    let proofPayload = ScriptedPulseMarkReadProof(
+        stateDirectory: artifactPath(stateDirectory),
+        actionTitle: markReadAction.title,
+        actionPayloadMatchedFirstAttentionFingerprint: payloadMatchesFirstItem,
+        afterClickHidden: afterClickHidden,
+        persistedRelaunchHidden: relaunchHidden,
+        changedDataResurfaced: changedResurfaced,
+        caughtUpStatusTitle: afterClickDescriptor.statusTitle,
+        changedStatusBadge: changedRun.descriptor.statusBadge,
+        rawPortfolioPayloadsRedacted: true
+    )
+    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+    guard payloadMatchesFirstItem, afterClickHidden, relaunchHidden, changedResurfaced else {
+        return SmokeReport(
+            name: "scripted-pulse-mark-read",
+            status: SmokeStatus.failed,
+            detail: "scripted Mark as read proof did not hide, persist, and resurface changed pulse data",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+    return SmokeReport(
+        name: "scripted-pulse-mark-read",
+        status: SmokeStatus.passed,
+        detail: "scripted Mark as read action persisted local read state, hid the same fingerprint across reload, and resurfaced changed fixture data",
+        artifacts: [artifactPath(proof)]
     )
 }
 
@@ -2241,6 +2323,18 @@ private struct ScriptedPDTConnectorProof: Codable {
     var rawPortfolioPayloadsRedacted: Bool
 }
 
+private struct ScriptedPulseMarkReadProof: Codable {
+    var stateDirectory: String
+    var actionTitle: String
+    var actionPayloadMatchedFirstAttentionFingerprint: Bool
+    var afterClickHidden: Bool
+    var persistedRelaunchHidden: Bool
+    var changedDataResurfaced: Bool
+    var caughtUpStatusTitle: String
+    var changedStatusBadge: String?
+    var rawPortfolioPayloadsRedacted: Bool
+}
+
 private struct ScriptedFirstFetchProof: Codable {
     var snapshotPath: String
     var snapshotWritten: Bool
@@ -2837,6 +2931,25 @@ private func artifactPath(_ url: URL) -> String {
         return String(path.dropFirst(root.count + 1))
     }
     return path
+}
+
+private func require<T>(_ value: T?, _ message: String) throws -> T {
+    guard let value else {
+        throw CommandError.runtime(message)
+    }
+    return value
+}
+
+private struct StaticPortfolioDataSource: PortfolioDataSource {
+    var fixedSnapshot: PortfolioSnapshot
+
+    init(snapshot: PortfolioSnapshot) {
+        fixedSnapshot = snapshot
+    }
+
+    func snapshot(asOf: String?) throws -> PortfolioSnapshot {
+        fixedSnapshot
+    }
 }
 
 private func modificationDate(of url: URL) -> Date? {
@@ -4282,6 +4395,7 @@ private extension CGRect {
 
 private enum CommandError: Error, CustomStringConvertible {
     case usage
+    case runtime(String)
     case timedOut(String)
     case commandFailed(String, String, String)
 
@@ -4289,6 +4403,8 @@ private enum CommandError: Error, CustomStringConvertible {
         switch self {
         case .usage:
             return "usage"
+        case let .runtime(message):
+            return message
         case let .timedOut(command):
             return "\(command) timed out"
         case let .commandFailed(command, stdout, stderr):
