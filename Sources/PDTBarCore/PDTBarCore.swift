@@ -2981,16 +2981,61 @@ public enum PressureEngine {
     }
 }
 
-public struct PressureRunResult: Codable, Equatable {
+public enum PulseLifecycleSource: String, Codable, Equatable {
+    case cachedSnapshot
+    case fetchedSnapshot
+    case refreshedSnapshot
+}
+
+public struct PulseLifecycleResult: Codable, Equatable {
+    public var unfilteredModel: PortfolioPulseModel
     public var model: PortfolioPulseModel
     public var snapshotCommit: SnapshotCommit
     public var descriptor: MenuDescriptor
+    public var readState: PulseReadState?
+    public var source: PulseLifecycleSource
+
+    public init(
+        unfilteredModel: PortfolioPulseModel,
+        model: PortfolioPulseModel,
+        snapshotCommit: SnapshotCommit,
+        descriptor: MenuDescriptor,
+        readState: PulseReadState? = nil,
+        source: PulseLifecycleSource
+    ) {
+        self.unfilteredModel = unfilteredModel
+        self.model = model
+        self.snapshotCommit = snapshotCommit
+        self.descriptor = descriptor
+        self.readState = readState
+        self.source = source
+    }
+
+    public func applyingReadState(_ readState: PulseReadState?) -> PulseLifecycleResult {
+        let model = PressureRunner.modelAfterApplyingReadState(unfilteredModel, readState: readState)
+        return PulseLifecycleResult(
+            unfilteredModel: unfilteredModel,
+            model: model,
+            snapshotCommit: snapshotCommit,
+            descriptor: MenuDescriptorRenderer.render(model: model),
+            readState: readState,
+            source: source
+        )
+    }
 }
+
+public typealias PressureRunResult = PulseLifecycleResult
 
 public struct SnapshotCommit: Codable, Equatable {
     public var written: Bool
     public var path: String
     public var asOf: String
+
+    public init(written: Bool, path: String, asOf: String) {
+        self.written = written
+        self.path = path
+        self.asOf = asOf
+    }
 }
 
 public protocol PortfolioDataSource {
@@ -3425,6 +3470,7 @@ public struct PDTBackgroundDetailRefreshOptions: Equatable, Sendable {
 
 public struct PDTBackgroundDetailRefreshResult: Equatable {
     public var outcome: PDTBackgroundDetailRefreshOutcome
+    public var pulse: PulseLifecycleResult
     public var model: PortfolioPulseModel
     public var snapshotCommit: SnapshotCommit
     public var descriptor: MenuDescriptor
@@ -3545,19 +3591,14 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         diagnostics.append(contentsOf: priceHistory.diagnostics)
         let commit = try snapshotStore.commitCurrentSnapshot(snapshot)
 
-        let loadedReadState = PressureRunner.displayReadState(from: pulseReadStore)
-        let rawModel = PressureEngine.buildModel(
-            from: snapshot,
+        let pulse = try PressureRunner.lifecycleResult(
+            snapshot: snapshot,
             priorSnapshot: originalPriorSnapshot,
-            readState: loadedReadState
+            snapshotCommit: commit,
+            pulseReadStore: pulseReadStore,
+            source: .refreshedSnapshot,
+            resetsReappearedReadState: true
         )
-        let readState = try PressureRunner.readStateAfterResettingReappearedItems(
-            in: rawModel,
-            loadedReadState: loadedReadState,
-            pulseReadStore: pulseReadStore
-        )
-        let model = PressureRunner.modelAfterApplyingReadState(rawModel, readState: readState)
-        let descriptor = MenuDescriptorRenderer.render(model: model)
         let outcome: PDTBackgroundDetailRefreshOutcome = diagnostics.isEmpty ? .completed : .degraded
         if let lastDiagnostic = diagnostics.last {
             try snapshotStore.saveLastDetailRefreshDiagnostic(lastDiagnostic)
@@ -3566,9 +3607,10 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         }
         return PDTBackgroundDetailRefreshResult(
             outcome: outcome,
-            model: model,
+            pulse: pulse,
+            model: pulse.model,
             snapshotCommit: commit,
-            descriptor: descriptor,
+            descriptor: pulse.descriptor,
             diagnostics: diagnostics
         )
     }
@@ -4109,17 +4151,33 @@ public struct PDTLiveDataSource: PortfolioDataSource {
 }
 
 public enum PressureRunner {
+    public static func cachedPulse(
+        snapshotStore: SnapshotStore,
+        pulseReadStore: PulseReadStore? = nil
+    ) throws -> PulseLifecycleResult? {
+        guard let snapshot = try snapshotStore.loadPriorSnapshot() else {
+            return nil
+        }
+        let commit = SnapshotCommit(
+            written: false,
+            path: snapshotStore.currentSnapshotPath.path,
+            asOf: snapshot.asOf
+        )
+        return try lifecycleResult(
+            snapshot: snapshot,
+            priorSnapshot: nil,
+            snapshotCommit: commit,
+            pulseReadStore: pulseReadStore,
+            source: .cachedSnapshot,
+            resetsReappearedReadState: false
+        )
+    }
+
     public static func cachedPulseDescriptor(
         snapshotStore: SnapshotStore,
         pulseReadStore: PulseReadStore? = nil
     ) throws -> MenuDescriptor? {
-        guard let snapshot = try snapshotStore.loadPriorSnapshot() else {
-            return nil
-        }
-        let readState = displayReadState(from: pulseReadStore)
-        let rawModel = PressureEngine.buildModel(from: snapshot, readState: readState)
-        let model = modelAfterApplyingReadState(rawModel, readState: readState)
-        return MenuDescriptorRenderer.render(model: model)
+        try cachedPulse(snapshotStore: snapshotStore, pulseReadStore: pulseReadStore)?.descriptor
     }
 
     public static func seedPriorSnapshot(
@@ -4152,16 +4210,16 @@ public enum PressureRunner {
             priorSnapshot = nil
         }
         let loadedReadState = displayReadState(from: pulseReadStore)
-        let rawModel = PressureEngine.buildModel(from: snapshot, priorSnapshot: priorSnapshot, readState: loadedReadState)
-        let readState = try readStateAfterResettingReappearedItems(
-            in: rawModel,
-            loadedReadState: loadedReadState,
-            pulseReadStore: pulseReadStore
-        )
-        let model = modelAfterApplyingReadState(rawModel, readState: readState)
         let commit = try snapshotStore.commitCurrentSnapshot(snapshot)
-        let descriptor = MenuDescriptorRenderer.render(model: model)
-        return PressureRunResult(model: model, snapshotCommit: commit, descriptor: descriptor)
+        return try lifecycleResult(
+            snapshot: snapshot,
+            priorSnapshot: priorSnapshot,
+            snapshotCommit: commit,
+            pulseReadStore: pulseReadStore,
+            source: .fetchedSnapshot,
+            loadedReadState: loadedReadState,
+            resetsReappearedReadState: true
+        )
     }
 
     static func displayReadState(from pulseReadStore: PulseReadStore?) -> PulseReadState? {
@@ -4186,6 +4244,39 @@ public enum PressureRunner {
             return model
         }
         return PulseReadFilter.apply(to: model, readState: readState)
+    }
+
+    static func lifecycleResult(
+        snapshot: PortfolioSnapshot,
+        priorSnapshot: PortfolioSnapshot?,
+        snapshotCommit: SnapshotCommit,
+        pulseReadStore: PulseReadStore?,
+        source: PulseLifecycleSource,
+        loadedReadState: PulseReadState? = nil,
+        resetsReappearedReadState: Bool
+    ) throws -> PulseLifecycleResult {
+        let displayReadState = loadedReadState ?? displayReadState(from: pulseReadStore)
+        let rawModel = PressureEngine.buildModel(
+            from: snapshot,
+            priorSnapshot: priorSnapshot,
+            readState: displayReadState
+        )
+        let readState = resetsReappearedReadState
+            ? try readStateAfterResettingReappearedItems(
+                in: rawModel,
+                loadedReadState: displayReadState,
+                pulseReadStore: pulseReadStore
+            )
+            : displayReadState
+        let model = modelAfterApplyingReadState(rawModel, readState: readState)
+        return PulseLifecycleResult(
+            unfilteredModel: rawModel,
+            model: model,
+            snapshotCommit: snapshotCommit,
+            descriptor: MenuDescriptorRenderer.render(model: model),
+            readState: readState,
+            source: source
+        )
     }
 
     static func readStateAfterResettingReappearedItems(
@@ -4248,7 +4339,7 @@ public struct SnapshotStore: Sendable {
     }
 
     public func loadPriorSnapshot() throws -> PortfolioSnapshot? {
-        let target = directory.appending(path: "latest-portfolio-snapshot.json")
+        let target = currentSnapshotPath
         guard FileManager.default.fileExists(atPath: target.path) else {
             return nil
         }
@@ -4257,7 +4348,7 @@ public struct SnapshotStore: Sendable {
 
     public func commitCurrentSnapshot(_ snapshot: PortfolioSnapshot) throws -> SnapshotCommit {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let target = directory.appending(path: "latest-portfolio-snapshot.json")
+        let target = currentSnapshotPath
         try stableJSONData(snapshot).write(to: target, options: .atomic)
         return SnapshotCommit(written: true, path: target.path, asOf: snapshot.asOf)
     }
@@ -4289,6 +4380,10 @@ public struct SnapshotStore: Sendable {
 
     private var detailRefreshDiagnosticFile: URL {
         directory.appending(path: "latest-detail-refresh-diagnostic.json")
+    }
+
+    public var currentSnapshotPath: URL {
+        directory.appending(path: "latest-portfolio-snapshot.json")
     }
 }
 

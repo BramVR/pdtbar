@@ -205,6 +205,8 @@ struct PulseReadTests {
         let readState = try readStore.load()
 
         #expect(changedItem.readFingerprint != originalItem.readFingerprint)
+        #expect(run.source == .fetchedSnapshot)
+        #expect(run.readState?.contains(originalItem.readFingerprint) == false)
         #expect(!readState.contains(originalItem.readFingerprint))
         #expect(!readState.contains(changedItem.readFingerprint))
     }
@@ -223,16 +225,42 @@ struct PulseReadTests {
             snapshotStore: snapshotStore,
             pulseReadStore: readStore
         )
-        let maybeCachedDescriptor = try PressureRunner.cachedPulseDescriptor(
+        let maybeCached = try PressureRunner.cachedPulse(
             snapshotStore: snapshotStore,
             pulseReadStore: readStore
         )
-        let cachedDescriptor = try #require(maybeCachedDescriptor)
+        let cached = try #require(maybeCached)
 
         #expect(refresh.model.rankedAttentionItems.isEmpty)
+        #expect(refresh.source == .fetchedSnapshot)
         #expect(try readStore.load().contains(originalItem.readFingerprint))
-        #expect(cachedDescriptor.statusBadge == nil)
-        #expect(cachedDescriptor.statusTitle.contains("All caught up"))
+        #expect(cached.source == .cachedSnapshot)
+        #expect(cached.descriptor.statusBadge == nil)
+        #expect(cached.descriptor.statusTitle.contains("All caught up"))
+    }
+
+    @Test("Cached relaunch returns the same lifecycle result shape as first fetch")
+    func cachedRelaunchReturnsPulseLifecycleResult() throws {
+        let snapshot = try fixtureSnapshot("concentration-pressure.json")
+        let originalItem = try #require(PressureEngine.buildModel(from: snapshot).rankedAttentionItems.first)
+        let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-read-lifecycle-cache-test")
+        let readStore = PulseReadStore(directory: snapshotStore.directory)
+
+        try readStore.markRead(originalItem.readFingerprint)
+        _ = try snapshotStore.commitCurrentSnapshot(snapshot)
+        let maybeCached = try PressureRunner.cachedPulse(
+            snapshotStore: snapshotStore,
+            pulseReadStore: readStore
+        )
+        let cached = try #require(maybeCached)
+
+        #expect(cached.source == .cachedSnapshot)
+        #expect(cached.snapshotCommit.written == false)
+        #expect(cached.snapshotCommit.asOf == snapshot.asOf)
+        #expect(cached.model.rankedAttentionItems.isEmpty)
+        #expect(cached.readState?.contains(originalItem.readFingerprint) == true)
+        #expect(cached.descriptor.statusBadge == nil)
+        #expect(cached.descriptor.statusTitle.contains("All caught up"))
     }
 
     @Test("Cached relaunch does not prune prior-dependent big-mover read state")
@@ -254,9 +282,48 @@ struct PulseReadTests {
         let bigMover = try #require(run.model.rankedAttentionItems.first { $0.facet == "bigMovers" })
 
         try readStore.markRead(bigMover.readFingerprint)
-        _ = try PressureRunner.cachedPulseDescriptor(snapshotStore: snapshotStore, pulseReadStore: readStore)
+        _ = try PressureRunner.cachedPulse(snapshotStore: snapshotStore, pulseReadStore: readStore)
 
         #expect(try readStore.load().contains(bigMover.readFingerprint))
+    }
+
+    @Test("Applying read state to current lifecycle keeps unread prior-dependent movers")
+    func applyingReadStateToCurrentLifecycleKeepsUnreadBigMovers() throws {
+        let fixture = packageRoot.appending(path: "docs/pdt/fixtures/big-mover.json")
+        let dataSource = PDTFixtureDataSource(fixture: fixture)
+        var priorSnapshot = try dataSource.priorSnapshot(asOf: "2026-06-15")
+        var currentSnapshot = try dataSource.snapshot(asOf: "2026-06-22")
+        var priorSecondMover = try #require(priorSnapshot.openHoldings.first)
+        priorSecondMover.name = "Orion Software"
+        priorSecondMover.quoteId = 9002
+        priorSecondMover.weight = 0.060
+        priorSecondMover.worth = Money(value: "3000.00", currency: "EUR")
+        priorSecondMover.price = Money(value: "100.00", currency: "EUR")
+        var currentSecondMover = priorSecondMover
+        currentSecondMover.weight = 0.070
+        currentSecondMover.worth = Money(value: "3450.00", currency: "EUR")
+        currentSecondMover.price = Money(value: "115.00", currency: "EUR")
+        priorSnapshot.openHoldings.append(priorSecondMover)
+        currentSnapshot.openHoldings.append(currentSecondMover)
+        let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-current-lifecycle-big-mover-read-test")
+        let readStore = PulseReadStore(directory: snapshotStore.directory)
+
+        _ = try snapshotStore.commitCurrentSnapshot(priorSnapshot)
+        let run = try PressureRunner.run(
+            dataSource: StaticPortfolioDataSource(snapshot: currentSnapshot),
+            snapshotStore: snapshotStore,
+            pulseReadStore: readStore
+        )
+        let bigMovers = run.model.rankedAttentionItems.filter { $0.facet == "bigMovers" }
+        let readMover = try #require(bigMovers.first)
+        let unreadMover = try #require(bigMovers.dropFirst().first)
+
+        try readStore.markRead(readMover.readFingerprint)
+        let refreshed = run.applyingReadState(try readStore.load())
+        let visibleFingerprints = Set(refreshed.model.rankedAttentionItems.map(\.readFingerprint))
+
+        #expect(!visibleFingerprints.contains(readMover.readFingerprint))
+        #expect(visibleFingerprints.contains(unreadMover.readFingerprint))
     }
 
     @Test("Partial refresh preserves omitted facet read state")

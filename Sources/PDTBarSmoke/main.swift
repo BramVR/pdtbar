@@ -1347,14 +1347,14 @@ private func scriptedPulseMarkReadSmoke(arguments: [String]) throws -> SmokeRepo
     )
     let clickedPayload = try require(markReadAction.actionPayload, "Mark as read action should carry fingerprint")
     try readStore.markRead(clickedPayload)
-    let afterClickDescriptor = try require(
-        try PressureRunner.cachedPulseDescriptor(snapshotStore: snapshotStore, pulseReadStore: readStore),
-        "cached descriptor should reload after scripted Mark as read click"
+    let afterClickPulse = try require(
+        try PressureRunner.cachedPulse(snapshotStore: snapshotStore, pulseReadStore: readStore),
+        "cached pulse lifecycle should reload after scripted Mark as read click"
     )
     let reloadedReadStore = PulseReadStore(directory: stateDirectory)
-    let relaunchDescriptor = try require(
-        try PressureRunner.cachedPulseDescriptor(snapshotStore: snapshotStore, pulseReadStore: reloadedReadStore),
-        "cached descriptor should reload after read-state relaunch"
+    let relaunchPulse = try require(
+        try PressureRunner.cachedPulse(snapshotStore: snapshotStore, pulseReadStore: reloadedReadStore),
+        "cached pulse lifecycle should reload after read-state relaunch"
     )
     var changedSnapshot = try PDTFixtureDataSource.snapshot(from: pressureFixture)
     changedSnapshot.openHoldings[0].weight = 0.265
@@ -1365,10 +1365,12 @@ private func scriptedPulseMarkReadSmoke(arguments: [String]) throws -> SmokeRepo
     )
     let resurfacedItem = changedRun.model.rankedAttentionItems.first
     let payloadMatchesFirstItem = clickedPayload == firstItem.readFingerprint
-    let afterClickHidden = afterClickDescriptor.statusBadge == nil
-        && afterClickDescriptor.statusTitle.contains("All caught up")
-    let relaunchHidden = relaunchDescriptor.statusBadge == nil
-        && relaunchDescriptor.statusTitle.contains("All caught up")
+    let afterClickHidden = afterClickPulse.descriptor.statusBadge == nil
+        && afterClickPulse.descriptor.statusTitle.contains("All caught up")
+        && afterClickPulse.source == .cachedSnapshot
+    let relaunchHidden = relaunchPulse.descriptor.statusBadge == nil
+        && relaunchPulse.descriptor.statusTitle.contains("All caught up")
+        && relaunchPulse.source == .cachedSnapshot
     let changedResurfaced = resurfacedItem?.holdingIdentity?.quoteId == firstItem.holdingIdentity?.quoteId
         && resurfacedItem?.readFingerprint != clickedPayload
     let proofPayload = ScriptedPulseMarkReadProof(
@@ -1378,7 +1380,7 @@ private func scriptedPulseMarkReadSmoke(arguments: [String]) throws -> SmokeRepo
         afterClickHidden: afterClickHidden,
         persistedRelaunchHidden: relaunchHidden,
         changedDataResurfaced: changedResurfaced,
-        caughtUpStatusTitle: afterClickDescriptor.statusTitle,
+        caughtUpStatusTitle: afterClickPulse.descriptor.statusTitle,
         changedStatusBadge: changedRun.descriptor.statusBadge,
         rawPortfolioPayloadsRedacted: true
     )
