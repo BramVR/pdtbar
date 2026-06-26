@@ -1963,6 +1963,16 @@ let holdingFactsChildren = try require(
     "holding facts descriptor row should exist"
 )
 try check(
+    holdingFactsDescriptor.sections.first { $0.id == "allocation" }?
+        .rows.first { $0.title == "Core Facts Holding" }?
+        .detail == "10.0%",
+    "allocation parent row should keep inline portfolio weight"
+)
+try check(
+    holdingFactsChildren.contains { $0.id == "allocation.9601.weight" || $0.title == "Weight" } == false,
+    "allocation drill-down should omit duplicate child weight row"
+)
+try check(
     holdingFactsChildren.map(\.title).containsSequence([
         "Worth",
         "Price",

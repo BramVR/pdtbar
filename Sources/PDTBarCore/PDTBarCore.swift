@@ -2394,11 +2394,6 @@ public enum MenuDescriptorRenderer {
     private static func allocationChildren(for holding: HoldingSummary, attention: AttentionItem?) -> [MenuRow] {
         var rows = [
             MenuRow(
-                id: "allocation.\(holding.quoteId).weight",
-                title: "Weight",
-                detail: "\(bar(fraction: holding.weight)) \(percent(holding.weight))"
-            ),
-            MenuRow(
                 id: "allocation.\(holding.quoteId).worth",
                 title: "Worth",
                 detail: display(holding.worth)
