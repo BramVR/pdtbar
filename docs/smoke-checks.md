@@ -58,6 +58,21 @@ swift test
 build, `pdtbar-checks`, and the sharded Swift test runner. Live Claude/PDT,
 Keychain, 1Password, Accessibility, and packaged-app checks stay opt-in.
 
+Expected handoff gate for changes that affect launch, setup, first fetch, menu
+behavior, or UI proof:
+
+```bash
+make docs-list
+make test
+make check
+swift build --product pdtbar
+./Scripts/package_app.sh
+swift run pdtbar-smoke packaged-onboarding --app PDTBar.app
+```
+
+Add optional live proof only when explicitly requested or when local deterministic
+and packaged scripted proof cannot cover the change.
+
 Scripted Claude PDT connector e2e:
 
 ```bash
@@ -238,6 +253,12 @@ isolation. Proof artifacts contain app/support/sentinel paths, selectors, setup
 and fetch status text, and booleans only.
 Passing `--peekaboo` additionally captures sanitized real UI PNGs for setup,
 login-opening, and post-readiness fetching states.
+
+For UI PRs that need screenshot proof, follow the PR #68 convention: capture
+real macOS PNG screenshots from packaged `PDTBar.app` using sanitized fixtures or
+isolated scripted state, wrap PNG pixels in SVG only as a viewable container, verify
+raw URLs with `curl -I -L`, and put the links in a PR comment. Do not use SVG as
+the only proof when the reviewer needs to inspect real UI pixels.
 
 Real Claude-flow Accessibility matrix smoke:
 

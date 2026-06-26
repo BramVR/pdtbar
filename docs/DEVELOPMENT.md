@@ -19,12 +19,15 @@ Read matching `Read when` hints before editing. Keep docs current with behavior.
 ## Build And Checks
 
 ```bash
+make docs-list
+make start
+make stop
+make test
 make check
 swift build
 swift run pdtbar-checks
 swift test
 ./Scripts/test.sh
-make test
 ```
 
 `make check` is the default deterministic handoff gate. It delegates to
@@ -44,13 +47,26 @@ PDTBAR_TEST_SHARD_INDEX=0 PDTBAR_TEST_SHARD_COUNT=2 ./Scripts/test.sh
 ```bash
 make start
 make stop
+make test
+make check
 ./Scripts/check.sh scripts
 swift run pdtbar-dev model --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift build --product pdtbar
 ./Scripts/package_app.sh
 ./Scripts/launch.sh
+./Scripts/compile_and_run.sh
 ```
+
+`make start` is the normal manual UX launch. It stops existing PDTBar processes,
+packages `PDTBar.app`, and launches the packaged app. `./Scripts/compile_and_run.sh`
+is the explicit one-shot equivalent. `make stop` stops the packaged app and may
+also clean up old raw SwiftPM debug/release processes from historical runs.
+
+Historical workaround only: launching raw `.build/debug/pdtbar`, keeping it
+alive in a foreground shell, `tmux`, or `nohup`, and checking truncated process
+names were temporary first-run incident workarounds. Normal first-run UX testing
+must use the packaged app path above.
 
 ## Smoke Gate
 
@@ -62,6 +78,14 @@ swift run pdtbar-smoke scripted-pulse-mark-read
 swift run pdtbar-smoke scripted-first-fetch
 swift run pdtbar-smoke scripted-returning-launch
 swift run pdtbar-smoke real-claude-flow-ax
+```
+
+First-run packaged regression gate:
+
+```bash
+swift build --product pdtbar
+./Scripts/package_app.sh
+swift run pdtbar-smoke packaged-onboarding --app PDTBar.app
 ```
 
 Optional local/live checks:
@@ -77,6 +101,22 @@ swift run pdtbar-smoke real-user-pulse --fixture docs/pdt/fixtures/quiet-no-pres
 ```
 
 See [`smoke-checks.md`](smoke-checks.md) before changing smoke behavior.
+
+## Handoff Gate
+
+Expected handoff for normal changes:
+
+```bash
+make docs-list
+make test
+make check
+swift build --product pdtbar
+./Scripts/package_app.sh
+swift run pdtbar-smoke packaged-onboarding --app PDTBar.app
+```
+
+Add optional live proof only when explicitly requested or when the change needs
+live Claude/PDT, Accessibility, or real UI screenshot evidence.
 
 ## Project Map
 
