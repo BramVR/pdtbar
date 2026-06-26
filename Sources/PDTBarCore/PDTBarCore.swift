@@ -280,6 +280,7 @@ public struct HoldingSummary: Codable, Equatable {
     public var weight: Double
     public var worth: Money
     public var price: Money?
+    public var copyableIdentifier: String?
     public var recentMove: PriceMoveSummary?
     public var nextIncomeEvent: IncomeEventSummary?
     public var averageBuyPrice: Money?
@@ -800,6 +801,7 @@ public enum MenuRowRole: String, Codable, Equatable {
     case incomeDrillDown
     case bigMoverSummary
     case freshnessSummary
+    case holdingIdentifierCopy
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -821,6 +823,7 @@ public enum MenuRowRole: String, Codable, Equatable {
 
 public enum MenuRowActionTargetKind: String, Codable, Equatable {
     case incomeEvent
+    case copyHoldingIdentifier
 }
 
 public struct IncomeEventActionTarget: Codable, Equatable {
@@ -858,15 +861,18 @@ public struct MenuRowActionTarget: Codable, Equatable {
     public var kind: MenuRowActionTargetKind
     public var id: String
     public var incomeEvent: IncomeEventActionTarget?
+    public var copyText: String?
 
     public init(
         kind: MenuRowActionTargetKind,
         id: String,
-        incomeEvent: IncomeEventActionTarget? = nil
+        incomeEvent: IncomeEventActionTarget? = nil,
+        copyText: String? = nil
     ) {
         self.kind = kind
         self.id = id
         self.incomeEvent = incomeEvent
+        self.copyText = copyText
     }
 }
 
@@ -2137,6 +2143,21 @@ public enum MenuDescriptorRenderer {
                 )
             )
         }
+        if let copyableIdentifier = holding.copyableIdentifier {
+            rows.append(
+                MenuRow(
+                    id: "allocation.\(holding.quoteId).copyIdentifier",
+                    role: .holdingIdentifierCopy,
+                    actionTarget: MenuRowActionTarget(
+                        kind: .copyHoldingIdentifier,
+                        id: "allocation.\(holding.quoteId).copyIdentifier",
+                        copyText: copyableIdentifier
+                    ),
+                    title: "Copy identifier",
+                    detail: copyableIdentifier
+                )
+            )
+        }
         if let attention,
            let threshold = attention.threshold
         {
@@ -2267,6 +2288,7 @@ public enum PressureEngine {
                                 weight: $0.weight,
                                 worth: $0.worth,
                                 price: validMoney($0.price),
+                                copyableIdentifier: $0.copyableIdentifier,
                                 recentMove: recentMovesByQuoteID[$0.quoteId],
                                 nextIncomeEvent: nextIncomeEventsByQuoteID[$0.quoteId],
                                 averageBuyPrice: $0.averageBuyPrice,
@@ -3079,7 +3101,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         }
         let dividends = options.includeDividends ? try liveDividends(arguments: dividendDateRange) : []
 
-        let openHoldings = holdingsEnvelope.holdings
+        var openHoldings = holdingsEnvelope.holdings
             .filter { $0.closedAt == nil }
             .map {
                 NormalizedHolding(
@@ -3098,9 +3120,15 @@ public struct PDTLiveDataSource: PortfolioDataSource {
                     gainLossPercentage: finite($0.unrealisedGainsPercentage)
                 )
             }
-        let quoteIDsBySymbolID = options.includeIncomeQuoteLookups
-            ? try liveQuoteIDsBySymbolID(for: openHoldings)
-            : [:]
+        let quoteMetadata = options.includeIncomeQuoteLookups
+            ? try liveSymbolQuoteMetadata(for: openHoldings)
+            : SymbolQuoteMetadata()
+        openHoldings = openHoldings.map {
+            var holding = $0
+            holding.copyableIdentifier = quoteMetadata.codesByQuoteID[holding.quoteId]
+            return holding
+        }
+        let quoteIDsBySymbolID = quoteMetadata.quoteIDsBySymbolID
         let dividendsByQuoteID = Dictionary(
             grouping: dividends,
             by: \.symbolQuoteId
@@ -3139,16 +3167,19 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         )
     }
 
-    private func liveQuoteIDsBySymbolID(for holdings: [NormalizedHolding]) throws -> [Int: Int] {
-        var idsBySymbolID: [Int: Int] = [:]
+    private func liveSymbolQuoteMetadata(for holdings: [NormalizedHolding]) throws -> SymbolQuoteMetadata {
+        var metadata = SymbolQuoteMetadata()
         for holding in holdings {
             let quote: LiveSymbolQuoteEnvelope = try decodeLiveTool(
                 "pdt-get-symbol-quote",
                 data: toolClient.callReadTool("pdt-get-symbol-quote", arguments: ["id": String(holding.quoteId)])
             )
-            idsBySymbolID[quote.symbolId] = quote.id
+            metadata.quoteIDsBySymbolID[quote.symbolId] = quote.id
+            if let code = safePublicIdentifier(quote.code) {
+                metadata.codesByQuoteID[quote.id] = code
+            }
         }
-        return idsBySymbolID
+        return metadata
     }
 
     private func liveXRayHoldings() throws -> [XRayHoldingSummary] {
@@ -3323,6 +3354,7 @@ public struct NormalizedHolding: Codable, Equatable {
     public var worth: Money
     public var price: Money?
     public var priceAsOf: String
+    public var copyableIdentifier: String?
     public var averageBuyPrice: Money?
     public var gainLoss: Money?
     public var gainLossPercentage: Double?
@@ -3334,6 +3366,7 @@ public struct NormalizedHolding: Codable, Equatable {
         worth: Money,
         price: Money?,
         priceAsOf: String,
+        copyableIdentifier: String? = nil,
         averageBuyPrice: Money? = nil,
         gainLoss: Money? = nil,
         gainLossPercentage: Double? = nil
@@ -3344,6 +3377,7 @@ public struct NormalizedHolding: Codable, Equatable {
         self.worth = worth
         self.price = price
         self.priceAsOf = priceAsOf
+        self.copyableIdentifier = safePublicIdentifier(copyableIdentifier)
         self.averageBuyPrice = averageBuyPrice
         self.gainLoss = gainLoss
         self.gainLossPercentage = gainLossPercentage
@@ -3357,6 +3391,7 @@ public struct NormalizedHolding: Codable, Equatable {
         worth = try container.decode(Money.self, forKey: .worth)
         price = validMoney(try? container.decodeIfPresent(Money.self, forKey: .price))
         priceAsOf = try container.decode(String.self, forKey: .priceAsOf)
+        copyableIdentifier = safePublicIdentifier(try? container.decodeIfPresent(String.self, forKey: .copyableIdentifier))
         averageBuyPrice = validMoney(try? container.decodeIfPresent(Money.self, forKey: .averageBuyPrice))
         gainLoss = validMoney(try? container.decodeIfPresent(Money.self, forKey: .gainLoss))
         gainLossPercentage = finite(try? container.decodeIfPresent(Double.self, forKey: .gainLossPercentage))
@@ -3410,6 +3445,11 @@ public struct PDTFixtureDataSource: PortfolioDataSource, PortfolioPriorSnapshotD
         holdings rawHoldings: [FixtureHolding],
         asOf: String
     ) -> PortfolioSnapshot {
+        let quoteCodesByQuoteID = payload.symbolQuotes.reduce(into: [Int: String]()) { codesByQuoteID, quote in
+            if let code = safePublicIdentifier(quote.code) {
+                codesByQuoteID[quote.id] = code
+            }
+        }
         let holdings = rawHoldings
             .filter { $0.closedAt == nil && $0.hasLiveWorth }
             .map {
@@ -3420,6 +3460,7 @@ public struct PDTFixtureDataSource: PortfolioDataSource, PortfolioPriorSnapshotD
                     worth: $0.currentWorthLocal,
                     price: validMoney($0.currentPriceLocal),
                     priceAsOf: dayPrefix($0.currentPriceDate),
+                    copyableIdentifier: quoteCodesByQuoteID[$0.symbolQuoteId],
                     averageBuyPrice: averageBuyPrice(
                         explicit: $0.unrealisedBoughtPriceAverageLocal,
                         total: $0.unrealisedBoughtPriceTotalLocal,
@@ -3669,7 +3710,13 @@ private struct LiveDividend: Decodable {
 
 private struct LiveSymbolQuoteEnvelope: Decodable {
     var id: Int
+    var code: String?
     var symbolId: Int
+}
+
+private struct SymbolQuoteMetadata {
+    var quoteIDsBySymbolID: [Int: Int] = [:]
+    var codesByQuoteID: [Int: String] = [:]
 }
 
 private struct LivePricesEnvelope: Decodable {
@@ -3809,7 +3856,23 @@ private struct FixtureDividend: Decodable {
 
 private struct SymbolQuoteEnvelope: Decodable {
     var id: Int
+    var code: String?
     var symbolId: Int
+}
+
+private func safePublicIdentifier(_ raw: String?) -> String? {
+    guard let raw else {
+        return nil
+    }
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty,
+          trimmed.count <= 24,
+          trimmed.range(of: #"^[A-Za-z0-9._-]+$"#, options: .regularExpression) != nil,
+          trimmed.range(of: #"[A-Za-z]"#, options: .regularExpression) != nil
+    else {
+        return nil
+    }
+    return trimmed
 }
 
 private struct PricesEnvelope: Decodable {

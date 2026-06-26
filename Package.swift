@@ -34,6 +34,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "PDTBarCore", targets: ["PDTBarCore"]),
+        .library(name: "PDTBarAppSupport", targets: ["PDTBarAppSupport"]),
         .executable(name: "pdtbar", targets: ["PDTBarApp"]),
         .executable(name: "pdtbar-dev", targets: ["PDTBarDev"]),
         .executable(name: "pdtbar-smoke", targets: ["PDTBarSmoke"]),
@@ -44,9 +45,13 @@ let package = Package(
     ],
     targets: [
         .target(name: "PDTBarCore"),
+        .target(
+            name: "PDTBarAppSupport",
+            dependencies: ["PDTBarCore"]
+        ),
         .executableTarget(
             name: "PDTBarApp",
-            dependencies: ["PDTBarCore"]
+            dependencies: ["PDTBarCore", "PDTBarAppSupport"]
         ),
         .executableTarget(
             name: "PDTBarDev",
@@ -54,7 +59,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "PDTBarSmoke",
-            dependencies: ["PDTBarCore"]
+            dependencies: ["PDTBarCore", "PDTBarAppSupport"]
         ),
         .executableTarget(
             name: "PDTBarChecks",
@@ -64,6 +69,7 @@ let package = Package(
             name: "PDTBarTests",
             dependencies: [
                 "PDTBarCore",
+                "PDTBarAppSupport",
                 .product(name: "Testing", package: "swift-testing"),
             ],
             linkerSettings: testingInteropLinkerSettings

@@ -1,5 +1,7 @@
 import ApplicationServices
+import AppKit
 import Foundation
+import PDTBarAppSupport
 import PDTBarCore
 
 private struct SmokeReport: Codable {
@@ -32,6 +34,8 @@ do {
         report = try livePDTSmoke(arguments: Array(arguments.dropFirst()))
     case "scripted-pdt-connector":
         report = try scriptedPDTConnectorSmoke(arguments: Array(arguments.dropFirst()))
+    case "copy-holding-identifier-action":
+        report = copyHoldingIdentifierActionSmoke()
     case "scripted-first-fetch":
         report = try scriptedFirstFetchSmoke(arguments: Array(arguments.dropFirst()))
     case "scripted-returning-launch":
@@ -68,6 +72,7 @@ do {
       pdtbar-smoke manual-claude-pdt [--claude <path>] [--model <alias>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke live-pdt [--server <mcporter-server>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-pdt-connector [--artifacts <dir>]
+      pdtbar-smoke copy-holding-identifier-action
       pdtbar-smoke scripted-first-fetch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-returning-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-login-handoff [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
@@ -984,6 +989,36 @@ private func scriptedPDTConnectorSmoke(arguments: [String]) throws -> SmokeRepor
         status: SmokeStatus.passed,
         detail: "scripted Claude PDT connector checked required v1 read tools, called each read tool exactly once for a coalesced fetch, and rendered through PressureRunner with redacted proof",
         artifacts: [artifactPath(proof)]
+    )
+}
+
+private func copyHoldingIdentifierActionSmoke() -> SmokeReport {
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("pdtbar.copy.identifier.smoke.\(UUID().uuidString)"))
+    let dispatcher = MenuActionDispatcher(pasteboard: pasteboard)
+    let actionTarget = MenuRowActionTarget(
+        kind: .copyHoldingIdentifier,
+        id: "allocation.9701.copyIdentifier",
+        copyText: "PUBC"
+    )
+    let item = NSMenuItem(title: "Copy identifier - redacted", action: nil, keyEquivalent: "")
+    item.representedObject = actionTarget
+
+    dispatcher.copyMenuRowAction(item)
+
+    guard pasteboard.string(forType: .string) == "PUBC" else {
+        return SmokeReport(
+            name: "copy-holding-identifier-action",
+            status: SmokeStatus.failed,
+            detail: "copy identifier action did not write expected sanitized identifier from action metadata",
+            artifacts: []
+        )
+    }
+
+    return SmokeReport(
+        name: "copy-holding-identifier-action",
+        status: SmokeStatus.passed,
+        detail: "AppKit dispatcher copied sanitized holding identifier from explicit action metadata using an isolated pasteboard",
+        artifacts: []
     )
 }
 
@@ -3523,7 +3558,7 @@ private func scriptedPDTConnectorResponses() throws -> [String: Data] {
         }
         """),
         "pdt-get-symbol-quote?id=9101": try mcpContent("""
-        { "id": 9101, "symbolId": 5101 }
+        { "id": 9101, "code": "SPDT", "symbolId": 5101 }
         """),
         "pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9101": try mcpContent("""
         {

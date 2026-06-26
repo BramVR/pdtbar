@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+import PDTBarAppSupport
 import PDTBarCore
 
 private struct PortfolioFetchOutcome: @unchecked Sendable {
@@ -29,6 +30,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var portfolioFetchProgressTimer: Timer?
     private let claudeReadinessProbeGate = ClaudeReadinessProbeGate()
     private let claudeLoginAttemptGate = ClaudeLoginAttemptGate()
+    private let menuActionDispatcher = MenuActionDispatcher()
 
     init(options: PDTBarLaunchOptions) {
         self.options = options
@@ -390,6 +392,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             if row.role == .setupLogin {
                 item.target = self
                 item.action = #selector(loginWithClaude(_:))
+            }
+            if row.actionTarget?.kind == .copyHoldingIdentifier {
+                item.target = menuActionDispatcher
+                item.action = #selector(MenuActionDispatcher.copyMenuRowAction(_:))
+                item.representedObject = row.actionTarget
             }
         } else {
             let submenu = NSMenu()
