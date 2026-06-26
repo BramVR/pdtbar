@@ -1,6 +1,6 @@
 # src/bar — the pulse (menu-bar renderer)
 
-> Early architecture note. Current Swift implementation lives in `Sources/PDTBarCore` and `Sources/PDTBarApp`; ADR-0001 is accepted.
+> Historical architecture note. Current Swift implementation lives in `Sources/PDTBarCore`, `Sources/PDTBarAppSupport`, and `Sources/PDTBarApp`; ADR-0001 is accepted.
 
 A **thin renderer** over the engine's model. Holds **no portfolio logic** — it only displays what the engine emits.
 
@@ -8,7 +8,7 @@ A **thin renderer** over the engine's model. Holds **no portfolio logic** — it
 
 - **Status item (always visible):** the Concentration Stack icon. Bar heights come from concentration/allocation facts; filled bars are attention-count notification fill capped at three; no separate dot.
 - **The menu (the glance):** the ranked attention items, or **"all quiet"**; each expands to the numbers that triggered it.
-- **Submenus (drill-down):** the per-facet snapshots — holdings/allocation, income/calendar, performance vs benchmark, cash — reachable without leaving the bar.
+- **Submenus (drill-down):** current v1 snapshots — holdings/allocation, income/calendar, and big movers/freshness — reachable without leaving the bar. Performance vs benchmark and cash are deferred full-product facets.
 
 All information reachable through the bar, but via progressive disclosure — never a dashboard grid shown all at once.
 

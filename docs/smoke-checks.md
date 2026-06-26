@@ -47,6 +47,7 @@ swift run pdtbar-smoke scripted-pdt-connector
 swift run pdtbar-smoke scripted-login-handoff
 swift run pdtbar-smoke scripted-setup-retry
 swift run pdtbar-smoke scripted-pulse-mark-read
+swift run pdtbar-smoke copy-holding-identifier-action
 swift run pdtbar-smoke scripted-first-fetch
 swift run pdtbar-smoke scripted-returning-launch
 swift run pdtbar-smoke real-claude-flow-ax
@@ -133,6 +134,17 @@ the same fingerprint is hidden across a cached reload, and proves changed
 material data resurfaces as unread. Proof artifacts contain only fixture names,
 selectors/status booleans, and redacted state.
 
+Copy holding identifier action proof:
+
+```bash
+swift run pdtbar-smoke copy-holding-identifier-action
+```
+
+This uses descriptor/app-support action plumbing only. It verifies the holding
+identifier copy action resolves to the expected sanitized identifier payload
+without launching the app or touching the user's pasteboard; the smoke reads
+back from an isolated named pasteboard.
+
 Manual Claude `-p` PDT reachability smoke:
 
 ```bash
@@ -140,7 +152,7 @@ swift run pdtbar-smoke manual-claude-pdt --model opus
 ```
 
 This optional local smoke uses the installed `claude` CLI with normal `-p`
-mode plus an explicit `--allowedTools` list for the six required PDT read tools
+mode plus an explicit `--allowedTools` list for the seven required PDT read tools
 under the observed Desktop server name and renamed MCP server names, structured
 output, and non-mutating tool discovery; a broad `--disallowedTools` denylist
 for built-ins plus PDT mutate-tool prefixes on the configured Claude CLI MCP

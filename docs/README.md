@@ -37,6 +37,7 @@ Docs are agent-facing source of truth. Root `README.md` stays human/product-faci
 ## Current Shape
 
 - `Sources/PDTBarCore`: pressure model, normalization, fixtures, smokeable core.
+- `Sources/PDTBarAppSupport`: shared AppKit-adjacent support for the app, smoke runner, and tests.
 - `Sources/PDTBarApp`: macOS menu-bar product path.
 - `Sources/PDTBarDev`: developer descriptors/model inspection.
 - `Sources/PDTBarSmoke`: scripted and live smoke checks.

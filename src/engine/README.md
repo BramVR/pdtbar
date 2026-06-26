@@ -1,6 +1,6 @@
 # src/engine — the pressure engine (the IP)
 
-> Early architecture note. Current Swift implementation lives in `Sources/PDTBarCore`; ADR-0001 is accepted.
+> Historical architecture note. Current Swift implementation lives in `Sources/PDTBarCore`; ADR-0001 is accepted.
 
 The **brain** of the product. Deterministic logic, no LLM required.
 
@@ -10,7 +10,7 @@ Read the portfolio from PDT plus a small **history snapshot**, compute **pressur
 
 ## Inputs
 
-- Current portfolio facets from PDT (holdings/allocation, income + calendar, performance, cash, corporate actions, benchmark).
+- Current v1 portfolio facets from PDT (holdings/allocation, income + calendar, and big movers/freshness). Performance, cash, corporate actions, and benchmark are deferred full-product facets.
 - A small local **snapshot of prior state** (e.g. yesterday's weights/prices) — required to detect change.
 
 ## Output: "the model"

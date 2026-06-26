@@ -18,7 +18,7 @@ A retail investor who already tracks their portfolio in PDT and wants to **stay 
 
 ## The aha (why it's not just another balance app)
 
-Every brokerage app shows your value and a list of holdings. None of them curate "here are the two or three things to actually look at this week." The aha is **curated relevance**: within a minute of connecting, you see the handful of things worth knowing — a holding that moved hard, rising concentration, a dividend cut, an upcoming corporate action, idle cash, a benchmark divergence — that you'd otherwise have to hunt for. Value and performance are *context*; "what changed and what needs you" is the headline.
+Every brokerage app shows your value and a list of holdings. None of them curate "here are the two or three things to actually look at this week." The aha is **curated relevance**: within a minute of connecting, you see the handful of things worth knowing — in v1, allocation/concentration, income/calendar, and big-mover signals; later, richer corporate-action, idle-cash, and benchmark-divergence signals — that you'd otherwise have to hunt for. Value and performance are *context*; "what changed and what needs you" is the headline.
 
 ## The surface: the menu bar, layered
 
@@ -26,7 +26,7 @@ The product lives in the macOS menu bar (the **pulse**), and **all information i
 
 - **Status item (always visible):** the Concentration Stack icon. Bar heights show the concentration shape; filled bars show attention count capped at three; full status copy stays in tooltip/accessibility and the first Pulse row.
 - **The menu (the glance):** the ranked unread attention items, or "all quiet"; each expands to the numbers that triggered it and can be marked read without hiding the underlying drill-down facts.
-- **Submenus (drill-down):** the full picture — holdings/allocation, income/calendar, performance vs benchmark, cash — without leaving the bar.
+- **Submenus (drill-down):** the current v1 picture — holdings/allocation, income/calendar, and big movers/freshness — without leaving the bar. Full-product facets such as performance vs benchmark and cash are deferred until earned.
 
 Quiet at the top, everything available underneath.
 
