@@ -401,8 +401,8 @@ function layout({ page, html, toc, sectionName }) {
         ${themeToggleHtml()}
       </div>
       <div class="lang-switch" aria-label="Language">
-        <a class="${isDutch ? "active" : ""}" href="${hrefBetween(page, pageForLang("nl"))}">NL</a>
-        <a class="${isDutch ? "" : "active"}" href="${hrefBetween(page, pageForLang("en"))}">EN</a>
+        <a class="${isDutch ? "active" : ""}" href="${hrefBetween(page, homePageForLang("nl"))}">NL</a>
+        <a class="${isDutch ? "" : "active"}" href="${hrefBetween(page, homePageForLang("en"))}">EN</a>
       </div>
       <label class="search"><span>${searchLabel}</span><input id="doc-search" type="search" placeholder="${searchPlaceholder}" autocomplete="off"></label>
       <nav aria-label="Documentation">
@@ -453,29 +453,36 @@ function tocHtml(toc, isDutch) {
   return `<aside class="toc"><h2>${heading}</h2>${toc.map((item) => `<a class="toc-l${item.level}" href="#${item.id}">${escapeHtml(item.title)}</a>`).join("")}</aside>`;
 }
 
-function pageForLang(lang) {
-  return pages.find((page) => page.lang === lang) || pages[0];
+function homePageForLang(lang) {
+  const homeOutRel = lang === "nl" ? "index.html" : `${lang}/index.html`;
+  return pages.find((page) => page.lang === lang && page.outRel === homeOutRel) || pages.find((page) => page.lang === lang) || pages[0];
 }
 
 function alternatePage(page) {
-  return pageForLang(page.lang === "nl" ? "en" : "nl");
+  const nextLang = page.lang === "nl" ? "en" : "nl";
+  const alternateRel = page.rel.replace(new RegExp(`\\.${page.lang}\\.md$`), `.${nextLang}.md`);
+  return pageMap.get(alternateRel) || pages.find((candidate) => candidate.lang === nextLang && candidate.title === page.title) || homePageForLang(nextLang);
 }
 
 function homeHref(page) {
-  return page.lang === "en" ? "../" : "./";
+  return hrefBetween(page, homePageForLang("nl"));
 }
 
 function assetHref(page, rel) {
-  return page.lang === "en" ? `../${rel}` : rel;
+  return hrefFromOutRel(page.outRel, rel, { targetIsDirectory: false });
 }
 
 function hrefBetween(fromPage, toPage) {
-  const fromDir = path.posix.dirname(fromPage.outRel);
-  const fromBase = fromDir === "." ? "" : fromDir;
-  const relative = path.posix.relative(fromBase, toPage.outRel);
-  if (toPage.outRel === "index.html") return fromPage.outRel === "index.html" ? "./" : "../";
-  if (toPage.outRel === "en/index.html") return fromPage.outRel === "index.html" ? "en/" : "./";
-  return relative || "./";
+  return hrefFromOutRel(fromPage.outRel, outputUrlPath(toPage.outRel), {
+    targetIsDirectory: isDirectoryIndexOutRel(toPage.outRel),
+  });
+}
+
+function hrefFromOutRel(fromOutRel, targetUrlPath, { targetIsDirectory }) {
+  const fromDir = outputUrlDirectory(fromOutRel);
+  const relative = path.posix.relative(fromDir, targetUrlPath);
+  if (!relative) return "./";
+  return targetIsDirectory && !relative.endsWith("/") ? `${relative}/` : relative;
 }
 
 function canonicalUrl(page) {
@@ -490,6 +497,24 @@ function urlPathFor(page) {
   if (page.outRel === "index.html") return "/";
   if (page.outRel.endsWith("/index.html")) return `/${page.outRel.slice(0, -"index.html".length)}`;
   return `/${page.outRel}`;
+}
+
+function outputUrlPath(outRel) {
+  if (outRel === "index.html") return "";
+  if (isDirectoryIndexOutRel(outRel)) return outRel.slice(0, -"index.html".length);
+  return outRel;
+}
+
+function outputUrlDirectory(outRel) {
+  const urlPath = outputUrlPath(outRel);
+  if (!urlPath) return "";
+  if (urlPath.endsWith("/")) return urlPath.slice(0, -1);
+  const dir = path.posix.dirname(urlPath);
+  return dir === "." ? "" : dir;
+}
+
+function isDirectoryIndexOutRel(outRel) {
+  return outRel === "index.html" || outRel.endsWith("/index.html");
 }
 
 function llmsTxt() {

@@ -39,6 +39,58 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
     "\n\n[Unsafe control link](java\tscript:alert(1))\n",
     "utf8",
   );
+  fs.writeFileSync(
+    path.join(tempRoot, "docs", "public", "guide.nl.md"),
+    [
+      "---",
+      'summary: "Nested Dutch docs-site page."',
+      'title: "Gids"',
+      'lang: "nl"',
+      'permalink: "/gids/"',
+      'description: "Nested Dutch page."',
+      "---",
+      "",
+      "# Gids",
+      "",
+      "Nederlandse nested page.",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(tempRoot, "docs", "public", "guide.en.md"),
+    [
+      "---",
+      'summary: "Nested English docs-site page."',
+      'title: "Guide"',
+      'lang: "en"',
+      'permalink: "/en/guide/"',
+      'description: "Nested English page."',
+      "---",
+      "",
+      "# Guide",
+      "",
+      "English nested page.",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(tempRoot, "docs", "public-docs.json"),
+    JSON.stringify(
+      {
+        sections: [
+          {
+            name: "PDTBar",
+            pages: ["public/index.nl.md", "public/index.en.md", "public/guide.nl.md", "public/guide.en.md"],
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
 
   try {
     execFileSync("make", ["docs-site"], {
@@ -55,6 +107,8 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
 
     const index = fs.readFileSync(path.join(outDir, "index.html"), "utf8");
     const english = fs.readFileSync(path.join(outDir, "en", "index.html"), "utf8");
+    const nestedDutch = fs.readFileSync(path.join(outDir, "gids", "index.html"), "utf8");
+    const nestedEnglish = fs.readFileSync(path.join(outDir, "en", "guide", "index.html"), "utf8");
     const llms = fs.readFileSync(path.join(outDir, "llms.txt"), "utf8");
     const llmsFull = fs.readFileSync(path.join(outDir, "llms-full.txt"), "utf8");
     const sitemap = fs.readFileSync(path.join(outDir, "sitemap.xml"), "utf8");
@@ -64,6 +118,8 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
     for (const rel of [
       "index.html",
       "en/index.html",
+      "gids/index.html",
+      "en/guide/index.html",
       "favicon.svg",
       "social-card.svg",
       "sitemap.xml",
@@ -111,6 +167,18 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
     assert.match(english, /aria-label="Bekijk deze pagina in het Nederlands"/);
     assert.match(english, /<link rel="canonical" href="https:\/\/bramvr\.github\.io\/pdtbar\/en\/">/);
     assert.doesNotMatch(english, /java\tscript:alert/);
+
+    assert.match(nestedDutch, /<link rel="icon" href="\.\.\/favicon\.svg"/);
+    assert.match(nestedDutch, /<a class="brand" href="\.\.\/">/);
+    assert.match(nestedDutch, /<a class="btn" href="\.\.\/en\/guide\/" aria-label="View this page in English">English<\/a>/);
+    assert.match(nestedDutch, /<a class="nav-link" href="\.\.\/">Nederlands<\/a>/);
+    assert.match(nestedDutch, /<a class="nav-link" href="\.\.\/en\/">English<\/a>/);
+
+    assert.match(nestedEnglish, /<link rel="icon" href="\.\.\/\.\.\/favicon\.svg"/);
+    assert.match(nestedEnglish, /<a class="brand" href="\.\.\/\.\.\/">/);
+    assert.match(nestedEnglish, /<a class="btn" href="\.\.\/\.\.\/gids\/" aria-label="Bekijk deze pagina in het Nederlands">Nederlands<\/a>/);
+    assert.match(nestedEnglish, /<a class="nav-link" href="\.\.\/\.\.\/">Nederlands<\/a>/);
+    assert.match(nestedEnglish, /<a class="nav-link" href="\.\.\/">English<\/a>/);
 
     const combined = `${index}\n${english}\n${llms}\n${llmsFull}`;
     assert.doesNotMatch(combined, /INTERNAL_ONLY_SENTINEL_PDT_PORTFOLIO_PATH/);
