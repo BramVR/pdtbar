@@ -33,13 +33,19 @@ and refreshed snapshots: it loads prior state, computes pressure, applies/reset
 read state, commits snapshot metadata when needed, and returns the rendered
 descriptor as one `PulseLifecycleResult`.
 
+`PDTLaunchRuntime` is the scripted no-argument launch seam for readiness,
+cached-pulse display, first-fetch success/failure, retry gating, and descriptor
+updates. The AppKit delegate renders runtime descriptors, forwards menu actions,
+and performs platform lifecycle work such as timers, async process calls, and
+status-item installation.
+
 Fixture mode uses the same engine/render path but is explicit developer tooling.
 
 ## Boundaries
 
 - Engine computes pressure. Bar renders descriptors.
 - App support holds reusable AppKit-adjacent glue; it is not a second engine.
-- Bar owns setup, retry, cached-pulse display, and menu actions.
+- Launch runtime owns setup, retry, and cached-pulse display state; Bar forwards menu actions.
 - PDT/MCP adapters normalize raw shapes before engine logic sees them.
 - Financial data stays local; public proof is sanitized.
 
