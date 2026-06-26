@@ -153,6 +153,25 @@ struct BackgroundDetailRefreshTests {
         #expect(committed.priceSeries.filter { $0.quoteId == 9102 }.map(\.date) == ["2026-03-20", "2026-03-21"])
     }
 
+    @Test("Failed X-ray or income phase preserves prior optional detail")
+    func failedXRayOrIncomePhasePreservesPriorOptionalDetail() throws {
+        try assertPriorOptionalDetailPreservedWhenRemovingResponse(
+            "pdt-list-x-ray-holdings?limit=500&offset=0",
+            prefix: "pdtbar-detail-refresh-prior-xray-test"
+        ) { committed in
+            #expect(committed.xRayHoldings == [XRayHoldingSummary(weight: 25.0), XRayHoldingSummary(weight: 15.0)])
+            #expect(committed.incomeEvents.count == 1)
+        }
+
+        try assertPriorOptionalDetailPreservedWhenRemovingResponse(
+            "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28",
+            prefix: "pdtbar-detail-refresh-prior-income-test"
+        ) { committed in
+            #expect(committed.xRayHoldings == [XRayHoldingSummary(weight: 0.25), XRayHoldingSummary(weight: 0.15)])
+            #expect(committed.incomeEvents.first?.amount == Money(value: "7.00", currency: "EUR"))
+        }
+    }
+
     @Test("Background refresh resets reappeared read-state items")
     func backgroundRefreshResetsReappearedReadStateItems() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-read-state-test")
@@ -573,6 +592,31 @@ private func testSnapshot(
     }
     """
     return try JSONDecoder().decode(PortfolioSnapshot.self, from: Data(json.utf8))
+}
+
+private func assertPriorOptionalDetailPreservedWhenRemovingResponse(
+    _ responseKey: String,
+    prefix: String,
+    expectations: (PortfolioSnapshot) throws -> Void
+) throws {
+    let store = try SnapshotStore.temporaryTestStore(prefix: prefix)
+    defer {
+        try? FileManager.default.removeItem(at: store.directory)
+    }
+    _ = try store.commitCurrentSnapshot(testSnapshot(asOf: "2026-03-28"))
+    var responses = try detailRefreshResponses()
+    responses.removeValue(forKey: responseKey)
+
+    let result = try PDTBackgroundDetailRefresh(
+        connector: ScriptedPDTMCPConnector(responses: responses),
+        snapshotStore: store,
+        asOf: "2026-03-29",
+        options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+    ).refresh()
+
+    let committed = try #require(try store.loadPriorSnapshot())
+    #expect(result.outcome == .degraded)
+    try expectations(committed)
 }
 
 private func mcpContent(_ json: String) throws -> Data {
