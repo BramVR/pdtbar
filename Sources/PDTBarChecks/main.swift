@@ -1459,8 +1459,20 @@ let longIncomeRows = MenuDescriptorRenderer.render(model: longIncomeModel)
 let longPreviewRows = longIncomeRows.filter { $0.role == .incomeNext || $0.role == .incomeEvent }
 let longOverflowRows = longIncomeRows.filter { $0.role == .incomeDrillDown }
 try check(
+    longIncomeRows.prefix(2).map(\.id) == ["income.summary", "income.next"],
+    "long income calendar should summarize first, then show the next event"
+)
+try check(
+    longIncomeRows.first?.detail == "7 events through 2026-07-01; 5 confirmed, 2 estimated",
+    "long income calendar should summarize the calendar window and estimated state"
+)
+try check(
     longPreviewRows.count == IncomeCalendarDescriptor.previewLimit,
     "long income calendar should cap direct preview rows at the configured preview limit"
+)
+try check(
+    longPreviewRows.map(\.title) == ["Next income: Anchor Pay A", "Anchor Pay B", "Anchor Pay C"],
+    "long income calendar should keep only the next event and capped preview in the main event rows"
 )
 try check(
     longOverflowRows.map(\.id) == ["income.overflow.next", "income.overflow.this-week", "income.overflow.later"],
