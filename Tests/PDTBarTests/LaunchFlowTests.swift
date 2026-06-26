@@ -62,6 +62,39 @@ struct ClaudeLaunchFlowTests {
         #expect(ClaudeLaunchFlow.action(afterLoginHandoff: .failed) == .showMissingClaude)
     }
 
+    @Test("Successful login handoff can land on missing PDT setup after readiness recheck")
+    func successfulLoginHandoffCanLandOnMissingPDTSetupAfterReadinessRecheck() {
+        var readinessResults: [ClaudeReadinessProbeResult] = [.missingClaudeLogin, .missingPDTMCP]
+        var renderedTitles: [String] = []
+        var fetchCalls = 0
+
+        let runner = PDTOnboardingRunner(
+            dependencies: PDTOnboardingRunnerDependencies(
+                loadCachedPulse: { nil },
+                readinessProbe: { readinessResults.removeFirst() },
+                loginHandoff: { .succeeded },
+                firstFetch: {
+                    fetchCalls += 1
+                    return .failed("unexpected fetch")
+                }
+            ),
+            render: { renderedTitles.append($0.descriptor.statusTitle) }
+        )
+
+        runner.launch()
+        runner.loginWithClaude()
+
+        #expect(renderedTitles == [
+            "Checking Claude",
+            "Not connected",
+            "Signing in with Claude",
+            "Checking Claude",
+            "Add the PDT MCP server to Claude",
+        ])
+        #expect(readinessResults.isEmpty)
+        #expect(fetchCalls == 0)
+    }
+
     @Test("Probing Claude descriptor keeps login action available")
     func probingDescriptorKeepsLoginActionAvailable() {
         let descriptor = ClaudeLaunchFlow.descriptor(for: .probingClaude)
