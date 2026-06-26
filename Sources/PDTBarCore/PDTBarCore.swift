@@ -3492,8 +3492,9 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 phase: .allocation,
                 arguments: [:]
             )
-            snapshot.sectors = distributions.sectors.map(\.summary)
-            snapshot.assetTypes = distributions.assetTypes.map(\.summary)
+            let normalized = PDTOptionalDetailNormalizer.normalizeDistributions(distributions.optionalDetailInput)
+            snapshot.sectors = normalized.sectors
+            snapshot.assetTypes = normalized.assetTypes
             _ = try snapshotStore.commitCurrentSnapshot(snapshot)
         } catch {
             diagnostics.append(diagnostic(for: error, tool: "pdt-get-portfolio-distributions", phase: .allocation))
@@ -3501,7 +3502,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
 
         do {
             progress(BackgroundDetailRefreshProgress(phase: .xRay))
-            snapshot.xRayHoldings = try xRayHoldings()
+            snapshot.xRayHoldings = PDTOptionalDetailNormalizer.normalizeXRayHoldings(try xRayHoldings())
             _ = try snapshotStore.commitCurrentSnapshot(snapshot)
         } catch {
             diagnostics.append(diagnostic(for: error, tool: "pdt-list-x-ray-holdings", phase: .xRay, arguments: [
@@ -3629,10 +3630,10 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         return refreshed + fallback
     }
 
-    private func xRayHoldings() throws -> [XRayHoldingSummary] {
+    private func xRayHoldings() throws -> [PDTXRayHoldingInput] {
         let limit = 500
         var offset = 0
-        var holdings: [XRayHoldingSummary] = []
+        var holdings: [PDTXRayHoldingInput] = []
         while true {
             let arguments = ["limit": String(limit), "offset": String(offset)]
             let envelope: XRayHoldingsEnvelope = try callDecodedWithRetry(
@@ -3640,9 +3641,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 phase: .xRay,
                 arguments: arguments
             )
-            holdings.append(contentsOf: envelope.items.map {
-                XRayHoldingSummary(weight: normalizedXRayPortfolioWeight($0.weight))
-            })
+            holdings.append(contentsOf: envelope.items.map(\.optionalDetailInput))
             guard envelope.hasMore == true, !envelope.items.isEmpty else {
                 return holdings
             }
@@ -3668,28 +3667,16 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             arguments: incomeDateRange
         )
         let dividends = try liveDividends(arguments: dividendDateRange)
-        let dividendsByQuoteID = Dictionary(grouping: dividends, by: \.symbolQuoteId)
         let calendarEvents = calendarEnvelope.data.filter { $0.type != "no-events-today" }
         let quoteIDsBySymbolID = try incomeQuoteIDsBySymbolID(for: calendarEvents, holdings: holdings)
+        let normalized = PDTOptionalDetailNormalizer.normalizeIncomeEvents(
+            calendarEvents: calendarEvents.map(\.optionalDetailInput),
+            dividends: dividends.map(\.optionalDetailInput),
+            quoteIDsBySymbolID: quoteIDsBySymbolID
+        )
         return (
-            events: calendarEvents.map {
-                let quoteId = $0.symbolId.flatMap { quoteIDsBySymbolID[$0] }
-                let amount = $0.type == "ex-dividend" && !$0.isEstimated
-                    ? latestLiveDividendAmount(for: quoteId, dividendsByQuoteID: dividendsByQuoteID)
-                    : nil
-                return IncomeEventSummary(
-                    date: $0.date,
-                    kind: $0.type,
-                    symbolName: $0.symbolName ?? "Portfolio",
-                    estimated: $0.isEstimated,
-                    symbolId: $0.symbolId,
-                    quoteId: quoteId,
-                    amount: amount,
-                    priorAmount: nil,
-                    changePercent: nil
-                )
-            },
-            dividendRowCount: dividends.count
+            events: normalized.events,
+            dividendRowCount: normalized.dividendRowCount
         )
     }
 
@@ -3780,13 +3767,9 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                         phase: .priceHistory,
                         arguments: arguments
                     )
-                    let nextPoints = prices.data.map {
-                        PricePoint(
-                            quoteId: $0.symbolQuoteId,
-                            date: $0.date,
-                            closeAdjusted: $0.closeAdjusted
-                        )
-                    }
+                    let nextPoints = PDTOptionalDetailNormalizer.normalizePriceSeries(
+                        prices.data.map(\.optionalDetailInput)
+                    )
                     accumulator.append(points: nextPoints)
                 } catch {
                     let diagnostic = diagnostic(
@@ -4026,40 +4009,28 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             return holding
         }
         let quoteIDsBySymbolID = quoteMetadata.quoteIDsBySymbolID
-        let dividendsByQuoteID = Dictionary(
-            grouping: dividends,
-            by: \.symbolQuoteId
-        )
         let priceSeries = options.includePriceSeries
-            ? try livePriceSeries(for: openHoldings, asOf: snapshotAsOf)
+            ? try livePriceRows(for: openHoldings, asOf: snapshotAsOf)
             : []
+        let optionalDetails = PDTOptionalDetailNormalizer.normalize(
+            distributions: distributionsEnvelope?.optionalDetailInput,
+            xRayHoldings: xRayHoldings,
+            calendarEvents: calendarEvents.map(\.optionalDetailInput),
+            dividends: dividends.map(\.optionalDetailInput),
+            quoteIDsBySymbolID: quoteIDsBySymbolID,
+            priceRows: priceSeries
+        )
 
         return PortfolioSnapshot(
             asOf: snapshotAsOf,
             totalValue: baseNormalization.totalValue,
             openHoldings: openHoldings,
-            sectors: distributionsEnvelope?.sectors.map(\.summary) ?? [],
-            assetTypes: distributionsEnvelope?.assetTypes.map(\.summary) ?? [],
-            xRayHoldings: xRayHoldings,
-            incomeEvents: calendarEvents.filter { $0.type != "no-events-today" }.map {
-                let quoteId = $0.symbolId.flatMap { quoteIDsBySymbolID[$0] }
-                let amount = $0.type == "ex-dividend" && !$0.isEstimated
-                    ? latestLiveDividendAmount(for: quoteId, dividendsByQuoteID: dividendsByQuoteID)
-                    : nil
-                return IncomeEventSummary(
-                    date: $0.date,
-                    kind: $0.type,
-                    symbolName: $0.symbolName ?? "Portfolio",
-                    estimated: $0.isEstimated,
-                    symbolId: $0.symbolId,
-                    quoteId: quoteId,
-                    amount: amount,
-                    priorAmount: nil,
-                    changePercent: nil
-                )
-            },
-            dividendRowCount: dividends.count,
-            priceSeries: priceSeries
+            sectors: optionalDetails.sectors,
+            assetTypes: optionalDetails.assetTypes,
+            xRayHoldings: optionalDetails.xRayHoldings,
+            incomeEvents: optionalDetails.incomeEvents,
+            dividendRowCount: optionalDetails.dividendRowCount,
+            priceSeries: optionalDetails.priceSeries
         )
     }
 
@@ -4078,10 +4049,10 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         return metadata
     }
 
-    private func liveXRayHoldings() throws -> [XRayHoldingSummary] {
+    private func liveXRayHoldings() throws -> [PDTXRayHoldingInput] {
         let limit = 500
         var offset = 0
-        var holdings: [XRayHoldingSummary] = []
+        var holdings: [PDTXRayHoldingInput] = []
         while true {
             let envelope: XRayHoldingsEnvelope = try decodeLiveTool(
                 "pdt-list-x-ray-holdings",
@@ -4090,9 +4061,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
                     arguments: ["limit": String(limit), "offset": String(offset)]
                 )
             )
-            holdings.append(contentsOf: envelope.items.map {
-                XRayHoldingSummary(weight: normalizedXRayPortfolioWeight($0.weight))
-            })
+            holdings.append(contentsOf: envelope.items.map(\.optionalDetailInput))
             guard envelope.hasMore == true, !envelope.items.isEmpty else {
                 return holdings
             }
@@ -4121,7 +4090,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         }
     }
 
-    private func livePriceSeries(for holdings: [NormalizedHolding], asOf: String) throws -> [PricePoint] {
+    private func livePriceRows(for holdings: [NormalizedHolding], asOf: String) throws -> [PDTPriceInput] {
         let priceDateRange = [
             "date_from": dayString(asOf, addingDays: -7),
             "date_to": asOf,
@@ -4134,13 +4103,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
                     arguments: priceDateRange.merging(["symbol_quote_id": String(holding.quoteId)]) { _, new in new }
                 )
             )
-            return prices.data.map {
-                PricePoint(
-                    quoteId: $0.symbolQuoteId,
-                    date: $0.date,
-                    closeAdjusted: $0.closeAdjusted
-                )
-            }
+            return prices.data.map(\.optionalDetailInput)
         }
     }
 }
@@ -4458,68 +4421,26 @@ public struct PDTFixtureDataSource: PortfolioDataSource, PortfolioPriorSnapshotD
         let quoteIDsBySymbolID = payload.symbolQuotes.reduce(into: [Int: Int]()) { idsBySymbolID, quote in
             idsBySymbolID[quote.symbolId] = quote.id
         }
-        let dividendsByQuoteID = Dictionary(
-            grouping: payload.listDividends?.data ?? [],
-            by: \.symbolQuoteId
+        let optionalDetails = PDTOptionalDetailNormalizer.normalize(
+            distributions: payload.getPortfolioDistributions?.optionalDetailInput,
+            xRayHoldings: payload.listXRayHoldings?.items.map(\.optionalDetailInput),
+            calendarEvents: payload.listCalendarEvents?.data.map(\.optionalDetailInput) ?? [],
+            dividends: payload.listDividends?.data.map(\.optionalDetailInput) ?? [],
+            quoteIDsBySymbolID: quoteIDsBySymbolID,
+            priceRows: payload.listSymbolPrices?.data.map(\.optionalDetailInput) ?? []
         )
 
         return PortfolioSnapshot(
             asOf: asOf,
             totalValue: normalization.totalValue,
             openHoldings: holdings,
-            sectors: (payload.getPortfolioDistributions?.sectors ?? []).map(\.summary),
-            assetTypes: (payload.getPortfolioDistributions?.assetTypes ?? []).map(\.summary),
-            xRayHoldings: payload.listXRayHoldings?.items.map { XRayHoldingSummary(weight: normalizedXRayPortfolioWeight($0.weight)) },
-            incomeEvents: payload.listCalendarEvents?.data.map {
-                let quoteId = $0.symbolId.flatMap { quoteIDsBySymbolID[$0] }
-                let amount = $0.type == "ex-dividend" && !$0.isEstimated
-                    ? latestDividendAmount(for: quoteId, dividendsByQuoteID: dividendsByQuoteID)
-                    : nil
-                return IncomeEventSummary(
-                    date: $0.date,
-                    kind: $0.type,
-                    symbolName: $0.symbolName ?? "Portfolio",
-                    estimated: $0.isEstimated,
-                    symbolId: $0.symbolId,
-                    quoteId: quoteId,
-                    amount: amount,
-                    priorAmount: nil,
-                    changePercent: nil
-                )
-            } ?? [],
-            dividendRowCount: payload.listDividends?.data.count ?? 0,
-            priceSeries: payload.listSymbolPrices?.data.map {
-                PricePoint(
-                    quoteId: $0.symbolQuoteId,
-                    date: $0.date,
-                    closeAdjusted: $0.closeAdjusted
-                )
-            } ?? []
+            sectors: optionalDetails.sectors,
+            assetTypes: optionalDetails.assetTypes,
+            xRayHoldings: optionalDetails.xRayHoldings,
+            incomeEvents: optionalDetails.incomeEvents,
+            dividendRowCount: optionalDetails.dividendRowCount,
+            priceSeries: optionalDetails.priceSeries
         )
-    }
-
-    private static func latestDividendAmount(
-        for quoteId: Int?,
-        dividendsByQuoteID: [Int: [FixtureDividend]]
-    ) -> Money? {
-        guard let quoteId else {
-            return nil
-        }
-        let dividends = dividendsByQuoteID[quoteId] ?? []
-        // Correction pairs need a stable pairing key before their amounts are safe to display.
-        guard !dividends.contains(where: { (Decimal(string: $0.amount.value) ?? 0) < 0 }) else {
-            return nil
-        }
-        return dividends
-            .filter {
-                guard let amount = Decimal(string: $0.amount.value),
-                      amount > 0
-                else { return false }
-                return true
-            }
-            .sorted { $0.date > $1.date }
-            .first?
-            .amount
     }
 }
 
@@ -4658,11 +4579,22 @@ private struct XRayHoldingsEnvelope: Decodable {
 
 private struct XRayHolding: Decodable {
     var weight: Double
+
+    var optionalDetailInput: PDTXRayHoldingInput {
+        PDTXRayHoldingInput(weight: weight)
+    }
 }
 
 private struct LiveDistributionsEnvelope: Decodable {
     var sectors: [LiveDistribution]
     var assetTypes: [LiveDistribution]
+
+    var optionalDetailInput: PDTOptionalDistributionsInput {
+        PDTOptionalDistributionsInput(
+            sectors: sectors.map(\.optionalDetailInput),
+            assetTypes: assetTypes.map(\.optionalDetailInput)
+        )
+    }
 }
 
 private struct LiveDistribution: Decodable {
@@ -4670,8 +4602,8 @@ private struct LiveDistribution: Decodable {
     var totalValue: Money
     var percentage: Double
 
-    var summary: DistributionSummary {
-        DistributionSummary(name: categoryName, percentage: percentage, totalValue: totalValue)
+    var optionalDetailInput: PDTDistributionInput {
+        PDTDistributionInput(categoryName: categoryName, totalValue: totalValue, percentage: percentage)
     }
 }
 
@@ -4685,6 +4617,16 @@ private struct LiveCalendarEvent: Decodable {
     var isEstimated: Bool
     var symbolId: Int?
     var symbolName: String?
+
+    var optionalDetailInput: PDTCalendarEventInput {
+        PDTCalendarEventInput(
+            date: date,
+            type: type,
+            isEstimated: isEstimated,
+            symbolId: symbolId,
+            symbolName: symbolName
+        )
+    }
 }
 
 private struct LiveDividendsEnvelope: Decodable {
@@ -4712,6 +4654,10 @@ private struct LiveDividend: Decodable {
     var date: String
     var amount: Money
     var symbolQuoteId: Int
+
+    var optionalDetailInput: PDTDividendInput {
+        PDTDividendInput(date: date, amount: amount, symbolQuoteId: symbolQuoteId)
+    }
 }
 
 private struct LiveSymbolQuoteEnvelope: Decodable {
@@ -4733,6 +4679,10 @@ private struct LivePrice: Decodable {
     var date: String
     var closeAdjusted: String
     var symbolQuoteId: Int
+
+    var optionalDetailInput: PDTPriceInput {
+        PDTPriceInput(date: date, closeAdjusted: closeAdjusted, symbolQuoteId: symbolQuoteId)
+    }
 }
 
 private struct FixtureMeta: Decodable {
@@ -4834,6 +4784,13 @@ private extension FixtureHolding {
 private struct DistributionsEnvelope: Decodable {
     var sectors: [FixtureDistribution]?
     var assetTypes: [FixtureDistribution]?
+
+    var optionalDetailInput: PDTOptionalDistributionsInput {
+        PDTOptionalDistributionsInput(
+            sectors: (sectors ?? []).map(\.optionalDetailInput),
+            assetTypes: (assetTypes ?? []).map(\.optionalDetailInput)
+        )
+    }
 }
 
 private struct FixtureDistribution: Decodable {
@@ -4841,8 +4798,8 @@ private struct FixtureDistribution: Decodable {
     var totalValue: Money
     var percentage: Double
 
-    var summary: DistributionSummary {
-        DistributionSummary(name: categoryName, percentage: percentage, totalValue: totalValue)
+    var optionalDetailInput: PDTDistributionInput {
+        PDTDistributionInput(categoryName: categoryName, totalValue: totalValue, percentage: percentage)
     }
 }
 
@@ -4856,6 +4813,16 @@ private struct FixtureCalendarEvent: Decodable {
     var isEstimated: Bool
     var symbolId: Int?
     var symbolName: String?
+
+    var optionalDetailInput: PDTCalendarEventInput {
+        PDTCalendarEventInput(
+            date: date,
+            type: type,
+            isEstimated: isEstimated,
+            symbolId: symbolId,
+            symbolName: symbolName
+        )
+    }
 }
 
 private struct DividendsEnvelope: Decodable {
@@ -4866,6 +4833,10 @@ private struct FixtureDividend: Decodable {
     var date: String
     var amount: Money
     var symbolQuoteId: Int
+
+    var optionalDetailInput: PDTDividendInput {
+        PDTDividendInput(date: date, amount: amount, symbolQuoteId: symbolQuoteId)
+    }
 }
 
 private struct SymbolQuoteEnvelope: Decodable {
@@ -4886,6 +4857,10 @@ private struct FixturePrice: Decodable {
     var date: String
     var closeAdjusted: String
     var symbolQuoteId: Int
+
+    var optionalDetailInput: PDTPriceInput {
+        PDTPriceInput(date: date, closeAdjusted: closeAdjusted, symbolQuoteId: symbolQuoteId)
+    }
 }
 
 private func decodeLiveTool<T: Decodable>(_ tool: String, data: Data) throws -> T {
@@ -4932,29 +4907,6 @@ private func extractedMCPPayloadData(from object: Any) -> Data? {
         }
     }
     return nil
-}
-
-private func latestLiveDividendAmount(
-    for quoteId: Int?,
-    dividendsByQuoteID: [Int: [LiveDividend]]
-) -> Money? {
-    guard let quoteId else {
-        return nil
-    }
-    let dividends = dividendsByQuoteID[quoteId] ?? []
-    guard !dividends.contains(where: { (Decimal(string: $0.amount.value) ?? 0) < 0 }) else {
-        return nil
-    }
-    return dividends
-        .filter {
-            guard let amount = Decimal(string: $0.amount.value),
-                  amount > 0
-            else { return false }
-            return true
-        }
-        .sorted { $0.date > $1.date }
-        .first?
-        .amount
 }
 
 private func validMoney(_ money: Money?) -> Money? {
@@ -5051,10 +5003,6 @@ private func bucketBasisPoints(_ value: Double?, bucketSize: Int) -> String {
 
 private func percent(_ value: Double) -> String {
     "\(decimalString(String(value * 100), places: 1))%"
-}
-
-private func normalizedXRayPortfolioWeight(_ value: Double) -> Double {
-    value / 100.0
 }
 
 private func signedPercent(_ value: Double) -> String {
