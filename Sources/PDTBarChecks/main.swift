@@ -819,7 +819,7 @@ let scriptedConnectorResponses = [
     }
     """),
     "pdt-get-symbol-quote?id=9101": try mcpContent("""
-    { "id": 9101, "symbolId": 5101 }
+    { "id": 9101, "code": "LIVE", "symbolId": 5101 }
     """),
     "pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9101": try mcpContent("""
     {
@@ -839,6 +839,10 @@ try check(scriptedLiveRun.snapshotCommit.written, "live data source run should w
 try check(
     scriptedLiveRun.model.facetSnapshots.allocation.openHoldingCount == 1,
     "live data source should normalize open holdings and filter closed positions"
+)
+try check(
+    scriptedLiveRun.model.facetSnapshots.allocation.topHoldings.first?.copyableIdentifier == "LIVE",
+    "live data source should expose public quote code as copyable holding identifier"
 )
 try check(
     scriptedLiveRun.model.facetSnapshots.allocation.sectorBreakdown.count == 1,
@@ -1757,7 +1761,12 @@ try Data("""
       { "date": "2026-06-21", "closeAdjusted": "25.00", "symbolQuoteId": 9602 },
       { "date": "2026-06-22", "closeAdjusted": "40.00", "symbolQuoteId": 9603 }
     ]
-  }
+  },
+  "getSymbolQuotes": [
+    { "id": 9601, "code": "CORE", "symbolId": 5601 },
+    { "id": 9602, "symbolId": 5602 },
+    { "id": 9603, "code": "9603", "symbolId": 5603 }
+  ]
 }
 """.utf8).write(to: holdingFactsFixture)
 let holdingFactsDescriptor = MenuDescriptorRenderer.render(
@@ -1792,6 +1801,15 @@ try check(
     holdingFactsChildren.first { $0.title == "Recent move" }?.detail == "+11.1% from 2026-06-18 to 2026-06-22",
     "allocation drill-down should render recent move percent with date window context"
 )
+let coreIdentifierAction = holdingFactsChildren.first { $0.id == "allocation.9601.copyIdentifier" }
+try check(
+    coreIdentifierAction?.role == .holdingIdentifierCopy
+        && coreIdentifierAction?.title == "Copy identifier"
+        && coreIdentifierAction?.detail == "CORE"
+        && coreIdentifierAction?.actionTarget?.kind == .copyHoldingIdentifier
+        && coreIdentifierAction?.actionTarget?.copyText == "CORE",
+    "allocation drill-down should expose copy identifier action metadata for public quote codes"
+)
 let fallbackFactsChildren = try require(
     holdingFactsDescriptor.sections.first { $0.id == "allocation" }?
         .rows.first { $0.title == "Fallback Facts Holding" }?
@@ -1805,6 +1823,10 @@ try check(
 try check(
     fallbackFactsChildren.map(\.title).contains("Recent move") == false,
     "allocation drill-down should omit recent move when price data is malformed"
+)
+try check(
+    fallbackFactsChildren.contains { $0.id.hasSuffix(".copyIdentifier") } == false,
+    "allocation drill-down should omit copy identifier action when no public quote code is present"
 )
 let sparseFactsChildren = try require(
     holdingFactsDescriptor.sections.first { $0.id == "allocation" }?
@@ -1821,6 +1843,19 @@ try check(
         "Gain/loss %",
     ].contains($0) },
     "allocation drill-down should omit unavailable or malformed holding fact rows"
+)
+try check(
+    sparseFactsChildren.contains { $0.id.hasSuffix(".copyIdentifier") } == false,
+    "allocation drill-down should omit numeric-only quote codes that could be private identifiers"
+)
+let holdingFactsSurface = MenuBarSurfaceRenderer.render(descriptor: holdingFactsDescriptor)
+let surfaceIdentifierAction = holdingFactsSurface.sections.first { $0.id == "allocation" }?
+    .rows.first { $0.id == "allocation.9601" }?
+    .children.first { $0.id == "allocation.9601.copyIdentifier" }
+try check(
+    surfaceIdentifierAction?.actionTarget?.kind == .copyHoldingIdentifier
+        && surfaceIdentifierAction?.actionTarget?.copyText == "CORE",
+    "menu surface rendering should preserve copy identifier action metadata"
 )
 
 var crowdedAllocationModel = concentrationRun.model
