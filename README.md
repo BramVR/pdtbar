@@ -35,6 +35,21 @@ Fixture mode exists for development only and must be launched explicitly.
 
 Implementation notes, architecture, smoke checks, and reuse guidance live in [`docs/`](docs/README.md). Start there before changing behavior.
 
+Common local workflow:
+
+```bash
+make docs-list
+make start
+make stop
+make test
+make check
+./Scripts/compile_and_run.sh
+```
+
+Use `make start` or `./Scripts/compile_and_run.sh` for manual UX testing. Both
+package and launch `PDTBar.app`; do not use raw `.build/debug/pdtbar` as the
+first-run product path.
+
 ## License
 
 License pending. Reused MIT-licensed code or direct copies must keep attribution; see [`docs/reuse-notes.md`](docs/reuse-notes.md).
