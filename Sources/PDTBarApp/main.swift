@@ -496,7 +496,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private func makeSectionHeadingView(title: String, accessibilityIdentifier: String) -> NSView {
         let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: 28))
         container.autoresizingMask = [.width]
-        container.setAccessibilityIdentifier(accessibilityIdentifier)
+        configureStaticMenuViewAccessibility(
+            container,
+            accessibilityIdentifier: accessibilityIdentifier,
+            label: title
+        )
 
         let titleField = NSTextField(labelWithString: title)
         titleField.font = NSFont.menuFont(ofSize: NSFont.systemFontSize)
@@ -570,9 +574,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let hasDetail = detail?.isEmpty == false
         let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: hasDetail ? 42 : 30))
         container.autoresizingMask = [.width]
-        if !accessibilityIdentifier.isEmpty {
-            container.setAccessibilityIdentifier(accessibilityIdentifier)
-        }
+        configureStaticMenuViewAccessibility(
+            container,
+            accessibilityIdentifier: accessibilityIdentifier,
+            label: detail.map { "\(title) - \($0)" } ?? title
+        )
 
         let titleField = NSTextField(labelWithString: title)
         titleField.font = NSFont.menuFont(ofSize: NSFont.systemFontSize)
@@ -609,6 +615,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         return container
+    }
+
+    private func configureStaticMenuViewAccessibility(
+        _ view: NSView,
+        accessibilityIdentifier: String,
+        label: String
+    ) {
+        view.setAccessibilityElement(true)
+        view.setAccessibilityLabel(label)
+        if !accessibilityIdentifier.isEmpty {
+            view.setAccessibilityIdentifier(accessibilityIdentifier)
+        }
     }
 
     private func applyDetailSubtitle(_ detail: String?, to item: NSMenuItem, title: String) {
