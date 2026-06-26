@@ -161,6 +161,7 @@ struct ClaudeLaunchFlowTests {
         #expect(rowTitles(in: fetchFailed) == ["Could not fetch portfolio", "Try again", "Log in with Claude"])
         #expect(MenuBarSurfaceRenderer.render(descriptor: fetchFailed).status.visual.isDimmed)
         #expect(cachedRefresh.statusTitle == cachedPulse.statusTitle)
+        #expect(cachedRefresh.sections.first?.id == "portfolioFetch")
         #expect(cachedRefresh.sections.map(\.id).contains("pulse"))
         #expect(rowTitles(in: cachedRefresh).contains("Refreshing portfolio"))
         #expect(cachedFailure.statusVisual.isDimmed)
@@ -170,6 +171,8 @@ struct ClaudeLaunchFlowTests {
         #expect(rowTitles(in: cachedFailure).contains("Fill details again"))
         #expect(!rowTitles(in: cachedFailure).contains("Log in with Claude"))
         #expect(rowTitles(in: cachedRefreshAction).contains("Refresh details"))
+        #expect(cachedRefreshAction.sections.first?.id == cachedPulse.sections.first?.id)
+        #expect(backgroundFailure.sections.first?.id == "portfolioFetch")
         #expect(rowTitles(in: backgroundFailure).contains("Details fill failed"))
         #expect(rowTitles(in: backgroundFailure).contains("Fill details again"))
         #expect(!rowTitles(in: backgroundFailure).contains("Log in with Claude"))
@@ -188,6 +191,7 @@ struct ClaudeLaunchFlowTests {
         )
 
         #expect(descriptor.statusTitle == cachedPulse.statusTitle)
+        #expect(descriptor.sections.first?.id == "portfolioFetch")
         #expect(rowTitles(in: descriptor).contains("Filling details"))
         #expect(rowTitles(in: descriptor).contains("Step 5/5: Price history"))
         #expect(rowTitles(in: descriptor).contains("12/19 price histories checked"))
@@ -201,6 +205,7 @@ struct ClaudeLaunchFlowTests {
         let descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailDegraded(cachedPulse: cachedPulse)
 
         #expect(descriptor.statusTitle == cachedPulse.statusTitle)
+        #expect(descriptor.sections.first?.id == "portfolioFetch")
         #expect(descriptor.sections.map(\.id).contains("pulse"))
         #expect(rowTitles(in: descriptor).contains("Details partially filled"))
         #expect(rowTitles(in: descriptor).contains("Fill details again"))

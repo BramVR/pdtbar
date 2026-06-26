@@ -1491,6 +1491,7 @@ public enum ClaudeLaunchFlow {
             case .probingClaude:
                 return cachedPulseDescriptor(
                     cachedPulse,
+                    rowsFirst: true,
                     rows: [
                         MenuRow(
                             id: "portfolioFetch.probing",
@@ -1503,6 +1504,7 @@ public enum ClaudeLaunchFlow {
             case .fetchingPortfolio:
                 return cachedPulseDescriptor(
                     cachedPulse,
+                    rowsFirst: true,
                     rows: [
                         MenuRow(
                             id: "portfolioFetch.refreshing",
@@ -1665,6 +1667,7 @@ public enum ClaudeLaunchFlow {
         cachedPulseDescriptor(
             cachedPulse,
             statusVisual: cachedPulse.statusVisual.withDimming(true),
+            rowsFirst: true,
             rows: [
                 MenuRow(
                     id: "portfolioFetch.backgroundFailed",
@@ -1687,6 +1690,7 @@ public enum ClaudeLaunchFlow {
     ) -> MenuDescriptor {
         cachedPulseDescriptor(
             cachedPulse,
+            rowsFirst: true,
             rows: backgroundDetailProgressRows(progress)
         )
     }
@@ -1695,6 +1699,7 @@ public enum ClaudeLaunchFlow {
         cachedPulseDescriptor(
             cachedPulse,
             statusVisual: cachedPulse.statusVisual.withDimming(true),
+            rowsFirst: true,
             rows: [
                 MenuRow(
                     id: "portfolioFetch.backgroundDegraded",
@@ -1768,20 +1773,20 @@ public enum ClaudeLaunchFlow {
     private static func cachedPulseDescriptor(
         _ cachedPulse: MenuDescriptor,
         statusVisual: StatusVisualState? = nil,
+        rowsFirst: Bool = false,
         rows: [MenuRow]
     ) -> MenuDescriptor {
-        MenuDescriptor(
+        let fetchSection = MenuSection(
+            id: "portfolioFetch",
+            title: "Portfolio",
+            rows: rows
+        )
+        return MenuDescriptor(
             statusTitle: cachedPulse.statusTitle,
             statusBadge: cachedPulse.statusBadge,
             statusVisual: statusVisual ?? cachedPulse.statusVisual,
             statusAccessibilityIdentifier: cachedPulse.statusAccessibilityIdentifier,
-            sections: cachedPulse.sections + [
-                MenuSection(
-                    id: "portfolioFetch",
-                    title: "Portfolio",
-                    rows: rows
-                ),
-            ]
+            sections: rowsFirst ? [fetchSection] + cachedPulse.sections : cachedPulse.sections + [fetchSection]
         )
     }
 
