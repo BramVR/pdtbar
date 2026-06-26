@@ -3490,7 +3490,7 @@ public enum PressureRunner {
         guard let snapshot = try snapshotStore.loadPriorSnapshot() else {
             return nil
         }
-        let readState = try pulseReadStore?.load()
+        let readState = displayReadState(from: pulseReadStore)
         let rawModel = PressureEngine.buildModel(from: snapshot, readState: readState)
         let model = modelAfterApplyingReadState(rawModel, readState: readState)
         return MenuDescriptorRenderer.render(model: model)
@@ -3525,7 +3525,7 @@ public enum PressureRunner {
         } catch {
             priorSnapshot = nil
         }
-        let loadedReadState = try pulseReadStore?.load()
+        let loadedReadState = displayReadState(from: pulseReadStore)
         let rawModel = PressureEngine.buildModel(from: snapshot, priorSnapshot: priorSnapshot, readState: loadedReadState)
         let readState = try readStateAfterResettingReappearedItems(
             in: rawModel,
@@ -3536,6 +3536,13 @@ public enum PressureRunner {
         let commit = try snapshotStore.commitCurrentSnapshot(snapshot)
         let descriptor = MenuDescriptorRenderer.render(model: model)
         return PressureRunResult(model: model, snapshotCommit: commit, descriptor: descriptor)
+    }
+
+    private static func displayReadState(from pulseReadStore: PulseReadStore?) -> PulseReadState? {
+        guard let pulseReadStore else {
+            return nil
+        }
+        return try? pulseReadStore.load()
     }
 
     public static func run(fixture: URL, snapshotDirectory: URL) throws -> PressureRunResult {

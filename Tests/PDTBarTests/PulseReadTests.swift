@@ -65,6 +65,25 @@ struct PulseReadTests {
         }
     }
 
+    @Test("Unreadable read state does not block pulse rendering")
+    func unreadableReadStateDoesNotBlockPulseRendering() throws {
+        let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-unreadable-read-render-test")
+        let readStore = PulseReadStore(directory: snapshotStore.directory)
+        try FileManager.default.createDirectory(
+            at: snapshotStore.directory.appending(path: "pulse-read-state.json"),
+            withIntermediateDirectories: true
+        )
+
+        let run = try PressureRunner.run(
+            dataSource: StaticPortfolioDataSource(snapshot: fixtureSnapshot("concentration-pressure.json")),
+            snapshotStore: snapshotStore,
+            pulseReadStore: readStore
+        )
+
+        #expect(!run.model.rankedAttentionItems.isEmpty)
+        #expect(run.descriptor.statusBadge != nil)
+    }
+
     @Test("Same fingerprint hides attention but keeps facet drill-down facts visible")
     func sameFingerprintHidesAttentionOnly() throws {
         let snapshot = try fixtureSnapshot("concentration-pressure.json")
