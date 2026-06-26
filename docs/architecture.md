@@ -28,6 +28,11 @@ read_when:
 
 Claude/PDT readiness probe -> `PortfolioDataSource` -> normalized `PortfolioSnapshot` -> `SnapshotStore` -> pressure engine -> `PortfolioPulseModel` -> `MenuDescriptor` -> `PDTBarAppSupport` action/status helpers -> AppKit menu/status item.
 
+`PressureRunner` is the Pulse lifecycle seam for cached snapshots, first fetches,
+and refreshed snapshots: it loads prior state, computes pressure, applies/reset
+read state, commits snapshot metadata when needed, and returns the rendered
+descriptor as one `PulseLifecycleResult`.
+
 Fixture mode uses the same engine/render path but is explicit developer tooling.
 
 ## Boundaries

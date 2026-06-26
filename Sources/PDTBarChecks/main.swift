@@ -77,23 +77,32 @@ try check(
     reloadedReadState.contains(pressureItem.readFingerprint),
     "read store should persist marked fingerprints across reload"
 )
-let filteredPressure = PulseReadFilter.apply(to: pressureModel, readState: try readStore.load())
-let filteredDescriptor = MenuDescriptorRenderer.render(model: filteredPressure)
-try check(filteredPressure.rankedAttentionItems.isEmpty, "same read fingerprint should hide Pulse attention rows")
-try check(filteredDescriptor.statusBadge == nil, "same read fingerprint should clear status badge count")
-try check(filteredDescriptor.statusVisual.filledBarCount == 0, "same read fingerprint should clear status fill count")
-try check(filteredDescriptor.statusTitle.contains("All caught up"), "all-read pressure should render caught-up copy")
+let readSnapshotStore = SnapshotStore(directory: readStore.directory)
+_ = try readSnapshotStore.commitCurrentSnapshot(pressureSnapshot)
+let caughtUpPulse = try require(
+    PressureRunner.cachedPulse(snapshotStore: readSnapshotStore, pulseReadStore: readStore),
+    "cached pulse lifecycle should load the committed read-state snapshot"
+)
+try check(caughtUpPulse.source == .cachedSnapshot, "cached pulse lifecycle should report cached source")
+try check(caughtUpPulse.snapshotCommit.written == false, "cached pulse lifecycle should not rewrite snapshot state")
+try check(caughtUpPulse.model.rankedAttentionItems.isEmpty, "same read fingerprint should hide Pulse attention rows")
+try check(caughtUpPulse.descriptor.statusBadge == nil, "same read fingerprint should clear status badge count")
+try check(caughtUpPulse.descriptor.statusVisual.filledBarCount == 0, "same read fingerprint should clear status fill count")
+try check(caughtUpPulse.descriptor.statusTitle.contains("All caught up"), "all-read pressure should render caught-up copy")
 try check(
-    filteredDescriptor.sections.first { $0.id == "allocation" }?.rows.contains { $0.title == "Nova Lithography" } == true,
+    caughtUpPulse.descriptor.sections.first { $0.id == "allocation" }?.rows.contains { $0.title == "Nova Lithography" } == true,
     "read attention should not hide allocation drill-down facts"
 )
 var changedPressureSnapshot = pressureSnapshot
 changedPressureSnapshot.openHoldings[0].weight = 0.265
-let changedPressureModel = PressureEngine.buildModel(from: changedPressureSnapshot)
-let changedFilteredPressure = PulseReadFilter.apply(to: changedPressureModel, readState: try readStore.load())
+let changedPulse = try PressureRunner.run(
+    dataSource: StaticPortfolioDataSource(snapshot: changedPressureSnapshot),
+    snapshotStore: readSnapshotStore,
+    pulseReadStore: readStore
+)
 try check(
-    changedFilteredPressure.rankedAttentionItems.first?.holdingIdentity?.quoteId == pressureItem.holdingIdentity?.quoteId
-        && changedFilteredPressure.rankedAttentionItems.first?.readFingerprint != pressureItem.readFingerprint,
+    changedPulse.model.rankedAttentionItems.first?.holdingIdentity?.quoteId == pressureItem.holdingIdentity?.quoteId
+        && changedPulse.model.rankedAttentionItems.first?.readFingerprint != pressureItem.readFingerprint,
     "changed material fingerprint should resurface as unread"
 )
 let markReadRow = MenuDescriptorRenderer.render(model: pressureModel)
@@ -2446,6 +2455,18 @@ fileprivate final class OneShotFailingPDTConnector: PDTMCPConnector, @unchecked 
             throw CheckFailure("missing scripted PDT response for \(key)")
         }
         return response
+    }
+}
+
+private struct StaticPortfolioDataSource: PortfolioDataSource {
+    var fixedSnapshot: PortfolioSnapshot
+
+    init(snapshot: PortfolioSnapshot) {
+        fixedSnapshot = snapshot
+    }
+
+    func snapshot(asOf: String?) throws -> PortfolioSnapshot {
+        fixedSnapshot
     }
 }
 

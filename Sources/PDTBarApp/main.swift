@@ -5,8 +5,7 @@ import PDTBarAppSupport
 import PDTBarCore
 
 private struct PortfolioFetchOutcome: @unchecked Sendable {
-    var model: PortfolioPulseModel?
-    var descriptor: MenuDescriptor?
+    var pulse: PulseLifecycleResult? = nil
     var errorDescription: String?
     var detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome?
     var shouldStartBackgroundRefresh = false
@@ -25,7 +24,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let loginHandoff: ClaudeLoginHandoff
     private let onboardingCoordinator = PDTOnboardingCoordinator()
     private var statusItem: NSStatusItem?
-    private var cachedPulseModel: PortfolioPulseModel?
+    private var currentPulse: PulseLifecycleResult?
     private var cachedPulseDescriptor: MenuDescriptor?
     private var portfolioFetchInFlight = false
     private var portfolioRefreshInFlight = false
@@ -57,9 +56,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         switch options.mode {
         case .claudeFirst:
             activeSnapshotDirectory = firstFetchStateDirectory()
-            let cachedPulse = loadCachedPulseDescriptor()
-            cachedPulseDescriptor = cachedPulse
-            handleOnboardingUpdate(onboardingCoordinator.launch(cachedPulse: cachedPulse))
+            let cachedPulse = loadCachedPulse()
+            currentPulse = cachedPulse
+            cachedPulseDescriptor = cachedPulse?.descriptor
+            handleOnboardingUpdate(onboardingCoordinator.launch(cachedPulse: cachedPulse?.descriptor))
         case let .fixture(fixture):
             let dataSource = PDTFixtureDataSource(fixture: fixture)
             let snapshotDirectory = try fixtureSnapshotDirectory()
@@ -69,7 +69,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 snapshotStore: SnapshotStore(directory: snapshotDirectory),
                 pulseReadStore: PulseReadStore(directory: snapshotDirectory)
             )
-            cachedPulseModel = result.model
+            currentPulse = result
             cachedPulseDescriptor = result.descriptor
             installMenuBarItem(result.descriptor)
         }
@@ -130,31 +130,31 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                     )
                     let result = try fetch.fetch()
                     outcome = PortfolioFetchOutcome(
-                        model: result.model,
-                        descriptor: result.descriptor,
+                        pulse: result,
                         errorDescription: nil,
                         shouldStartBackgroundRefresh: configuration.shouldStartBackgroundRefresh
                     )
                 } catch {
-                    outcome = PortfolioFetchOutcome(model: nil, descriptor: nil, errorDescription: "\(error)")
+                    outcome = PortfolioFetchOutcome(errorDescription: "\(error)")
                 }
                 DispatchQueue.main.async { [weak self] in
                     self?.finishFirstPortfolioFetch(outcome)
                 }
             }
         } catch {
-            finishFirstPortfolioFetch(PortfolioFetchOutcome(model: nil, descriptor: nil, errorDescription: "\(error)"))
+            finishFirstPortfolioFetch(PortfolioFetchOutcome(errorDescription: "\(error)"))
         }
     }
 
     private func finishFirstPortfolioFetch(_ outcome: PortfolioFetchOutcome) {
         portfolioFetchInFlight = false
         stopPortfolioFetchProgressTimer()
-        if let descriptor = outcome.descriptor {
-            let refreshed = descriptorApplyingCurrentReadState(model: outcome.model, fallback: descriptor)
-            cachedPulseModel = refreshed.model
-            cachedPulseDescriptor = refreshed.descriptor
-            installMenuBarItem(onboardingCoordinator.completeFirstFetch(.succeeded(refreshed.descriptor)).descriptor)
+        if let pulse = outcome.pulse {
+            let refreshedPulse = pulseApplyingCurrentReadState(pulse)
+            let descriptor = refreshedPulse.descriptor
+            currentPulse = refreshedPulse
+            cachedPulseDescriptor = descriptor
+            installMenuBarItem(onboardingCoordinator.completeFirstFetch(.succeeded(descriptor)).descriptor)
             if outcome.shouldStartBackgroundRefresh {
                 startBackgroundPortfolioRefresh()
             }
@@ -229,7 +229,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             refreshConfiguration = try backgroundRefreshConnectorConfiguration(environment: environment)
         } catch {
             finishBackgroundPortfolioRefresh(
-                PortfolioFetchOutcome(model: nil, descriptor: nil, errorDescription: "\(error)")
+                PortfolioFetchOutcome(errorDescription: "\(error)")
             )
             return
         }
@@ -260,13 +260,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
                 outcome = PortfolioFetchOutcome(
-                    model: result.model,
-                    descriptor: result.descriptor,
+                    pulse: result.pulse,
                     errorDescription: nil,
                     detailRefreshOutcome: result.outcome
                 )
             } catch {
-                outcome = PortfolioFetchOutcome(model: nil, descriptor: nil, errorDescription: "\(error)")
+                outcome = PortfolioFetchOutcome(errorDescription: "\(error)")
             }
             DispatchQueue.main.async { [weak self] in
                 self?.finishBackgroundPortfolioRefresh(outcome)
@@ -276,14 +275,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func finishBackgroundPortfolioRefresh(_ outcome: PortfolioFetchOutcome) {
         portfolioRefreshInFlight = false
-        if let descriptor = outcome.descriptor {
-            let refreshed = descriptorApplyingCurrentReadState(model: outcome.model, fallback: descriptor)
-            cachedPulseModel = refreshed.model
-            cachedPulseDescriptor = refreshed.descriptor
+        if let pulse = outcome.pulse {
+            let refreshedPulse = pulseApplyingCurrentReadState(pulse)
+            let descriptor = refreshedPulse.descriptor
+            currentPulse = refreshedPulse
+            cachedPulseDescriptor = descriptor
             if outcome.detailRefreshOutcome == .degraded {
-                installMenuBarItem(ClaudeLaunchFlow.descriptorForBackgroundDetailDegraded(cachedPulse: refreshed.descriptor))
+                installMenuBarItem(ClaudeLaunchFlow.descriptorForBackgroundDetailDegraded(cachedPulse: descriptor))
             } else {
-                installPortfolioPulseDescriptor(refreshed.descriptor)
+                installPortfolioPulseDescriptor(descriptor)
             }
             return
         }
@@ -402,12 +402,20 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         activeSnapshotDirectory ?? firstFetchStateDirectory()
     }
 
-    private func loadCachedPulseDescriptor() -> MenuDescriptor? {
+    private func loadCachedPulse() -> PulseLifecycleResult? {
         let directory = currentSnapshotDirectory()
-        return try? PressureRunner.cachedPulseDescriptor(
+        return try? PressureRunner.cachedPulse(
             snapshotStore: SnapshotStore(directory: directory),
             pulseReadStore: PulseReadStore(directory: directory)
         )
+    }
+
+    private func pulseApplyingCurrentReadState(_ pulse: PulseLifecycleResult) -> PulseLifecycleResult {
+        let readStore = PulseReadStore(directory: currentSnapshotDirectory())
+        guard let readState = try? readStore.load() else {
+            return pulse
+        }
+        return pulse.applyingReadState(readState)
     }
 
     private func fixtureSnapshotDirectory() throws -> URL {
@@ -449,21 +457,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installPortfolioPulseDescriptor(_ descriptor: MenuDescriptor) {
         installMenuBarItem(onboardingCoordinator.completeFirstFetch(.succeeded(descriptor)).descriptor)
-    }
-
-    private func descriptorApplyingCurrentReadState(
-        model: PortfolioPulseModel?,
-        fallback descriptor: MenuDescriptor
-    ) -> (model: PortfolioPulseModel?, descriptor: MenuDescriptor) {
-        guard let model else {
-            return (nil, descriptor)
-        }
-        let readStore = PulseReadStore(directory: currentSnapshotDirectory())
-        guard let readState = try? readStore.load() else {
-            return (model, descriptor)
-        }
-        let filteredModel = PulseReadFilter.apply(to: model, readState: readState)
-        return (filteredModel, MenuDescriptorRenderer.render(model: filteredModel))
     }
 
     private func makeMenu(from surface: MenuBarSurface) -> NSMenu {
@@ -649,20 +642,21 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             let directory = currentSnapshotDirectory()
             let readStore = PulseReadStore(directory: directory)
             try readStore.markRead(fingerprint)
-            if let cachedPulseModel {
-                let filteredModel = PulseReadFilter.apply(to: cachedPulseModel, readState: try readStore.load())
-                let descriptor = MenuDescriptorRenderer.render(model: filteredModel)
-                self.cachedPulseModel = filteredModel
-                cachedPulseDescriptor = descriptor
-                installPortfolioPulseDescriptor(descriptor)
+            if let currentPulse {
+                let refreshedPulse = currentPulse.applyingReadState(try readStore.load())
+                self.currentPulse = refreshedPulse
+                cachedPulseDescriptor = refreshedPulse.descriptor
+                installPortfolioPulseDescriptor(refreshedPulse.descriptor)
                 return
             }
-            guard let descriptor = try PressureRunner.cachedPulseDescriptor(
+            guard let cachedPulse = try PressureRunner.cachedPulse(
                 snapshotStore: SnapshotStore(directory: directory),
                 pulseReadStore: readStore
             ) else {
                 return
             }
+            currentPulse = cachedPulse
+            let descriptor = cachedPulse.descriptor
             cachedPulseDescriptor = descriptor
             installPortfolioPulseDescriptor(descriptor)
         } catch {
