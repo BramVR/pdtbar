@@ -1849,6 +1849,7 @@ public enum PDTOnboardingEffect: Equatable {
     case probeReadiness
     case startLoginHandoff
     case startFirstFetch
+    case startBackgroundDetailRefresh
 }
 
 public struct PDTOnboardingUpdate: Equatable {
@@ -1882,12 +1883,18 @@ public enum PDTLaunchFetchResult: Equatable {
     case failed(String)
 }
 
+public enum PDTLaunchBackgroundDetailRefreshResult: Equatable {
+    case succeeded(PulseLifecycleResult, outcome: PDTBackgroundDetailRefreshOutcome)
+    case failed(String)
+}
+
 public final class PDTLaunchRuntime {
     public private(set) var currentPulse: PulseLifecycleResult?
     public private(set) var state: ClaudeLaunchState = .probingClaude
     public private(set) var readinessProbeInFlight = false
     public private(set) var readinessAttemptID = 0
     public private(set) var firstFetchInFlight = false
+    public private(set) var backgroundDetailRefreshInFlight = false
     private var lastDescriptor: MenuDescriptor?
 
     public init() {}
@@ -1906,7 +1913,8 @@ public final class PDTLaunchRuntime {
 
     public func completeReadinessProbe(
         _ result: ClaudeReadinessProbeResult,
-        attemptID: Int? = nil
+        attemptID: Int? = nil,
+        allowsBackgroundDetailRefresh: Bool = true
     ) -> PDTOnboardingUpdate {
         if let attemptID, attemptID != readinessAttemptID {
             return currentUpdate()
@@ -1914,8 +1922,11 @@ public final class PDTLaunchRuntime {
         readinessProbeInFlight = false
         let nextState = ClaudeLaunchFlow.state(afterReadinessProbe: result)
         if nextState == .fetchingPortfolio {
-            guard !firstFetchInFlight else {
-                return update(state: nextState)
+            guard !firstFetchInFlight, !backgroundDetailRefreshInFlight else {
+                return currentUpdate()
+            }
+            if let currentPulse, allowsBackgroundDetailRefresh {
+                return startBackgroundDetailRefresh(with: currentPulse)
             }
             firstFetchInFlight = true
             return update(state: nextState, effect: .startFirstFetch)
@@ -1943,8 +1954,11 @@ public final class PDTLaunchRuntime {
     }
 
     public func retryFirstFetch() -> PDTOnboardingUpdate? {
-        guard !firstFetchInFlight else {
+        guard !firstFetchInFlight, !backgroundDetailRefreshInFlight else {
             return nil
+        }
+        if let currentPulse {
+            return startBackgroundDetailRefresh(with: currentPulse)
         }
         firstFetchInFlight = true
         return update(state: .fetchingPortfolio, effect: .startFirstFetch)
@@ -1967,8 +1981,51 @@ public final class PDTLaunchRuntime {
         }
     }
 
-    public func handOffFirstFetchToBackgroundRefresh() {
-        firstFetchInFlight = false
+    public func beginBackgroundDetailRefresh() -> PDTOnboardingUpdate? {
+        guard let currentPulse, !firstFetchInFlight, !backgroundDetailRefreshInFlight else {
+            return nil
+        }
+        return startBackgroundDetailRefresh(with: currentPulse)
+    }
+
+    public func backgroundDetailRefreshProgress(_ progress: BackgroundDetailRefreshProgress) -> PDTOnboardingUpdate? {
+        guard backgroundDetailRefreshInFlight, let pulse = currentPulse else {
+            return nil
+        }
+        state = .fetchingPortfolio
+        let descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+            cachedPulse: pulse.descriptor,
+            progress: progress
+        )
+        lastDescriptor = descriptor
+        return PDTOnboardingUpdate(
+            state: state,
+            descriptor: descriptor
+        )
+    }
+
+    public func completeBackgroundDetailRefresh(
+        _ result: PDTLaunchBackgroundDetailRefreshResult
+    ) -> PDTOnboardingUpdate {
+        backgroundDetailRefreshInFlight = false
+        switch result {
+        case let .succeeded(pulse, outcome):
+            currentPulse = pulse
+            state = .fetchingPortfolio
+            let descriptor: MenuDescriptor
+            if outcome == .degraded {
+                descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailDegraded(cachedPulse: pulse.descriptor)
+            } else {
+                descriptor = ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: pulse.descriptor)
+            }
+            lastDescriptor = descriptor
+            return PDTOnboardingUpdate(
+                state: state,
+                descriptor: descriptor
+            )
+        case .failed:
+            return update(state: .portfolioFetchFailed)
+        }
     }
 
     public func replaceCurrentPulse(_ pulse: PulseLifecycleResult) {
@@ -1976,6 +2033,7 @@ public final class PDTLaunchRuntime {
     }
 
     public func publishPulse(_ pulse: PulseLifecycleResult) -> PDTOnboardingUpdate {
+        backgroundDetailRefreshInFlight = false
         currentPulse = pulse
         state = .fetchingPortfolio
         let descriptor = ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: pulse.descriptor)
@@ -1990,6 +2048,22 @@ public final class PDTLaunchRuntime {
         readinessAttemptID += 1
         readinessProbeInFlight = true
         return update(state: .probingClaude, effect: .probeReadiness)
+    }
+
+    private func startBackgroundDetailRefresh(with pulse: PulseLifecycleResult) -> PDTOnboardingUpdate {
+        firstFetchInFlight = false
+        backgroundDetailRefreshInFlight = true
+        state = .fetchingPortfolio
+        let descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+            cachedPulse: pulse.descriptor,
+            progress: BackgroundDetailRefreshProgress(phase: .baseHoldings)
+        )
+        lastDescriptor = descriptor
+        return PDTOnboardingUpdate(
+            state: state,
+            descriptor: descriptor,
+            effect: .startBackgroundDetailRefresh
+        )
     }
 
     private func update(
@@ -2172,6 +2246,8 @@ public final class PDTOnboardingRunner {
         case .startFirstFetch:
             handle(coordinator.beginFirstFetch())
             handle(coordinator.completeFirstFetch(dependencies.firstFetch()))
+        case .startBackgroundDetailRefresh:
+            return
         }
     }
 }
