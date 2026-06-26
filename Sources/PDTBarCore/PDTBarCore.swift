@@ -3697,17 +3697,24 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         for calendarEvents: [LiveCalendarEvent],
         holdings: [NormalizedHolding]
     ) throws -> [Int: Int] {
-        guard calendarEvents.contains(where: { $0.symbolId != nil }) else {
+        var neededSymbolIDs = Set(calendarEvents.compactMap(\.symbolId))
+        guard !neededSymbolIDs.isEmpty else {
             return [:]
         }
         var quoteIDsBySymbolID: [Int: Int] = [:]
-        for holding in holdings {
+        for holding in holdings.reversed() {
             let quote: LiveSymbolQuoteEnvelope = try callDecodedWithRetry(
                 "pdt-get-symbol-quote",
                 phase: .income,
                 arguments: ["id": String(holding.quoteId)]
             )
+            guard neededSymbolIDs.remove(quote.symbolId) != nil else {
+                continue
+            }
             quoteIDsBySymbolID[quote.symbolId] = quote.id
+            if neededSymbolIDs.isEmpty {
+                break
+            }
         }
         return quoteIDsBySymbolID
     }
