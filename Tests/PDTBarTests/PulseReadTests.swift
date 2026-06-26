@@ -52,6 +52,19 @@ struct PulseReadTests {
         #expect(try store.load().readFingerprints.isEmpty)
     }
 
+    @Test("Unreadable read state aborts mutation instead of resetting")
+    func unreadableReadStateAbortsMutationInsteadOfResetting() throws {
+        let store = try temporaryPulseReadStore()
+        try FileManager.default.createDirectory(
+            at: store.directory.appending(path: "pulse-read-state.json"),
+            withIntermediateDirectories: true
+        )
+
+        #expect(throws: (any Error).self) {
+            try store.markRead("pulse:v1:new")
+        }
+    }
+
     @Test("Same fingerprint hides attention but keeps facet drill-down facts visible")
     func sameFingerprintHidesAttentionOnly() throws {
         let snapshot = try fixtureSnapshot("concentration-pressure.json")

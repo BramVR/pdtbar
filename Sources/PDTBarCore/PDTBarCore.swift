@@ -363,9 +363,16 @@ public struct PulseReadStore: Sendable {
         guard FileManager.default.fileExists(atPath: target.path) else {
             return PulseReadState()
         }
-        guard let data = try? Data(contentsOf: target),
-              let state = try? JSONDecoder().decode(PulseReadState.self, from: data)
-        else {
+        let data: Data
+        do {
+            data = try Data(contentsOf: target)
+        } catch {
+            if !FileManager.default.fileExists(atPath: target.path) {
+                return PulseReadState()
+            }
+            throw error
+        }
+        guard let state = try? JSONDecoder().decode(PulseReadState.self, from: data) else {
             return PulseReadState()
         }
         return state
