@@ -83,7 +83,10 @@ This uses no live Claude credentials. It drives the connector-backed
 `PortfolioDataSource` path with live-shaped scripted MCP responses, checks all
 required v1 PDT read tools are available, verifies only those tools are called,
 and proves each required read tool is called exactly once for the coalesced
-fetch. The proof artifact reports selectors/counts/scenario status only; no raw
+fetch. It also exercises progressive background detail refresh with one missing
+optional price-history response, proving completed allocation/X-ray/income data
+is preserved, a redacted diagnostic is stored, and a retry clears the degraded
+state. The proof artifact reports selectors/counts/scenario status only; no raw
 portfolio payloads, values, account identifiers, or live data are written.
 
 Scripted Claude login handoff e2e:

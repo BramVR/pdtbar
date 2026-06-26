@@ -1399,6 +1399,60 @@ public enum ClaudeLoginFailureReason: Equatable, Sendable {
     case launchFailed
 }
 
+public enum BackgroundDetailRefreshPhase: String, Codable, Equatable, Sendable, CaseIterable {
+    case baseHoldings
+    case allocation
+    case xRay
+    case income
+    case priceHistory
+
+    public var stepIndex: Int {
+        switch self {
+        case .baseHoldings:
+            1
+        case .allocation:
+            2
+        case .xRay:
+            3
+        case .income:
+            4
+        case .priceHistory:
+            5
+        }
+    }
+
+    public var title: String {
+        switch self {
+        case .baseHoldings:
+            "Base holdings"
+        case .allocation:
+            "Allocation"
+        case .xRay:
+            "X-ray"
+        case .income:
+            "Income"
+        case .priceHistory:
+            "Price history"
+        }
+    }
+}
+
+public struct BackgroundDetailRefreshProgress: Codable, Equatable, Sendable {
+    public var phase: BackgroundDetailRefreshPhase
+    public var completedUnitCount: Int?
+    public var totalUnitCount: Int?
+
+    public init(
+        phase: BackgroundDetailRefreshPhase,
+        completedUnitCount: Int? = nil,
+        totalUnitCount: Int? = nil
+    ) {
+        self.phase = phase
+        self.completedUnitCount = completedUnitCount
+        self.totalUnitCount = totalUnitCount
+    }
+}
+
 public enum ClaudeLaunchFlow {
     public static func state(afterReadinessProbe result: ClaudeReadinessProbeResult?) -> ClaudeLaunchState {
         guard let result else {
@@ -1627,6 +1681,36 @@ public enum ClaudeLaunchFlow {
         )
     }
 
+    public static func descriptorForBackgroundDetailProgress(
+        cachedPulse: MenuDescriptor,
+        progress: BackgroundDetailRefreshProgress
+    ) -> MenuDescriptor {
+        cachedPulseDescriptor(
+            cachedPulse,
+            rows: backgroundDetailProgressRows(progress)
+        )
+    }
+
+    public static func descriptorForBackgroundDetailDegraded(cachedPulse: MenuDescriptor) -> MenuDescriptor {
+        cachedPulseDescriptor(
+            cachedPulse,
+            statusVisual: cachedPulse.statusVisual.withDimming(true),
+            rows: [
+                MenuRow(
+                    id: "portfolioFetch.backgroundDegraded",
+                    role: .fetchStatus,
+                    title: "Details partially filled",
+                    detail: "Some optional details can be retried"
+                ),
+                MenuRow(
+                    id: "portfolioFetch.retry",
+                    role: .fetchRetry,
+                    title: "Fill details again"
+                ),
+            ]
+        )
+    }
+
     public static func formatElapsedSeconds(_ seconds: Int) -> String {
         let safeSeconds = max(0, seconds)
         return "\(safeSeconds / 60):\(String(format: "%02d", safeSeconds % 60))"
@@ -1699,6 +1783,35 @@ public enum ClaudeLaunchFlow {
                 ),
             ]
         )
+    }
+
+    private static func backgroundDetailProgressRows(_ progress: BackgroundDetailRefreshProgress) -> [MenuRow] {
+        var rows = [
+            MenuRow(
+                id: "portfolioFetch.backgroundProgress",
+                role: .fetchStatus,
+                title: "Filling details",
+                detail: "Keeping last pulse visible"
+            ),
+            MenuRow(
+                id: "portfolioFetch.backgroundProgress.phase",
+                role: .fetchStatus,
+                title: "Step \(progress.phase.stepIndex)/\(BackgroundDetailRefreshPhase.allCases.count): \(progress.phase.title)"
+            ),
+        ]
+        if progress.phase == .priceHistory,
+           let completed = progress.completedUnitCount,
+           let total = progress.totalUnitCount
+        {
+            rows.append(
+                MenuRow(
+                    id: "portfolioFetch.backgroundProgress.priceHistory",
+                    role: .fetchStatus,
+                    title: "\(max(0, completed))/\(max(0, total)) price histories checked"
+                )
+            )
+        }
+        return rows
     }
 
     private static func portfolioFetchFailureRows() -> [MenuRow] {
@@ -2999,6 +3112,7 @@ public final class ScriptedPDTMCPConnector: PDTMCPConnector {
     public var initialCallDelaySeconds: Double?
     public private(set) var availabilityChecks = 0
     public private(set) var calls: [String] = []
+    private let lock = NSLock()
 
     public init(
         availableTools: Set<String> = Set(PDTReadTools.requiredV1),
@@ -3013,15 +3127,27 @@ public final class ScriptedPDTMCPConnector: PDTMCPConnector {
     }
 
     public func availableReadTools() throws -> Set<String> {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
         availabilityChecks += 1
         return availableTools
     }
 
     public func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
+        lock.lock()
         calls.append(name)
         if let delay = initialCallDelaySeconds, delay > 0 {
             initialCallDelaySeconds = nil
+            lock.unlock()
             Thread.sleep(forTimeInterval: delay)
+        } else {
+            lock.unlock()
+        }
+        lock.lock()
+        defer {
+            lock.unlock()
         }
         if let failure {
             throw failure
@@ -3238,6 +3364,521 @@ public enum PDTLiveUnavailableClassifier {
             }
         }
         return texts
+    }
+}
+
+public enum PDTBackgroundDetailRefreshOutcome: String, Codable, Equatable, Sendable {
+    case completed
+    case degraded
+}
+
+public enum PDTDetailRefreshFailureCategory: String, Codable, Equatable, Sendable {
+    case setupUnavailable
+    case transientFailure
+    case missingScriptedResponse
+    case decode
+    case unavailable
+    case exit
+}
+
+public struct PDTDetailRefreshFailureDiagnostic: Codable, Equatable, Sendable {
+    public var toolName: String
+    public var phase: BackgroundDetailRefreshPhase
+    public var attemptCount: Int
+    public var category: PDTDetailRefreshFailureCategory
+    public var argumentShape: [String]
+
+    public init(
+        toolName: String,
+        phase: BackgroundDetailRefreshPhase,
+        attemptCount: Int,
+        category: PDTDetailRefreshFailureCategory,
+        argumentShape: [String]
+    ) {
+        self.toolName = toolName
+        self.phase = phase
+        self.attemptCount = attemptCount
+        self.category = category
+        self.argumentShape = argumentShape.sorted()
+    }
+}
+
+public struct PDTBackgroundDetailRefreshOptions: Equatable, Sendable {
+    public var priceHistoryConcurrencyLimit: Int
+    public var optionalRetryCount: Int
+    public var retryBackoffSeconds: Double
+
+    public init(
+        priceHistoryConcurrencyLimit: Int = 4,
+        optionalRetryCount: Int = 1,
+        retryBackoffSeconds: Double = 0.35
+    ) {
+        self.priceHistoryConcurrencyLimit = max(1, priceHistoryConcurrencyLimit)
+        self.optionalRetryCount = max(0, optionalRetryCount)
+        self.retryBackoffSeconds = max(0, retryBackoffSeconds)
+    }
+}
+
+public struct PDTBackgroundDetailRefreshResult: Equatable {
+    public var outcome: PDTBackgroundDetailRefreshOutcome
+    public var model: PortfolioPulseModel
+    public var snapshotCommit: SnapshotCommit
+    public var descriptor: MenuDescriptor
+    public var diagnostics: [PDTDetailRefreshFailureDiagnostic]
+}
+
+public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
+    private let connector: any PDTMCPConnector
+    private let snapshotStore: SnapshotStore
+    private let pulseReadStore: PulseReadStore?
+    private let asOf: String?
+    private let options: PDTBackgroundDetailRefreshOptions
+
+    public init(
+        connector: any PDTMCPConnector,
+        snapshotStore: SnapshotStore,
+        pulseReadStore: PulseReadStore? = nil,
+        asOf: String? = nil,
+        options: PDTBackgroundDetailRefreshOptions = PDTBackgroundDetailRefreshOptions()
+    ) {
+        self.connector = connector
+        self.snapshotStore = snapshotStore
+        self.pulseReadStore = pulseReadStore
+        self.asOf = asOf
+        self.options = options
+    }
+
+    public func refresh(
+        progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void = { _ in }
+    ) throws -> PDTBackgroundDetailRefreshResult {
+        let requiredTools = [
+            "pdt-get-portfolio-holdings",
+            "pdt-get-portfolio-distributions",
+            "pdt-list-x-ray-holdings",
+            "pdt-list-calendar-events",
+            "pdt-list-dividends",
+            "pdt-list-symbol-prices",
+        ]
+        let availableTools = try connector.availableReadTools(required: Set(requiredTools))
+        let missing = requiredTools.filter { !availableTools.contains($0) }
+        guard missing.isEmpty else {
+            throw PDTMCPConnectorError.missingRequiredReadTools(missing)
+        }
+
+        let snapshotAsOf = asOf ?? currentDayString()
+        let originalPriorSnapshot = try? snapshotStore.loadPriorSnapshot()
+        var diagnostics: [PDTDetailRefreshFailureDiagnostic] = []
+        var snapshot = try baseSnapshot(asOf: snapshotAsOf, progress: progress)
+        preserveOptionalDetails(in: &snapshot, from: originalPriorSnapshot)
+        _ = try snapshotStore.commitCurrentSnapshot(snapshot)
+
+        do {
+            progress(BackgroundDetailRefreshProgress(phase: .allocation))
+            let distributions: LiveDistributionsEnvelope = try callDecodedWithRetry(
+                "pdt-get-portfolio-distributions",
+                phase: .allocation,
+                arguments: [:]
+            )
+            snapshot.sectors = distributions.sectors.map(\.summary)
+            snapshot.assetTypes = distributions.assetTypes.map(\.summary)
+            _ = try snapshotStore.commitCurrentSnapshot(snapshot)
+        } catch {
+            diagnostics.append(diagnostic(for: error, tool: "pdt-get-portfolio-distributions", phase: .allocation))
+        }
+
+        do {
+            progress(BackgroundDetailRefreshProgress(phase: .xRay))
+            snapshot.xRayHoldings = try xRayHoldings()
+            _ = try snapshotStore.commitCurrentSnapshot(snapshot)
+        } catch {
+            diagnostics.append(diagnostic(for: error, tool: "pdt-list-x-ray-holdings", phase: .xRay, arguments: [
+                "limit": "",
+                "offset": "",
+            ]))
+        }
+
+        do {
+            progress(BackgroundDetailRefreshProgress(phase: .income))
+            let income = try incomeEvents(asOf: snapshotAsOf)
+            snapshot.incomeEvents = income.events
+            snapshot.dividendRowCount = income.dividendRowCount
+            _ = try snapshotStore.commitCurrentSnapshot(snapshot)
+        } catch {
+            diagnostics.append(diagnostic(for: error, tool: "pdt-list-calendar-events", phase: .income))
+        }
+
+        progress(BackgroundDetailRefreshProgress(
+            phase: .priceHistory,
+            completedUnitCount: 0,
+            totalUnitCount: snapshot.openHoldings.count
+        ))
+        let priceHistory = priceSeries(
+            for: snapshot.openHoldings,
+            asOf: snapshotAsOf,
+            progress: progress
+        )
+        snapshot.priceSeries = priceSeriesWithPriorFallback(
+            refreshed: priceHistory.points,
+            failedQuoteIDs: priceHistory.failedQuoteIDs,
+            priorSnapshot: originalPriorSnapshot,
+            currentQuoteIDs: Set(snapshot.openHoldings.map(\.quoteId))
+        ).sorted {
+            if $0.quoteId != $1.quoteId {
+                return $0.quoteId < $1.quoteId
+            }
+            return $0.date < $1.date
+        }
+        diagnostics.append(contentsOf: priceHistory.diagnostics)
+        let commit = try snapshotStore.commitCurrentSnapshot(snapshot)
+
+        let loadedReadState = PressureRunner.displayReadState(from: pulseReadStore)
+        let rawModel = PressureEngine.buildModel(
+            from: snapshot,
+            priorSnapshot: originalPriorSnapshot,
+            readState: loadedReadState
+        )
+        let readState = try PressureRunner.readStateAfterResettingReappearedItems(
+            in: rawModel,
+            loadedReadState: loadedReadState,
+            pulseReadStore: pulseReadStore
+        )
+        let model = PressureRunner.modelAfterApplyingReadState(rawModel, readState: readState)
+        let descriptor = MenuDescriptorRenderer.render(model: model)
+        let outcome: PDTBackgroundDetailRefreshOutcome = diagnostics.isEmpty ? .completed : .degraded
+        if let lastDiagnostic = diagnostics.last {
+            try snapshotStore.saveLastDetailRefreshDiagnostic(lastDiagnostic)
+        } else {
+            try snapshotStore.clearLastDetailRefreshDiagnostic()
+        }
+        return PDTBackgroundDetailRefreshResult(
+            outcome: outcome,
+            model: model,
+            snapshotCommit: commit,
+            descriptor: descriptor,
+            diagnostics: diagnostics
+        )
+    }
+
+    private func baseSnapshot(
+        asOf snapshotAsOf: String,
+        progress: @Sendable (BackgroundDetailRefreshProgress) -> Void
+    ) throws -> PortfolioSnapshot {
+        progress(BackgroundDetailRefreshProgress(phase: .baseHoldings))
+        let holdingsEnvelope: LiveHoldingsEnvelope = try callDecoded(
+            "pdt-get-portfolio-holdings",
+            arguments: [:]
+        )
+        let openHoldings = holdingsEnvelope.holdings
+            .filter { $0.closedAt == nil }
+            .map {
+                NormalizedHolding(
+                    name: $0.symbolName,
+                    quoteId: $0.symbolQuoteId,
+                    weight: $0.portfolioWeight,
+                    worth: $0.currentWorthLocal,
+                    price: validMoney($0.currentPriceLocal),
+                    priceAsOf: dayPrefix($0.currentPriceDate),
+                    averageBuyPrice: averageBuyPrice(
+                        explicit: $0.unrealisedBoughtPriceAverageLocal,
+                        total: $0.unrealisedBoughtPriceTotalLocal,
+                        shares: $0.unrealisedBoughtShares
+                    ),
+                    gainLoss: validMoney($0.unrealisedGains),
+                    gainLossPercentage: finite($0.unrealisedGainsPercentage)
+                )
+            }
+        let currency = openHoldings.first?.worth.currency ?? "EUR"
+        return PortfolioSnapshot(
+            asOf: snapshotAsOf,
+            totalValue: sumWorth(openHoldings, currency: currency),
+            openHoldings: openHoldings,
+            sectors: [],
+            assetTypes: [],
+            xRayHoldings: nil,
+            incomeEvents: [],
+            dividendRowCount: 0,
+            priceSeries: []
+        )
+    }
+
+    private func preserveOptionalDetails(in snapshot: inout PortfolioSnapshot, from priorSnapshot: PortfolioSnapshot?) {
+        guard let priorSnapshot else {
+            return
+        }
+        let currentQuoteIDs = Set(snapshot.openHoldings.map(\.quoteId))
+        snapshot.sectors = priorSnapshot.sectors
+        snapshot.assetTypes = priorSnapshot.assetTypes
+        snapshot.xRayHoldings = priorSnapshot.xRayHoldings
+        snapshot.incomeEvents = priorSnapshot.incomeEvents
+        snapshot.dividendRowCount = priorSnapshot.dividendRowCount
+        snapshot.priceSeries = priorSnapshot.priceSeries.filter { currentQuoteIDs.contains($0.quoteId) }
+    }
+
+    private func priceSeriesWithPriorFallback(
+        refreshed: [PricePoint],
+        failedQuoteIDs: Set<Int>,
+        priorSnapshot: PortfolioSnapshot?,
+        currentQuoteIDs: Set<Int>
+    ) -> [PricePoint] {
+        guard let priorSnapshot, !failedQuoteIDs.isEmpty else {
+            return refreshed
+        }
+        let refreshedQuoteIDs = Set(refreshed.map(\.quoteId))
+        let fallbackQuoteIDs = failedQuoteIDs.subtracting(refreshedQuoteIDs)
+        let fallback = priorSnapshot.priceSeries.filter {
+            currentQuoteIDs.contains($0.quoteId) && fallbackQuoteIDs.contains($0.quoteId)
+        }
+        return refreshed + fallback
+    }
+
+    private func xRayHoldings() throws -> [XRayHoldingSummary] {
+        let limit = 500
+        var offset = 0
+        var holdings: [XRayHoldingSummary] = []
+        while true {
+            let arguments = ["limit": String(limit), "offset": String(offset)]
+            let envelope: XRayHoldingsEnvelope = try callDecodedWithRetry(
+                "pdt-list-x-ray-holdings",
+                phase: .xRay,
+                arguments: arguments
+            )
+            holdings.append(contentsOf: envelope.items.map {
+                XRayHoldingSummary(weight: normalizedXRayPortfolioWeight($0.weight))
+            })
+            guard envelope.hasMore == true, !envelope.items.isEmpty else {
+                return holdings
+            }
+            offset += limit
+        }
+    }
+
+    private func incomeEvents(asOf snapshotAsOf: String) throws -> (events: [IncomeEventSummary], dividendRowCount: Int) {
+        let incomeDateRange = [
+            "date_from": snapshotAsOf,
+            "date_to": dayString(snapshotAsOf, addingDays: 30),
+        ]
+        let dividendDateRange = [
+            "date_from": dayString(snapshotAsOf, addingDays: -370),
+            "date_to": incomeDateRange["date_to"] ?? snapshotAsOf,
+        ]
+        let calendarEnvelope: LiveCalendarEventsEnvelope = try callDecodedWithRetry(
+            "pdt-list-calendar-events",
+            phase: .income,
+            arguments: incomeDateRange
+        )
+        let dividends = try liveDividends(arguments: dividendDateRange)
+        let dividendsByQuoteID = Dictionary(grouping: dividends, by: \.symbolQuoteId)
+        return (
+            events: calendarEnvelope.data.filter { $0.type != "no-events-today" }.map {
+                IncomeEventSummary(
+                    date: $0.date,
+                    kind: $0.type,
+                    symbolName: $0.symbolName ?? "Portfolio",
+                    estimated: $0.isEstimated,
+                    symbolId: $0.symbolId,
+                    quoteId: nil,
+                    amount: latestLiveDividendAmount(for: nil, dividendsByQuoteID: dividendsByQuoteID),
+                    priorAmount: nil,
+                    changePercent: nil
+                )
+            },
+            dividendRowCount: dividends.count
+        )
+    }
+
+    private func liveDividends(arguments baseArguments: [String: String]) throws -> [LiveDividend] {
+        var page = 1
+        var dividends: [LiveDividend] = []
+        while true {
+            let arguments = baseArguments.merging([
+                "page": String(page),
+                "per_page": "250",
+            ]) { _, new in new }
+            let envelope: LiveDividendsEnvelope = try callDecodedWithRetry(
+                "pdt-list-dividends",
+                phase: .income,
+                arguments: arguments
+            )
+            dividends.append(contentsOf: envelope.data)
+            let lastPage = envelope.meta?.lastPage ?? page
+            guard page < lastPage else {
+                return dividends
+            }
+            page += 1
+        }
+    }
+
+    private func priceSeries(
+        for holdings: [NormalizedHolding],
+        asOf snapshotAsOf: String,
+        progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
+    ) -> (points: [PricePoint], diagnostics: [PDTDetailRefreshFailureDiagnostic], failedQuoteIDs: Set<Int>) {
+        let priceDateRange = [
+            "date_from": dayString(snapshotAsOf, addingDays: -7),
+            "date_to": snapshotAsOf,
+        ]
+        let semaphore = DispatchSemaphore(value: options.priceHistoryConcurrencyLimit)
+        let group = DispatchGroup()
+        let queue = DispatchQueue(label: "PDTBarCore.background-detail.price-history", attributes: .concurrent)
+        let totalCount = holdings.count
+        let quoteIDs = holdings.map(\.quoteId)
+        let accumulator = PDTPriceHistoryAccumulator()
+
+        for quoteID in quoteIDs {
+            semaphore.wait()
+            group.enter()
+            queue.async { [self] in
+                defer {
+                    let progressValue = accumulator.markCompleted()
+                    progress(BackgroundDetailRefreshProgress(
+                        phase: .priceHistory,
+                        completedUnitCount: progressValue,
+                        totalUnitCount: totalCount
+                    ))
+                    semaphore.signal()
+                    group.leave()
+                }
+                let arguments = priceDateRange.merging([
+                    "symbol_quote_id": String(quoteID),
+                ]) { _, new in new }
+                do {
+                    let prices: LivePricesEnvelope = try callDecodedWithRetry(
+                        "pdt-list-symbol-prices",
+                        phase: .priceHistory,
+                        arguments: arguments
+                    )
+                    let nextPoints = prices.data.map {
+                        PricePoint(
+                            quoteId: $0.symbolQuoteId,
+                            date: $0.date,
+                            closeAdjusted: $0.closeAdjusted
+                        )
+                    }
+                    accumulator.append(points: nextPoints)
+                } catch {
+                    let diagnostic = diagnostic(
+                        for: error,
+                        tool: "pdt-list-symbol-prices",
+                        phase: .priceHistory,
+                        arguments: arguments
+                    )
+                    accumulator.append(diagnostic: diagnostic, failedQuoteID: quoteID)
+                }
+            }
+        }
+        group.wait()
+        return accumulator.result()
+    }
+
+    private func callDecoded<T: Decodable>(_ tool: String, arguments: [String: String]) throws -> T {
+        try decodeLiveTool(tool, data: connector.callReadTool(tool, arguments: arguments))
+    }
+
+    private func callDecodedWithRetry<T: Decodable>(
+        _ tool: String,
+        phase: BackgroundDetailRefreshPhase,
+        arguments: [String: String]
+    ) throws -> T {
+        var attempts = 0
+        var lastError: Error?
+        repeat {
+            attempts += 1
+            do {
+                return try callDecoded(tool, arguments: arguments)
+            } catch {
+                lastError = error
+                if attempts <= options.optionalRetryCount, options.retryBackoffSeconds > 0 {
+                    Thread.sleep(forTimeInterval: options.retryBackoffSeconds)
+                }
+            }
+        } while attempts <= options.optionalRetryCount
+        throw PDTDetailRefreshToolError(
+            diagnostic: diagnostic(
+                for: lastError ?? PDTMCPConnectorError.transientFailure("unknown detail refresh failure"),
+                tool: tool,
+                phase: phase,
+                attempts: attempts,
+                arguments: arguments
+            )
+        )
+    }
+
+    private func diagnostic(
+        for error: Error,
+        tool: String,
+        phase: BackgroundDetailRefreshPhase,
+        attempts: Int = 1,
+        arguments: [String: String] = [:]
+    ) -> PDTDetailRefreshFailureDiagnostic {
+        if let wrapped = error as? PDTDetailRefreshToolError {
+            return wrapped.diagnostic
+        }
+        return PDTDetailRefreshFailureDiagnostic(
+            toolName: tool,
+            phase: phase,
+            attemptCount: attempts,
+            category: failureCategory(error),
+            argumentShape: arguments.keys.sorted()
+        )
+    }
+
+    private func failureCategory(_ error: Error) -> PDTDetailRefreshFailureCategory {
+        switch error {
+        case PDTMCPConnectorError.setupUnavailable:
+            .setupUnavailable
+        case PDTMCPConnectorError.transientFailure:
+            .transientFailure
+        case PDTMCPConnectorError.missingScriptedResponse:
+            .missingScriptedResponse
+        case PDTLiveDataSourceError.malformedToolResult:
+            .decode
+        case PDTLiveDataSourceError.unavailableToolResult:
+            .unavailable
+        default:
+            .exit
+        }
+    }
+}
+
+private struct PDTDetailRefreshToolError: Error {
+    var diagnostic: PDTDetailRefreshFailureDiagnostic
+}
+
+private final class PDTPriceHistoryAccumulator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completed = 0
+    private var points: [PricePoint] = []
+    private var diagnostics: [PDTDetailRefreshFailureDiagnostic] = []
+    private var failedQuoteIDs: Set<Int> = []
+
+    func markCompleted() -> Int {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        completed += 1
+        return completed
+    }
+
+    func append(points newPoints: [PricePoint]) {
+        lock.lock()
+        points.append(contentsOf: newPoints)
+        lock.unlock()
+    }
+
+    func append(diagnostic: PDTDetailRefreshFailureDiagnostic, failedQuoteID: Int) {
+        lock.lock()
+        diagnostics.append(diagnostic)
+        failedQuoteIDs.insert(failedQuoteID)
+        lock.unlock()
+    }
+
+    func result() -> (points: [PricePoint], diagnostics: [PDTDetailRefreshFailureDiagnostic], failedQuoteIDs: Set<Int>) {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return (points, diagnostics, failedQuoteIDs)
     }
 }
 
@@ -3538,7 +4179,7 @@ public enum PressureRunner {
         return PressureRunResult(model: model, snapshotCommit: commit, descriptor: descriptor)
     }
 
-    private static func displayReadState(from pulseReadStore: PulseReadStore?) -> PulseReadState? {
+    static func displayReadState(from pulseReadStore: PulseReadStore?) -> PulseReadState? {
         guard let pulseReadStore else {
             return nil
         }
@@ -3552,7 +4193,7 @@ public enum PressureRunner {
         )
     }
 
-    private static func modelAfterApplyingReadState(
+    static func modelAfterApplyingReadState(
         _ model: PortfolioPulseModel,
         readState: PulseReadState?
     ) -> PortfolioPulseModel {
@@ -3562,7 +4203,7 @@ public enum PressureRunner {
         return PulseReadFilter.apply(to: model, readState: readState)
     }
 
-    private static func readStateAfterResettingReappearedItems(
+    static func readStateAfterResettingReappearedItems(
         in model: PortfolioPulseModel,
         loadedReadState: PulseReadState?,
         pulseReadStore: PulseReadStore?
@@ -3638,6 +4279,31 @@ public struct SnapshotStore: Sendable {
 
     public func write(snapshot: PortfolioSnapshot) throws -> SnapshotCommit {
         try commitCurrentSnapshot(snapshot)
+    }
+
+    public func loadLastDetailRefreshDiagnostic() throws -> PDTDetailRefreshFailureDiagnostic? {
+        let target = detailRefreshDiagnosticFile
+        guard FileManager.default.fileExists(atPath: target.path) else {
+            return nil
+        }
+        return try JSONDecoder().decode(PDTDetailRefreshFailureDiagnostic.self, from: Data(contentsOf: target))
+    }
+
+    public func saveLastDetailRefreshDiagnostic(_ diagnostic: PDTDetailRefreshFailureDiagnostic) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try stableJSONData(diagnostic).write(to: detailRefreshDiagnosticFile, options: .atomic)
+    }
+
+    public func clearLastDetailRefreshDiagnostic() throws {
+        let target = detailRefreshDiagnosticFile
+        guard FileManager.default.fileExists(atPath: target.path) else {
+            return
+        }
+        try FileManager.default.removeItem(at: target)
+    }
+
+    private var detailRefreshDiagnosticFile: URL {
+        directory.appending(path: "latest-detail-refresh-diagnostic.json")
     }
 }
 
