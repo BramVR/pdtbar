@@ -11,6 +11,7 @@ read_when:
 ## Modules
 
 - `Sources/PDTBarCore`: normalized portfolio model, pressure engine, fixture/live data sources, menu descriptor rendering.
+- `Sources/PDTBarAppSupport`: shared AppKit-adjacent support used by the app, smoke runner, and tests for app state, status visuals, menu actions, and scripted launch seams.
 - `Sources/PDTBarApp`: AppKit status item, Claude-first readiness probe, first fetch, cached pulse, menu actions.
 - `Sources/PDTBarDev`: command-line model and descriptor inspection.
 - `Sources/PDTBarSmoke`: scripted, packaged, Accessibility, manual Claude, and live PDT smoke checks.
@@ -25,13 +26,14 @@ read_when:
 
 ## Data Flow
 
-Claude/PDT readiness probe -> `PortfolioDataSource` -> normalized `PortfolioSnapshot` -> `SnapshotStore` -> pressure engine -> `PortfolioPulseModel` -> `MenuDescriptor` -> AppKit menu/status item.
+Claude/PDT readiness probe -> `PortfolioDataSource` -> normalized `PortfolioSnapshot` -> `SnapshotStore` -> pressure engine -> `PortfolioPulseModel` -> `MenuDescriptor` -> `PDTBarAppSupport` action/status helpers -> AppKit menu/status item.
 
 Fixture mode uses the same engine/render path but is explicit developer tooling.
 
 ## Boundaries
 
 - Engine computes pressure. Bar renders descriptors.
+- App support holds reusable AppKit-adjacent glue; it is not a second engine.
 - Bar owns setup, retry, cached-pulse display, and menu actions.
 - PDT/MCP adapters normalize raw shapes before engine logic sees them.
 - Financial data stays local; public proof is sanitized.

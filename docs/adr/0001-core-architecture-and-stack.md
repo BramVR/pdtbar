@@ -39,7 +39,7 @@ Rejected options:
 ## Consequences
 
 - Determines whether **mcporter** is a shipped dependency or just a research tool (see `docs/reuse-notes.md`).
-- Sets the shape of `src/engine` and `src/bar` and the packaging story.
+- Sets the accepted Swift architecture and packaging story. Historical `src/engine` and `src/bar` notes remain planning references only.
 - Keeps the product in one native app/runtime. The cost is owning a small Swift PDT normalization layer, including join-key mapping, freshness derivation, closed-holding filtering, FX handling, and derived income-event signals.
 
 ## Evidence (PDT MCP exercised 2026-06-22 — issue #8)

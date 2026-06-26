@@ -37,7 +37,7 @@ Pick the highest-signal, lowest-data-dependency facets first:
   The Income menu stays browsable rather than alert-like: it summarizes the current income window, shows the next ex-dividend/payment event, and keeps Pulse limited to pressure-worthy income items.
 - **Big movers** — a holding moved more than X% over the window. *Needs a little history (see below).*
 
-Deferred facets: performance-vs-benchmark divergence, cash drag, corporate-action decisions — add after the first three work. (Cash drag is a cheap absolute-threshold add if PDT exposes cash readily.)
+Current v1 drill-down covers allocation/concentration, income/calendar, and big movers/freshness. Deferred full-product facets include performance-vs-benchmark divergence, cash drag, and corporate-action decisions; add them after the first three work. (Cash drag is a cheap absolute-threshold add if PDT exposes cash readily.)
 
 ## History store — required, kept tiny
 
@@ -47,7 +47,7 @@ Pressure is **change over time**, so the engine must remember prior state. This 
 
 The two hardest moments are day one and a calm day. Handle them deliberately:
 
-- **Cold start (no prior snapshot):** "what changed" signals can't fire yet, so lean on the **absolute-threshold** signals that need no history — concentration too high, cash too high, ex-dividend within N days. The bar must be useful on the *first* run, not after a day of data. Take the first snapshot on connect.
+- **Cold start (no prior snapshot):** "what changed" signals can't fire yet, so lean on the **absolute-threshold** signals that need no history — concentration too high or ex-dividend within N days. Deferred facets can add cash-too-high later. The bar must be useful on the *first* run, not after a day of data. Take the first snapshot on connect.
 - **Quiet day (nothing crosses a threshold):** show a real **"all quiet"** state with the glanceable context (value / next payment) still present and the drill-down still reachable. A holding that was already above the concentration line in the prior snapshot is quiet unless it freshly crosses from below. Silence is a designed state, not an empty screen.
 - **Caught up (current attention was marked read):** hide those Pulse rows, badge fill, and attention highlighting while keeping Allocation/Income/Big movers drill-down facts visible. If the same material fingerprint remains, it stays read; if the material bucket changes, it can surface again.
 
