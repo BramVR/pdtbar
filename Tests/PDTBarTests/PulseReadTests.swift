@@ -324,6 +324,50 @@ struct PulseReadTests {
         #expect(bigMover.readFingerprint.contains("move-bucket-bp:1200"))
     }
 
+    @Test("Fingerprint identity ignores non-material holding name changes")
+    func fingerprintIdentityIgnoresNonMaterialHoldingNameChanges() {
+        let first = AttentionItem(
+            id: "allocation.concentration.9003",
+            facet: "allocation",
+            rank: 1,
+            title: "Helix Pharma A/S concentration",
+            severity: "medium",
+            score: 0.7,
+            holdingIdentity: HoldingIdentity(name: "Helix Pharma A/S", quoteId: 9003),
+            currentWeight: 0.24,
+            threshold: 0.20,
+            supportingDataSlotIDs: ["allocation.openHoldings"]
+        )
+        var renamed = first
+        renamed.holdingIdentity = HoldingIdentity(name: "Helix Pharma AS", quoteId: 9003)
+
+        #expect(first.readFingerprint == renamed.readFingerprint)
+        #expect(!first.readFingerprint.contains("Helix"))
+    }
+
+    @Test("Missing numeric fingerprint facts differ from real zero")
+    func missingNumericFingerprintFactsDifferFromRealZero() {
+        let missingChange = AttentionItem(
+            id: "income.ex-dividend.9003",
+            facet: "income",
+            rank: 1,
+            title: "Helix Pharma A/S ex-dividend",
+            severity: "low",
+            score: 0.45,
+            holdingIdentity: HoldingIdentity(name: "Helix Pharma A/S", quoteId: 9003),
+            eventDate: "2026-06-24",
+            amount: Money(value: "78.00", currency: "EUR"),
+            changePercent: nil,
+            supportingDataSlotIDs: ["income.calendar"]
+        )
+        var zeroChange = missingChange
+        zeroChange.changePercent = 0.0
+
+        #expect(missingChange.readFingerprint.contains("change-bp:missing"))
+        #expect(zeroChange.readFingerprint.contains("change-bp:0"))
+        #expect(missingChange.readFingerprint != zeroChange.readFingerprint)
+    }
+
     @Test("Renderer exposes one mark-as-read action per attention row")
     func rendererExposesMarkAsReadAction() throws {
         let model = PressureEngine.buildModel(from: try fixtureSnapshot("concentration-pressure.json"))

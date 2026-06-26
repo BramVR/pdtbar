@@ -236,7 +236,7 @@ public struct AttentionItem: Codable, Equatable {
 
 public extension AttentionItem {
     private var readFingerprintIdentity: String {
-        holdingIdentity.map { "quote:\($0.quoteId):name:\(fingerprintToken($0.name))" }
+        holdingIdentity.map { "quote:\($0.quoteId)" }
             ?? "id:\(fingerprintToken(id))"
     }
 
@@ -246,7 +246,7 @@ public extension AttentionItem {
             return [
                 "pulse:v1:allocation",
                 readFingerprintIdentity,
-                "threshold-bp:\(basisPoints(threshold))",
+                "threshold-bp:\(fingerprintBasisPoints(threshold))",
                 "severity:\(fingerprintToken(severity))",
                 "weight-bucket-bp:\(bucketBasisPoints(currentWeight, bucketSize: 100))",
             ].joined(separator: ":")
@@ -256,7 +256,7 @@ public extension AttentionItem {
                 readFingerprintIdentity,
                 "date:\(eventDate ?? "unknown")",
                 "amount:\(moneyFingerprint(amount))",
-                "change-bp:\(basisPoints(changePercent))",
+                "change-bp:\(fingerprintBasisPoints(changePercent))",
             ].joined(separator: ":")
         case "bigMovers":
             return [
@@ -271,7 +271,7 @@ public extension AttentionItem {
                 fingerprintToken(facet),
                 readFingerprintIdentity,
                 "severity:\(fingerprintToken(severity))",
-                "score-bp:\(basisPoints(score))",
+                "score-bp:\(fingerprintBasisPoints(score))",
             ].joined(separator: ":")
         }
     }
@@ -294,7 +294,7 @@ public extension AttentionItem {
         return [
             "pulse:v1:allocation",
             readFingerprintIdentity,
-            "threshold-bp:\(basisPoints(threshold))",
+            "threshold-bp:\(fingerprintBasisPoints(threshold))",
         ].joined(separator: ":") + ":"
     }
 }
@@ -4357,19 +4357,26 @@ private func moneyFingerprint(_ money: Money?) -> String {
     return "\(money.currency):\(value)"
 }
 
-private func basisPoints(_ value: Double?) -> Int {
+private func fingerprintBasisPoints(_ value: Double?) -> String {
     guard let value else {
-        return 0
+        return "missing"
     }
+    return String(basisPoints(value))
+}
+
+private func basisPoints(_ value: Double) -> Int {
     return Int((value * 10_000).rounded())
 }
 
-private func bucketBasisPoints(_ value: Double?, bucketSize: Int) -> Int {
+private func bucketBasisPoints(_ value: Double?, bucketSize: Int) -> String {
+    guard let value else {
+        return "missing"
+    }
     guard bucketSize > 0 else {
-        return basisPoints(value)
+        return String(basisPoints(value))
     }
     let points = basisPoints(value)
-    return Int((Double(points) / Double(bucketSize)).rounded()) * bucketSize
+    return String(Int((Double(points) / Double(bucketSize)).rounded()) * bucketSize)
 }
 
 private func percent(_ value: Double) -> String {
