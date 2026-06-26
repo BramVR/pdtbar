@@ -4,6 +4,30 @@ import PDTBarCore
 
 @Suite("Holding drill-downs")
 struct HoldingDrillDownTests {
+    @Test("Descriptor keeps parent weight but omits duplicate holding child weight")
+    func descriptorKeepsParentWeightButOmitsDuplicateHoldingChildWeight() throws {
+        var snapshot = try quietSnapshot()
+        snapshot.incomeEvents = [
+            IncomeEventSummary(
+                date: "2026-06-25",
+                kind: "ex-dividend",
+                symbolName: "Nova Lithography",
+                estimated: false,
+                quoteId: 9001
+            ),
+        ]
+
+        let holdingRow = try holdingRow(for: 9001, snapshot: snapshot)
+
+        #expect(holdingRow.title == "Nova Lithography")
+        #expect(holdingRow.detail == "11.7%")
+        #expect(holdingRow.children.first?.title == "Worth")
+        #expect(holdingRow.children.contains { $0.id == "allocation.9001.weight" } == false)
+        #expect(holdingRow.children.contains { $0.title == "Weight" } == false)
+        #expect(holdingRow.children.contains { $0.title == "Price" })
+        #expect(holdingRow.children.contains { $0.title == "Next income" })
+    }
+
     @Test("Descriptor shows next joined income event in holding drill-down")
     func descriptorShowsNextJoinedIncomeEvent() throws {
         var snapshot = try quietSnapshot()
