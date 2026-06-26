@@ -24,6 +24,8 @@ make start
 make stop
 make test
 make check
+make docs-site
+make docs-site-test
 swift build
 swift run pdtbar-checks
 swift test
@@ -45,6 +47,9 @@ PDTBAR_TEST_SHARD_INDEX=0 PDTBAR_TEST_SHARD_COUNT=2 ./Scripts/test.sh
 ## Developer Commands
 
 ```bash
+make docs-site
+make docs-site-test
+make docs-site-clean
 make start
 make stop
 make test
@@ -57,6 +62,11 @@ swift build --product pdtbar
 ./Scripts/launch.sh
 ./Scripts/compile_and_run.sh
 ```
+
+`make docs-site` builds the public static site into `dist/docs-site`. The root
+page is Dutch by default and links to the English version under `/en/`.
+`make docs-site-test` verifies the public allowlist, generated assets, metadata,
+language toggle, and Pages workflow expectations.
 
 `make start` is the normal manual UX launch. It stops existing PDTBar processes,
 packages `PDTBar.app`, and launches the packaged app. `./Scripts/compile_and_run.sh`
@@ -127,7 +137,14 @@ PDTBar/
 ├── CONTEXT.md
 ├── Package.swift
 ├── Scripts/docs-list.mjs
+├── Scripts/
+│   ├── build-docs-site.mjs
+│   ├── build-docs-site.test.mjs
+│   └── docs-site-assets.mjs
 ├── docs/
+│   ├── index.md
+│   ├── public-docs.json
+│   ├── en/
 │   ├── README.md
 │   ├── DEVELOPMENT.md
 │   ├── architecture.md

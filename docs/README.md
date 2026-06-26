@@ -16,7 +16,7 @@ Docs are agent-facing source of truth. Root `README.md` stays human/product-faci
 2. Read every doc whose `Read when` hint matches the task.
 3. Change behavior and docs together.
 4. Add `summary` and `read_when` frontmatter to every new docs page.
-5. Keep user-facing product copy in the root README; keep implementation, smoke, and agent routing here.
+5. Keep durable product copy in the root README and public docs-site pages; keep implementation, smoke, and agent routing here.
 
 ## Start Here
 
@@ -27,6 +27,7 @@ Docs are agent-facing source of truth. Root `README.md` stays human/product-faci
 - [`claude-login-workflow.md`](claude-login-workflow.md) - product launch, setup, first fetch.
 - [`smoke-checks.md`](smoke-checks.md) - deterministic and live proof gates.
 - [`reuse-notes.md`](reuse-notes.md) - CodexBar/RepoBar/mcporter/birdclaw reuse boundaries.
+- [`index.md`](index.md) and [`en/index.md`](en/index.md) - public docs-site home pages.
 
 ## Domain And Decisions
 
@@ -42,3 +43,4 @@ Docs are agent-facing source of truth. Root `README.md` stays human/product-faci
 - `Sources/PDTBarDev`: developer descriptors/model inspection.
 - `Sources/PDTBarSmoke`: scripted and live smoke checks.
 - `Sources/PDTBarChecks`: deterministic checks.
+- `Scripts/build-docs-site.mjs`: public static site generator for `dist/docs-site`.

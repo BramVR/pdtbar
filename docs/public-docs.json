@@ -1,0 +1,14 @@
+{
+  "sections": [
+    {
+      "name": "Start",
+      "pages": ["index.md", "en/index.md"]
+    }
+  ],
+  "assets": [
+    {
+      "from": "docs/smoke/menu-polish-proof.png",
+      "to": "assets/pdtbar-menu.png"
+    }
+  ]
+}
