@@ -288,6 +288,98 @@ try check(
         && cachedFailureDescriptor.statusVisual.filledBarCount == descriptor.statusVisual.filledBarCount,
     "returning launch fetch failure should dim the icon while preserving cached concentration shape and fill"
 )
+let launchRuntime = PDTLaunchRuntime()
+let runtimeLaunch = launchRuntime.launch(cachedPulse: caughtUpPulse)
+let runtimeReady = launchRuntime.completeReadinessProbe(.ready)
+let runtimeDuplicateReady = launchRuntime.completeReadinessProbe(.ready)
+let runtimeCachedFailure = launchRuntime.completeFirstFetch(.failed("scripted detail fill failed"))
+try check(
+    runtimeLaunch.effect == .probeReadiness
+        && runtimeLaunch.descriptor.statusTitle == caughtUpPulse.descriptor.statusTitle
+        && runtimeLaunch.descriptor.sections.flatMap(\.rows).map(\.title).contains("Checking Claude setup"),
+    "launch runtime should render cached pulse while probing readiness"
+)
+try check(
+    runtimeReady.effect == .startFirstFetch
+        && runtimeReady.descriptor.statusTitle == caughtUpPulse.descriptor.statusTitle
+        && runtimeReady.descriptor.sections.flatMap(\.rows).map(\.title).contains("Refreshing portfolio"),
+    "launch runtime should keep cached pulse visible while first fetch starts"
+)
+try check(
+    runtimeDuplicateReady.effect == .none
+        && runtimeDuplicateReady.descriptor.statusTitle == caughtUpPulse.descriptor.statusTitle,
+    "launch runtime should ignore duplicate ready completions while first fetch is already in flight"
+)
+try check(
+    runtimeCachedFailure.descriptor.sections.flatMap(\.rows).map(\.title).contains("Details fill failed")
+        && runtimeCachedFailure.descriptor.sections.flatMap(\.rows).map(\.title).contains("Fill details again")
+        && launchRuntime.currentPulse?.source == .cachedSnapshot,
+    "launch runtime should preserve cached pulse and retry state after returning-launch fetch failure"
+)
+let runtimeRetry = try require(launchRuntime.retryFirstFetch(), "launch runtime should allow retry after fetch failure")
+let runtimeProgress = try require(
+    launchRuntime.firstFetchProgress(fetchingElapsedSeconds: 12),
+    "launch runtime should render retry progress while fetch is in flight"
+)
+let runtimeDuplicateRetry = launchRuntime.retryFirstFetch()
+let runtimeComplete = launchRuntime.completeFirstFetch(.succeeded(changedPulse))
+try check(
+    runtimeRetry.effect == .startFirstFetch
+        && runtimeDuplicateRetry == nil
+        && runtimeProgress.descriptor.statusTitle == caughtUpPulse.descriptor.statusTitle
+        && runtimeProgress.descriptor.sections.flatMap(\.rows).map(\.detail).contains("Keeping last pulse visible - working for 0:12")
+        && runtimeComplete.descriptor.statusTitle == changedPulse.descriptor.statusTitle
+        && launchRuntime.currentPulse?.source == .fetchedSnapshot,
+    "launch runtime should own retry gating, progress descriptors, and fetched pulse publication"
+)
+let staleRuntime = PDTLaunchRuntime()
+_ = staleRuntime.launch(cachedPulse: nil)
+let staleFirstAttemptID = staleRuntime.readinessAttemptID
+_ = staleRuntime.completeLoginHandoff(.succeeded)
+let staleSecondAttemptID = staleRuntime.readinessAttemptID
+let staleReadinessFailure = staleRuntime.completeReadinessProbe(.failed, attemptID: staleFirstAttemptID)
+let staleReadinessReady = staleRuntime.completeReadinessProbe(.ready, attemptID: staleSecondAttemptID)
+let staleReadinessComplete = staleRuntime.completeFirstFetch(.succeeded(changedPulse))
+let staleLateFailure = staleRuntime.completeReadinessProbe(.missingClaudeLogin, attemptID: staleFirstAttemptID)
+try check(
+    staleReadinessFailure.effect == .none
+        && staleReadinessFailure.descriptor.statusTitle == "Checking Claude"
+        && staleReadinessReady.effect == .startFirstFetch
+        && staleReadinessComplete.descriptor.statusTitle == changedPulse.descriptor.statusTitle
+        && staleLateFailure.descriptor.statusTitle == changedPulse.descriptor.statusTitle
+        && staleLateFailure.descriptor.sections.flatMap(\.rows).map(\.title).contains("Refresh details"),
+    "launch runtime should ignore stale readiness completions from earlier attempts"
+)
+let staleCachedFailureRuntime = PDTLaunchRuntime()
+_ = staleCachedFailureRuntime.launch(cachedPulse: caughtUpPulse)
+let staleCachedFailureFirstAttemptID = staleCachedFailureRuntime.readinessAttemptID
+_ = staleCachedFailureRuntime.completeLoginHandoff(.succeeded)
+let staleCachedFailureSecondAttemptID = staleCachedFailureRuntime.readinessAttemptID
+_ = staleCachedFailureRuntime.completeReadinessProbe(.ready, attemptID: staleCachedFailureSecondAttemptID)
+_ = staleCachedFailureRuntime.completeFirstFetch(.failed("scripted details fill failed"))
+let staleCachedFailure = staleCachedFailureRuntime.completeReadinessProbe(
+    .failed,
+    attemptID: staleCachedFailureFirstAttemptID
+)
+try check(
+    staleCachedFailure.descriptor.sections.flatMap(\.rows).map(\.title).contains("Details fill failed")
+        && staleCachedFailure.descriptor.sections.flatMap(\.rows).map(\.title).contains("Fill details again")
+        && !staleCachedFailure.descriptor.sections.flatMap(\.rows).map(\.title).contains("Refresh details"),
+    "stale readiness completions should preserve cached fetch failure copy"
+)
+let staleSetupRuntime = PDTLaunchRuntime()
+_ = staleSetupRuntime.launch(cachedPulse: caughtUpPulse)
+let staleSetupFirstAttemptID = staleSetupRuntime.readinessAttemptID
+_ = staleSetupRuntime.completeLoginHandoff(.succeeded)
+let staleSetupSecondAttemptID = staleSetupRuntime.readinessAttemptID
+_ = staleSetupRuntime.completeReadinessProbe(.missingPDTMCP, attemptID: staleSetupSecondAttemptID)
+let staleSetupFailure = staleSetupRuntime.completeReadinessProbe(.failed, attemptID: staleSetupFirstAttemptID)
+try check(
+    staleSetupFailure.descriptor.statusTitle == "Add the PDT MCP server to Claude"
+        && staleSetupFailure.descriptor.sections.flatMap(\.rows).map(\.title).contains("Check again")
+        && !staleSetupFailure.descriptor.sections.flatMap(\.rows).map(\.title).contains("Refresh details"),
+    "stale readiness completions should preserve active setup copy"
+)
 try check(
     setupDescriptor.sections.map(\.id) == ["claudeSetup"],
     "logged-out real launch should render a Claude-only setup section"

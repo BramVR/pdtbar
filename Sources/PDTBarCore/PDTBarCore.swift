@@ -1877,6 +1877,151 @@ public enum PDTOnboardingFetchResult: Equatable {
     case failed(String)
 }
 
+public enum PDTLaunchFetchResult: Equatable {
+    case succeeded(PulseLifecycleResult)
+    case failed(String)
+}
+
+public final class PDTLaunchRuntime {
+    public private(set) var currentPulse: PulseLifecycleResult?
+    public private(set) var state: ClaudeLaunchState = .probingClaude
+    public private(set) var readinessProbeInFlight = false
+    public private(set) var readinessAttemptID = 0
+    public private(set) var firstFetchInFlight = false
+    private var lastDescriptor: MenuDescriptor?
+
+    public init() {}
+
+    public func launch(cachedPulse: PulseLifecycleResult?) -> PDTOnboardingUpdate {
+        currentPulse = cachedPulse
+        return beginReadinessProbe()
+    }
+
+    public func retryReadiness() -> PDTOnboardingUpdate? {
+        guard !readinessProbeInFlight else {
+            return nil
+        }
+        return beginReadinessProbe()
+    }
+
+    public func completeReadinessProbe(
+        _ result: ClaudeReadinessProbeResult,
+        attemptID: Int? = nil
+    ) -> PDTOnboardingUpdate {
+        if let attemptID, attemptID != readinessAttemptID {
+            return currentUpdate()
+        }
+        readinessProbeInFlight = false
+        let nextState = ClaudeLaunchFlow.state(afterReadinessProbe: result)
+        if nextState == .fetchingPortfolio {
+            guard !firstFetchInFlight else {
+                return update(state: nextState)
+            }
+            firstFetchInFlight = true
+            return update(state: nextState, effect: .startFirstFetch)
+        }
+        return update(state: nextState)
+    }
+
+    public func beginLoginHandoff() -> PDTOnboardingUpdate {
+        update(state: .openingClaude, effect: .startLoginHandoff)
+    }
+
+    public func completeLoginHandoff(_ result: PDTOnboardingLoginResult) -> PDTOnboardingUpdate {
+        switch result {
+        case .succeeded:
+            return beginReadinessProbe()
+        case .failed(let reason):
+            state = .missingClaude
+            let descriptor = ClaudeLaunchFlow.descriptor(forLoginFailure: reason)
+            lastDescriptor = descriptor
+            return PDTOnboardingUpdate(
+                state: state,
+                descriptor: descriptor
+            )
+        }
+    }
+
+    public func retryFirstFetch() -> PDTOnboardingUpdate? {
+        guard !firstFetchInFlight else {
+            return nil
+        }
+        firstFetchInFlight = true
+        return update(state: .fetchingPortfolio, effect: .startFirstFetch)
+    }
+
+    public func firstFetchProgress(fetchingElapsedSeconds: Int) -> PDTOnboardingUpdate? {
+        guard firstFetchInFlight else {
+            return nil
+        }
+        return update(state: .fetchingPortfolio, fetchingElapsedSeconds: fetchingElapsedSeconds)
+    }
+
+    public func completeFirstFetch(_ result: PDTLaunchFetchResult) -> PDTOnboardingUpdate {
+        firstFetchInFlight = false
+        switch result {
+        case .succeeded(let pulse):
+            return publishPulse(pulse)
+        case .failed:
+            return update(state: .portfolioFetchFailed)
+        }
+    }
+
+    public func handOffFirstFetchToBackgroundRefresh() {
+        firstFetchInFlight = false
+    }
+
+    public func replaceCurrentPulse(_ pulse: PulseLifecycleResult) {
+        currentPulse = pulse
+    }
+
+    public func publishPulse(_ pulse: PulseLifecycleResult) -> PDTOnboardingUpdate {
+        currentPulse = pulse
+        state = .fetchingPortfolio
+        let descriptor = ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: pulse.descriptor)
+        lastDescriptor = descriptor
+        return PDTOnboardingUpdate(
+            state: state,
+            descriptor: descriptor
+        )
+    }
+
+    private func beginReadinessProbe() -> PDTOnboardingUpdate {
+        readinessAttemptID += 1
+        readinessProbeInFlight = true
+        return update(state: .probingClaude, effect: .probeReadiness)
+    }
+
+    private func update(
+        state: ClaudeLaunchState,
+        effect: PDTOnboardingEffect = .none,
+        fetchingElapsedSeconds: Int? = nil
+    ) -> PDTOnboardingUpdate {
+        self.state = state
+        let descriptor = ClaudeLaunchFlow.descriptor(
+            for: state,
+            cachedPulse: currentPulse?.descriptor,
+            fetchingElapsedSeconds: fetchingElapsedSeconds
+        )
+        lastDescriptor = descriptor
+        return PDTOnboardingUpdate(
+            state: state,
+            descriptor: descriptor,
+            effect: effect
+        )
+    }
+
+    private func currentUpdate() -> PDTOnboardingUpdate {
+        if let lastDescriptor {
+            return PDTOnboardingUpdate(
+                state: state,
+                descriptor: lastDescriptor
+            )
+        }
+        return update(state: state)
+    }
+}
+
 public final class PDTOnboardingCoordinator {
     private var cachedPulse: MenuDescriptor?
     public private(set) var state: ClaudeLaunchState = .probingClaude
