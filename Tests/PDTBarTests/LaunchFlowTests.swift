@@ -175,6 +175,38 @@ struct ClaudeLaunchFlowTests {
         #expect(!rowTitles(in: backgroundFailure).contains("Log in with Claude"))
     }
 
+    @Test("Background detail retry renders active phase progress instead of stale failure")
+    func backgroundDetailRetryRendersActivePhaseProgress() throws {
+        let cachedPulse = try quietFixtureDescriptor()
+        let descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+            cachedPulse: cachedPulse,
+            progress: BackgroundDetailRefreshProgress(
+                phase: .priceHistory,
+                completedUnitCount: 12,
+                totalUnitCount: 19
+            )
+        )
+
+        #expect(descriptor.statusTitle == cachedPulse.statusTitle)
+        #expect(rowTitles(in: descriptor).contains("Filling details"))
+        #expect(rowTitles(in: descriptor).contains("Step 5/5: Price history"))
+        #expect(rowTitles(in: descriptor).contains("12/19 price histories checked"))
+        #expect(!rowTitles(in: descriptor).contains("Details fill failed"))
+        #expect(!rowTitles(in: descriptor).contains("Fill details again"))
+    }
+
+    @Test("Background degraded completion keeps pulse rows and exposes retry")
+    func backgroundDegradedCompletionKeepsPulseRowsAndExposesRetry() throws {
+        let cachedPulse = try quietFixtureDescriptor()
+        let descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailDegraded(cachedPulse: cachedPulse)
+
+        #expect(descriptor.statusTitle == cachedPulse.statusTitle)
+        #expect(descriptor.sections.map(\.id).contains("pulse"))
+        #expect(rowTitles(in: descriptor).contains("Details partially filled"))
+        #expect(rowTitles(in: descriptor).contains("Fill details again"))
+        #expect(!rowTitles(in: descriptor).contains("Details fill failed"))
+    }
+
     @Test("Claude auth status parser reads logged-in JSON from stdout")
     func claudeAuthStatusParserReadsLoggedInJSONFromStdout() {
         let noisyStdout = """

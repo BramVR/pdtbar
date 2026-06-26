@@ -1277,7 +1277,7 @@ private func scriptedPDTConnectorSmoke(arguments: [String]) throws -> SmokeRepor
         return SmokeReport(
             name: "scripted-pdt-connector",
             status: SmokeStatus.failed,
-            detail: "scripted PDT connector did not prove required read-tool availability, exact coalesced call counts, or all scripted response states",
+            detail: "scripted PDT connector did not prove required read-tool availability, exact coalesced call counts, progressive detail refresh, or all scripted response states",
             artifacts: [artifactPath(proof)]
         )
     }
@@ -1285,7 +1285,7 @@ private func scriptedPDTConnectorSmoke(arguments: [String]) throws -> SmokeRepor
     return SmokeReport(
         name: "scripted-pdt-connector",
         status: SmokeStatus.passed,
-        detail: "scripted Claude PDT connector checked required v1 read tools, called each read tool exactly once for a coalesced fetch, and rendered through PressureRunner with redacted proof",
+        detail: "scripted Claude PDT connector checked required v1 read tools, called each read tool exactly once for a coalesced fetch, rendered through PressureRunner, and proved progressive degraded detail refresh with redacted proof",
         artifacts: [artifactPath(proof)]
     )
 }
@@ -1645,11 +1645,11 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
         responses: responseStrings,
         asOf: refreshConfiguration.asOf
     )
-    let expectedFreshRun = try PDTCoalescedFirstPortfolioFetch(
-        dataSource: PDTMCPConnectorDataSource(connector: expectedFreshConfiguration.connector()),
+    let expectedFreshRun = try PDTBackgroundDetailRefresh(
+        connector: expectedFreshConfiguration.connector(),
         snapshotStore: expectedFreshStore,
         asOf: expectedFreshConfiguration.asOf
-    ).fetch()
+    ).refresh()
 
     let successAppSupport = try options.isolatedAppSupportDirectory(prefix: "scripted-returning-launch-success-app-support")
     let successStore = SnapshotStore(directory: successAppSupport.appending(path: "pdtbar/state"))
@@ -1661,7 +1661,8 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
     let successProcess = try launchFirstFetchApp(
         app,
         appSupportDirectory: successAppSupport,
-        fixtureSnapshotDirectory: successFixtureSnapshotDirectory
+        fixtureSnapshotDirectory: successFixtureSnapshotDirectory,
+        scriptedBackgroundRefresh: true
     )
     defer {
         terminate(successProcess)
@@ -1681,14 +1682,21 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
 
     let accessibilityChecked = AXIsProcessTrusted()
     var stalePulseVisible = false
+    var backgroundProgressVisible = false
+    var backgroundProgressScreenshotPath: String?
+    var backgroundProgressScreenshotBlocker: String?
     var freshPulseVisible = false
     var failurePulseVisible = false
     var failureRetryVisible = false
     var axArtifacts: [String] = []
+    let screenshotTool = options.peekaboo.flatMap(peekabooScreenshotTool)
     if accessibilityChecked {
         let staleAXTimeout = min(refreshDelay - 1.0, max(options.timeout, 5.0))
         let refreshingSurface = MenuBarSurfaceRenderer.render(
-            descriptor: ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio, cachedPulse: cachedDescriptor)
+            descriptor: ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+                cachedPulse: cachedDescriptor,
+                progress: BackgroundDetailRefreshProgress(phase: .baseHoldings)
+            )
         )
         let targets = requiredSetupMenuTargets(in: refreshingSurface)
         let appElement = AXUIElementCreateApplication(successProcess.processIdentifier)
@@ -1717,7 +1725,34 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
             let staleMenuVisible = Set(targets.map(\.accessibilityIdentifier)).isSubset(of: snapshot.identifiers)
             let staleStatusVisible = statusText.contains(refreshingSurface.status.accessibilityLabel)
                 || statusText.contains(refreshingSurface.status.title)
-            stalePulseVisible = staleMenuVisible || (staleStatusVisible && snapshotAsOf(successSnapshot) == staleSnapshot.asOf)
+            backgroundProgressVisible = staleMenuVisible
+                && snapshot.texts.contains { $0.hasPrefix("Filling details") }
+                && snapshot.texts.contains("Step 1/5: Base holdings")
+                && !snapshot.texts.contains("Details fill failed")
+            stalePulseVisible = backgroundProgressVisible
+                || staleMenuVisible
+                || (staleStatusVisible && snapshotAsOf(successSnapshot) == staleSnapshot.asOf)
+            if backgroundProgressVisible {
+                let screenshot = (try? captureMenuScreenshot(
+                    name: "pdtbar-scripted-returning-launch-progress",
+                    snapshot: snapshot,
+                    expectedMenuIdentifiers: Set(targets.map(\.accessibilityIdentifier)),
+                    artifacts: artifacts,
+                    peekaboo: screenshotTool
+                )) ?? captureFullScreenScreenshot(
+                    name: "pdtbar-scripted-returning-launch-progress-fullscreen",
+                    artifacts: artifacts,
+                    peekaboo: screenshotTool
+                )
+                if let screenshot {
+                    backgroundProgressScreenshotPath = artifactPath(screenshot)
+                    axArtifacts.append(artifactPath(screenshot))
+                } else {
+                    backgroundProgressScreenshotBlocker = screenshotTool == nil
+                        ? "Peekaboo screenshot capture unavailable or missing required TCC permissions"
+                        : "Peekaboo screenshot capture returned no visible image while Accessibility saw the progress menu"
+                }
+            }
         }
     }
 
@@ -1777,7 +1812,8 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
     let failureProcess = try launchFirstFetchApp(
         app,
         appSupportDirectory: failureAppSupport,
-        fixtureSnapshotDirectory: failureFixtureSnapshotDirectory
+        fixtureSnapshotDirectory: failureFixtureSnapshotDirectory,
+        scriptedBackgroundRefresh: true
     )
     defer {
         terminate(failureProcess)
@@ -1830,6 +1866,9 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
         failureSnapshotAsOf: snapshotAsOf(failureSnapshot),
         accessibilityChecked: accessibilityChecked,
         stalePulseVisibleDuringRefresh: stalePulseVisible,
+        backgroundDetailProgressVisible: backgroundProgressVisible,
+        backgroundDetailProgressScreenshotPath: backgroundProgressScreenshotPath,
+        backgroundDetailProgressScreenshotBlocker: backgroundProgressScreenshotBlocker,
         freshPulseVisibleAfterRefresh: freshPulseVisible,
         transientFailurePreservedSnapshot: failurePreservedSnapshot,
         transientFailurePulseVisible: failurePulseVisible,
@@ -1839,12 +1878,18 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
     try stableJSONData(proofPayload).write(to: proof, options: .atomic)
 
     guard failurePreservedSnapshot,
-          !accessibilityChecked || (stalePulseVisible && freshPulseVisible && failurePulseVisible && failureRetryVisible)
+          !accessibilityChecked || (
+              stalePulseVisible
+              && backgroundProgressVisible
+              && freshPulseVisible
+              && failurePulseVisible
+              && failureRetryVisible
+          )
     else {
         return SmokeReport(
             name: "scripted-returning-launch",
             status: SmokeStatus.failed,
-            detail: "scripted returning launch did not prove stale visibility, fresh replacement, or transient failure preservation",
+            detail: "scripted returning launch did not prove background progress visibility, fresh replacement, or transient failure preservation",
             artifacts: [artifactPath(proof)] + axArtifacts
         )
     }
@@ -1852,7 +1897,7 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
     return SmokeReport(
         name: "scripted-returning-launch",
         status: SmokeStatus.passed,
-        detail: "returning launch kept the seeded pulse visible during refresh, replaced it after complete scripted data, and preserved it with a details retry after transient failure",
+        detail: "returning launch kept the seeded pulse visible with active detail progress, replaced it after complete scripted data, and preserved it with a details retry after transient failure",
         artifacts: [artifactPath(proof)] + axArtifacts
     )
 }
@@ -2671,6 +2716,9 @@ private struct ScriptedReturningLaunchProof: Codable {
     var failureSnapshotAsOf: String?
     var accessibilityChecked: Bool
     var stalePulseVisibleDuringRefresh: Bool
+    var backgroundDetailProgressVisible: Bool
+    var backgroundDetailProgressScreenshotPath: String?
+    var backgroundDetailProgressScreenshotBlocker: String?
     var freshPulseVisibleAfterRefresh: Bool
     var transientFailurePreservedSnapshot: Bool
     var transientFailurePulseVisible: Bool
@@ -2998,6 +3046,35 @@ private func captureMenuScreenshot(
         return nil
     }
     return screenshot
+}
+
+private func captureFullScreenScreenshot(name: String, artifacts: URL, peekaboo: URL?) -> URL? {
+    guard let peekaboo else {
+        return nil
+    }
+    let screenshot = artifacts.appending(path: "\(name).png")
+    do {
+        try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+        _ = try run(
+            peekaboo,
+            arguments: [
+                "image",
+                "--mode", "screen",
+                "--path", screenshot.path,
+                "--json",
+                "--no-remote",
+            ],
+            timeout: 20
+        )
+        guard imageHasVisiblePixels(screenshot) else {
+            try? FileManager.default.removeItem(at: screenshot)
+            return nil
+        }
+        return screenshot
+    } catch {
+        try? FileManager.default.removeItem(at: screenshot)
+        return nil
+    }
 }
 
 private func movePointerToNeutralMenuArea(in snapshot: AccessibilitySnapshot) {
@@ -3739,7 +3816,8 @@ private func launchSetupRetryApp(
 private func launchFirstFetchApp(
     _ app: URL,
     appSupportDirectory: URL,
-    fixtureSnapshotDirectory: URL
+    fixtureSnapshotDirectory: URL,
+    scriptedBackgroundRefresh: Bool = false
 ) throws -> Process {
     let process = Process()
     process.executableURL = app
@@ -3750,6 +3828,7 @@ private func launchFirstFetchApp(
         "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
         "PDTBAR_FIXTURE": defaultFixture.path,
         "PDTBAR_SNAPSHOT_DIR": fixtureSnapshotDirectory.path,
+        "PDTBAR_SCRIPTED_BACKGROUND_REFRESH": scriptedBackgroundRefresh ? "1" : "0",
     ]) { _, new in new }
     try process.run()
     return process
@@ -4091,6 +4170,50 @@ private func scriptedPDTConnectorScenarioResults(
             name: "malformed-payload",
             passed: tool == "pdt-get-portfolio-holdings",
             detail: tool
+        ))
+    }
+
+    var degradedResponses = responses
+    degradedResponses.removeValue(
+        forKey: "pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9101"
+    )
+    let degradedStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-smoke-progressive-detail")
+    defer {
+        try? FileManager.default.removeItem(at: degradedStore.directory)
+    }
+    do {
+        let degraded = try PDTBackgroundDetailRefresh(
+            connector: ScriptedPDTMCPConnector(responses: degradedResponses),
+            snapshotStore: degradedStore,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+        let partialSnapshot = try degradedStore.loadPriorSnapshot()
+        let diagnostic = try degradedStore.loadLastDetailRefreshDiagnostic()
+        let retried = try PDTBackgroundDetailRefresh(
+            connector: ScriptedPDTMCPConnector(responses: responses),
+            snapshotStore: degradedStore,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+        let diagnosticAfterRetry = try degradedStore.loadLastDetailRefreshDiagnostic()
+        results.append(.init(
+            name: "progressive-detail-degraded-retry",
+            passed: degraded.outcome == .degraded
+                && partialSnapshot?.sectors.isEmpty == false
+                && partialSnapshot?.incomeEvents.isEmpty == false
+                && diagnostic?.toolName == "pdt-list-symbol-prices"
+                && diagnostic?.argumentShape == ["date_from", "date_to", "symbol_quote_id"]
+                && retried.outcome == .completed
+                && retried.model.facetSnapshots.bigMovers.priceSeriesCount == 2
+                && diagnosticAfterRetry == nil,
+            detail: "partial=\(degraded.outcome.rawValue); retry=\(retried.outcome.rawValue); diagnostic=\(diagnostic?.category.rawValue ?? "none")"
+        ))
+    } catch {
+        results.append(.init(
+            name: "progressive-detail-degraded-retry",
+            passed: false,
+            detail: "progressive detail scenario failed"
         ))
     }
 

@@ -235,6 +235,28 @@ try check(
         && !backgroundFailureDescriptor.sections.flatMap(\.rows).map(\.title).contains("Log in with Claude"),
     "background refresh failure should preserve the cached pulse and expose a detail-fill retry"
 )
+let backgroundProgressDescriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+    cachedPulse: descriptor,
+    progress: BackgroundDetailRefreshProgress(
+        phase: .priceHistory,
+        completedUnitCount: 12,
+        totalUnitCount: 19
+    )
+)
+try check(
+    backgroundProgressDescriptor.sections.flatMap(\.rows).map(\.title).contains("Filling details")
+        && backgroundProgressDescriptor.sections.flatMap(\.rows).map(\.title).contains("Step 5/5: Price history")
+        && backgroundProgressDescriptor.sections.flatMap(\.rows).map(\.title).contains("12/19 price histories checked")
+        && !backgroundProgressDescriptor.sections.flatMap(\.rows).map(\.title).contains("Details fill failed"),
+    "background detail retry should render active phase/count progress instead of stale failure"
+)
+let backgroundDegradedDescriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailDegraded(cachedPulse: descriptor)
+try check(
+    backgroundDegradedDescriptor.sections.flatMap(\.rows).map(\.title).contains("Details partially filled")
+        && backgroundDegradedDescriptor.sections.flatMap(\.rows).map(\.title).contains("Fill details again")
+        && !backgroundDegradedDescriptor.sections.flatMap(\.rows).map(\.title).contains("Details fill failed"),
+    "degraded detail completion should preserve the pulse and expose retry without stale failure copy"
+)
 let cachedFailureDescriptor = ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed, cachedPulse: descriptor)
 try check(
     cachedFailureDescriptor.statusTitle == descriptor.statusTitle
@@ -1060,6 +1082,106 @@ do {
     throw CheckFailure("exit-zero live PDT auth payload should not decode as a snapshot")
 } catch let error as PDTLiveDataSourceError {
     try check(error.shouldSkipLiveSmoke, "exit-zero live PDT auth payload should be classified as a skip")
+}
+var degradedDetailResponses = scriptedConnectorResponses
+degradedDetailResponses.removeValue(
+    forKey: "pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9101"
+)
+let degradedDetailStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-progressive-detail-check")
+defer {
+    try? FileManager.default.removeItem(at: degradedDetailStore.directory)
+}
+let degradedDetailRefresh = try PDTBackgroundDetailRefresh(
+    connector: ScriptedPDTMCPConnector(responses: degradedDetailResponses),
+    snapshotStore: degradedDetailStore,
+    asOf: "2026-03-29",
+    options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+).refresh()
+let degradedDetailSnapshot = try require(
+    try degradedDetailStore.loadPriorSnapshot(),
+    "degraded background detail refresh should commit a partial snapshot"
+)
+try check(degradedDetailRefresh.outcome == .degraded, "missing optional price history should degrade, not abort")
+try check(
+    degradedDetailSnapshot.sectors.count == 1
+        && degradedDetailSnapshot.xRayHoldings?.count == 2
+        && degradedDetailSnapshot.incomeEvents.count == 1
+        && degradedDetailSnapshot.priceSeries.isEmpty,
+    "degraded background detail refresh should preserve completed allocation, X-ray, and income phases"
+)
+let degradedDetailDiagnostic = try require(
+    try degradedDetailStore.loadLastDetailRefreshDiagnostic(),
+    "degraded background detail refresh should persist a redacted diagnostic"
+)
+try check(
+    degradedDetailDiagnostic.toolName == "pdt-list-symbol-prices"
+        && degradedDetailDiagnostic.phase == .priceHistory
+        && degradedDetailDiagnostic.argumentShape == ["date_from", "date_to", "symbol_quote_id"]
+        && degradedDetailDiagnostic.category == .missingScriptedResponse,
+    "detail refresh diagnostic should keep only tool, phase, category, attempts, and argument shape"
+)
+let repairedDetailRefresh = try PDTBackgroundDetailRefresh(
+    connector: ScriptedPDTMCPConnector(responses: scriptedConnectorResponses),
+    snapshotStore: degradedDetailStore,
+    asOf: "2026-03-29",
+    options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+).refresh()
+let repairedDetailDiagnostic = try degradedDetailStore.loadLastDetailRefreshDiagnostic()
+try check(repairedDetailRefresh.outcome == .completed, "retry after degraded detail refresh should complete with full data")
+try check(
+    repairedDetailRefresh.model.facetSnapshots.bigMovers.priceSeriesCount == 2
+        && repairedDetailDiagnostic == nil,
+    "completed detail retry should restore price data and clear the last diagnostic"
+)
+let baseRetryStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-required-base-retry-check")
+defer {
+    try? FileManager.default.removeItem(at: baseRetryStore.directory)
+}
+private let baseRetryConnector = OneShotFailingPDTConnector(
+    responses: scriptedConnectorResponses,
+    failures: [
+        "pdt-get-portfolio-holdings": .setupUnavailable("Claude did not call mcp__pdt__pdt-get-portfolio-holdings"),
+    ]
+)
+let baseRetryRefresh = try PDTBackgroundDetailRefresh(
+    connector: baseRetryConnector,
+    snapshotStore: baseRetryStore,
+    asOf: "2026-03-29",
+    options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+).refresh()
+try check(baseRetryRefresh.outcome == .completed, "required base holdings should retry a missing Claude tool call")
+try check(
+    baseRetryConnector.calls.filter { $0 == "pdt-get-portfolio-holdings" }.count == 2,
+    "required base holdings retry should call holdings twice before completing"
+)
+let baseFailureStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-required-base-failure-check")
+defer {
+    try? FileManager.default.removeItem(at: baseFailureStore.directory)
+}
+do {
+    _ = try PDTBackgroundDetailRefresh(
+        connector: ScriptedPDTMCPConnector(
+            responses: scriptedConnectorResponses,
+            failure: .setupUnavailable("Claude did not call mcp__pdt__pdt-get-portfolio-holdings")
+        ),
+        snapshotStore: baseFailureStore,
+        asOf: "2026-03-29",
+        options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+    ).refresh()
+    throw CheckFailure("required base holdings should fail after retry budget is exhausted")
+} catch {
+    let diagnostic = try require(
+        try baseFailureStore.loadLastDetailRefreshDiagnostic(),
+        "required base holdings failure should persist a redacted diagnostic"
+    )
+    try check(
+        diagnostic.toolName == "pdt-get-portfolio-holdings"
+            && diagnostic.phase == .baseHoldings
+            && diagnostic.attemptCount == 2
+            && diagnostic.category == .setupUnavailable
+            && diagnostic.argumentShape.isEmpty,
+        "required base holdings diagnostic should keep only tool, phase, category, attempts, and argument shape"
+    )
 }
 let quietRunWithPrior = try PressureRunner.run(
     fixture: fixture,
@@ -2265,6 +2387,42 @@ private struct ScriptedPDTLiveToolClient: PDTLiveToolClient {
         let key = suffix.isEmpty ? name : "\(name)?\(suffix)"
         guard let response = responses[key] ?? responses[name] else {
             throw CheckFailure("missing scripted live PDT response for \(key)")
+        }
+        return response
+    }
+}
+
+fileprivate final class OneShotFailingPDTConnector: PDTMCPConnector, @unchecked Sendable {
+    let responses: [String: Data]
+    private var failures: [String: PDTMCPConnectorError]
+    private let lock = NSLock()
+    private(set) var calls: [String] = []
+
+    init(responses: [String: Data], failures: [String: PDTMCPConnectorError]) {
+        self.responses = responses
+        self.failures = failures
+    }
+
+    func availableReadTools() throws -> Set<String> {
+        Set(PDTReadTools.requiredV1)
+    }
+
+    func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
+        lock.lock()
+        calls.append(name)
+        if let failure = failures.removeValue(forKey: name) {
+            lock.unlock()
+            throw failure
+        }
+        lock.unlock()
+
+        let suffix = arguments
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "&")
+        let key = suffix.isEmpty ? name : "\(name)?\(suffix)"
+        guard let response = responses[key] ?? responses[name] else {
+            throw CheckFailure("missing scripted PDT response for \(key)")
         }
         return response
     }
