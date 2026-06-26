@@ -199,6 +199,65 @@ struct BackgroundDetailRefreshTests {
         #expect(result.model.facetSnapshots.bigMovers.priceSeriesCount == 6)
         #expect(connector.maxActivePriceCalls == 2)
     }
+
+    @Test("Required base holdings retries a missing Claude tool call")
+    func requiredBaseHoldingsRetriesMissingClaudeToolCall() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-base-retry-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let connector = OneShotFailingPDTConnector(
+            responses: try detailRefreshResponses(),
+            failures: [
+                "pdt-get-portfolio-holdings": .setupUnavailable("Claude did not call mcp__pdt__pdt-get-portfolio-holdings"),
+            ]
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        #expect(result.outcome == .completed)
+        #expect(connector.calls.filter { $0 == "pdt-get-portfolio-holdings" }.count == 2)
+        #expect(try store.loadLastDetailRefreshDiagnostic() == nil)
+    }
+
+    @Test("Required base holdings failure persists a redacted diagnostic")
+    func requiredBaseHoldingsFailurePersistsRedactedDiagnostic() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-base-failure-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        _ = try store.commitCurrentSnapshot(testSnapshot(asOf: "2026-03-28"))
+
+        do {
+            _ = try PDTBackgroundDetailRefresh(
+                connector: ScriptedPDTMCPConnector(
+                    responses: try detailRefreshResponses(),
+                    failure: .setupUnavailable("Claude did not call mcp__pdt__pdt-get-portfolio-holdings")
+                ),
+                snapshotStore: store,
+                asOf: "2026-03-29",
+                options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+            ).refresh()
+            Issue.record("Expected required base holdings failure to throw")
+        } catch {
+            let diagnostic = try #require(try store.loadLastDetailRefreshDiagnostic())
+            #expect(diagnostic.toolName == "pdt-get-portfolio-holdings")
+            #expect(diagnostic.phase == .baseHoldings)
+            #expect(diagnostic.attemptCount == 2)
+            #expect(diagnostic.category == .setupUnavailable)
+            #expect(diagnostic.argumentShape == [])
+
+            let committed = try #require(try store.loadPriorSnapshot())
+            #expect(committed.asOf == "2026-03-28")
+            #expect(committed.sectors.count == 1)
+            #expect(committed.priceSeries.count == 4)
+        }
+    }
 }
 
 private final class DetailProgressRecorder: @unchecked Sendable {
@@ -250,6 +309,42 @@ private final class ConcurrencyTrackingPDTConnector: PDTMCPConnector, @unchecked
                 lock.unlock()
             }
         }
+        let suffix = arguments
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "&")
+        let key = suffix.isEmpty ? name : "\(name)?\(suffix)"
+        guard let response = responses[key] ?? responses[name] else {
+            throw PDTMCPConnectorError.missingScriptedResponse(key)
+        }
+        return response
+    }
+}
+
+private final class OneShotFailingPDTConnector: PDTMCPConnector, @unchecked Sendable {
+    let responses: [String: Data]
+    private var failures: [String: PDTMCPConnectorError]
+    private let lock = NSLock()
+    private(set) var calls: [String] = []
+
+    init(responses: [String: Data], failures: [String: PDTMCPConnectorError]) {
+        self.responses = responses
+        self.failures = failures
+    }
+
+    func availableReadTools() throws -> Set<String> {
+        Set(PDTReadTools.requiredV1)
+    }
+
+    func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
+        lock.lock()
+        calls.append(name)
+        if let failure = failures.removeValue(forKey: name) {
+            lock.unlock()
+            throw failure
+        }
+        lock.unlock()
+
         let suffix = arguments
             .sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }

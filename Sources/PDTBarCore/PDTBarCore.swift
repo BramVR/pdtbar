@@ -3468,7 +3468,15 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         let snapshotAsOf = asOf ?? currentDayString()
         let originalPriorSnapshot = try? snapshotStore.loadPriorSnapshot()
         var diagnostics: [PDTDetailRefreshFailureDiagnostic] = []
-        var snapshot = try baseSnapshot(asOf: snapshotAsOf, progress: progress)
+        var snapshot: PortfolioSnapshot
+        do {
+            snapshot = try baseSnapshot(asOf: snapshotAsOf, progress: progress)
+        } catch {
+            try snapshotStore.saveLastDetailRefreshDiagnostic(
+                diagnostic(for: error, tool: "pdt-get-portfolio-holdings", phase: .baseHoldings)
+            )
+            throw error
+        }
         preserveOptionalDetails(in: &snapshot, from: originalPriorSnapshot)
         _ = try snapshotStore.commitCurrentSnapshot(snapshot)
 
@@ -3564,8 +3572,9 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         progress: @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) throws -> PortfolioSnapshot {
         progress(BackgroundDetailRefreshProgress(phase: .baseHoldings))
-        let holdingsEnvelope: LiveHoldingsEnvelope = try callDecoded(
+        let holdingsEnvelope: LiveHoldingsEnvelope = try callDecodedWithRetry(
             "pdt-get-portfolio-holdings",
+            phase: .baseHoldings,
             arguments: [:]
         )
         let openHoldings = holdingsEnvelope.holdings
@@ -3840,8 +3849,12 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
     }
 }
 
-private struct PDTDetailRefreshToolError: Error {
+private struct PDTDetailRefreshToolError: Error, CustomStringConvertible {
     var diagnostic: PDTDetailRefreshFailureDiagnostic
+
+    var description: String {
+        "PDT detail refresh failed: tool=\(diagnostic.toolName) phase=\(diagnostic.phase.rawValue) category=\(diagnostic.category.rawValue) attempts=\(diagnostic.attemptCount)"
+    }
 }
 
 private final class PDTPriceHistoryAccumulator: @unchecked Sendable {

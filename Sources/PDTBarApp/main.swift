@@ -793,6 +793,7 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
     private let claudePath: String
     private let model: String
     private let timeout: TimeInterval
+    private let toolCallRetryPolicy: ClaudeToolCallRetryPolicy
     private var discoveredToolNames: [String: String] = [:]
 
     init(environment: [String: String]) {
@@ -800,6 +801,9 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
         self.claudePath = environment["PDTBAR_CLAUDE_BIN"].flatMap { $0.isEmpty ? nil : $0 } ?? "claude"
         self.model = environment["PDTBAR_CLAUDE_MODEL"].flatMap { $0.isEmpty ? nil : $0 } ?? "opus"
         self.timeout = environment["PDTBAR_CLAUDE_TOOL_TIMEOUT"].flatMap(Double.init) ?? 120.0
+        self.toolCallRetryPolicy = ClaudeToolCallRetryPolicy(
+            retryCount: environment["PDTBAR_CLAUDE_TOOL_RETRY_COUNT"].flatMap(Int.init) ?? 1
+        )
     }
 
     func availableReadTools() throws -> Set<String> {
@@ -841,10 +845,31 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
             throw PDTMCPConnectorError.setupUnavailable("Claude CLI is unavailable")
         }
         let toolName = try resolvedToolName(for: name)
+        var attempts = 0
+        var lastError: Error?
+        repeat {
+            attempts += 1
+            do {
+                return try callReadToolOnce(name, resolvedToolName: toolName, arguments: arguments)
+            } catch {
+                lastError = error
+                guard toolCallRetryPolicy.shouldRetry(error, afterAttempt: attempts) else {
+                    throw error
+                }
+            }
+        } while attempts < toolCallRetryPolicy.maxAttempts
+        throw lastError ?? PDTMCPConnectorError.transientFailure("Claude \(name) call failed")
+    }
+
+    private func callReadToolOnce(
+        _ name: String,
+        resolvedToolName toolName: String,
+        arguments: [String: String]
+    ) throws -> Data {
         let sessionID = UUID().uuidString
         let commandArguments = [
             "--model", model,
-            "--allowedTools", [toolName, "ToolSearch"].joined(separator: ","),
+            "--allowedTools", toolName,
             "--disallowedTools", disallowedTools().joined(separator: ","),
             "--session-id", sessionID,
             "-p", prompt(toolName: toolName, readToolName: name, arguments: arguments),
@@ -904,38 +929,91 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
         guard !unresolved.isEmpty else {
             return discoveredToolNames.filter { readToolNames.contains($0.key) }
         }
-        let sessionID = UUID().uuidString
-        let toolList = unresolved.joined(separator: ", ")
-        let result = try ClaudeCLIProcess.run(
-            executable: claudePath,
-            arguments: [
-                "--model", model,
-                "--allowedTools", "ToolSearch",
-                "--disallowedTools", toolSearchDisallowedTools().joined(separator: ","),
-                "--session-id", sessionID,
-                "-p", "Use ToolSearch to find these PDT MCP read-only tools: \(toolList). Return only {\"status\":\"redacted-ok\"}.",
-                "--output-format", "stream-json",
-                "--verbose",
-                "--no-session-persistence",
-            ],
-            timeout: min(timeout, 60.0),
-            environment: environment
-        )
-        let createdFiles = claudeToolResultFiles(sessionID: sessionID)
-        defer {
+        let stillUnresolved = unresolved
+        let toolList = stillUnresolved.joined(separator: ", ")
+        var attempts = 0
+        var lastResultExitCode: Int32 = 0
+        repeat {
+            attempts += 1
+            let sessionID = UUID().uuidString
+            let result = try ClaudeCLIProcess.run(
+                executable: claudePath,
+                arguments: [
+                    "--model", model,
+                    "--allowedTools", "ToolSearch",
+                    "--disallowedTools", toolSearchDisallowedTools().joined(separator: ","),
+                    "--session-id", sessionID,
+                    "-p", "Use ToolSearch to find these PDT MCP read-only tools: \(toolList). Return only {\"status\":\"redacted-ok\"}.",
+                    "--output-format", "stream-json",
+                    "--verbose",
+                    "--no-session-persistence",
+                ],
+                timeout: min(timeout, 60.0),
+                environment: environment
+            )
+            let createdFiles = claudeToolResultFiles(sessionID: sessionID)
             deleteClaudeToolResultFiles(pdtToolResultFiles(
                 in: createdFiles,
                 referencedBy: result.stdout,
-                readToolNames: unresolved,
+                readToolNames: stillUnresolved,
                 sessionID: sessionID
             ))
+            lastResultExitCode = result.exitCode
+            guard result.exitCode == 0 else {
+                continue
+            }
+            let resolved = discoveredToolNames(for: stillUnresolved, in: result.stdout)
+            discoveredToolNames.merge(resolved) { current, _ in current }
+            if stillUnresolved.allSatisfy({ discoveredToolNames[$0] != nil }) {
+                break
+            }
+        } while attempts < toolCallRetryPolicy.maxAttempts
+        for readToolName in stillUnresolved where discoveredToolNames[readToolName] == nil {
+            try resolveToolNameIndividually(readToolName)
         }
-        guard result.exitCode == 0 else {
+        let missing = stillUnresolved.filter { discoveredToolNames[$0] == nil }
+        guard lastResultExitCode == 0 || missing.isEmpty else {
             throw PDTMCPConnectorError.setupUnavailable("Claude could not find \(toolList)")
         }
-        let resolved = discoveredToolNames(for: unresolved, in: result.stdout)
-        discoveredToolNames.merge(resolved) { current, _ in current }
         return discoveredToolNames.filter { readToolNames.contains($0.key) }
+    }
+
+    private func resolveToolNameIndividually(_ readToolName: String) throws {
+        var attempts = 0
+        repeat {
+            attempts += 1
+            let sessionID = UUID().uuidString
+            let result = try ClaudeCLIProcess.run(
+                executable: claudePath,
+                arguments: [
+                    "--model", model,
+                    "--allowedTools", "ToolSearch",
+                    "--disallowedTools", toolSearchDisallowedTools().joined(separator: ","),
+                    "--session-id", sessionID,
+                    "-p", "Use ToolSearch to find exactly this PDT MCP read-only tool: \(readToolName). Return only {\"status\":\"redacted-ok\"}.",
+                    "--output-format", "stream-json",
+                    "--verbose",
+                    "--no-session-persistence",
+                ],
+                timeout: min(timeout, 60.0),
+                environment: environment
+            )
+            let createdFiles = claudeToolResultFiles(sessionID: sessionID)
+            deleteClaudeToolResultFiles(pdtToolResultFiles(
+                in: createdFiles,
+                referencedBy: result.stdout,
+                readToolNames: [readToolName],
+                sessionID: sessionID
+            ))
+            guard result.exitCode == 0 else {
+                continue
+            }
+            let resolved = discoveredToolNames(for: [readToolName], in: result.stdout)
+            discoveredToolNames.merge(resolved) { current, _ in current }
+            if discoveredToolNames[readToolName] != nil {
+                break
+            }
+        } while attempts < toolCallRetryPolicy.maxAttempts
     }
 
     private func discoveredToolNames(for readToolNames: [String], in output: String) -> [String: String] {
@@ -1028,7 +1106,7 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
             }
         let matchingToolUseIDs = Set(objects.flatMap { toolUseIDs(for: toolName, in: $0) })
         guard !matchingToolUseIDs.isEmpty else {
-            throw PDTMCPConnectorError.setupUnavailable("Claude did not call \(toolName)")
+            throw PDTMCPConnectorError.transientFailure("Claude did not call \(toolName)")
         }
         for object in objects {
             if let structured = structuredToolResult(in: object, matching: matchingToolUseIDs) {

@@ -1133,6 +1133,56 @@ try check(
         && repairedDetailDiagnostic == nil,
     "completed detail retry should restore price data and clear the last diagnostic"
 )
+let baseRetryStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-required-base-retry-check")
+defer {
+    try? FileManager.default.removeItem(at: baseRetryStore.directory)
+}
+private let baseRetryConnector = OneShotFailingPDTConnector(
+    responses: scriptedConnectorResponses,
+    failures: [
+        "pdt-get-portfolio-holdings": .setupUnavailable("Claude did not call mcp__pdt__pdt-get-portfolio-holdings"),
+    ]
+)
+let baseRetryRefresh = try PDTBackgroundDetailRefresh(
+    connector: baseRetryConnector,
+    snapshotStore: baseRetryStore,
+    asOf: "2026-03-29",
+    options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+).refresh()
+try check(baseRetryRefresh.outcome == .completed, "required base holdings should retry a missing Claude tool call")
+try check(
+    baseRetryConnector.calls.filter { $0 == "pdt-get-portfolio-holdings" }.count == 2,
+    "required base holdings retry should call holdings twice before completing"
+)
+let baseFailureStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-required-base-failure-check")
+defer {
+    try? FileManager.default.removeItem(at: baseFailureStore.directory)
+}
+do {
+    _ = try PDTBackgroundDetailRefresh(
+        connector: ScriptedPDTMCPConnector(
+            responses: scriptedConnectorResponses,
+            failure: .setupUnavailable("Claude did not call mcp__pdt__pdt-get-portfolio-holdings")
+        ),
+        snapshotStore: baseFailureStore,
+        asOf: "2026-03-29",
+        options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+    ).refresh()
+    throw CheckFailure("required base holdings should fail after retry budget is exhausted")
+} catch {
+    let diagnostic = try require(
+        try baseFailureStore.loadLastDetailRefreshDiagnostic(),
+        "required base holdings failure should persist a redacted diagnostic"
+    )
+    try check(
+        diagnostic.toolName == "pdt-get-portfolio-holdings"
+            && diagnostic.phase == .baseHoldings
+            && diagnostic.attemptCount == 2
+            && diagnostic.category == .setupUnavailable
+            && diagnostic.argumentShape.isEmpty,
+        "required base holdings diagnostic should keep only tool, phase, category, attempts, and argument shape"
+    )
+}
 let quietRunWithPrior = try PressureRunner.run(
     fixture: fixture,
     snapshotDirectory: quietSnapshotStore.directory
@@ -2337,6 +2387,42 @@ private struct ScriptedPDTLiveToolClient: PDTLiveToolClient {
         let key = suffix.isEmpty ? name : "\(name)?\(suffix)"
         guard let response = responses[key] ?? responses[name] else {
             throw CheckFailure("missing scripted live PDT response for \(key)")
+        }
+        return response
+    }
+}
+
+fileprivate final class OneShotFailingPDTConnector: PDTMCPConnector, @unchecked Sendable {
+    let responses: [String: Data]
+    private var failures: [String: PDTMCPConnectorError]
+    private let lock = NSLock()
+    private(set) var calls: [String] = []
+
+    init(responses: [String: Data], failures: [String: PDTMCPConnectorError]) {
+        self.responses = responses
+        self.failures = failures
+    }
+
+    func availableReadTools() throws -> Set<String> {
+        Set(PDTReadTools.requiredV1)
+    }
+
+    func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
+        lock.lock()
+        calls.append(name)
+        if let failure = failures.removeValue(forKey: name) {
+            lock.unlock()
+            throw failure
+        }
+        lock.unlock()
+
+        let suffix = arguments
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "&")
+        let key = suffix.isEmpty ? name : "\(name)?\(suffix)"
+        guard let response = responses[key] ?? responses[name] else {
+            throw CheckFailure("missing scripted PDT response for \(key)")
         }
         return response
     }
