@@ -1,51 +1,51 @@
 ---
-summary: "Publieke Nederlandse startpagina voor de PDTBar docs-site."
+summary: "Publieke Nederlandstalige startpagina voor de PDTBar docs-site."
 read_when:
   - Updating the public docs-site copy
 title: "PDTBar"
 lang: "nl"
 permalink: "/"
-description: "PDTBar is een rustige macOS-menubalk voor Portfolio Dividend Tracker-portefeuilles."
+description: "PDTBar houdt je Portfolio Dividend Tracker-portefeuille rustig in beeld via de macOS-menubalk."
 ---
 
 # PDTBar
 
-PDTBar is een rustige macOS-menubalk voor je Portfolio Dividend Tracker-portefeuille. De app kijkt mee via je bestaande Claude CLI + PDT MCP-installatie en laat alleen zien wat nu aandacht verdient.
+PDTBar houdt je Portfolio Dividend Tracker-portefeuille rustig in beeld via de macOS-menubalk. De app gebruikt je bestaande Claude CLI en PDT MCP-koppeling, leest lokaal mee en toont alleen wat nu aandacht verdient.
 
-De pulse draait om concentratie, inkomensmomenten, grote bewegingen, versheid en alles rustig-dagen.
+Het korte overzicht draait om concentratie, inkomensmomenten, opvallende bewegingen, de actualiteit van je gegevens en dagen waarop er gewoon niets bijzonders speelt.
 
-## Wat je ziet
+## In een oogopslag
 
-- Concentratie: welke posities het meeste gewicht krijgen.
+- Concentratie: welke posities zwaar meetellen in je portefeuille.
 - Inkomensmomenten: dividend- en kasstroommomenten die eraan komen.
-- Grote bewegingen: holdings die duidelijk afwijken.
-- Versheid: hoe recent de PDT-gegevens zijn.
-- Alles rustig: een kalme status wanneer er niets belangrijks speelt.
+- Opvallende bewegingen: holdings die duidelijk anders bewegen dan de rest.
+- Actualiteit: of de PDT-gegevens nog recent genoeg zijn.
+- Rust: een kalme melding wanneer er niets belangrijks speelt.
 
 ## Hoe het werkt
 
-PDTBar gebruikt dezelfde gegevens als PDT, maar met een ander ritme. PDT blijft de plek voor het volledige dashboard. PDTBar woont in de menubalk en geeft een korte pulse: de twee of drie feiten die je anders zelf zou moeten zoeken.
+PDTBar gebruikt dezelfde gegevens als PDT, maar met een andere rol. PDT blijft de plek voor het volledige dashboard. PDTBar zit in de menubalk en geeft je een korte stand van zaken: de twee of drie feiten die je anders zelf uit het dashboard zou halen.
 
-De huidige productlijn is Claude-first:
+Op dit moment werkt PDTBar via Claude:
 
 ```text
-open PDTBar
-check Claude CLI login
-check PDT MCP server
-fetch read-only PDT data
-show the portfolio pulse
+PDTBar starten
+Claude CLI-login controleren
+PDT MCP-server controleren
+PDT-gegevens alleen-lezen ophalen
+kort portefeuilleoverzicht tonen
 ```
 
-Als de setup ontbreekt, biedt PDTBar `Log in with Claude` en `Check again`. Dagelijks gebruik vraagt geen terminalcommando's.
+Als er nog iets ontbreekt, toont PDTBar `Log in with Claude` en `Check again`. Voor dagelijks gebruik hoef je geen terminalcommando's te draaien.
 
 ## Vertrouwen en privacy
 
-PDTBar is lokaal en standaard alleen-lezen. De app plaatst geen orders, verplaatst geen geld, uploadt geen portefeuille naar een eigen backend, en geeft geen financieel advies. De pressure engine rangschikt feiten en veranderingen; jij beslist wat ze betekenen.
+PDTBar werkt lokaal en is standaard alleen-lezen. De app plaatst geen orders, verplaatst geen geld, uploadt je portefeuille niet naar een eigen backend en geeft geen financieel advies. De app zet feiten en veranderingen op volgorde; jij bepaalt wat je ermee doet.
 
 ## Status
 
-PDTBar is in actieve ontwikkeling. Fixturemodus bestaat voor ontwikkeling en smoke-tests, maar echte portfolio-updates lopen via de lokale Claude CLI + PDT MCP-route.
+PDTBar is in actieve ontwikkeling. De fixturemodus is alleen bedoeld voor ontwikkeling en smoke-tests; echte portefeuille-updates lopen via de lokale Claude CLI en PDT MCP-koppeling.
 
-## Bron
+## Broncode
 
 De broncode staat op [GitHub](https://github.com/BramVR/pdtbar).

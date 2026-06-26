@@ -19,7 +19,7 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
     fs
       .readFileSync(dutchPage, "utf8")
       .replace(
-        'description: "PDTBar is een rustige macOS-menubalk voor Portfolio Dividend Tracker-portefeuilles."',
+        'description: "PDTBar houdt je Portfolio Dividend Tracker-portefeuille rustig in beeld via de macOS-menubalk."',
         'description: "PDTBar JSON-LD escape </script><script>alert(1)</script> sentinel."',
       ),
     "utf8",
@@ -77,18 +77,18 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
 
     assert.match(index, /<html lang="nl"/);
     assert.match(index, /PDTBar/);
-    assert.match(index, /rustige macOS-menubalk/);
+    assert.match(index, /rustig in beeld via de macOS-menubalk/);
     assert.match(index, /Portfolio Dividend Tracker/);
     assert.match(index, /Claude CLI/);
     assert.match(index, /PDT MCP/);
-    assert.match(index, /lokaal en standaard alleen-lezen/);
+    assert.match(index, /werkt lokaal en is standaard alleen-lezen/);
     assert.match(index, /concentratie/);
     assert.match(index, /inkomensmomenten/);
-    assert.match(index, /grote bewegingen/);
-    assert.match(index, /versheid/);
-    assert.match(index, /alles rustig/);
+    assert.match(index, /opvallende bewegingen/);
+    assert.match(index, /actualiteit van je gegevens/);
+    assert.match(index, /niets bijzonders speelt/);
     assert.match(index, /href="en\/"/);
-    assert.match(index, /aria-label="Switch language to English"/);
+    assert.match(index, /aria-label="View this page in English"/);
     assert.match(index, /id="doc-search"/);
     assert.match(index, /data-theme-toggle/);
     assert.match(index, /class="nav-toggle"/);
@@ -108,7 +108,7 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
     assert.match(english, /quiet macOS menu bar/);
     assert.match(english, /local and read-only by default/);
     assert.match(english, /href="\.\.\/"/);
-    assert.match(english, /aria-label="Schakel taal naar Nederlands"/);
+    assert.match(english, /aria-label="Bekijk deze pagina in het Nederlands"/);
     assert.match(english, /<link rel="canonical" href="https:\/\/bramvr\.github\.io\/pdtbar\/en\/">/);
     assert.doesNotMatch(english, /java\tscript:alert/);
 
