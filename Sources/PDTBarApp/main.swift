@@ -35,6 +35,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let claudeReadinessProbeGate = ClaudeReadinessProbeGate()
     private let claudeLoginAttemptGate = ClaudeLoginAttemptGate()
     private let menuActionDispatcher = MenuActionDispatcher()
+    private let menuItemViewWidth: CGFloat = 400
 
     init(options: PDTBarLaunchOptions) {
         self.options = options
@@ -467,11 +468,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func makeMenu(from surface: MenuBarSurface) -> NSMenu {
         let menu = NSMenu()
+        menu.autoenablesItems = false
         for section in surface.sections {
-            let heading = NSMenuItem(title: section.title, action: nil, keyEquivalent: "")
-            heading.identifier = NSUserInterfaceItemIdentifier(section.accessibilityIdentifier)
-            heading.setAccessibilityIdentifier(section.accessibilityIdentifier)
-            heading.isEnabled = false
+            let heading = makeSectionHeadingItem(
+                title: section.title,
+                accessibilityIdentifier: section.accessibilityIdentifier
+            )
             menu.addItem(heading)
             for row in section.rows {
                 menu.addItem(makeMenuItem(from: row))
@@ -480,6 +482,37 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menu.addItem(NSMenuItem(title: "Quit PDTBar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         return menu
+    }
+
+    private func makeSectionHeadingItem(title: String, accessibilityIdentifier: String) -> NSMenuItem {
+        let heading = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        heading.identifier = NSUserInterfaceItemIdentifier(accessibilityIdentifier)
+        heading.setAccessibilityIdentifier(accessibilityIdentifier)
+        heading.view = makeSectionHeadingView(title: title, accessibilityIdentifier: accessibilityIdentifier)
+        heading.isEnabled = false
+        return heading
+    }
+
+    private func makeSectionHeadingView(title: String, accessibilityIdentifier: String) -> NSView {
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: 28))
+        container.autoresizingMask = [.width]
+        container.setAccessibilityIdentifier(accessibilityIdentifier)
+
+        let titleField = NSTextField(labelWithString: title)
+        titleField.font = NSFont.menuFont(ofSize: NSFont.systemFontSize)
+        titleField.textColor = NSColor.labelColor
+        titleField.lineBreakMode = .byTruncatingTail
+        titleField.maximumNumberOfLines = 1
+        titleField.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(titleField)
+
+        NSLayoutConstraint.activate([
+            titleField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            titleField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
+            titleField.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+        ])
+
+        return container
     }
 
     private func makeMenuItem(from row: MenuBarRowSurface) -> NSMenuItem {
@@ -513,12 +546,81 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } else {
             let submenu = NSMenu()
+            submenu.autoenablesItems = false
             for child in row.children {
                 submenu.addItem(makeMenuItem(from: child))
             }
             item.submenu = submenu
         }
+        if item.action == nil && item.submenu == nil {
+            item.view = makeStaticMenuRowView(
+                title: row.title,
+                detail: row.detail,
+                accessibilityIdentifier: row.accessibilityIdentifier
+            )
+            item.isEnabled = false
+        } else {
+            item.isEnabled = true
+            applyDetailSubtitle(row.detail, to: item, title: row.title)
+        }
         return item
+    }
+
+    private func makeStaticMenuRowView(title: String, detail: String?, accessibilityIdentifier: String) -> NSView {
+        let hasDetail = detail?.isEmpty == false
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: hasDetail ? 42 : 30))
+        container.autoresizingMask = [.width]
+        if !accessibilityIdentifier.isEmpty {
+            container.setAccessibilityIdentifier(accessibilityIdentifier)
+        }
+
+        let titleField = NSTextField(labelWithString: title)
+        titleField.font = NSFont.menuFont(ofSize: NSFont.systemFontSize)
+        titleField.textColor = NSColor.labelColor
+        titleField.lineBreakMode = .byTruncatingTail
+        titleField.maximumNumberOfLines = 1
+        titleField.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(titleField)
+
+        if let detail, !detail.isEmpty {
+            let detailField = NSTextField(labelWithString: detail)
+            detailField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize)
+            detailField.textColor = NSColor.secondaryLabelColor
+            detailField.lineBreakMode = .byTruncatingTail
+            detailField.maximumNumberOfLines = 1
+            detailField.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(detailField)
+
+            NSLayoutConstraint.activate([
+                titleField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+                titleField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
+                titleField.topAnchor.constraint(equalTo: container.topAnchor, constant: 3),
+
+                detailField.leadingAnchor.constraint(equalTo: titleField.leadingAnchor),
+                detailField.trailingAnchor.constraint(equalTo: titleField.trailingAnchor),
+                detailField.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 1),
+            ])
+        } else {
+            NSLayoutConstraint.activate([
+                titleField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+                titleField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
+                titleField.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            ])
+        }
+
+        return container
+    }
+
+    private func applyDetailSubtitle(_ detail: String?, to item: NSMenuItem, title: String) {
+        guard let detail, !detail.isEmpty else {
+            return
+        }
+        if #available(macOS 14.4, *) {
+            item.subtitle = detail
+        } else {
+            item.title = "\(title) - \(detail)"
+        }
+        item.toolTip = "\(title) - \(detail)"
     }
 
     @objc private func markPulseItemRead(_ sender: NSMenuItem) {

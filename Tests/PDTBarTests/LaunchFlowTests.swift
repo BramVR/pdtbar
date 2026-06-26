@@ -104,8 +104,12 @@ struct ClaudeLaunchFlowTests {
         #expect(descriptor.statusVisual.isDimmed)
         #expect(descriptor.statusVisual.filledBarCount == 0)
         #expect(surface.sections.flatMap(\.rows).map(\.title) == [
-            "Checking Claude setup - No prompts opened",
+            "Checking Claude setup",
             "Log in with Claude",
+        ])
+        #expect(surface.sections.flatMap(\.rows).map(\.detail) == [
+            "No prompts opened",
+            nil,
         ])
         #expect(surface.sections.flatMap(\.rows).last?.role == .setupLogin)
     }

@@ -1177,6 +1177,7 @@ public struct MenuBarRowSurface: Codable, Equatable {
     public var id: String
     public var role: MenuRowRole
     public var title: String
+    public var detail: String?
     public var accessibilityIdentifier: String
     public var actionTarget: MenuRowActionTarget?
     public var actionPayload: String?
@@ -1186,6 +1187,7 @@ public struct MenuBarRowSurface: Codable, Equatable {
         id: String,
         role: MenuRowRole,
         title: String,
+        detail: String? = nil,
         accessibilityIdentifier: String,
         actionTarget: MenuRowActionTarget? = nil,
         actionPayload: String? = nil,
@@ -1194,6 +1196,7 @@ public struct MenuBarRowSurface: Codable, Equatable {
         self.id = id
         self.role = role
         self.title = title
+        self.detail = detail
         self.accessibilityIdentifier = accessibilityIdentifier
         self.actionTarget = actionTarget
         self.actionPayload = actionPayload
@@ -2174,7 +2177,8 @@ public enum MenuBarSurfaceRenderer {
         MenuBarRowSurface(
             id: row.id,
             role: row.role,
-            title: row.detail.map { "\(row.title) - \($0)" } ?? row.title,
+            title: row.title,
+            detail: row.detail,
             accessibilityIdentifier: row.accessibilityIdentifier,
             actionTarget: row.actionTarget,
             actionPayload: row.actionPayload,
