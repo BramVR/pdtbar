@@ -20,6 +20,8 @@ Read matching `Read when` hints before editing. Keep docs current with behavior.
 
 ```bash
 make docs-list
+make docs-site
+make docs-site-test
 make start
 make stop
 make test
@@ -42,9 +44,26 @@ PDTBAR_TEST_GROUP_SIZE=1 PDTBAR_TEST_SUITE_TIMEOUT=60 ./Scripts/test.sh
 PDTBAR_TEST_SHARD_INDEX=0 PDTBAR_TEST_SHARD_COUNT=2 ./Scripts/test.sh
 ```
 
+## Public Docs Site
+
+```bash
+make docs-site
+make docs-site-test
+make docs-site-clean
+```
+
+`make docs-site` builds the allowlisted public site into `dist/docs-site`.
+Only pages listed in `docs/public-docs.json` are published; contributor,
+agent, planning, and smoke docs stay out of the public artifact unless a
+maintainer explicitly allowlists them. The Pages workflow builds and
+smoke-tests the site on PRs and `main`, then deploys only from `main` when
+GitHub Pages is enabled for the repository.
+
 ## Developer Commands
 
 ```bash
+make docs-site
+make docs-site-test
 make start
 make stop
 make test

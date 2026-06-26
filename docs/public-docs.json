@@ -1,0 +1,11 @@
+{
+  "sections": [
+    {
+      "name": "PDTBar",
+      "pages": [
+        "public/index.nl.md",
+        "public/index.en.md"
+      ]
+    }
+  ]
+}

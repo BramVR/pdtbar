@@ -39,6 +39,8 @@ Common local workflow:
 
 ```bash
 make docs-list
+make docs-site
+make docs-site-test
 make start
 make stop
 make test
