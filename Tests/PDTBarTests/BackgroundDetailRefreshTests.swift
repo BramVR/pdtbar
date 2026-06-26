@@ -24,6 +24,10 @@ struct BackgroundDetailRefreshTests {
 
         let committed = try #require(try store.loadPriorSnapshot())
         let event = try #require(committed.incomeEvents.first)
+        #expect(result.outcome == .completed)
+        #expect(result.pulse.source == .refreshedSnapshot)
+        #expect(result.snapshotCommit == result.pulse.snapshotCommit)
+        #expect(result.descriptor == result.pulse.descriptor)
         #expect(event.symbolId == 5102)
         #expect(event.quoteId == 9102)
         #expect(event.amount == Money(value: "6.00", currency: "EUR"))
@@ -57,6 +61,9 @@ struct BackgroundDetailRefreshTests {
 
         let committed = try #require(try store.loadPriorSnapshot())
         #expect(result.outcome == .degraded)
+        #expect(result.pulse.source == .refreshedSnapshot)
+        #expect(result.snapshotCommit == result.pulse.snapshotCommit)
+        #expect(result.descriptor == result.pulse.descriptor)
         #expect(result.model.facetSnapshots.allocation.sectorBreakdown.count == 1)
         #expect(result.model.facetSnapshots.allocation.xRayHoldings?.count == 2)
         #expect(result.model.facetSnapshots.income.upcomingEvents.count == 1)

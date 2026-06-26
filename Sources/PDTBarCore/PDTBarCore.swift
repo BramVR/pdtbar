@@ -3589,15 +3589,11 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             return $0.date < $1.date
         }
         diagnostics.append(contentsOf: priceHistory.diagnostics)
-        let commit = try snapshotStore.commitCurrentSnapshot(snapshot)
-
-        let pulse = try PressureRunner.lifecycleResult(
+        let pulse = try PressureRunner.refreshedPulse(
             snapshot: snapshot,
             priorSnapshot: originalPriorSnapshot,
-            snapshotCommit: commit,
+            snapshotStore: snapshotStore,
             pulseReadStore: pulseReadStore,
-            source: .refreshedSnapshot,
-            resetsReappearedReadState: true
         )
         let outcome: PDTBackgroundDetailRefreshOutcome = diagnostics.isEmpty ? .completed : .degraded
         if let lastDiagnostic = diagnostics.last {
@@ -3609,7 +3605,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             outcome: outcome,
             pulse: pulse,
             model: pulse.model,
-            snapshotCommit: commit,
+            snapshotCommit: pulse.snapshotCommit,
             descriptor: pulse.descriptor,
             diagnostics: diagnostics
         )
@@ -4217,6 +4213,25 @@ public enum PressureRunner {
             snapshotCommit: commit,
             pulseReadStore: pulseReadStore,
             source: .fetchedSnapshot,
+            loadedReadState: loadedReadState,
+            resetsReappearedReadState: true
+        )
+    }
+
+    public static func refreshedPulse(
+        snapshot: PortfolioSnapshot,
+        priorSnapshot: PortfolioSnapshot?,
+        snapshotStore: SnapshotStore,
+        pulseReadStore: PulseReadStore? = nil
+    ) throws -> PulseLifecycleResult {
+        let loadedReadState = displayReadState(from: pulseReadStore)
+        let commit = try snapshotStore.commitCurrentSnapshot(snapshot)
+        return try lifecycleResult(
+            snapshot: snapshot,
+            priorSnapshot: priorSnapshot,
+            snapshotCommit: commit,
+            pulseReadStore: pulseReadStore,
+            source: .refreshedSnapshot,
             loadedReadState: loadedReadState,
             resetsReappearedReadState: true
         )
