@@ -276,9 +276,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private func finishBackgroundPortfolioRefresh(_ outcome: PortfolioFetchOutcome) {
         portfolioRefreshInFlight = false
         if let pulse = outcome.pulse {
-            let refreshedPulse = pulseApplyingCurrentReadState(pulse)
-            let descriptor = refreshedPulse.descriptor
-            currentPulse = refreshedPulse
+            let descriptor = pulse.descriptor
+            currentPulse = pulse
             cachedPulseDescriptor = descriptor
             if outcome.detailRefreshOutcome == .degraded {
                 installMenuBarItem(ClaudeLaunchFlow.descriptorForBackgroundDetailDegraded(cachedPulse: descriptor))

@@ -263,6 +263,36 @@ struct PulseReadTests {
         #expect(cached.descriptor.statusTitle.contains("All caught up"))
     }
 
+    @Test("Refreshed snapshot returns lifecycle result with commit read state and descriptor")
+    func refreshedSnapshotReturnsPulseLifecycleResult() throws {
+        let snapshot = try fixtureSnapshot("concentration-pressure.json")
+        let originalItem = try #require(PressureEngine.buildModel(from: snapshot).rankedAttentionItems.first)
+        let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-read-lifecycle-refresh-test")
+        let readStore = PulseReadStore(directory: snapshotStore.directory)
+        var priorSnapshot = snapshot
+        priorSnapshot.openHoldings[0].weight = 0.190
+
+        try readStore.markRead(originalItem.readFingerprint)
+        let refreshed = try PressureRunner.refreshedPulse(
+            snapshot: snapshot,
+            priorSnapshot: priorSnapshot,
+            snapshotStore: snapshotStore,
+            pulseReadStore: readStore
+        )
+        let committed = try #require(try snapshotStore.loadPriorSnapshot())
+
+        #expect(refreshed.source == .refreshedSnapshot)
+        #expect(refreshed.snapshotCommit.written)
+        #expect(refreshed.snapshotCommit.asOf == snapshot.asOf)
+        #expect(committed.asOf == snapshot.asOf)
+        #expect(refreshed.model.rankedAttentionItems.contains {
+            $0.readFingerprint == originalItem.readFingerprint
+        })
+        #expect(refreshed.readState?.contains(originalItem.readFingerprint) == false)
+        #expect(!((try readStore.load()).contains(originalItem.readFingerprint)))
+        #expect(refreshed.descriptor == MenuDescriptorRenderer.render(model: refreshed.model))
+    }
+
     @Test("Cached relaunch does not prune prior-dependent big-mover read state")
     func cachedRelaunchDoesNotPruneBigMoverReadState() throws {
         let fixture = packageRoot.appending(path: "docs/pdt/fixtures/big-mover.json")
