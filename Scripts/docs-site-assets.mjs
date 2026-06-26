@@ -49,8 +49,9 @@ a:hover{text-decoration:underline;text-underline-offset:.22em}
 .sidebar-head{display:flex;align-items:center;gap:10px;margin-bottom:22px}
 .brand{display:flex;gap:11px;align-items:center;min-width:0;flex:1;color:var(--ink);text-decoration:none}
 .brand:hover{text-decoration:none}
-.mark{width:36px;height:36px;flex:0 0 36px;border-radius:8px;display:grid;place-items:center;background:var(--ink);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 34%,var(--line));box-shadow:var(--shadow)}
-.mark svg{width:24px;height:24px}.brand strong{display:block;font-size:1.08rem;line-height:1.05;color:var(--ink)}.brand small{display:block;color:var(--muted);font-size:.68rem;text-transform:uppercase;letter-spacing:.08em;margin-top:3px}
+.mark{width:28px;height:28px;flex:0 0 28px;border-radius:7px;display:grid;place-items:center;background:var(--paper);color:var(--accent);border:1px solid var(--line)}
+:root[data-theme="dark"] .mark{background:linear-gradient(135deg,#1a2118,#0c110b)}
+.mark svg{width:18px;height:18px;display:block}.brand strong{display:block;font-size:1.08rem;line-height:1.05;color:var(--ink)}.brand small{display:block;color:var(--muted);font-size:.68rem;text-transform:uppercase;letter-spacing:.08em;margin-top:3px}
 .sidebar-actions{display:flex;gap:8px}.icon-button,.lang-button{height:34px;display:inline-grid;place-items:center;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--muted);cursor:pointer;font-weight:800}
 .icon-button{width:34px}.lang-button{padding:0 10px;font-size:.78rem}.icon-button:hover,.lang-button:hover{border-color:var(--accent);color:var(--accent);background:var(--soft);text-decoration:none}
 .icon-button svg{width:16px;height:16px}.icon-button .sun{display:none}:root[data-theme="dark"] .icon-button .sun{display:block}:root[data-theme="dark"] .icon-button .moon{display:none}
@@ -109,7 +110,20 @@ export function themeToggleHtml() {
 }
 
 export function brandMarkSvg() {
-  return `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 18V10M12 18V5M18 18v-6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M4 19h16" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><rect x="4.2" y="9" width="3.6" height="10" rx="1.8" stroke="currentColor" stroke-width="1.5"/><rect x="10.2" y="4" width="3.6" height="15" rx="1.8" stroke="currentColor" stroke-width="1.5"/><rect x="16.2" y="11" width="3.6" height="8" rx="1.8" stroke="currentColor" stroke-width="1.5"/></svg>`;
+  return `<svg class="pdtbar-mark" viewBox="0 0 24 24" aria-hidden="true">
+  <style>
+    .pdtbar-mark .bar{transform-box:fill-box;transform-origin:50% 100%;animation:pdtbar-bar-color 9s ease-in-out infinite}
+    .pdtbar-mark .side-left{animation:pdtbar-left-height 9s ease-in-out infinite,pdtbar-bar-color 9s ease-in-out infinite}
+    .pdtbar-mark .side-right{animation:pdtbar-right-height 9s ease-in-out infinite,pdtbar-bar-color 9s ease-in-out infinite;animation-delay:0s,3s}
+    .pdtbar-mark .center{animation-delay:1.5s}
+    @keyframes pdtbar-left-height{0%,100%{transform:scaleY(.58)}33%{transform:scaleY(1)}66%{transform:scaleY(.74)}}
+    @keyframes pdtbar-right-height{0%,100%{transform:scaleY(.86)}33%{transform:scaleY(.6)}66%{transform:scaleY(1)}}
+    @keyframes pdtbar-bar-color{0%,28%{fill:#9fd356}36%,61%{fill:#7fb7ff}69%,94%{fill:#f0b35a}100%{fill:#9fd356}}
+  </style>
+  <rect class="bar side-left" x="4" y="7" width="3.8" height="13" rx="1.9" fill="#9fd356"/>
+  <rect class="bar center" x="10.1" y="3.5" width="3.8" height="16.5" rx="1.9" fill="#7fb7ff"/>
+  <rect class="bar side-right" x="16.2" y="7" width="3.8" height="13" rx="1.9" fill="#f0b35a"/>
+</svg>`;
 }
 
 export function faviconSvg() {

@@ -68,6 +68,8 @@ test("docs-site builds Dutch default and English alternate from public allowlist
     assert.match(nl, /id="doc-search"/);
     assert.match(nl, /data-theme-toggle/);
     assert.match(nl, /className="copy"/);
+    assert.match(nl, /class="pdtbar-mark"/);
+    assert.match(nl, /pdtbar-left-height/);
     assert.match(nl, /assets\/pdtbar-menu\.png/);
     assert.match(nl, /https:\/\/bramvr\.github\.io\/pdtbar\/social-card\.svg/);
     assert.match(llms, /root page is Dutch by default/);
