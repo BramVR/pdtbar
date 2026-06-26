@@ -989,13 +989,15 @@ private func packagedOnboardingSmoke(arguments: [String]) throws -> SmokeReport 
         in: appElement,
         timeout: options.timeout
     )
-    if let screenshot = try? captureMenuScreenshot(
-        name: "pdtbar-packaged-onboarding-setup",
-        snapshot: setupSnapshot,
-        expectedMenuIdentifiers: loginIDs,
-        artifacts: artifacts,
-        peekaboo: screenshotTool
-    ) {
+    if loginIDs.isSubset(of: setupSnapshot.identifiers),
+       let screenshot = try? captureMenuScreenshot(
+           name: "pdtbar-packaged-onboarding-setup",
+           snapshot: setupSnapshot,
+           expectedMenuIdentifiers: loginIDs,
+           artifacts: artifacts,
+           peekaboo: screenshotTool
+       )
+    {
         proofPayload.screenshotPaths.append(artifactPath(screenshot))
     }
     proofPayload.setupMenuVisible = loginIDs.isSubset(of: setupSnapshot.identifiers)
@@ -1046,6 +1048,7 @@ private func packagedOnboardingSmoke(arguments: [String]) throws -> SmokeReport 
             timeout: min(options.timeout, 2.0)
         )
         if let openingSnapshot = openingMenu.snapshot,
+           openingIDs.isSubset(of: openingSnapshot.identifiers),
            let screenshot = try? captureMenuScreenshot(
                name: "pdtbar-packaged-onboarding-opening",
                snapshot: openingSnapshot,
@@ -1057,6 +1060,8 @@ private func packagedOnboardingSmoke(arguments: [String]) throws -> SmokeReport 
             proofPayload.screenshotPaths.append(artifactPath(screenshot))
         }
     }
+    pressEscape()
+    Thread.sleep(forTimeInterval: 0.2)
 
     let completed = waitForFile(result, timeout: options.timeout + 3.0)
     proofPayload.readinessRechecked = waitForReadinessProbeCount(
@@ -1073,6 +1078,8 @@ private func packagedOnboardingSmoke(arguments: [String]) throws -> SmokeReport 
     )
     if proofPayload.fetchingVisibleAfterReadiness {
         proofPayload.postReadinessState = "fetchingPortfolio"
+        pressEscape()
+        Thread.sleep(forTimeInterval: 0.2)
         let fetchingSurface = MenuBarSurfaceRenderer.render(descriptor: ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio))
         let fetchingTargets = requiredSetupMenuTargets(in: fetchingSurface)
         let fetchingIDs = Set(fetchingTargets.map(\.accessibilityIdentifier))
@@ -1088,6 +1095,7 @@ private func packagedOnboardingSmoke(arguments: [String]) throws -> SmokeReport 
                 timeout: min(options.timeout, 2.0)
             )
             if let fetchingSnapshot = fetchingMenu.snapshot,
+               fetchingIDs.isSubset(of: fetchingSnapshot.identifiers),
                let screenshot = try? captureMenuScreenshot(
                    name: "pdtbar-packaged-onboarding-fetching",
                    snapshot: fetchingSnapshot,
@@ -2960,6 +2968,7 @@ private func captureMenuScreenshot(
     let screenshot = artifacts.appending(path: "\(name)-menu.png")
     try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
     let menuBounds = menuFrameBounds(snapshot: snapshot, expectedMenuIdentifiers: expectedMenuIdentifiers)
+        ?? statusMenuFallbackBounds(snapshot: snapshot)
     let captureBounds = screenshotCaptureBounds(containing: menuBounds)
     let displayRegion = "\(Int(captureBounds.minX)),\(Int(captureBounds.minY)),\(Int(captureBounds.width)),\(Int(captureBounds.height))"
     _ = try run(
@@ -3045,6 +3054,13 @@ private func cropMenuScreenshot(
             width: Double(maxX - minX) * scaleX,
             height: Double(maxY - minY) * scaleY
         )
+    } else if let bounds = statusMenuFallbackBounds(snapshot: snapshot) {
+        sourceRect = CGRect(
+            x: Double(bounds.minX - displayBounds.minX) * scaleX,
+            y: Double(bounds.minY - displayBounds.minY) * scaleY,
+            width: Double(bounds.width) * scaleX,
+            height: Double(bounds.height) * scaleY
+        )
     } else {
         sourceRect = fallback
     }
@@ -3079,6 +3095,20 @@ private func menuFrameBounds(
         .compactMap { snapshot.framesByIdentifier[$0]?.rect }
         .filter { !$0.isNull && !$0.isEmpty && $0.width > 0 && $0.height > 0 }
         .reduce(nil as CGRect?) { partial, rect in partial?.union(rect) ?? rect }
+}
+
+private func statusMenuFallbackBounds(snapshot: AccessibilitySnapshot) -> CGRect? {
+    guard let status = snapshot.framesByIdentifier["pdtbar.status"]?.rect,
+          !status.isNull, !status.isEmpty
+    else {
+        return nil
+    }
+    let display = displayBounds(containing: status)
+    let width = min(display.width, 560)
+    let x = display.maxX - width
+    let y = min(max(display.minY, status.maxY + 2), display.maxY)
+    let height = min(display.maxY - y, 88)
+    return CGRect(x: x, y: y, width: width, height: height).integral
 }
 
 private func displayBounds(containing rect: CGRect?) -> CGRect {
@@ -3271,6 +3301,15 @@ private func click(point: CGPoint) {
     let source = CGEventSource(stateID: .hidSystemState)
     let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)
     let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
+    down?.post(tap: .cghidEventTap)
+    Thread.sleep(forTimeInterval: 0.05)
+    up?.post(tap: .cghidEventTap)
+}
+
+private func pressEscape() {
+    let source = CGEventSource(stateID: .hidSystemState)
+    let down = CGEvent(keyboardEventSource: source, virtualKey: 53, keyDown: true)
+    let up = CGEvent(keyboardEventSource: source, virtualKey: 53, keyDown: false)
     down?.post(tap: .cghidEventTap)
     Thread.sleep(forTimeInterval: 0.05)
     up?.post(tap: .cghidEventTap)
