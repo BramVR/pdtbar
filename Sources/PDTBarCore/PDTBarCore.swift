@@ -3462,6 +3462,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             "pdt-list-calendar-events",
             "pdt-list-dividends",
             "pdt-list-symbol-prices",
+            "pdt-get-symbol-quote",
         ]
         let availableTools = try connector.availableReadTools(required: Set(requiredTools))
         let missing = requiredTools.filter { !availableTools.contains($0) }
@@ -3511,7 +3512,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
 
         do {
             progress(BackgroundDetailRefreshProgress(phase: .income))
-            let income = try incomeEvents(asOf: snapshotAsOf)
+            let income = try incomeEvents(asOf: snapshotAsOf, holdings: snapshot.openHoldings)
             snapshot.incomeEvents = income.events
             snapshot.dividendRowCount = income.dividendRowCount
             _ = try snapshotStore.commitCurrentSnapshot(snapshot)
@@ -3649,7 +3650,10 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         }
     }
 
-    private func incomeEvents(asOf snapshotAsOf: String) throws -> (events: [IncomeEventSummary], dividendRowCount: Int) {
+    private func incomeEvents(
+        asOf snapshotAsOf: String,
+        holdings: [NormalizedHolding]
+    ) throws -> (events: [IncomeEventSummary], dividendRowCount: Int) {
         let incomeDateRange = [
             "date_from": snapshotAsOf,
             "date_to": dayString(snapshotAsOf, addingDays: 30),
@@ -3665,22 +3669,54 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         )
         let dividends = try liveDividends(arguments: dividendDateRange)
         let dividendsByQuoteID = Dictionary(grouping: dividends, by: \.symbolQuoteId)
+        let calendarEvents = calendarEnvelope.data.filter { $0.type != "no-events-today" }
+        let quoteIDsBySymbolID = try incomeQuoteIDsBySymbolID(for: calendarEvents, holdings: holdings)
         return (
-            events: calendarEnvelope.data.filter { $0.type != "no-events-today" }.map {
-                IncomeEventSummary(
+            events: calendarEvents.map {
+                let quoteId = $0.symbolId.flatMap { quoteIDsBySymbolID[$0] }
+                let amount = $0.type == "ex-dividend" && !$0.isEstimated
+                    ? latestLiveDividendAmount(for: quoteId, dividendsByQuoteID: dividendsByQuoteID)
+                    : nil
+                return IncomeEventSummary(
                     date: $0.date,
                     kind: $0.type,
                     symbolName: $0.symbolName ?? "Portfolio",
                     estimated: $0.isEstimated,
                     symbolId: $0.symbolId,
-                    quoteId: nil,
-                    amount: latestLiveDividendAmount(for: nil, dividendsByQuoteID: dividendsByQuoteID),
+                    quoteId: quoteId,
+                    amount: amount,
                     priorAmount: nil,
                     changePercent: nil
                 )
             },
             dividendRowCount: dividends.count
         )
+    }
+
+    private func incomeQuoteIDsBySymbolID(
+        for calendarEvents: [LiveCalendarEvent],
+        holdings: [NormalizedHolding]
+    ) throws -> [Int: Int] {
+        var neededSymbolIDs = Set(calendarEvents.compactMap(\.symbolId))
+        guard !neededSymbolIDs.isEmpty else {
+            return [:]
+        }
+        var quoteIDsBySymbolID: [Int: Int] = [:]
+        for holding in holdings.reversed() {
+            let quote: LiveSymbolQuoteEnvelope = try callDecodedWithRetry(
+                "pdt-get-symbol-quote",
+                phase: .income,
+                arguments: ["id": String(holding.quoteId)]
+            )
+            guard neededSymbolIDs.remove(quote.symbolId) != nil else {
+                continue
+            }
+            quoteIDsBySymbolID[quote.symbolId] = quote.id
+            if neededSymbolIDs.isEmpty {
+                break
+            }
+        }
+        return quoteIDsBySymbolID
     }
 
     private func liveDividends(arguments baseArguments: [String: String]) throws -> [LiveDividend] {
