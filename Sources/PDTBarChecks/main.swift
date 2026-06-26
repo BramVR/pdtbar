@@ -153,10 +153,17 @@ try check(
 )
 try check(
     probingSurface.sections.flatMap(\.rows).map(\.title) == [
-        "Checking Claude setup - No prompts opened",
+        "Checking Claude setup",
         "Log in with Claude",
     ],
     "Claude probing state should keep the login action available"
+)
+try check(
+    probingSurface.sections.flatMap(\.rows).map(\.detail) == [
+        "No prompts opened",
+        nil,
+    ],
+    "Claude probing surface should expose setup detail as secondary row text"
 )
 try check(
     ClaudeLaunchFlow.state(afterReadinessProbe: .ready) == .fetchingPortfolio,
@@ -277,7 +284,8 @@ try check(
     "logged-out real launch should render a Claude-only setup section"
 )
 try check(
-    setupSurface.sections.flatMap(\.rows).map(\.title) == ["Not connected - Use Claude CLI for PDT", "Log in with Claude"],
+    setupSurface.sections.flatMap(\.rows).map(\.title) == ["Not connected", "Log in with Claude"]
+        && setupSurface.sections.flatMap(\.rows).map(\.detail) == ["Use Claude CLI for PDT", nil],
     "logged-out real launch should render Claude setup status and login rows"
 )
 try check(
