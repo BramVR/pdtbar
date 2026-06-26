@@ -142,7 +142,8 @@ swift run pdtbar-smoke copy-holding-identifier-action
 
 This uses descriptor/app-support action plumbing only. It verifies the holding
 identifier copy action resolves to the expected sanitized identifier payload
-without launching the app or touching the pasteboard.
+without launching the app or touching the user's pasteboard; the smoke reads
+back from an isolated named pasteboard.
 
 Manual Claude `-p` PDT reachability smoke:
 
