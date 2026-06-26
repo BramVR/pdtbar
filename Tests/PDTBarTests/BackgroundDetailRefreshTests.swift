@@ -4,6 +4,35 @@ import PDTBarCore
 
 @Suite("Background detail refresh")
 struct BackgroundDetailRefreshTests {
+    @Test("Background refresh joins income calendar events to holding quotes")
+    func backgroundRefreshJoinsIncomeCalendarEventsToHoldingQuotes() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-income-join-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: ScriptedPDTMCPConnector(responses: try detailRefreshResponses(calendarSymbolID: 5101)),
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        let committed = try #require(try store.loadPriorSnapshot())
+        let event = try #require(committed.incomeEvents.first)
+        #expect(event.symbolId == 5101)
+        #expect(event.quoteId == 9101)
+        #expect(event.amount == Money(value: "8.00", currency: "EUR"))
+
+        let holdingRow = try #require(
+            result.descriptor.sections
+                .first { $0.id == "allocation" }?
+                .rows
+                .first { $0.id == "allocation.9101" }
+        )
+        #expect(holdingRow.children.first { $0.id == "allocation.9101.nextIncome" }?.detail == "Ex-dividend date on 2026-03-30; confirmed; EUR 8.00")
+    }
+
     @Test("Price-history failure keeps completed detail phases and continues other holdings")
     func priceHistoryFailureKeepsCompletedPhasesAndContinuesOtherHoldings() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-test")
@@ -359,7 +388,8 @@ private final class OneShotFailingPDTConnector: PDTMCPConnector, @unchecked Send
 
 private func detailRefreshResponses(
     omittingPriceQuoteID omittedQuoteID: Int? = nil,
-    includingThirdHolding: Bool = false
+    includingThirdHolding: Bool = false,
+    calendarSymbolID: Int? = nil
 ) throws -> [String: Data] {
     let thirdHolding = includingThirdHolding ? """
             ,
@@ -421,7 +451,7 @@ private func detailRefreshResponses(
         "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28": try mcpContent("""
         {
           "data": [
-            { "date": "2026-03-30", "type": "ex-dividend", "isEstimated": false, "symbolId": null, "symbolName": "Scripted Adapter A" }
+            { "date": "2026-03-30", "type": "ex-dividend", "isEstimated": false, "symbolId": \(calendarSymbolID.map(String.init) ?? "null"), "symbolName": "Scripted Adapter A" }
           ]
         }
         """),
@@ -432,6 +462,12 @@ private func detailRefreshResponses(
           ],
           "meta": { "last_page": 1 }
         }
+        """),
+        "pdt-get-symbol-quote?id=9101": try mcpContent("""
+        { "id": 9101, "code": "ADPA", "symbolId": 5101 }
+        """),
+        "pdt-get-symbol-quote?id=9102": try mcpContent("""
+        { "id": 9102, "code": "ADPB", "symbolId": 5102 }
         """),
     ]
     if omittedQuoteID != 9101 {
@@ -455,6 +491,9 @@ private func detailRefreshResponses(
         """)
     }
     if includingThirdHolding, omittedQuoteID != 9103 {
+        responses["pdt-get-symbol-quote?id=9103"] = try mcpContent("""
+        { "id": 9103, "code": "ADPC", "symbolId": 5103 }
+        """)
         responses["pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9103"] = try mcpContent("""
         {
           "data": [
