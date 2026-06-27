@@ -665,8 +665,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             selectedTitleField.stringValue = "\(bar.label): \(bar.percentageLabel)"
             selectedDetailField.stringValue = bar.detail
-            selectedTitleField.toolTip = bar.detail
-            selectedDetailField.toolTip = bar.detail
             selectedAccent.isHidden = false
         }
         chartView.onSelectionChanged = applySelection
@@ -793,7 +791,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             item.title = "\(title) - \(detail)"
         }
-        item.toolTip = "\(title) - \(detail)"
     }
 
     @objc private func markPulseItemRead(_ sender: NSMenuItem) {
@@ -1041,7 +1038,6 @@ private final class PortfolioAllocationVerticalBarChartView: NSView {
     private var selectedIndex: Int? {
         didSet {
             guard selectedIndex != oldValue else { return }
-            self.toolTip = self.selectedBar?.detail
             self.needsDisplay = true
             self.onSelectionChanged?(self.selectedBar)
         }
@@ -1063,7 +1059,6 @@ private final class PortfolioAllocationVerticalBarChartView: NSView {
         self.selectedIndex = bars.isEmpty ? nil : 0
         super.init(frame: .zero)
         self.wantsLayer = true
-        self.toolTip = self.selectedBar?.detail
     }
 
     static func contentWidth(viewportWidth: CGFloat, barCount: Int) -> CGFloat {
