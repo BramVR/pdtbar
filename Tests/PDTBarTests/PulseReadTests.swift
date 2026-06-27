@@ -88,8 +88,7 @@ struct PulseReadTests {
     func sameFingerprintHidesAttentionOnly() throws {
         let snapshot = try fixtureSnapshot("concentration-pressure.json")
         let rawModel = PressureEngine.buildModel(from: snapshot)
-        let item = try #require(rawModel.rankedAttentionItems.first)
-        let readState = PulseReadState(readFingerprints: [item.readFingerprint])
+        let readState = PulseReadState(readFingerprints: rawModel.rankedAttentionItems.map(\.readFingerprint))
 
         let filtered = PulseReadFilter.apply(to: rawModel, readState: readState)
         let descriptor = MenuDescriptorRenderer.render(model: filtered)
@@ -216,11 +215,14 @@ struct PulseReadTests {
     @Test("Same material concentration remains read after prior-aware refresh and cached relaunch")
     func sameMaterialConcentrationRemainsReadAfterRefreshAndRelaunch() throws {
         let snapshot = try fixtureSnapshot("concentration-pressure.json")
-        let originalItem = try #require(PressureEngine.buildModel(from: snapshot).rankedAttentionItems.first)
+        let originalItems = PressureEngine.buildModel(from: snapshot).rankedAttentionItems
+        let originalItem = try #require(originalItems.first)
         let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-read-refresh-test")
         let readStore = PulseReadStore(directory: snapshotStore.directory)
 
-        try readStore.markRead(originalItem.readFingerprint)
+        for item in originalItems {
+            try readStore.markRead(item.readFingerprint)
+        }
         _ = try snapshotStore.commitCurrentSnapshot(snapshot)
         let refresh = try PressureRunner.run(
             dataSource: StaticPortfolioDataSource(snapshot: snapshot),
@@ -244,11 +246,14 @@ struct PulseReadTests {
     @Test("Cached relaunch returns the same lifecycle result shape as first fetch")
     func cachedRelaunchReturnsPulseLifecycleResult() throws {
         let snapshot = try fixtureSnapshot("concentration-pressure.json")
-        let originalItem = try #require(PressureEngine.buildModel(from: snapshot).rankedAttentionItems.first)
+        let originalItems = PressureEngine.buildModel(from: snapshot).rankedAttentionItems
+        let originalItem = try #require(originalItems.first)
         let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-read-lifecycle-cache-test")
         let readStore = PulseReadStore(directory: snapshotStore.directory)
 
-        try readStore.markRead(originalItem.readFingerprint)
+        for item in originalItems {
+            try readStore.markRead(item.readFingerprint)
+        }
         _ = try snapshotStore.commitCurrentSnapshot(snapshot)
         let maybeCached = try PressureRunner.cachedPulse(
             snapshotStore: snapshotStore,

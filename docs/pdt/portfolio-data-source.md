@@ -172,7 +172,7 @@ logic**, which was the key input to ADR-0001 below.
 
 | Fixture | Scenario | Proves |
 |---|---|---|
-| `fixtures/concentration-pressure.json` | top weight 24.2% > 20% line | allocation pressure, cold-start, sector corroboration |
+| `fixtures/concentration-pressure.json` | top weight 24.2% > 20% line; top sector 30.9% > 30% line | allocation pressure, cold-start, sector pressure corroboration |
 | `fixtures/income-event.json` | ex-div in window + payment landed + derivable +18% raise | income facet incl. the derive-it gap and the symbolId↔quoteId join |
 | `fixtures/big-mover.json` | +12.4% over 5 sessions, weight 9.4%→11.6% | big-mover via price series **and** prior-vs-current snapshot |
 | `fixtures/quiet-no-pressure.json` | top weight 11.7%, no events, flat prices, fresh | the explicit all-quiet state |

@@ -2473,6 +2473,11 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         artifacts: artifacts,
         peekaboo: screenshotPeekaboo
     )
+    let allocationScreenshot = try? captureAllocationDetailScreenshot(
+        snapshot: menuSnapshot,
+        artifacts: artifacts,
+        peekaboo: screenshotPeekaboo
+    )
     let freshnessScreenshot = try? captureFreshnessDetailScreenshot(
         snapshot: menuSnapshot,
         artifacts: artifacts,
@@ -2485,16 +2490,18 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
     )
     let priorDetail = expectedScenario.seededPrior.map { "; seeded prior snapshot \($0.asOf)" } ?? ""
     let screenshotDetail = screenshot == nil ? "" : "; captured menu screenshot"
+    let allocationScreenshotDetail = allocationScreenshot == nil ? "" : "; captured allocation detail screenshot"
     let freshnessScreenshotDetail = freshnessScreenshot == nil ? "" : "; captured freshness detail screenshot"
     let attentionScreenshotDetail = attentionScreenshot == nil ? "" : "; captured attention explanation screenshot"
     let reportArtifacts = [artifactPath(evidence)]
         + (screenshot.map { [artifactPath($0)] } ?? [])
+        + (allocationScreenshot.map { [artifactPath($0)] } ?? [])
         + (freshnessScreenshot.map { [artifactPath($0)] } ?? [])
         + (attentionScreenshot.map { [artifactPath($0)] } ?? [])
     return SmokeReport(
         name: "real-user-pulse",
         status: SmokeStatus.passed,
-        detail: "launched fixture-mode app with isolated state\(priorDetail), opened menu-bar pulse through \(openedMenu.successfulAttempt ?? "Accessibility"), verified status plus pulse/allocation/income/big-mover/freshness selectors for \(fixture.lastPathComponent)\(screenshotDetail)\(freshnessScreenshotDetail)\(attentionScreenshotDetail)",
+        detail: "launched fixture-mode app with isolated state\(priorDetail), opened menu-bar pulse through \(openedMenu.successfulAttempt ?? "Accessibility"), verified status plus pulse/allocation/income/big-mover/freshness selectors for \(fixture.lastPathComponent)\(screenshotDetail)\(allocationScreenshotDetail)\(freshnessScreenshotDetail)\(attentionScreenshotDetail)",
         artifacts: reportArtifacts
     )
 }
@@ -3020,6 +3027,53 @@ private func captureRealUserMenuScreenshot(
         artifacts: artifacts,
         peekaboo: peekaboo
     )
+}
+
+private func captureAllocationDetailScreenshot(
+    snapshot: AccessibilitySnapshot,
+    artifacts: URL,
+    peekaboo: URL?
+) throws -> URL? {
+    guard let peekaboo,
+          let allocationRect = snapshot.framesByIdentifier["pdtbar.row.allocation.portfolio.details"]?.rect,
+          !allocationRect.isNull,
+          !allocationRect.isEmpty
+    else {
+        return nil
+    }
+    moveMouse(to: CGPoint(x: allocationRect.maxX - 24, y: allocationRect.midY))
+    Thread.sleep(forTimeInterval: 0.6)
+
+    let display = displayBounds(containing: allocationRect)
+    let padded = CGRect(
+        x: max(display.minX, allocationRect.minX - 520),
+        y: max(display.minY, allocationRect.minY - 96),
+        width: min(display.width, allocationRect.width + 600),
+        height: min(display.height, 420)
+    ).intersection(display).integral
+    guard !padded.isNull, !padded.isEmpty else {
+        return nil
+    }
+
+    let screenshot = artifacts.appending(path: "pdtbar-real-user-pulse-allocation-detail.png")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    _ = try run(
+        peekaboo,
+        arguments: [
+            "image",
+            "--mode", "area",
+            "--region", "\(Int(padded.minX)),\(Int(padded.minY)),\(Int(padded.width)),\(Int(padded.height))",
+            "--path", screenshot.path,
+            "--json",
+            "--no-remote",
+        ],
+        timeout: 20
+    )
+    guard imageHasVisiblePixels(screenshot) else {
+        try? FileManager.default.removeItem(at: screenshot)
+        return nil
+    }
+    return screenshot
 }
 
 private func captureFreshnessDetailScreenshot(

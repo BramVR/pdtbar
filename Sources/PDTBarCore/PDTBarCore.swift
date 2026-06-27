@@ -665,6 +665,7 @@ public struct AllocationSnapshot: Codable, Equatable {
     public var assetTypeBreakdown: [DistributionSummary]
     public var xRayHoldings: [XRayHoldingSummary]?
     public var portfolioOverview: PortfolioOverviewSummary
+    public var allocationPressureItems: [AttentionItem]
 
     public init(
         totalValue: Money,
@@ -673,7 +674,8 @@ public struct AllocationSnapshot: Codable, Equatable {
         sectorBreakdown: [DistributionSummary],
         assetTypeBreakdown: [DistributionSummary],
         xRayHoldings: [XRayHoldingSummary]? = nil,
-        portfolioOverview: PortfolioOverviewSummary? = nil
+        portfolioOverview: PortfolioOverviewSummary? = nil,
+        allocationPressureItems: [AttentionItem] = []
     ) {
         self.totalValue = totalValue
         self.openHoldingCount = openHoldingCount
@@ -688,6 +690,7 @@ public struct AllocationSnapshot: Codable, Equatable {
             sectorBreakdown: sectorBreakdown,
             assetTypeBreakdown: assetTypeBreakdown
         )
+        self.allocationPressureItems = allocationPressureItems
     }
 
     enum CodingKeys: String, CodingKey {
@@ -698,6 +701,7 @@ public struct AllocationSnapshot: Codable, Equatable {
         case assetTypeBreakdown
         case xRayHoldings
         case portfolioOverview
+        case allocationPressureItems
     }
 
     public init(from decoder: Decoder) throws {
@@ -718,7 +722,11 @@ public struct AllocationSnapshot: Codable, Equatable {
             portfolioOverview: try container.decodeIfPresent(
                 PortfolioOverviewSummary.self,
                 forKey: .portfolioOverview
-            )
+            ),
+            allocationPressureItems: try container.decodeIfPresent(
+                [AttentionItem].self,
+                forKey: .allocationPressureItems
+            ) ?? []
         )
     }
 }
@@ -3275,7 +3283,7 @@ public enum MenuDescriptorRenderer {
                     rows: [
                         portfolioOverviewChartRow(for: allocation.portfolioOverview),
                         portfolioOverviewDetailsRow(for: allocation, model: model),
-                    ]
+                    ] + allocationPressureRows(for: allocation)
                 ),
                 MenuSection(
                     id: "income",
@@ -3386,6 +3394,18 @@ public enum MenuDescriptorRenderer {
                 title: holding.name,
                 detail: drillDownDetail ?? percent(holding.weight),
                 children: allocationChildren(for: holding, attention: attention)
+            )
+        }
+    }
+
+    private static func allocationPressureRows(for allocation: AllocationSnapshot) -> [MenuRow] {
+        allocation.allocationPressureItems.map { item in
+            MenuRow(
+                id: "\(item.id).allocation",
+                role: .allocationDrillDown,
+                title: item.title,
+                detail: item.detail,
+                children: explanationRows(for: item.explanation, itemID: "\(item.id).allocation")
             )
         }
     }
@@ -3775,6 +3795,9 @@ public enum MenuDescriptorRenderer {
 
 public enum PressureEngine {
     public static let concentrationThreshold = 0.20
+    public static let sectorConcentrationThreshold = 0.30
+    public static let cashDragThreshold = 0.10
+    public static let concentrationDriftThreshold = 0.05
     public static let bigMoverThreshold = 0.10
 
     public static func buildModel(
@@ -3783,8 +3806,16 @@ public enum PressureEngine {
         readState: PulseReadState? = nil,
         detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil
     ) -> PortfolioPulseModel {
-        let rankedItems = ranked(
+        let portfolioOverview = PortfolioOverview.build(from: snapshot)
+        let priorPortfolioOverview = priorSnapshot.map(PortfolioOverview.build)
+        let allocationItems = ranked(
             concentrationItems(from: snapshot, priorSnapshot: priorSnapshot, readState: readState)
+                + sectorConcentrationItems(from: portfolioOverview)
+                + cashDragItems(from: portfolioOverview)
+                + concentrationDriftItems(from: portfolioOverview, priorOverview: priorPortfolioOverview)
+        )
+        let rankedItems = ranked(
+            allocationItems
                 + incomeItems(from: snapshot)
                 + bigMoverItems(from: snapshot, priorSnapshot: priorSnapshot)
         )
@@ -3792,7 +3823,6 @@ public enum PressureEngine {
         let freshness = FreshnessLedger.build(from: snapshot, detailRefreshOutcome: detailRefreshOutcome)
         let recentMovesByQuoteID = recentMoves(from: snapshot.priceSeries)
         let nextIncomeEventsByQuoteID = nextIncomeEventsByQuoteID(from: snapshot)
-        let portfolioOverview = PortfolioOverview.build(from: snapshot)
         let topHoldingSummaries = snapshot.openHoldings
             .sorted(by: ranksByAllocation)
             .map {
@@ -3852,6 +3882,14 @@ public enum PressureEngine {
                     itemCount: priorSnapshot.openHoldings.count
                 )
             )
+            supportingDataSlots.append(
+                SupportingDataSlot(
+                    id: "allocation.priorSnapshot",
+                    facet: "allocation",
+                    label: "Prior allocation snapshot",
+                    itemCount: priorSnapshot.openHoldings.count
+                )
+            )
         }
 
         return PortfolioPulseModel(
@@ -3877,7 +3915,8 @@ public enum PressureEngine {
                     sectorBreakdown: snapshot.sectors,
                     assetTypeBreakdown: snapshot.assetTypes,
                     xRayHoldings: snapshot.xRayHoldings,
-                    portfolioOverview: portfolioOverview
+                    portfolioOverview: portfolioOverview,
+                    allocationPressureItems: allocationItems
                 ),
                 income: IncomeSnapshot(
                     upcomingEvents: snapshot.incomeEvents.sorted { $0.date < $1.date },
@@ -4030,6 +4069,170 @@ public enum PressureEngine {
                     )
                 )
             }
+    }
+
+    private static func sectorConcentrationItems(from overview: PortfolioOverviewSummary) -> [AttentionItem] {
+        overview.sectorSummary
+            .filter { ($0.percentage / 100.0) >= sectorConcentrationThreshold }
+            .enumerated()
+            .map { offset, sector in
+                let weight = sector.percentage / 100.0
+                let score = concentrationScore(weight: weight, threshold: sectorConcentrationThreshold)
+                let title = "\(distributionLabel(sector.name)) sector concentration"
+                return AttentionItem(
+                    id: "allocation.sector.\(stableIDToken(sector.name))",
+                    facet: "allocation",
+                    rank: offset + 1,
+                    title: title,
+                    detail: percent(weight),
+                    severity: score >= 0.8 ? "high" : "medium",
+                    score: score,
+                    currentWeight: weight,
+                    threshold: sectorConcentrationThreshold,
+                    supportingDataSlotIDs: ["allocation.sectors"],
+                    explanation: AttentionExplanation(
+                        trigger: AttentionExplanationFact(
+                            key: "trigger",
+                            label: "Trigger",
+                            value: "Sector concentration line crossed"
+                        ),
+                        severity: explanationSeverity(
+                            severity: score >= 0.8 ? "high" : "medium",
+                            score: score
+                        ),
+                        threshold: AttentionExplanationFact(
+                            key: "threshold",
+                            label: "Threshold",
+                            value: percent(sectorConcentrationThreshold),
+                            numericValue: sectorConcentrationThreshold,
+                            unit: "fraction"
+                        ),
+                        currentValue: AttentionExplanationFact(
+                            key: "currentValue",
+                            label: "Current",
+                            value: percent(weight),
+                            numericValue: weight,
+                            unit: "fraction"
+                        ),
+                        supportingSourceSlots: explanationSourceSlots(["allocation.sectors"])
+                    )
+                )
+            }
+    }
+
+    private static func cashDragItems(from overview: PortfolioOverviewSummary) -> [AttentionItem] {
+        guard let cash = overview.cashSummary,
+              cash.weight >= cashDragThreshold
+        else {
+            return []
+        }
+        let score = concentrationScore(weight: cash.weight, threshold: cashDragThreshold)
+        return [
+            AttentionItem(
+                id: "allocation.cashDrag",
+                facet: "allocation",
+                rank: 1,
+                title: "Cash drag",
+                detail: "\(percent(cash.weight)); \(display(cash.value))",
+                severity: score >= 0.8 ? "high" : "medium",
+                score: score,
+                currentWeight: cash.weight,
+                threshold: cashDragThreshold,
+                supportingDataSlotIDs: ["allocation.overview"],
+                explanation: AttentionExplanation(
+                    trigger: AttentionExplanationFact(
+                        key: "trigger",
+                        label: "Trigger",
+                        value: "Cash allocation line crossed"
+                    ),
+                    severity: explanationSeverity(
+                        severity: score >= 0.8 ? "high" : "medium",
+                        score: score
+                    ),
+                    threshold: AttentionExplanationFact(
+                        key: "threshold",
+                        label: "Threshold",
+                        value: percent(cashDragThreshold),
+                        numericValue: cashDragThreshold,
+                        unit: "fraction"
+                    ),
+                    currentValue: AttentionExplanationFact(
+                        key: "currentValue",
+                        label: "Current",
+                        value: "\(percent(cash.weight)); \(display(cash.value))",
+                        numericValue: cash.weight,
+                        unit: "fraction"
+                    ),
+                    supportingSourceSlots: explanationSourceSlots(["allocation.overview"])
+                )
+            ),
+        ]
+    }
+
+    private static func concentrationDriftItems(
+        from overview: PortfolioOverviewSummary,
+        priorOverview: PortfolioOverviewSummary?
+    ) -> [AttentionItem] {
+        guard let current = overview.topNConcentration,
+              let prior = priorOverview?.topNConcentration,
+              current.rankCount == prior.rankCount
+        else {
+            return []
+        }
+        let drift = current.weight - prior.weight
+        guard drift >= concentrationDriftThreshold else {
+            return []
+        }
+        let score = concentrationScore(weight: drift, threshold: concentrationDriftThreshold)
+        return [
+            AttentionItem(
+                id: "allocation.concentrationDrift.top\(current.rankCount)",
+                facet: "allocation",
+                rank: 1,
+                title: "Top \(current.rankCount) concentration drift",
+                detail: "\(percent(prior.weight)) -> \(percent(current.weight))",
+                severity: score >= 0.8 ? "high" : "medium",
+                score: score,
+                currentWeight: current.weight,
+                threshold: concentrationDriftThreshold,
+                beforeWeight: prior.weight,
+                afterWeight: current.weight,
+                supportingDataSlotIDs: ["allocation.overview", "allocation.priorSnapshot"],
+                explanation: AttentionExplanation(
+                    trigger: AttentionExplanationFact(
+                        key: "trigger",
+                        label: "Trigger",
+                        value: "Top concentration drift crossed"
+                    ),
+                    severity: explanationSeverity(
+                        severity: score >= 0.8 ? "high" : "medium",
+                        score: score
+                    ),
+                    threshold: AttentionExplanationFact(
+                        key: "threshold",
+                        label: "Threshold",
+                        value: percent(concentrationDriftThreshold),
+                        numericValue: concentrationDriftThreshold,
+                        unit: "fraction"
+                    ),
+                    currentValue: AttentionExplanationFact(
+                        key: "currentValue",
+                        label: "Current",
+                        value: percent(current.weight),
+                        numericValue: current.weight,
+                        unit: "fraction"
+                    ),
+                    priorValue: AttentionExplanationFact(
+                        key: "priorValue",
+                        label: "Prior",
+                        value: percent(prior.weight),
+                        numericValue: prior.weight,
+                        unit: "fraction"
+                    ),
+                    supportingSourceSlots: explanationSourceSlots(["allocation.overview", "allocation.priorSnapshot"])
+                )
+            ),
+        ]
     }
 
     private static func ranksByAllocation(_ lhs: NormalizedHolding, _ rhs: NormalizedHolding) -> Bool {
@@ -4264,6 +4467,8 @@ public enum PressureEngine {
             return "Open holdings"
         case "allocation.sectors":
             return "Sector breakdown"
+        case "allocation.priorSnapshot":
+            return "Prior allocation snapshot"
         case "income.calendar":
             return "Calendar events"
         case "bigMovers.priorSnapshot":

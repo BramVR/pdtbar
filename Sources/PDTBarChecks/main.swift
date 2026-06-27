@@ -82,10 +82,80 @@ try check(
         && pressureItem.explanation.supportingSourceSlots.map(\.id) == ["allocation.holdings"],
     "concentration attention should carry structured explanation facts for renderer formatting"
 )
+let sectorPressureItem = try require(
+    pressureModel.rankedAttentionItems.first { $0.id == "allocation.sector.information-technology" },
+    "pressure fixture should emit sector allocation pressure when a sector crosses 30%"
+)
+try check(
+    sectorPressureItem.explanation.trigger.value == "Sector concentration line crossed"
+        && sectorPressureItem.explanation.threshold?.value == "30.0%"
+        && sectorPressureItem.explanation.currentValue?.value == "30.9%"
+        && sectorPressureItem.explanation.supportingSourceSlots.map(\.id) == ["allocation.sectors"],
+    "sector pressure should carry structured threshold/current/source facts"
+)
+try check(
+    pressureModel.facetSnapshots.allocation.allocationPressureItems.map(\.id)
+        .contains("allocation.sector.information-technology"),
+    "allocation snapshot should carry allocation-derived pressure facts"
+)
+let pressureDescriptor = MenuDescriptorRenderer.render(model: pressureModel)
+try check(
+    pressureDescriptor.sections.first { $0.id == "pulse" }?.rows
+        .contains { $0.id == "allocation.sector.information-technology.glance" } == true
+        && pressureDescriptor.sections.first { $0.id == "allocation" }?.rows
+            .contains { $0.id == "allocation.sector.information-technology.allocation" } == true
+        && pressureDescriptor.sections.first { $0.id == "allocation" }?.rows
+            .first { $0.id == "allocation.portfolio.details" }?
+            .children.contains { $0.id == "allocation.portfolio.sectors" } == true,
+    "sector pressure should render in Pulse and Allocation without hiding portfolio detail facts"
+)
+var highCashSnapshot = snapshot
+let cashIndex = try require(
+    highCashSnapshot.openHoldings.firstIndex { $0.name == "Cash" },
+    "quiet fixture should include a cash holding for cash-drag checks"
+)
+highCashSnapshot.openHoldings[cashIndex].weight = 0.12
+highCashSnapshot.openHoldings[cashIndex].worth = Money(value: "6144.00", currency: "EUR")
+highCashSnapshot.assetTypes = [
+    DistributionSummary(name: "cash", percentage: 12.0, totalValue: Money(value: "6144.00", currency: "EUR")),
+]
+let highCashModel = PressureEngine.buildModel(from: highCashSnapshot)
+try check(
+    highCashModel.rankedAttentionItems.first { $0.id == "allocation.cashDrag" }?.explanation.currentValue?.value
+        == "12.0%; EUR 6,144.00",
+    "cash drag should surface only from present cash data over the chosen threshold"
+)
+var missingCashSnapshot = snapshot
+missingCashSnapshot.openHoldings.removeAll { $0.name == "Cash" }
+missingCashSnapshot.assetTypes = []
+let missingCashModel = PressureEngine.buildModel(from: missingCashSnapshot)
+try check(
+    !missingCashModel.rankedAttentionItems.contains { $0.id == "allocation.cashDrag" },
+    "cash drag should stay quiet when cash data is missing"
+)
+let driftModel = PressureEngine.buildModel(
+    from: driftCheckSnapshot(weights: [0.20, 0.15, 0.10]),
+    priorSnapshot: driftCheckSnapshot(weights: [0.18, 0.12, 0.08], asOf: "2026-06-21")
+)
+try check(
+    driftModel.rankedAttentionItems.first { $0.id == "allocation.concentrationDrift.top3" }?.explanation.priorValue?.value
+        == "38.0%",
+    "top concentration drift should surface from prior complete snapshot data"
+)
+let quietAllocationPressure = PressureEngine.buildModel(
+    from: driftCheckSnapshot(weights: [0.19, 0.14, 0.10]),
+    priorSnapshot: driftCheckSnapshot(weights: [0.18, 0.13, 0.08], asOf: "2026-06-21")
+)
+try check(
+    quietAllocationPressure.facetSnapshots.allocation.allocationPressureItems.isEmpty,
+    "allocation pressure should stay quiet below sector, cash, and drift thresholds"
+)
 let readStore = try temporaryPulseReadStore()
 let emptyReadState = try readStore.load()
 try check(emptyReadState.readFingerprints.isEmpty, "read store should load empty when no local state exists")
-try readStore.markRead(pressureItem.readFingerprint)
+for item in pressureModel.rankedAttentionItems {
+    try readStore.markRead(item.readFingerprint)
+}
 let reloadedReadState = try PulseReadStore(directory: readStore.directory).load()
 try check(
     reloadedReadState.contains(pressureItem.readFingerprint),
@@ -2053,8 +2123,8 @@ try check(
     "concentration fixture should mark stale EOD facts"
 )
 try check(
-    concentrationRun.model.rankedAttentionItems.count == 1,
-    "concentration fixture should produce one attention item"
+    concentrationRun.model.rankedAttentionItems.count == 2,
+    "concentration fixture should produce holding and sector attention items"
 )
 let concentrationItem = try require(
     concentrationRun.model.rankedAttentionItems.first,
@@ -2083,11 +2153,11 @@ try check(
 try check(!concentrationItem.detail.localizedCaseInsensitiveContains("sell"), "copy should not prescribe selling")
 try check(!concentrationItem.detail.localizedCaseInsensitiveContains("buy"), "copy should not prescribe buying")
 try check(!concentrationItem.detail.localizedCaseInsensitiveContains("should"), "copy should not be prescriptive")
-try check(concentrationRun.descriptor.statusBadge == "1", "descriptor should expose a badge")
+try check(concentrationRun.descriptor.statusBadge == "2", "descriptor should expose a badge")
 let concentrationSurface = MenuBarSurfaceRenderer.render(descriptor: concentrationRun.descriptor)
 try check(
-    concentrationRun.descriptor.statusVisual.filledBarCount == 1,
-    "concentration descriptor should fill one notification bar"
+    concentrationRun.descriptor.statusVisual.filledBarCount == 2,
+    "concentration descriptor should fill one notification bar per allocation pressure item"
 )
 try check(
     concentrationRun.descriptor.statusVisual.isDimmed,
@@ -2100,7 +2170,7 @@ let crossingConcentrationModel = PressureEngine.buildModel(
     priorSnapshot: quietPriorSnapshot
 )
 try check(
-    crossingConcentrationModel.rankedAttentionItems.first?.detail == "24.2%",
+    crossingConcentrationModel.rankedAttentionItems.first { $0.id == "allocation.concentration.9001" }?.detail == "24.2%",
     "concentration copy should stay compact when prior snapshot was below the line"
 )
 let repeatedConcentrationModel = PressureEngine.buildModel(
@@ -2108,8 +2178,8 @@ let repeatedConcentrationModel = PressureEngine.buildModel(
     priorSnapshot: concentrationSnapshot
 )
 try check(
-    repeatedConcentrationModel.rankedAttentionItems.filter { $0.facet == "allocation" }.isEmpty,
-    "concentration pressure should not repeat when the prior snapshot was already over the line"
+    !repeatedConcentrationModel.rankedAttentionItems.contains { $0.id == "allocation.concentration.9001" },
+    "holding concentration pressure should not repeat when the prior snapshot was already over the line"
 )
 try check(
     concentrationRun.descriptor.statusVisual.barHeights == StatusVisualState().barHeights,
@@ -2120,7 +2190,7 @@ try check(
     "concentration fixture should keep the middle bar at max visual height"
 )
 try check(
-    concentrationSurface.status.badge == "1",
+    concentrationSurface.status.badge == "2",
     "fixture launch surface should render non-quiet descriptor badge"
 )
 try check(
@@ -2128,8 +2198,9 @@ try check(
     "pressure fixture launch surface should keep status text out of the menu bar title"
 )
 try check(
-    concentrationSurface.sections.first { $0.id == "pulse" }?.rows.dropFirst().map(\.role)
-        == [.pulseAttention],
+    concentrationSurface.sections.first { $0.id == "pulse" }?.rows.dropFirst().allSatisfy {
+        $0.role == .pulseAttention
+    } == true,
     "fixture launch surface should keep attention items compact at the top level"
 )
 try check(
@@ -2742,6 +2813,28 @@ private struct StaticPortfolioDataSource: PortfolioDataSource {
     func snapshot(asOf: String?) throws -> PortfolioSnapshot {
         fixedSnapshot
     }
+}
+
+private func driftCheckSnapshot(weights: [Double], asOf: String = "2026-06-22") -> PortfolioSnapshot {
+    PortfolioSnapshot(
+        asOf: asOf,
+        totalValue: Money(value: "1000.00", currency: "EUR"),
+        openHoldings: weights.enumerated().map { offset, weight in
+            NormalizedHolding(
+                name: "Holding \(offset + 1)",
+                quoteId: offset + 1,
+                weight: weight,
+                worth: Money(value: String(format: "%.2f", weight * 1000), currency: "EUR"),
+                price: nil,
+                priceAsOf: "2026-06-22"
+            )
+        },
+        sectors: [],
+        assetTypes: [],
+        incomeEvents: [],
+        dividendRowCount: 0,
+        priceSeries: []
+    )
 }
 
 private func mcpContent(_ json: String) throws -> Data {
