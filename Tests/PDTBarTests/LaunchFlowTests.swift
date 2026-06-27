@@ -293,8 +293,8 @@ struct PDTOnboardingRunnerTests {
         #expect(runtime.currentPulse?.source == .fetchedSnapshot)
     }
 
-    @Test("Launch runtime keeps cached pulse visible while probing and fetching")
-    func launchRuntimeKeepsCachedPulseVisibleWhileProbingAndFetching() throws {
+    @Test("Launch runtime keeps cached pulse visible while probing and filling details")
+    func launchRuntimeKeepsCachedPulseVisibleWhileProbingAndFillingDetails() throws {
         let cachedPulse = try cachedQuietFixturePulse()
         let runtime = PDTLaunchRuntime()
 
@@ -305,17 +305,131 @@ struct PDTOnboardingRunnerTests {
         #expect(launch.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
         #expect(rowTitles(in: launch.descriptor).contains("Checking Claude setup"))
         #expect(ready.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: ready.descriptor).contains("Refreshing portfolio"))
+        #expect(rowTitles(in: ready.descriptor).contains("Filling details"))
+        #expect(rowTitles(in: ready.descriptor).contains("Step 1/5: Base holdings"))
     }
 
-    @Test("Launch runtime preserves cached pulse and retry copy after first fetch failure")
-    func launchRuntimePreservesCachedPulseAndRetryCopyAfterFirstFetchFailure() throws {
+    @Test("Launch runtime starts returning cached detail refresh and reports progress")
+    func launchRuntimeStartsReturningCachedDetailRefreshAndReportsProgress() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launch(cachedPulse: cachedPulse)
+        let ready = runtime.completeReadinessProbe(.ready)
+        let progress = try #require(runtime.backgroundDetailRefreshProgress(
+            BackgroundDetailRefreshProgress(
+                phase: .priceHistory,
+                completedUnitCount: 12,
+                totalUnitCount: 19
+            )
+        ))
+
+        #expect(ready.effect == .startBackgroundDetailRefresh)
+        #expect(ready.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
+        #expect(rowTitles(in: ready.descriptor).contains("Filling details"))
+        #expect(progress.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
+        #expect(rowTitles(in: progress.descriptor).contains("Step 5/5: Price history"))
+        #expect(rowTitles(in: progress.descriptor).contains("12/19 price histories checked"))
+        #expect(!rowTitles(in: progress.descriptor).contains("Details fill failed"))
+    }
+
+    @Test("Launch runtime preserves cached normal refresh when background detail refresh is disabled")
+    func launchRuntimePreservesCachedNormalRefreshWhenBackgroundDetailRefreshIsDisabled() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launch(cachedPulse: cachedPulse)
+        let ready = runtime.completeReadinessProbe(.ready, allowsBackgroundDetailRefresh: false)
+
+        #expect(ready.effect == .startFirstFetch)
+        #expect(runtime.firstFetchInFlight)
+        #expect(!runtime.backgroundDetailRefreshInFlight)
+        #expect(ready.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
+        #expect(rowTitles(in: ready.descriptor).contains("Refreshing portfolio"))
+        #expect(!rowTitles(in: ready.descriptor).contains("Filling details"))
+    }
+
+    @Test("Launch runtime publishes completed background detail refresh")
+    func launchRuntimePublishesCompletedBackgroundDetailRefresh() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let refreshedPulse = try quietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launch(cachedPulse: cachedPulse)
+        _ = runtime.completeReadinessProbe(.ready)
+        let completed = runtime.completeBackgroundDetailRefresh(.succeeded(refreshedPulse, outcome: .completed))
+
+        #expect(!runtime.backgroundDetailRefreshInFlight)
+        #expect(runtime.currentPulse?.source == .fetchedSnapshot)
+        #expect(completed.descriptor.statusTitle == refreshedPulse.descriptor.statusTitle)
+        #expect(rowTitles(in: completed.descriptor).contains("Refresh details"))
+        #expect(!rowTitles(in: completed.descriptor).contains("Details partially filled"))
+        #expect(!rowTitles(in: completed.descriptor).contains("Details fill failed"))
+    }
+
+    @Test("Launch runtime renders degraded background detail completion")
+    func launchRuntimeRendersDegradedBackgroundDetailCompletion() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let refreshedPulse = try quietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launch(cachedPulse: cachedPulse)
+        _ = runtime.completeReadinessProbe(.ready)
+        let degraded = runtime.completeBackgroundDetailRefresh(.succeeded(refreshedPulse, outcome: .degraded))
+
+        #expect(!runtime.backgroundDetailRefreshInFlight)
+        #expect(runtime.currentPulse?.source == .fetchedSnapshot)
+        #expect(degraded.descriptor.statusTitle == refreshedPulse.descriptor.statusTitle)
+        #expect(rowTitles(in: degraded.descriptor).contains("Details partially filled"))
+        #expect(rowTitles(in: degraded.descriptor).contains("Fill details again"))
+        #expect(!rowTitles(in: degraded.descriptor).contains("Details fill failed"))
+    }
+
+    @Test("Launch runtime preserves cached pulse after background detail failure")
+    func launchRuntimePreservesCachedPulseAfterBackgroundDetailFailure() throws {
         let cachedPulse = try cachedQuietFixturePulse()
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: cachedPulse)
         _ = runtime.completeReadinessProbe(.ready)
-        let failed = runtime.completeFirstFetch(.failed("scripted details fill failed"))
+        let failed = runtime.completeBackgroundDetailRefresh(.failed("scripted detail fill failed"))
+
+        #expect(!runtime.backgroundDetailRefreshInFlight)
+        #expect(runtime.currentPulse?.source == .cachedSnapshot)
+        #expect(failed.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
+        #expect(rowTitles(in: failed.descriptor).contains("Details fill failed"))
+        #expect(rowTitles(in: failed.descriptor).contains("Fill details again"))
+        #expect(!rowTitles(in: failed.descriptor).contains("Log in with Claude"))
+    }
+
+    @Test("Launch runtime retries failed background detail refresh")
+    func launchRuntimeRetriesFailedBackgroundDetailRefresh() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launch(cachedPulse: cachedPulse)
+        _ = runtime.completeReadinessProbe(.ready)
+        _ = runtime.completeBackgroundDetailRefresh(.failed("scripted detail fill failed"))
+
+        let retry = try #require(runtime.retryFirstFetch())
+        let duplicateRetry = runtime.retryFirstFetch()
+
+        #expect(retry.effect == .startBackgroundDetailRefresh)
+        #expect(runtime.backgroundDetailRefreshInFlight)
+        #expect(duplicateRetry == nil)
+        #expect(retry.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
+        #expect(rowTitles(in: retry.descriptor).contains("Filling details"))
+        #expect(!rowTitles(in: retry.descriptor).contains("Details fill failed"))
+    }
+
+    @Test("Launch runtime preserves cached pulse and retry copy after background detail failure")
+    func launchRuntimePreservesCachedPulseAndRetryCopyAfterBackgroundDetailFailure() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launch(cachedPulse: cachedPulse)
+        _ = runtime.completeReadinessProbe(.ready)
+        let failed = runtime.completeBackgroundDetailRefresh(.failed("scripted details fill failed"))
 
         #expect(runtime.currentPulse?.source == .cachedSnapshot)
         #expect(failed.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)

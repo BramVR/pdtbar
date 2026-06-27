@@ -292,7 +292,17 @@ let launchRuntime = PDTLaunchRuntime()
 let runtimeLaunch = launchRuntime.launch(cachedPulse: caughtUpPulse)
 let runtimeReady = launchRuntime.completeReadinessProbe(.ready)
 let runtimeDuplicateReady = launchRuntime.completeReadinessProbe(.ready)
-let runtimeCachedFailure = launchRuntime.completeFirstFetch(.failed("scripted detail fill failed"))
+let runtimeBackgroundProgress = try require(
+    launchRuntime.backgroundDetailRefreshProgress(
+        BackgroundDetailRefreshProgress(
+            phase: .priceHistory,
+            completedUnitCount: 12,
+            totalUnitCount: 19
+        )
+    ),
+    "launch runtime should render background detail progress while refresh is in flight"
+)
+let runtimeCachedFailure = launchRuntime.completeBackgroundDetailRefresh(.failed("scripted detail fill failed"))
 try check(
     runtimeLaunch.effect == .probeReadiness
         && runtimeLaunch.descriptor.statusTitle == caughtUpPulse.descriptor.statusTitle
@@ -300,37 +310,50 @@ try check(
     "launch runtime should render cached pulse while probing readiness"
 )
 try check(
-    runtimeReady.effect == .startFirstFetch
+    runtimeReady.effect == .startBackgroundDetailRefresh
         && runtimeReady.descriptor.statusTitle == caughtUpPulse.descriptor.statusTitle
-        && runtimeReady.descriptor.sections.flatMap(\.rows).map(\.title).contains("Refreshing portfolio"),
-    "launch runtime should keep cached pulse visible while first fetch starts"
+        && runtimeReady.descriptor.sections.flatMap(\.rows).map(\.title).contains("Filling details")
+        && runtimeReady.descriptor.sections.flatMap(\.rows).map(\.title).contains("Step 1/5: Base holdings"),
+    "launch runtime should keep cached pulse visible while background detail fill starts"
 )
 try check(
     runtimeDuplicateReady.effect == .none
         && runtimeDuplicateReady.descriptor.statusTitle == caughtUpPulse.descriptor.statusTitle,
-    "launch runtime should ignore duplicate ready completions while first fetch is already in flight"
+    "launch runtime should ignore duplicate ready completions while background detail fill is already in flight"
+)
+try check(
+    runtimeBackgroundProgress.descriptor.sections.flatMap(\.rows).map(\.title).contains("Step 5/5: Price history")
+        && runtimeBackgroundProgress.descriptor.sections.flatMap(\.rows).map(\.title).contains("12/19 price histories checked")
+        && !runtimeBackgroundProgress.descriptor.sections.flatMap(\.rows).map(\.title).contains("Details fill failed"),
+    "launch runtime should render returning-launch background detail progress"
 )
 try check(
     runtimeCachedFailure.descriptor.sections.flatMap(\.rows).map(\.title).contains("Details fill failed")
         && runtimeCachedFailure.descriptor.sections.flatMap(\.rows).map(\.title).contains("Fill details again")
         && launchRuntime.currentPulse?.source == .cachedSnapshot,
-    "launch runtime should preserve cached pulse and retry state after returning-launch fetch failure"
+    "launch runtime should preserve cached pulse and retry state after returning-launch background detail failure"
 )
 let runtimeRetry = try require(launchRuntime.retryFirstFetch(), "launch runtime should allow retry after fetch failure")
 let runtimeProgress = try require(
-    launchRuntime.firstFetchProgress(fetchingElapsedSeconds: 12),
-    "launch runtime should render retry progress while fetch is in flight"
+    launchRuntime.backgroundDetailRefreshProgress(
+        BackgroundDetailRefreshProgress(
+            phase: .priceHistory,
+            completedUnitCount: 12,
+            totalUnitCount: 19
+        )
+    ),
+    "launch runtime should render retry progress while background detail refresh is in flight"
 )
 let runtimeDuplicateRetry = launchRuntime.retryFirstFetch()
-let runtimeComplete = launchRuntime.completeFirstFetch(.succeeded(changedPulse))
+let runtimeComplete = launchRuntime.completeBackgroundDetailRefresh(.succeeded(changedPulse, outcome: .completed))
 try check(
-    runtimeRetry.effect == .startFirstFetch
+    runtimeRetry.effect == .startBackgroundDetailRefresh
         && runtimeDuplicateRetry == nil
         && runtimeProgress.descriptor.statusTitle == caughtUpPulse.descriptor.statusTitle
-        && runtimeProgress.descriptor.sections.flatMap(\.rows).map(\.detail).contains("Keeping last pulse visible - working for 0:12")
+        && runtimeProgress.descriptor.sections.flatMap(\.rows).map(\.title).contains("12/19 price histories checked")
         && runtimeComplete.descriptor.statusTitle == changedPulse.descriptor.statusTitle
         && launchRuntime.currentPulse?.source == .fetchedSnapshot,
-    "launch runtime should own retry gating, progress descriptors, and fetched pulse publication"
+    "launch runtime should own retry gating, progress descriptors, and completed background pulse publication"
 )
 let staleRuntime = PDTLaunchRuntime()
 _ = staleRuntime.launch(cachedPulse: nil)
@@ -356,7 +379,7 @@ let staleCachedFailureFirstAttemptID = staleCachedFailureRuntime.readinessAttemp
 _ = staleCachedFailureRuntime.completeLoginHandoff(.succeeded)
 let staleCachedFailureSecondAttemptID = staleCachedFailureRuntime.readinessAttemptID
 _ = staleCachedFailureRuntime.completeReadinessProbe(.ready, attemptID: staleCachedFailureSecondAttemptID)
-_ = staleCachedFailureRuntime.completeFirstFetch(.failed("scripted details fill failed"))
+_ = staleCachedFailureRuntime.completeBackgroundDetailRefresh(.failed("scripted details fill failed"))
 let staleCachedFailure = staleCachedFailureRuntime.completeReadinessProbe(
     .failed,
     attemptID: staleCachedFailureFirstAttemptID

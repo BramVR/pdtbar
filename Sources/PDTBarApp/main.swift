@@ -32,10 +32,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let menuActionDispatcher = MenuActionDispatcher()
     private let menuItemViewWidth: CGFloat = 400
 
-    private var cachedPulseDescriptor: MenuDescriptor? {
-        launchRuntime.currentPulse?.descriptor
-    }
-
     init(options: PDTBarLaunchOptions) {
         self.options = options
         self.loginHandoff = ClaudeCLILoginHandoff(
@@ -83,19 +79,25 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else {
                     return
                 }
-                self.handleLaunchUpdate(self.launchRuntime.completeReadinessProbe(result, attemptID: attemptID))
+                self.handleLaunchUpdate(self.launchRuntime.completeReadinessProbe(
+                    result,
+                    attemptID: attemptID,
+                    allowsBackgroundDetailRefresh: self.returningLaunchBackgroundDetailRefreshEnabled()
+                ))
             }
         }
+    }
+
+    private func returningLaunchBackgroundDetailRefreshEnabled() -> Bool {
+        guard launchRuntime.currentPulse != nil else {
+            return false
+        }
+        return (try? firstFetchConnectorConfiguration().shouldStartBackgroundRefresh) ?? false
     }
 
     private func startFirstPortfolioFetch() {
         do {
             let configuration = try firstFetchConnectorConfiguration()
-            if configuration.shouldStartBackgroundRefresh && cachedPulseDescriptor != nil {
-                launchRuntime.handOffFirstFetchToBackgroundRefresh()
-                startBackgroundPortfolioRefresh()
-                return
-            }
             portfolioFetchStartedAt = Date()
             installPortfolioFetchProgressMenu(cancelOpenMenu: true)
             startPortfolioFetchProgressTimer()
@@ -139,7 +141,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             let refreshedPulse = pulseApplyingCurrentReadState(pulse)
             handleLaunchUpdate(launchRuntime.completeFirstFetch(.succeeded(refreshedPulse)))
             if outcome.shouldStartBackgroundRefresh {
-                startBackgroundPortfolioRefresh()
+                if let update = launchRuntime.beginBackgroundDetailRefresh() {
+                    handleLaunchUpdate(update)
+                }
             }
             return
         }
@@ -197,14 +201,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         portfolioRefreshInFlight = true
-        if let cachedPulseDescriptor {
-            installMenuBarItem(
-                ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
-                    cachedPulse: cachedPulseDescriptor,
-                    progress: BackgroundDetailRefreshProgress(phase: .baseHoldings)
-                )
-            )
-        }
         let stateDirectory = firstFetchStateDirectory()
         activeSnapshotDirectory = stateDirectory
         let snapshotStore = SnapshotStore(directory: stateDirectory)
@@ -232,17 +228,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                     DispatchQueue.main.async { [weak self] in
                         guard let self,
                               self.portfolioRefreshInFlight,
-                              let cachedPulseDescriptor = self.cachedPulseDescriptor
+                              let update = self.launchRuntime.backgroundDetailRefreshProgress(progress)
                         else {
                             return
                         }
-                        self.installMenuBarItem(
-                            ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
-                                cachedPulse: cachedPulseDescriptor,
-                                progress: progress
-                            ),
-                            cancelOpenMenu: false
-                        )
+                        self.installMenuBarItem(update.descriptor, cancelOpenMenu: false)
                     }
                 }
                 outcome = PortfolioFetchOutcome(
@@ -262,22 +252,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private func finishBackgroundPortfolioRefresh(_ outcome: PortfolioFetchOutcome) {
         portfolioRefreshInFlight = false
         if let pulse = outcome.pulse {
-            let descriptor = pulse.descriptor
-            launchRuntime.replaceCurrentPulse(pulse)
-            if outcome.detailRefreshOutcome == .degraded {
-                installMenuBarItem(ClaudeLaunchFlow.descriptorForBackgroundDetailDegraded(cachedPulse: descriptor))
-            } else {
-                installPortfolioPulseDescriptor(descriptor)
-            }
+            handleLaunchUpdate(launchRuntime.completeBackgroundDetailRefresh(
+                .succeeded(pulse, outcome: outcome.detailRefreshOutcome ?? .completed)
+            ))
             return
         }
         let errorDescription = outcome.errorDescription ?? "unknown error"
         FileHandle.standardError.write(Data("pdtbar: background refresh failed: \(errorDescription)\n".utf8))
-        if let cachedPulseDescriptor {
-            installMenuBarItem(ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(cachedPulse: cachedPulseDescriptor))
-        } else {
-            installMenuBarItem(ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed))
-        }
+        handleLaunchUpdate(launchRuntime.completeBackgroundDetailRefresh(.failed(errorDescription)))
     }
 
     @objc private func retryClaudeReadiness(_ sender: NSMenuItem) {
@@ -323,6 +305,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         case .startFirstFetch:
             startFirstPortfolioFetch()
+        case .startBackgroundDetailRefresh:
+            startBackgroundPortfolioRefresh()
         }
     }
 
@@ -440,10 +424,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.setAccessibilityLabel(surface.status.accessibilityLabel)
         item.button?.setAccessibilityIdentifier(surface.status.accessibilityIdentifier)
         item.menu = makeMenu(from: surface)
-    }
-
-    private func installPortfolioPulseDescriptor(_ descriptor: MenuDescriptor) {
-        installMenuBarItem(ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: descriptor))
     }
 
     private func makeMenu(from surface: MenuBarSurface) -> NSMenu {
