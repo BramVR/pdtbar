@@ -208,7 +208,6 @@ struct FreshnessLedgerTests {
             "freshness.oldestPrice",
             "freshness.oldestRows",
             "freshness.detailFill",
-            "freshness.caveats",
         ])
         #expect(summary.children.first { $0.id == "freshness.oldestRows" }?.children.map(\.id) == [
             "freshness.oldestRows.2",

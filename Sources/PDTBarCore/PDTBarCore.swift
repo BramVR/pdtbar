@@ -3326,12 +3326,6 @@ public enum MenuDescriptorRenderer {
                 title: "Latest complete detail fill",
                 detail: freshness.latestCompleteDetailFillAsOf ?? "Not recorded"
             ),
-            freshness.sourceCaveats.isEmpty ? nil : MenuRow(
-                id: "freshness.caveats",
-                role: .freshnessCaveats,
-                title: "Source caveats",
-                detail: freshness.sourceCaveats.joined(separator: "; ")
-            ),
         ].compactMap { $0 }
     }
 

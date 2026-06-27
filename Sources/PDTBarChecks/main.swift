@@ -710,9 +710,8 @@ try check(
         "freshness.oldestPrice",
         "freshness.oldestRows",
         "freshness.detailFill",
-        "freshness.caveats",
     ],
-    "freshness summary should expose ledger detail rows without AppKit deriving facts"
+    "freshness summary should expose user-facing ledger detail rows without AppKit deriving facts"
 )
 
 let zeroWorthFixtureDirectory = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-zero-worth-fixture")
