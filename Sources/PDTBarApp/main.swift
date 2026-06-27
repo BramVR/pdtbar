@@ -544,7 +544,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         barChart: MenuRowBarChart,
         accessibilityIdentifier: String
     ) -> NSView {
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: 136))
+        let rowHeight = CGFloat(48 + (barChart.bars.count * 34))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: rowHeight))
         container.autoresizingMask = [.width]
         let chartSummary = barChart.bars.map { "\($0.label) \($0.percentageLabel)" }.joined(separator: ", ")
         configureStaticMenuViewAccessibility(
@@ -573,85 +574,98 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         container.addSubview(detailField)
 
         let chartStack = NSStackView()
-        chartStack.orientation = .horizontal
-        chartStack.alignment = .bottom
-        chartStack.distribution = .fillEqually
-        chartStack.spacing = 8
+        chartStack.orientation = .vertical
+        chartStack.alignment = .leading
+        chartStack.distribution = .fill
+        chartStack.spacing = 7
         chartStack.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(chartStack)
 
-        let maxWeight = max(barChart.bars.map(\.weight).max() ?? 0.0, 0.01)
-        let colors: [NSColor] = [
-            .systemBlue,
-            .systemGreen,
-            .systemTeal,
-            .systemOrange,
-            .systemIndigo,
-        ]
+        for bar in barChart.bars {
+            let row = NSStackView()
+            row.orientation = .vertical
+            row.alignment = .leading
+            row.distribution = .fill
+            row.spacing = 4
+            row.toolTip = bar.detail
+            row.translatesAutoresizingMaskIntoConstraints = false
 
-        for (index, bar) in barChart.bars.enumerated() {
-            let column = NSStackView()
-            column.orientation = .vertical
-            column.alignment = .centerX
-            column.distribution = .fill
-            column.spacing = 3
-            column.toolTip = bar.detail
+            let progressTrack = NSBox()
+            progressTrack.boxType = .custom
+            progressTrack.borderWidth = 0
+            progressTrack.cornerRadius = 3
+            progressTrack.fillColor = NSColor.tertiaryLabelColor.withAlphaComponent(0.22)
+            progressTrack.translatesAutoresizingMaskIntoConstraints = false
+            progressTrack.toolTip = bar.detail
 
-            let percentageField = NSTextField(labelWithString: bar.percentageLabel)
-            percentageField.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
-            percentageField.textColor = NSColor.labelColor
-            percentageField.alignment = .center
-            percentageField.lineBreakMode = .byTruncatingTail
-            percentageField.maximumNumberOfLines = 1
-            percentageField.toolTip = bar.detail
+            let progressFill = NSBox()
+            progressFill.boxType = .custom
+            progressFill.borderWidth = 0
+            progressFill.cornerRadius = 3
+            progressFill.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.86)
+            progressFill.translatesAutoresizingMaskIntoConstraints = false
+            progressFill.toolTip = bar.detail
+            progressTrack.addSubview(progressFill)
 
-            let barArea = NSView()
-            barArea.translatesAutoresizingMaskIntoConstraints = false
-
-            let barView = NSBox()
-            barView.boxType = .custom
-            barView.cornerRadius = 3
-            barView.fillColor = colors[index % colors.count].withAlphaComponent(0.82)
-            barView.translatesAutoresizingMaskIntoConstraints = false
-            barView.toolTip = bar.detail
-            barArea.addSubview(barView)
-
-            let normalizedHeight = CGFloat(max(0.08, min(1.0, bar.weight / maxWeight)))
+            let fillWidth = CGFloat(max(0.004, min(1.0, bar.weight)))
             NSLayoutConstraint.activate([
-                barArea.heightAnchor.constraint(equalToConstant: 42),
-                barView.widthAnchor.constraint(equalTo: barArea.widthAnchor, multiplier: 0.58),
-                barView.centerXAnchor.constraint(equalTo: barArea.centerXAnchor),
-                barView.bottomAnchor.constraint(equalTo: barArea.bottomAnchor),
-                barView.heightAnchor.constraint(equalTo: barArea.heightAnchor, multiplier: normalizedHeight),
+                progressTrack.heightAnchor.constraint(equalToConstant: 6),
+                progressFill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
+                progressFill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
+                progressFill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
+                progressFill.widthAnchor.constraint(equalTo: progressTrack.widthAnchor, multiplier: fillWidth),
             ])
+
+            let valueRow = NSStackView()
+            valueRow.orientation = .horizontal
+            valueRow.alignment = .firstBaseline
+            valueRow.distribution = .fill
+            valueRow.spacing = 8
+            valueRow.toolTip = bar.detail
+            valueRow.translatesAutoresizingMaskIntoConstraints = false
 
             let labelField = NSTextField(labelWithString: bar.label)
             labelField.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-            labelField.textColor = NSColor.secondaryLabelColor
-            labelField.alignment = .center
+            labelField.textColor = NSColor.labelColor
             labelField.lineBreakMode = .byTruncatingTail
             labelField.maximumNumberOfLines = 1
             labelField.toolTip = bar.detail
 
-            column.addArrangedSubview(percentageField)
-            column.addArrangedSubview(barArea)
-            column.addArrangedSubview(labelField)
-            chartStack.addArrangedSubview(column)
+            let percentageField = NSTextField(labelWithString: bar.percentageLabel)
+            percentageField.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+            percentageField.textColor = NSColor.secondaryLabelColor
+            percentageField.alignment = .right
+            percentageField.lineBreakMode = .byTruncatingTail
+            percentageField.maximumNumberOfLines = 1
+            percentageField.toolTip = bar.detail
+
+            valueRow.addArrangedSubview(labelField)
+            valueRow.addArrangedSubview(NSView())
+            valueRow.addArrangedSubview(percentageField)
+            row.addArrangedSubview(progressTrack)
+            row.addArrangedSubview(valueRow)
+            chartStack.addArrangedSubview(row)
+
+            NSLayoutConstraint.activate([
+                row.widthAnchor.constraint(equalTo: chartStack.widthAnchor),
+                progressTrack.widthAnchor.constraint(equalTo: row.widthAnchor),
+                valueRow.widthAnchor.constraint(equalTo: row.widthAnchor),
+            ])
         }
 
         NSLayoutConstraint.activate([
-            titleField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
-            titleField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
+            titleField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            titleField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -28),
             titleField.topAnchor.constraint(equalTo: container.topAnchor, constant: 7),
 
             detailField.leadingAnchor.constraint(equalTo: titleField.leadingAnchor),
             detailField.trailingAnchor.constraint(equalTo: titleField.trailingAnchor),
             detailField.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 1),
 
-            chartStack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
-            chartStack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            chartStack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            chartStack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -28),
             chartStack.topAnchor.constraint(equalTo: detailField.bottomAnchor, constant: 8),
-            chartStack.heightAnchor.constraint(equalToConstant: 78),
+            chartStack.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -7),
         ])
 
         return container
