@@ -50,8 +50,8 @@ struct HoldingIdentifierCopyTests {
         )
 
         let copyableChildren = try #require(
-            descriptor.sections.first { $0.id == "allocation" }?
-                .rows.first { $0.title == "Copyable Public Co" }?
+            allocationDetailsChildren(in: descriptor)
+                .first { $0.title == "Copyable Public Co" }?
                 .children
         )
         let copyRow = try #require(copyableChildren.first { $0.id == "allocation.9701.copyIdentifier" })
@@ -62,15 +62,16 @@ struct HoldingIdentifierCopyTests {
         #expect(copyRow.actionTarget?.copyText == "PUBC")
 
         let ambiguousChildren = try #require(
-            descriptor.sections.first { $0.id == "allocation" }?
-                .rows.first { $0.title == "Ambiguous Private Co" }?
+            allocationDetailsChildren(in: descriptor)
+                .first { $0.title == "Ambiguous Private Co" }?
                 .children
         )
         #expect(ambiguousChildren.contains { $0.id.hasSuffix(".copyIdentifier") } == false)
 
         let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
         let surfaceCopyRow = surface.sections.first { $0.id == "allocation" }?
-            .rows.first { $0.id == "allocation.9701" }?
+            .rows.first { $0.id == "allocation.portfolio.details" }?
+            .children.first { $0.id == "allocation.9701" }?
             .children.first { $0.id == "allocation.9701.copyIdentifier" }
         #expect(surfaceCopyRow?.actionTarget?.kind == .copyHoldingIdentifier)
         #expect(surfaceCopyRow?.actionTarget?.copyText == "PUBC")
@@ -92,6 +93,12 @@ struct HoldingIdentifierCopyTests {
 
         #expect(pasteboard.string(forType: .string) == "PUBC")
     }
+}
+
+private func allocationDetailsChildren(in descriptor: MenuDescriptor) -> [MenuRow] {
+    descriptor.sections.first { $0.id == "allocation" }?
+        .rows.first { $0.id == "allocation.portfolio.details" }?
+        .children ?? []
 }
 
 private func temporaryFixture(_ contents: String) throws -> URL {

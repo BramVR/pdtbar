@@ -115,6 +115,8 @@ private func holdingRow(for quoteId: Int, snapshot: PortfolioSnapshot) throws ->
             .sections
             .first { $0.id == "allocation" }?
             .rows
+            .first { $0.id == "allocation.portfolio.details" }?
+            .children
             .first { $0.id == "allocation.\(quoteId)" }
     )
 }
