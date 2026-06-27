@@ -37,6 +37,8 @@ struct BackgroundDetailRefreshTests {
             result.descriptor.sections
                 .first { $0.id == "allocation" }?
                 .rows
+                .first { $0.id == "allocation.portfolio.details" }?
+                .children
                 .first { $0.id == "allocation.9102" }
         )
         #expect(holdingRow.children.first { $0.id == "allocation.9102.nextIncome" }?.detail == "Ex-dividend date on 2026-03-30; confirmed; EUR 6.00")

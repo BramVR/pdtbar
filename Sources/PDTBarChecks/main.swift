@@ -97,7 +97,11 @@ try check(caughtUpPulse.descriptor.statusBadge == nil, "same read fingerprint sh
 try check(caughtUpPulse.descriptor.statusVisual.filledBarCount == 0, "same read fingerprint should clear status fill count")
 try check(caughtUpPulse.descriptor.statusTitle.contains("All caught up"), "all-read pressure should render caught-up copy")
 try check(
-    caughtUpPulse.descriptor.sections.first { $0.id == "allocation" }?.rows.contains { $0.title == "Nova Lithography" } == true,
+    caughtUpPulse.descriptor.sections.first { $0.id == "allocation" }?
+        .rows
+        .first { $0.id == "allocation.portfolio.details" }?
+        .children
+        .contains { $0.title == "Nova Lithography" } == true,
     "read attention should not hide allocation drill-down facts"
 )
 var changedPressureSnapshot = pressureSnapshot
@@ -638,23 +642,33 @@ let quietAllocationRows = try require(
 )
 let portfolioAllocationRow = try require(
     quietAllocationRows.first,
-    "allocation section should start with a portfolio allocation row"
+    "allocation section should start with a portfolio allocation chart row"
+)
+let portfolioDetailsRow = try require(
+    quietAllocationRows.dropFirst().first,
+    "allocation section should place detailed info below the portfolio allocation chart"
 )
 try check(
     portfolioAllocationRow.id == "allocation.portfolio"
-        && portfolioAllocationRow.role == MenuRowRole.portfolioOverview
-        && quietAllocationRows.dropFirst().first?.id == "allocation.9001",
-    "allocation section should render Portfolio allocation before individual holding rows"
+        && portfolioAllocationRow.role == MenuRowRole.portfolioOverviewChart
+        && portfolioAllocationRow.barChart?.bars.map(\.label) == ["9001", "9002", "9003", "9009", "9011"]
+        && portfolioDetailsRow.id == "allocation.portfolio.details"
+        && portfolioDetailsRow.role == MenuRowRole.portfolioOverviewDetails,
+    "allocation section should render Portfolio allocation chart before detailed info"
 )
 try check(
-    portfolioAllocationRow.children.map { $0.id } == [
+    portfolioDetailsRow.children.prefix(5).map { $0.id } == [
         "allocation.portfolio.holdings",
         "allocation.portfolio.concentration",
         "allocation.portfolio.sectors",
         "allocation.portfolio.assetTypes",
         "allocation.portfolio.cash",
     ],
-    "portfolio allocation submenu should expose holdings, concentration, sectors, asset types, and cash"
+    "portfolio detailed info submenu should expose holdings, concentration, sectors, asset types, and cash"
+)
+try check(
+    portfolioDetailsRow.children.dropFirst(5).first?.id == "allocation.9001",
+    "portfolio detailed info submenu should expose individual holding drill-down rows"
 )
 try check(
     descriptor.sections.first { $0.id == "income" }?.rows.map(\.id) == ["income.empty"],
@@ -912,6 +926,8 @@ let incompleteAllocationRow = try require(
         .sections
         .first { $0.id == "allocation" }?
         .rows
+        .first { $0.id == "allocation.portfolio.details" }?
+        .children
         .first { $0.title == "Nova Lithography" },
     "allocation row should exist for incomplete attention metadata"
 )
@@ -1669,7 +1685,9 @@ let joinedHoldingIncomeRows = MenuDescriptorRenderer.render(
     .first { $0.id == "allocation" }?
     .rows ?? []
 let joinedHoldingIncomeRow = try require(
-    joinedHoldingIncomeRows.first { $0.id == "allocation.9001" },
+    joinedHoldingIncomeRows.first { $0.id == "allocation.portfolio.details" }?
+        .children
+        .first { $0.id == "allocation.9001" },
     "joined holding income check should find the holding row"
 )
 try check(
@@ -1694,6 +1712,8 @@ let estimatedHoldingIncomeRow = try require(
         .sections
         .first { $0.id == "allocation" }?
         .rows
+        .first { $0.id == "allocation.portfolio.details" }?
+        .children
         .first { $0.id == "allocation.9001" },
     "estimated holding income check should find the holding row"
 )
@@ -1736,6 +1756,8 @@ let absentHoldingIncomeRow = try require(
         .sections
         .first { $0.id == "allocation" }?
         .rows
+        .first { $0.id == "allocation.portfolio.details" }?
+        .children
         .first { $0.id == "allocation.9001" },
     "absent holding income check should find the holding row"
 )
@@ -2028,13 +2050,14 @@ try check(
     "descriptor should expose pulse attention expansion rows as a nested drill-down"
 )
 let allocationRows = concentrationRun.descriptor.sections.first { $0.id == "allocation" }?.rows ?? []
-let allocationDrillDownRow = allocationRows.first {
+let detailedAllocationRows = allocationRows.first { $0.id == "allocation.portfolio.details" }?.children ?? []
+let allocationDrillDownRow = detailedAllocationRows.first {
     $0.role == .allocationDrillDown && $0.title == "Nova Lithography"
 }
 try check(
-    allocationRows.filter { $0.role == .allocationHolding || $0.role == .allocationDrillDown }.count
+    detailedAllocationRows.filter { $0.role == .allocationHolding || $0.role == .allocationDrillDown }.count
         == concentrationRun.model.facetSnapshots.allocation.openHoldingCount,
-    "allocation drill-down should list every open holding"
+    "detailed allocation drill-down should list every open holding"
 )
 try check(
     allocationDrillDownRow?.detail == "24.2%",
@@ -2123,16 +2146,15 @@ try Data("""
 let holdingFactsDescriptor = MenuDescriptorRenderer.render(
     model: PressureEngine.buildModel(from: try PDTFixtureDataSource.snapshot(from: holdingFactsFixture))
 )
-let holdingFactsChildren = try require(
+let holdingFactsRow = try require(
     holdingFactsDescriptor.sections.first { $0.id == "allocation" }?
-        .rows.first { $0.title == "Core Facts Holding" }?
-        .children,
+        .rows.first { $0.id == "allocation.portfolio.details" }?
+        .children.first { $0.title == "Core Facts Holding" },
     "holding facts descriptor row should exist"
 )
+let holdingFactsChildren = holdingFactsRow.children
 try check(
-    holdingFactsDescriptor.sections.first { $0.id == "allocation" }?
-        .rows.first { $0.title == "Core Facts Holding" }?
-        .detail == "10.0%",
+    holdingFactsRow.detail == "10.0%",
     "allocation parent row should keep inline portfolio weight"
 )
 try check(
@@ -2173,7 +2195,8 @@ try check(
 )
 let fallbackFactsChildren = try require(
     holdingFactsDescriptor.sections.first { $0.id == "allocation" }?
-        .rows.first { $0.title == "Fallback Facts Holding" }?
+        .rows.first { $0.id == "allocation.portfolio.details" }?
+        .children.first { $0.title == "Fallback Facts Holding" }?
         .children,
     "fallback holding descriptor row should exist"
 )
@@ -2191,7 +2214,8 @@ try check(
 )
 let sparseFactsChildren = try require(
     holdingFactsDescriptor.sections.first { $0.id == "allocation" }?
-        .rows.first { $0.title == "Sparse Facts Holding" }?
+        .rows.first { $0.id == "allocation.portfolio.details" }?
+        .children.first { $0.title == "Sparse Facts Holding" }?
         .children,
     "sparse holding descriptor row should exist"
 )
@@ -2211,7 +2235,8 @@ try check(
 )
 let holdingFactsSurface = MenuBarSurfaceRenderer.render(descriptor: holdingFactsDescriptor)
 let surfaceIdentifierAction = holdingFactsSurface.sections.first { $0.id == "allocation" }?
-    .rows.first { $0.id == "allocation.9601" }?
+    .rows.first { $0.id == "allocation.portfolio.details" }?
+    .children.first { $0.id == "allocation.9601" }?
     .children.first { $0.id == "allocation.9601.copyIdentifier" }
 try check(
     surfaceIdentifierAction?.actionTarget?.kind == .copyHoldingIdentifier

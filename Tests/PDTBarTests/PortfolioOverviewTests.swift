@@ -171,23 +171,59 @@ struct PortfolioOverviewTests {
         #expect(overview.cashSummary?.value == Money(value: "1895.00", currency: "EUR"))
     }
 
-    @Test("Descriptor renders portfolio allocation row before holdings")
-    func descriptorRendersPortfolioAllocationRowBeforeHoldings() throws {
+    @Test("Descriptor renders portfolio chart before detailed allocation info")
+    func descriptorRendersPortfolioChartBeforeDetailedAllocationInfo() throws {
         let descriptor = MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: try quietSnapshot()))
         let allocationRows = try #require(descriptor.sections.first { $0.id == "allocation" }?.rows)
-        let overviewRow = try #require(allocationRows.first)
+        let chartRow = try #require(allocationRows.first)
+        let detailsRow = try #require(allocationRows.dropFirst().first)
 
-        #expect(overviewRow.id == "allocation.portfolio")
-        #expect(overviewRow.role == .portfolioOverview)
-        #expect(overviewRow.title == "Portfolio allocation")
-        #expect(allocationRows.dropFirst().first?.id == "allocation.9001")
-        #expect(overviewRow.children.map(\.id) == [
+        #expect(chartRow.id == "allocation.portfolio")
+        #expect(chartRow.role == .portfolioOverviewChart)
+        #expect(chartRow.title == "Portfolio allocation")
+        #expect(chartRow.children.isEmpty)
+        #expect(detailsRow.id == "allocation.portfolio.details")
+        #expect(detailsRow.role == .portfolioOverviewDetails)
+        #expect(detailsRow.title == "Detailed info")
+        #expect(detailsRow.children.prefix(5).map(\.id) == [
             "allocation.portfolio.holdings",
             "allocation.portfolio.concentration",
             "allocation.portfolio.sectors",
             "allocation.portfolio.assetTypes",
             "allocation.portfolio.cash",
         ])
+        #expect(detailsRow.children.dropFirst(5).first?.id == "allocation.9001")
+    }
+
+    @Test("Portfolio allocation chart carries holding bars and detailed info drills into holdings")
+    func portfolioAllocationChartCarriesHoldingBarsAndDetailedInfoDrillsIntoHoldings() throws {
+        let descriptor = MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: try quietSnapshot()))
+        let allocationRows = try #require(descriptor.sections.first { $0.id == "allocation" }?.rows)
+        let chartRow = try #require(allocationRows.first)
+        let chart = try #require(chartRow.barChart)
+
+        #expect(chart.bars.map(\.id) == [
+            "allocation.portfolio.chart.9001",
+            "allocation.portfolio.chart.9002",
+            "allocation.portfolio.chart.9003",
+            "allocation.portfolio.chart.9009",
+            "allocation.portfolio.chart.9011",
+        ])
+        #expect(chart.bars.map(\.label) == ["9001", "9002", "9003", "9009", "9011"])
+        #expect(chart.bars.map(\.weight) == [0.1171875, 0.1171875, 0.11328125, 0.10742188, 0.10742188])
+        #expect(chart.bars.map(\.percentageLabel) == ["11.7%", "11.7%", "11.3%", "10.7%", "10.7%"])
+        #expect(chart.bars.first?.detail == "Nova Lithography 11.7%; EUR 6,000.00")
+
+        let detailsRow = try #require(allocationRows.first { $0.id == "allocation.portfolio.details" })
+        let novaRow = try #require(detailsRow.children.first { $0.id == "allocation.9001" })
+        #expect(novaRow.id == "allocation.9001")
+        #expect(novaRow.role == .allocationHolding)
+        #expect(novaRow.children.map(\.id).contains("allocation.9001.worth"))
+        #expect(novaRow.children.map(\.id).contains("allocation.9001.price"))
+
+        let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
+        let surfaceOverviewRow = try #require(surface.sections.first { $0.id == "allocation" }?.rows.first)
+        #expect(surfaceOverviewRow.barChart == chart)
     }
 }
 

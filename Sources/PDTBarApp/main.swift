@@ -516,7 +516,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             item.submenu = submenu
         }
-        if item.action == nil && item.submenu == nil {
+        if let barChart = row.barChart {
+            item.view = makePortfolioAllocationChartRowView(
+                title: row.title,
+                detail: row.detail,
+                barChart: barChart,
+                accessibilityIdentifier: row.accessibilityIdentifier
+            )
+            item.isEnabled = false
+        } else if item.action == nil && item.submenu == nil {
             item.view = makeStaticMenuRowView(
                 title: row.title,
                 detail: row.detail,
@@ -528,6 +536,125 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             applyDetailSubtitle(row.detail, to: item, title: row.title)
         }
         return item
+    }
+
+    private func makePortfolioAllocationChartRowView(
+        title: String,
+        detail: String?,
+        barChart: MenuRowBarChart,
+        accessibilityIdentifier: String
+    ) -> NSView {
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: 136))
+        container.autoresizingMask = [.width]
+        let chartSummary = barChart.bars.map { "\($0.label) \($0.percentageLabel)" }.joined(separator: ", ")
+        configureStaticMenuViewAccessibility(
+            container,
+            accessibilityIdentifier: accessibilityIdentifier,
+            label: ([title, detail, chartSummary].compactMap { value in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }).joined(separator: " - ")
+        )
+
+        let titleField = NSTextField(labelWithString: title)
+        titleField.font = NSFont.menuFont(ofSize: NSFont.systemFontSize)
+        titleField.textColor = NSColor.labelColor
+        titleField.lineBreakMode = .byTruncatingTail
+        titleField.maximumNumberOfLines = 1
+        titleField.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(titleField)
+
+        let detailField = NSTextField(labelWithString: detail ?? "")
+        detailField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize)
+        detailField.textColor = NSColor.secondaryLabelColor
+        detailField.lineBreakMode = .byTruncatingTail
+        detailField.maximumNumberOfLines = 1
+        detailField.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(detailField)
+
+        let chartStack = NSStackView()
+        chartStack.orientation = .horizontal
+        chartStack.alignment = .bottom
+        chartStack.distribution = .fillEqually
+        chartStack.spacing = 8
+        chartStack.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(chartStack)
+
+        let maxWeight = max(barChart.bars.map(\.weight).max() ?? 0.0, 0.01)
+        let colors: [NSColor] = [
+            .systemBlue,
+            .systemGreen,
+            .systemTeal,
+            .systemOrange,
+            .systemIndigo,
+        ]
+
+        for (index, bar) in barChart.bars.enumerated() {
+            let column = NSStackView()
+            column.orientation = .vertical
+            column.alignment = .centerX
+            column.distribution = .fill
+            column.spacing = 3
+            column.toolTip = bar.detail
+
+            let percentageField = NSTextField(labelWithString: bar.percentageLabel)
+            percentageField.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+            percentageField.textColor = NSColor.labelColor
+            percentageField.alignment = .center
+            percentageField.lineBreakMode = .byTruncatingTail
+            percentageField.maximumNumberOfLines = 1
+            percentageField.toolTip = bar.detail
+
+            let barArea = NSView()
+            barArea.translatesAutoresizingMaskIntoConstraints = false
+
+            let barView = NSBox()
+            barView.boxType = .custom
+            barView.cornerRadius = 3
+            barView.fillColor = colors[index % colors.count].withAlphaComponent(0.82)
+            barView.translatesAutoresizingMaskIntoConstraints = false
+            barView.toolTip = bar.detail
+            barArea.addSubview(barView)
+
+            let normalizedHeight = CGFloat(max(0.08, min(1.0, bar.weight / maxWeight)))
+            NSLayoutConstraint.activate([
+                barArea.heightAnchor.constraint(equalToConstant: 42),
+                barView.widthAnchor.constraint(equalTo: barArea.widthAnchor, multiplier: 0.58),
+                barView.centerXAnchor.constraint(equalTo: barArea.centerXAnchor),
+                barView.bottomAnchor.constraint(equalTo: barArea.bottomAnchor),
+                barView.heightAnchor.constraint(equalTo: barArea.heightAnchor, multiplier: normalizedHeight),
+            ])
+
+            let labelField = NSTextField(labelWithString: bar.label)
+            labelField.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+            labelField.textColor = NSColor.secondaryLabelColor
+            labelField.alignment = .center
+            labelField.lineBreakMode = .byTruncatingTail
+            labelField.maximumNumberOfLines = 1
+            labelField.toolTip = bar.detail
+
+            column.addArrangedSubview(percentageField)
+            column.addArrangedSubview(barArea)
+            column.addArrangedSubview(labelField)
+            chartStack.addArrangedSubview(column)
+        }
+
+        NSLayoutConstraint.activate([
+            titleField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            titleField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
+            titleField.topAnchor.constraint(equalTo: container.topAnchor, constant: 7),
+
+            detailField.leadingAnchor.constraint(equalTo: titleField.leadingAnchor),
+            detailField.trailingAnchor.constraint(equalTo: titleField.trailingAnchor),
+            detailField.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 1),
+
+            chartStack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            chartStack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            chartStack.topAnchor.constraint(equalTo: detailField.bottomAnchor, constant: 8),
+            chartStack.heightAnchor.constraint(equalToConstant: 78),
+        ])
+
+        return container
     }
 
     private func makeStaticMenuRowView(title: String, detail: String?, accessibilityIdentifier: String) -> NSView {

@@ -1251,6 +1251,8 @@ public enum MenuRowRole: String, Codable, Equatable {
     case pulseAttentionExpansion
     case pulseMarkRead
     case portfolioOverview
+    case portfolioOverviewChart
+    case portfolioOverviewDetails
     case portfolioOverviewHoldings
     case portfolioOverviewConcentration
     case portfolioOverviewSector
@@ -1345,6 +1347,36 @@ public struct MenuRowActionTarget: Codable, Equatable {
     }
 }
 
+public struct MenuRowBarChart: Codable, Equatable {
+    public var bars: [Bar]
+
+    public init(bars: [Bar]) {
+        self.bars = bars
+    }
+
+    public struct Bar: Codable, Equatable {
+        public var id: String
+        public var label: String
+        public var weight: Double
+        public var percentageLabel: String
+        public var detail: String
+
+        public init(
+            id: String,
+            label: String,
+            weight: Double,
+            percentageLabel: String,
+            detail: String
+        ) {
+            self.id = id
+            self.label = label
+            self.weight = weight
+            self.percentageLabel = percentageLabel
+            self.detail = detail
+        }
+    }
+}
+
 public struct MenuRow: Codable, Equatable {
     public var id: String
     public var role: MenuRowRole
@@ -1352,6 +1384,7 @@ public struct MenuRow: Codable, Equatable {
     public var actionTarget: MenuRowActionTarget?
     public var title: String
     public var detail: String?
+    public var barChart: MenuRowBarChart?
     public var actionPayload: String?
     public var children: [MenuRow]
 
@@ -1362,6 +1395,7 @@ public struct MenuRow: Codable, Equatable {
         actionTarget: MenuRowActionTarget? = nil,
         title: String,
         detail: String? = nil,
+        barChart: MenuRowBarChart? = nil,
         actionPayload: String? = nil,
         children: [MenuRow] = []
     ) {
@@ -1371,6 +1405,7 @@ public struct MenuRow: Codable, Equatable {
         self.actionTarget = actionTarget
         self.title = title
         self.detail = detail
+        self.barChart = barChart
         self.actionPayload = actionPayload
         self.children = children
     }
@@ -1382,6 +1417,7 @@ public struct MenuRow: Codable, Equatable {
         case actionTarget
         case title
         case detail
+        case barChart
         case actionPayload
         case children
     }
@@ -1396,6 +1432,7 @@ public struct MenuRow: Codable, Equatable {
         actionTarget = try container.decodeIfPresent(MenuRowActionTarget.self, forKey: .actionTarget)
         title = try container.decode(String.self, forKey: .title)
         detail = try container.decodeIfPresent(String.self, forKey: .detail)
+        barChart = try container.decodeIfPresent(MenuRowBarChart.self, forKey: .barChart)
         actionPayload = try container.decodeIfPresent(String.self, forKey: .actionPayload)
         children = try container.decodeIfPresent([MenuRow].self, forKey: .children) ?? []
     }
@@ -1464,6 +1501,7 @@ public struct MenuBarRowSurface: Codable, Equatable {
     public var detail: String?
     public var accessibilityIdentifier: String
     public var actionTarget: MenuRowActionTarget?
+    public var barChart: MenuRowBarChart?
     public var actionPayload: String?
     public var children: [MenuBarRowSurface]
 
@@ -1474,6 +1512,7 @@ public struct MenuBarRowSurface: Codable, Equatable {
         detail: String? = nil,
         accessibilityIdentifier: String,
         actionTarget: MenuRowActionTarget? = nil,
+        barChart: MenuRowBarChart? = nil,
         actionPayload: String? = nil,
         children: [MenuBarRowSurface] = []
     ) {
@@ -1483,6 +1522,7 @@ public struct MenuBarRowSurface: Codable, Equatable {
         self.detail = detail
         self.accessibilityIdentifier = accessibilityIdentifier
         self.actionTarget = actionTarget
+        self.barChart = barChart
         self.actionPayload = actionPayload
         self.children = children
     }
@@ -2686,6 +2726,7 @@ public enum MenuBarSurfaceRenderer {
             detail: row.detail,
             accessibilityIdentifier: row.accessibilityIdentifier,
             actionTarget: row.actionTarget,
+            barChart: row.barChart,
             actionPayload: row.actionPayload,
             children: row.children.map(renderRow)
         )
@@ -2771,24 +2812,10 @@ public enum MenuDescriptorRenderer {
                 MenuSection(
                     id: "allocation",
                     title: "Allocation",
-                    rows: [portfolioOverviewRow(for: allocation.portfolioOverview)] + allocation.topHoldings.map { holding in
-                        let attention = model.rankedAttentionItems.first { item in
-                            item.facet == "allocation" && item.holdingIdentity?.quoteId == holding.quoteId
-                        }
-                        let drillDownDetail = attention.flatMap { item -> String? in
-                            guard let currentWeight = item.currentWeight,
-                                  item.threshold != nil
-                            else { return nil }
-                            return percent(currentWeight)
-                        }
-                        return MenuRow(
-                            id: "allocation.\(holding.quoteId)",
-                            role: drillDownDetail == nil ? .allocationHolding : .allocationDrillDown,
-                            title: holding.name,
-                            detail: drillDownDetail ?? percent(holding.weight),
-                            children: allocationChildren(for: holding, attention: attention)
-                        )
-                    }
+                    rows: [
+                        portfolioOverviewChartRow(for: allocation.portfolioOverview),
+                        portfolioOverviewDetailsRow(for: allocation, model: model),
+                    ]
                 ),
                 MenuSection(
                     id: "income",
@@ -2826,13 +2853,16 @@ public enum MenuDescriptorRenderer {
         )
     }
 
-    private static func portfolioOverviewRow(for overview: PortfolioOverviewSummary) -> MenuRow {
+    private static func portfolioOverviewDetail(for overview: PortfolioOverviewSummary) -> String {
         let concentrationDetail = overview.topNConcentration.map {
             "top \($0.rankCount) \(percent($0.weight))"
         }
-        let detail = ([display(overview.totalValue), "\(overview.openHoldingCount) holdings"] + [concentrationDetail].compactMap { $0 })
+        return ([display(overview.totalValue), "\(overview.openHoldingCount) holdings"] + [concentrationDetail].compactMap { $0 })
             .joined(separator: "; ")
-        let children = [
+    }
+
+    private static func portfolioOverviewChildren(for overview: PortfolioOverviewSummary) -> [MenuRow] {
+        [
             portfolioOverviewHoldingsRow(for: overview),
             portfolioOverviewConcentrationRow(for: overview),
             portfolioOverviewDistributionRow(
@@ -2849,13 +2879,83 @@ public enum MenuDescriptorRenderer {
             ),
             overview.cashSummary.map(portfolioOverviewCashRow),
         ].compactMap { $0 }
+    }
+
+    private static func portfolioOverviewChartRow(for overview: PortfolioOverviewSummary) -> MenuRow {
         return MenuRow(
             id: "allocation.portfolio",
-            role: .portfolioOverview,
+            role: .portfolioOverviewChart,
             title: "Portfolio allocation",
-            detail: detail,
-            children: children
+            detail: portfolioOverviewDetail(for: overview),
+            barChart: portfolioOverviewBarChart(for: overview)
         )
+    }
+
+    private static func portfolioOverviewDetailsRow(
+        for allocation: AllocationSnapshot,
+        model: PortfolioPulseModel
+    ) -> MenuRow {
+        let overview = allocation.portfolioOverview
+        return MenuRow(
+            id: "allocation.portfolio.details",
+            role: .portfolioOverviewDetails,
+            title: "Detailed info",
+            detail: "Full allocation list",
+            children: portfolioOverviewChildren(for: overview) + allocationHoldingRows(
+                for: allocation.topHoldings,
+                model: model
+            )
+        )
+    }
+
+    private static func portfolioOverviewBarChart(for overview: PortfolioOverviewSummary) -> MenuRowBarChart? {
+        let bars = overview.topHoldings.prefix(PortfolioOverview.topHoldingLimit).map { holding in
+            MenuRowBarChart.Bar(
+                id: "allocation.portfolio.chart.\(holding.quoteId)",
+                label: holdingChartLabel(holding),
+                weight: holding.weight,
+                percentageLabel: percent(holding.weight),
+                detail: "\(holding.name) \(percent(holding.weight)); \(display(holding.worth))"
+            )
+        }
+        guard !bars.isEmpty else {
+            return nil
+        }
+        return MenuRowBarChart(bars: Array(bars))
+    }
+
+    private static func allocationHoldingRows(
+        for holdings: [HoldingSummary],
+        model: PortfolioPulseModel
+    ) -> [MenuRow] {
+        holdings.map { holding in
+            let attention = model.rankedAttentionItems.first { item in
+                item.facet == "allocation" && item.holdingIdentity?.quoteId == holding.quoteId
+            }
+            let drillDownDetail = attention.flatMap { item -> String? in
+                guard let currentWeight = item.currentWeight,
+                      item.threshold != nil
+                else { return nil }
+                return percent(currentWeight)
+            }
+            return MenuRow(
+                id: "allocation.\(holding.quoteId)",
+                role: drillDownDetail == nil ? .allocationHolding : .allocationDrillDown,
+                title: holding.name,
+                detail: drillDownDetail ?? percent(holding.weight),
+                children: allocationChildren(for: holding, attention: attention)
+            )
+        }
+    }
+
+    private static func holdingChartLabel(_ holding: HoldingSummary) -> String {
+        if let copyableIdentifier = holding.copyableIdentifier?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !copyableIdentifier.isEmpty
+        {
+            return copyableIdentifier
+        }
+        return "\(holding.quoteId)"
     }
 
     private static func portfolioOverviewHoldingsRow(for overview: PortfolioOverviewSummary) -> MenuRow {
