@@ -516,7 +516,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             item.submenu = submenu
         }
-        if item.action == nil && item.submenu == nil {
+        if let barChart = row.barChart {
+            item.view = makePortfolioAllocationChartRowView(
+                title: row.title,
+                detail: row.detail,
+                barChart: barChart,
+                accessibilityIdentifier: row.accessibilityIdentifier
+            )
+            item.isEnabled = false
+        } else if item.action == nil && item.submenu == nil {
             item.view = makeStaticMenuRowView(
                 title: row.title,
                 detail: row.detail,
@@ -528,6 +536,177 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             applyDetailSubtitle(row.detail, to: item, title: row.title)
         }
         return item
+    }
+
+    private func makePortfolioAllocationChartRowView(
+        title: String,
+        detail: String?,
+        barChart: MenuRowBarChart,
+        accessibilityIdentifier: String
+    ) -> NSView {
+        let rowHeight: CGFloat = 226
+        let container = PortfolioAllocationChartRowView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: rowHeight))
+        container.autoresizingMask = [.width]
+        let chartSummary = barChart.bars.map { "\($0.label) \($0.percentageLabel)" }.joined(separator: ", ")
+        configureStaticMenuViewAccessibility(
+            container,
+            accessibilityIdentifier: accessibilityIdentifier,
+            label: ([title, detail, chartSummary].compactMap { value in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }).joined(separator: " - ")
+        )
+
+        let titleField = NSTextField(labelWithString: title)
+        titleField.font = NSFont.menuFont(ofSize: NSFont.systemFontSize)
+        titleField.textColor = NSColor.labelColor
+        titleField.lineBreakMode = .byTruncatingTail
+        titleField.maximumNumberOfLines = 1
+        titleField.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(titleField)
+
+        let detailField = NSTextField(labelWithString: detail ?? "")
+        detailField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize)
+        detailField.textColor = NSColor.secondaryLabelColor
+        detailField.lineBreakMode = .byTruncatingTail
+        detailField.maximumNumberOfLines = 1
+        detailField.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(detailField)
+
+        let chartAxisView = PortfolioAllocationYAxisView(bars: barChart.bars)
+        chartAxisView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(chartAxisView)
+
+        let chartScrollView = NSScrollView()
+        chartScrollView.borderType = .noBorder
+        chartScrollView.drawsBackground = false
+        chartScrollView.hasVerticalScroller = false
+        chartScrollView.hasHorizontalScroller = barChart.bars.count > PortfolioAllocationVerticalBarChartView.visibleSlotCount
+        chartScrollView.autohidesScrollers = barChart.bars.count <= PortfolioAllocationVerticalBarChartView.visibleSlotCount
+        chartScrollView.horizontalScrollElasticity = .allowed
+        chartScrollView.scrollerStyle = .overlay
+        chartScrollView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(chartScrollView)
+
+        let chartView = PortfolioAllocationVerticalBarChartView(bars: barChart.bars)
+        let chartAxisWidth = PortfolioAllocationYAxisView.axisWidth
+        let chartAxisGap = PortfolioAllocationYAxisView.axisGap
+        let chartViewportWidth = menuItemViewWidth - 20 - chartAxisWidth - chartAxisGap - 28
+        let chartContentWidth = PortfolioAllocationVerticalBarChartView.contentWidth(
+            viewportWidth: chartViewportWidth,
+            barCount: barChart.bars.count
+        )
+        chartView.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: chartContentWidth,
+            height: PortfolioAllocationVerticalBarChartView.chartHeight
+        )
+        chartView.autoresizingMask = [.height]
+        chartScrollView.documentView = chartView
+
+        let xAxisScrollView = NSScrollView()
+        xAxisScrollView.borderType = .noBorder
+        xAxisScrollView.drawsBackground = false
+        xAxisScrollView.hasVerticalScroller = false
+        xAxisScrollView.hasHorizontalScroller = false
+        xAxisScrollView.horizontalScrollElasticity = .none
+        xAxisScrollView.scrollerStyle = .overlay
+        xAxisScrollView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(xAxisScrollView)
+
+        let xAxisView = PortfolioAllocationXAxisView(bars: barChart.bars)
+        xAxisView.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: chartContentWidth,
+            height: PortfolioAllocationXAxisView.axisHeight
+        )
+        xAxisView.autoresizingMask = [.height]
+        xAxisScrollView.documentView = xAxisView
+
+        let selectedAccent = NSBox()
+        selectedAccent.boxType = .custom
+        selectedAccent.borderWidth = 0
+        selectedAccent.cornerRadius = 1
+        selectedAccent.fillColor = PortfolioAllocationVerticalBarChartView.barColor
+        selectedAccent.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(selectedAccent)
+
+        let selectedTitleField = NSTextField(labelWithString: "")
+        selectedTitleField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize)
+        selectedTitleField.textColor = NSColor.secondaryLabelColor
+        selectedTitleField.lineBreakMode = .byTruncatingTail
+        selectedTitleField.maximumNumberOfLines = 1
+        selectedTitleField.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(selectedTitleField)
+
+        let selectedDetailField = NSTextField(labelWithString: "")
+        selectedDetailField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize - 1)
+        selectedDetailField.textColor = NSColor.tertiaryLabelColor
+        selectedDetailField.lineBreakMode = .byTruncatingTail
+        selectedDetailField.maximumNumberOfLines = 1
+        selectedDetailField.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(selectedDetailField)
+
+        let applySelection: (MenuRowBarChart.Bar?) -> Void = { bar in
+            guard let bar else {
+                selectedTitleField.stringValue = "Hover a bar for details"
+                selectedDetailField.stringValue = ""
+                selectedAccent.isHidden = true
+                return
+            }
+            selectedTitleField.stringValue = "\(bar.label): \(bar.percentageLabel)"
+            selectedDetailField.stringValue = bar.detail
+            selectedTitleField.toolTip = bar.detail
+            selectedDetailField.toolTip = bar.detail
+            selectedAccent.isHidden = false
+        }
+        chartView.onSelectionChanged = applySelection
+        applySelection(chartView.selectedBar)
+
+        container.mirrorHorizontalScroll(from: chartScrollView, to: xAxisScrollView)
+
+        NSLayoutConstraint.activate([
+            titleField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            titleField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -28),
+            titleField.topAnchor.constraint(equalTo: container.topAnchor, constant: 7),
+
+            detailField.leadingAnchor.constraint(equalTo: titleField.leadingAnchor),
+            detailField.trailingAnchor.constraint(equalTo: titleField.trailingAnchor),
+            detailField.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 1),
+
+            chartAxisView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            chartAxisView.topAnchor.constraint(equalTo: detailField.bottomAnchor, constant: 9),
+            chartAxisView.widthAnchor.constraint(equalToConstant: chartAxisWidth),
+            chartAxisView.heightAnchor.constraint(equalToConstant: PortfolioAllocationVerticalBarChartView.chartHeight),
+
+            chartScrollView.leadingAnchor.constraint(equalTo: chartAxisView.trailingAnchor, constant: chartAxisGap),
+            chartScrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -28),
+            chartScrollView.topAnchor.constraint(equalTo: detailField.bottomAnchor, constant: 9),
+            chartScrollView.heightAnchor.constraint(equalToConstant: PortfolioAllocationVerticalBarChartView.chartHeight),
+
+            xAxisScrollView.leadingAnchor.constraint(equalTo: chartScrollView.leadingAnchor),
+            xAxisScrollView.trailingAnchor.constraint(equalTo: chartScrollView.trailingAnchor),
+            xAxisScrollView.topAnchor.constraint(equalTo: chartScrollView.bottomAnchor, constant: -1),
+            xAxisScrollView.heightAnchor.constraint(equalToConstant: PortfolioAllocationXAxisView.axisHeight),
+
+            selectedAccent.leadingAnchor.constraint(equalTo: chartAxisView.leadingAnchor),
+            selectedAccent.topAnchor.constraint(equalTo: xAxisScrollView.bottomAnchor, constant: 8),
+            selectedAccent.widthAnchor.constraint(equalToConstant: 2),
+            selectedAccent.heightAnchor.constraint(equalToConstant: 30),
+
+            selectedTitleField.leadingAnchor.constraint(equalTo: selectedAccent.trailingAnchor, constant: 8),
+            selectedTitleField.trailingAnchor.constraint(equalTo: chartScrollView.trailingAnchor),
+            selectedTitleField.topAnchor.constraint(equalTo: xAxisScrollView.bottomAnchor, constant: 5),
+
+            selectedDetailField.leadingAnchor.constraint(equalTo: selectedTitleField.leadingAnchor),
+            selectedDetailField.trailingAnchor.constraint(equalTo: selectedTitleField.trailingAnchor),
+            selectedDetailField.topAnchor.constraint(equalTo: selectedTitleField.bottomAnchor, constant: 1),
+            selectedDetailField.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -8),
+        ])
+
+        return container
     }
 
     private func makeStaticMenuRowView(title: String, detail: String?, accessibilityIdentifier: String) -> NSView {
@@ -804,6 +983,349 @@ private struct ScriptedClaudeReadinessProbe {
     private struct Script: Decodable {
         var result: String
         var delaySeconds: Double?
+    }
+}
+
+private final class PortfolioAllocationChartRowView: NSView {
+    private weak var sourceScrollView: NSScrollView?
+    private weak var targetScrollView: NSScrollView?
+
+    func mirrorHorizontalScroll(from sourceScrollView: NSScrollView, to targetScrollView: NSScrollView) {
+        NotificationCenter.default.removeObserver(self, name: NSView.boundsDidChangeNotification, object: nil)
+        self.sourceScrollView = sourceScrollView
+        self.targetScrollView = targetScrollView
+        sourceScrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(sourceBoundsDidChange(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: sourceScrollView.contentView
+        )
+    }
+
+    @objc
+    private func sourceBoundsDidChange(_ notification: Notification) {
+        guard let sourceScrollView, let targetScrollView else { return }
+        let origin = sourceScrollView.contentView.bounds.origin
+        targetScrollView.contentView.setBoundsOrigin(NSPoint(x: origin.x, y: 0))
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+}
+
+private final class PortfolioAllocationVerticalBarChartView: NSView {
+    static let barColor = NSColor(calibratedRed: 0.28, green: 0.68, blue: 0.73, alpha: 0.92)
+    static let visibleSlotCount = 30
+    static let chartHeight: CGFloat = 114
+
+    private let bars: [MenuRowBarChart.Bar]
+    private var trackingArea: NSTrackingArea?
+    private var selectedIndex: Int? {
+        didSet {
+            guard selectedIndex != oldValue else { return }
+            self.toolTip = self.selectedBar?.detail
+            self.needsDisplay = true
+            self.onSelectionChanged?(self.selectedBar)
+        }
+    }
+
+    var onSelectionChanged: ((MenuRowBarChart.Bar?) -> Void)?
+
+    var selectedBar: MenuRowBarChart.Bar? {
+        guard let selectedIndex, self.bars.indices.contains(selectedIndex) else { return nil }
+        return self.bars[selectedIndex]
+    }
+
+    override var isFlipped: Bool {
+        true
+    }
+
+    init(bars: [MenuRowBarChart.Bar]) {
+        self.bars = bars
+        self.selectedIndex = bars.isEmpty ? nil : 0
+        super.init(frame: .zero)
+        self.wantsLayer = true
+        self.toolTip = self.selectedBar?.detail
+    }
+
+    static func contentWidth(viewportWidth: CGFloat, barCount: Int) -> CGFloat {
+        let visibleWidth = max(viewportWidth, 1)
+        let slotCount = max(barCount, Self.visibleSlotCount)
+        return visibleWidth * CGFloat(slotCount) / CGFloat(Self.visibleSlotCount)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is unavailable")
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        self.window?.acceptsMouseMovedEvents = true
+        self.updateTrackingAreas()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            self.removeTrackingArea(trackingArea)
+        }
+        let options: NSTrackingArea.Options = [
+            .activeAlways,
+            .inVisibleRect,
+            .mouseEnteredAndExited,
+            .mouseMoved,
+        ]
+        let area = NSTrackingArea(rect: .zero, options: options, owner: self, userInfo: nil)
+        self.addTrackingArea(area)
+        self.trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        self.updateSelection(with: event)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        self.updateSelection(with: event)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard !self.bars.isEmpty, self.bounds.width > 1, self.bounds.height > 1 else { return }
+
+        let plotRect = Self.plotRect(in: self.bounds)
+        let totalSlotCount = self.totalSlotCount
+        let leadingSlotCount = self.leadingSlotCount
+        let slotWidth = plotRect.width / CGFloat(totalSlotCount)
+        let barHalfWidth = Self.barHalfWidth(slotWidth: slotWidth)
+        let barWidth = barHalfWidth * 2
+        let scaleMaxWeight = Self.scaleMaxWeight(for: self.bars)
+
+        if let selectedIndex {
+            let centerX = plotRect.minX + slotWidth * (CGFloat(leadingSlotCount + selectedIndex) + 0.5)
+            let bandRect = NSRect(
+                x: centerX - barHalfWidth,
+                y: plotRect.minY,
+                width: barWidth,
+                height: plotRect.height
+            )
+            NSColor.labelColor.withAlphaComponent(0.10).setFill()
+            bandRect.fill()
+        }
+
+        for (index, bar) in self.bars.enumerated() {
+            let weight = Self.clampedWeight(bar.weight)
+            let barHeight = max(weight > 0 ? 3 : 0, plotRect.height * weight / scaleMaxWeight)
+            let centerX = plotRect.minX + slotWidth * (CGFloat(leadingSlotCount + index) + 0.5)
+            let barRect = NSRect(
+                x: centerX - barWidth / 2,
+                y: plotRect.maxY - barHeight,
+                width: barWidth,
+                height: barHeight
+            )
+            Self.barColor.setFill()
+            NSBezierPath(roundedRect: barRect, xRadius: 3, yRadius: 3).fill()
+        }
+
+    }
+
+    private func updateSelection(with event: NSEvent) {
+        let location = self.convert(event.locationInWindow, from: nil)
+        guard self.bounds.contains(location), !self.bars.isEmpty else { return }
+        let plotWidth = max(self.bounds.width, 1)
+        let slotWidth = plotWidth / CGFloat(self.totalSlotCount)
+        let rawSlot = Int(floor(location.x / slotWidth))
+        let index = rawSlot - self.leadingSlotCount
+        guard self.bars.indices.contains(index) else { return }
+        self.selectedIndex = index
+    }
+
+    private static func clampedWeight(_ weight: Double) -> CGFloat {
+        guard weight.isFinite, weight > 0 else { return 0 }
+        return CGFloat(min(weight, 1))
+    }
+
+    static func totalSlotCount(for barCount: Int) -> Int {
+        max(barCount, Self.visibleSlotCount)
+    }
+
+    static func leadingSlotCount(for barCount: Int) -> Int {
+        max((Self.visibleSlotCount - barCount) / 2, 0)
+    }
+
+    static func plotRect(in bounds: NSRect) -> NSRect {
+        let topInset: CGFloat = 16
+        let bottomInset: CGFloat = 6
+        return NSRect(
+            x: 0,
+            y: topInset,
+            width: bounds.width,
+            height: max(1, bounds.height - topInset - bottomInset)
+        )
+    }
+
+    static func scaleMaxWeight(for bars: [MenuRowBarChart.Bar]) -> CGFloat {
+        max(bars.map { Self.clampedWeight($0.weight) }.max() ?? 0, 0.01)
+    }
+
+    static func tickValues(for bars: [MenuRowBarChart.Bar]) -> [CGFloat] {
+        let scaleMax = Self.scaleMaxWeight(for: bars)
+        let step = Self.tickStep(for: scaleMax)
+        var values: [CGFloat] = []
+        var tick: CGFloat = 0
+        while tick <= scaleMax + 0.000001 {
+            values.append(tick)
+            tick += step
+        }
+        return values
+    }
+
+    static func tickStep(for maxWeight: CGFloat) -> CGFloat {
+        switch maxWeight {
+        case ...0.05:
+            return 0.01
+        case ...0.15:
+            return 0.05
+        case ...0.30:
+            return 0.10
+        case ...0.60:
+            return 0.25
+        default:
+            return 0.25
+        }
+    }
+
+    private static func barHalfWidth(slotWidth: CGFloat) -> CGFloat {
+        slotWidth * 0.25 + 2
+    }
+
+    private var totalSlotCount: Int {
+        Self.totalSlotCount(for: self.bars.count)
+    }
+
+    private var leadingSlotCount: Int {
+        Self.leadingSlotCount(for: self.bars.count)
+    }
+}
+
+private final class PortfolioAllocationXAxisView: NSView {
+    static let axisHeight: CGFloat = 16
+
+    private let bars: [MenuRowBarChart.Bar]
+
+    override var isFlipped: Bool {
+        true
+    }
+
+    init(bars: [MenuRowBarChart.Bar]) {
+        self.bars = bars
+        super.init(frame: .zero)
+        self.wantsLayer = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is unavailable")
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard !self.bars.isEmpty, self.bounds.width > 1, self.bounds.height > 1 else { return }
+
+        let totalSlotCount = PortfolioAllocationVerticalBarChartView.totalSlotCount(for: self.bars.count)
+        let leadingSlotCount = PortfolioAllocationVerticalBarChartView.leadingSlotCount(for: self.bars.count)
+        let slotWidth = self.bounds.width / CGFloat(totalSlotCount)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byTruncatingTail
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize - 1, weight: .regular),
+            .foregroundColor: NSColor.tertiaryLabelColor,
+            .paragraphStyle: paragraph,
+        ]
+
+        for index in self.bars.indices {
+            let centerX = self.bounds.minX + slotWidth * (CGFloat(leadingSlotCount + index) + 0.5)
+            let labelWidth = max(slotWidth, 10)
+            let labelRect = NSRect(
+                x: centerX - labelWidth / 2,
+                y: 0,
+                width: labelWidth,
+                height: Self.axisHeight
+            )
+            let label = self.bars[index].axisLabel ?? String(self.bars[index].label.prefix(1)).uppercased()
+            NSString(string: label).draw(in: labelRect, withAttributes: attrs)
+        }
+    }
+}
+
+private final class PortfolioAllocationYAxisView: NSView {
+    static let axisWidth: CGFloat = 38
+    static let axisGap: CGFloat = 6
+
+    private let bars: [MenuRowBarChart.Bar]
+
+    override var isFlipped: Bool {
+        true
+    }
+
+    init(bars: [MenuRowBarChart.Bar]) {
+        self.bars = bars
+        super.init(frame: .zero)
+        self.wantsLayer = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is unavailable")
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard !self.bars.isEmpty, self.bounds.width > 1, self.bounds.height > 1 else { return }
+
+        let plotRect = PortfolioAllocationVerticalBarChartView.plotRect(in: self.bounds)
+        let scaleMax = PortfolioAllocationVerticalBarChartView.scaleMaxWeight(for: self.bars)
+        let axisX = self.bounds.maxX - 5
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .right
+        paragraph.lineBreakMode = .byTruncatingTail
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize - 1, weight: .regular),
+            .foregroundColor: NSColor.secondaryLabelColor,
+            .paragraphStyle: paragraph,
+        ]
+
+        for tick in PortfolioAllocationVerticalBarChartView.tickValues(for: self.bars) {
+            let y = plotRect.maxY - plotRect.height * tick / scaleMax
+            let tickPath = NSBezierPath()
+            tickPath.move(to: NSPoint(x: axisX - 5, y: y))
+            tickPath.line(to: NSPoint(x: axisX, y: y))
+            tickPath.lineWidth = 1
+            tickPath.stroke()
+
+            let label = Self.percentLabel(tick)
+            let labelRect = NSRect(
+                x: 0,
+                y: y - 6,
+                width: axisX - 8,
+                height: 12
+            )
+            NSString(string: label).draw(in: labelRect, withAttributes: attrs)
+        }
+    }
+
+    private static func percentLabel(_ weight: CGFloat) -> String {
+        let percent = weight * 100
+        if abs(percent.rounded() - percent) < 0.001 {
+            return "\(Int(percent.rounded()))%"
+        }
+        return String(format: "%.1f%%", Double(percent))
     }
 }
 

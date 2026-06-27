@@ -98,7 +98,9 @@ struct PulseReadTests {
         #expect(descriptor.statusBadge == nil)
         #expect(descriptor.statusVisual.filledBarCount == 0)
         #expect(descriptor.statusTitle.contains("All caught up"))
-        #expect(descriptor.sections.first { $0.id == "allocation" }?.rows.first { $0.title == "Nova Lithography" } != nil)
+        #expect(descriptor.sections.first { $0.id == "allocation" }?
+            .rows.first { $0.id == "allocation.portfolio.details" }?
+            .children.first { $0.title == "Nova Lithography" } != nil)
         #expect(descriptor.sections.first { $0.id == "income" } != nil)
         #expect(descriptor.sections.first { $0.id == "bigMovers" } != nil)
     }
