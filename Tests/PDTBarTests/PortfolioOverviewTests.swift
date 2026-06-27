@@ -43,6 +43,14 @@ struct PortfolioOverviewTests {
                     price: nil,
                     priceAsOf: "2026-06-22"
                 ),
+                NormalizedHolding(
+                    name: "Overweight Holding",
+                    quoteId: 3,
+                    weight: 1.20,
+                    worth: Money(value: "1200.00", currency: "EUR"),
+                    price: nil,
+                    priceAsOf: "2026-06-22"
+                ),
             ],
             sectors: [
                 DistributionSummary(
@@ -55,8 +63,19 @@ struct PortfolioOverviewTests {
                     percentage: .infinity,
                     totalValue: Money(value: "400.00", currency: "EUR")
                 ),
+                DistributionSummary(
+                    name: "overrange-sector",
+                    percentage: 120,
+                    totalValue: Money(value: "1200.00", currency: "EUR")
+                ),
             ],
-            assetTypes: [],
+            assetTypes: [
+                DistributionSummary(
+                    name: "cash",
+                    percentage: 150,
+                    totalValue: Money(value: "1500.00", currency: "EUR")
+                ),
+            ],
             xRayHoldings: nil,
             incomeEvents: [],
             dividendRowCount: 0,
@@ -70,6 +89,38 @@ struct PortfolioOverviewTests {
         #expect(overview.sectorSummary.map(\.name) == ["valid-sector"])
         #expect(overview.assetTypeSummary.isEmpty)
         #expect(overview.cashSummary == nil)
+    }
+
+    @Test("Top-N concentration ranks public input before prefixing")
+    func topNConcentrationRanksPublicInputBeforePrefixing() {
+        let holdings = [
+            HoldingSummary(
+                name: "Small",
+                quoteId: 3,
+                weight: 0.10,
+                worth: Money(value: "100.00", currency: "EUR"),
+                price: nil
+            ),
+            HoldingSummary(
+                name: "Large",
+                quoteId: 1,
+                weight: 0.50,
+                worth: Money(value: "500.00", currency: "EUR"),
+                price: nil
+            ),
+            HoldingSummary(
+                name: "Medium",
+                quoteId: 2,
+                weight: 0.30,
+                worth: Money(value: "300.00", currency: "EUR"),
+                price: nil
+            ),
+        ]
+
+        #expect(PortfolioOverview.topNConcentration(from: holdings, rankCount: 2) == PortfolioTopNConcentrationSummary(
+            rankCount: 2,
+            weight: 0.80
+        ))
     }
 
     @Test("Pulse model carries structured portfolio overview")

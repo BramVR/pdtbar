@@ -659,7 +659,10 @@ public enum PortfolioOverview {
         from holdings: [HoldingSummary],
         rankCount: Int = concentrationRankCount
     ) -> PortfolioTopNConcentrationSummary? {
-        let top = Array(holdings.filter { validWeight($0.weight) }.prefix(max(0, rankCount)))
+        let top = Array(holdings
+            .filter { validWeight($0.weight) }
+            .sorted(by: ranksByAllocation)
+            .prefix(max(0, rankCount)))
         guard !top.isEmpty else {
             return nil
         }
@@ -728,12 +731,14 @@ public enum PortfolioOverview {
         return lhs.quoteId < rhs.quoteId
     }
 
+    // Overview rows render weights as fractions and distributions as 0...100 percentages.
+    // Over-range upstream facts are treated as malformed instead of being clamped.
     private static func validWeight(_ value: Double) -> Bool {
-        value.isFinite && value >= 0
+        value.isFinite && value >= 0 && value <= 1
     }
 
     private static func validPercentage(_ value: Double) -> Bool {
-        value.isFinite && value >= 0
+        value.isFinite && value >= 0 && value <= 100
     }
 
     private static func validMoney(_ money: Money?) -> Bool {
@@ -5718,7 +5723,8 @@ private func fingerprintToken(_ value: String) -> String {
 }
 
 private func stableIDToken(_ value: String) -> String {
-    fingerprintToken(value).isEmpty ? "unknown" : fingerprintToken(value)
+    let token = fingerprintToken(value)
+    return token.isEmpty ? "unknown" : token
 }
 
 private func distributionLabel(_ value: String) -> String {
