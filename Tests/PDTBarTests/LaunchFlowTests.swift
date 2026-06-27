@@ -403,6 +403,28 @@ struct PDTOnboardingRunnerTests {
         #expect(!rowTitles(in: failed.descriptor).contains("Log in with Claude"))
     }
 
+    @Test("Launch runtime surfaces background detail failure diagnostics")
+    func launchRuntimeSurfacesBackgroundDetailFailureDiagnostics() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+        let diagnostic = PDTDetailRefreshFailureDiagnostic(
+            toolName: "pdt-list-symbol-prices",
+            phase: .priceHistory,
+            attemptCount: 1,
+            category: .transientFailure,
+            argumentShape: ["symbol_quote_id"]
+        )
+
+        _ = runtime.launch(cachedPulse: cachedPulse)
+        _ = runtime.completeReadinessProbe(.ready)
+        let failed = runtime.completeBackgroundDetailRefresh(.failed("scripted detail fill failed", diagnostic: diagnostic))
+        let diagnosticRow = try #require(healthRow(in: failed.descriptor)?.children.first { $0.id == "dataHealth.diagnostic" })
+
+        #expect(failed.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
+        #expect(diagnosticRow.detail == "pdt-list-symbol-prices; priceHistory; transientFailure")
+        #expect(diagnosticRow.children.first?.actionTarget?.copyText?.contains("argument_keys: symbol_quote_id") == true)
+    }
+
     @Test("Launch runtime retries failed background detail refresh")
     func launchRuntimeRetriesFailedBackgroundDetailRefresh() throws {
         let cachedPulse = try cachedQuietFixturePulse()
@@ -838,6 +860,14 @@ private func rowTitles(in descriptor: MenuDescriptor) -> [String] {
         .sections
         .flatMap(\.rows)
         .map(\.title)
+}
+
+private func healthRow(in descriptor: MenuDescriptor) -> MenuRow? {
+    descriptor
+        .sections
+        .first { $0.id == "freshness" }?
+        .rows
+        .first { $0.id == "dataHealth" }
 }
 
 private func freshnessRefreshDetailsAction(in descriptor: MenuDescriptor) -> MenuRow? {

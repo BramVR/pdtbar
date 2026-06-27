@@ -285,8 +285,8 @@ swift run pdtbar-smoke real-claude-flow-ax
 This launches the actual no-argument app path with isolated app-support
 directories and scripted Claude/PDT dependencies. It opens the menu-bar item
 through macOS Accessibility and verifies stable status/menu identifiers plus
-visible text for setup, fetching, all-quiet, pressure, and retryable fetch-error
-surfaces. Fixture env is injected only as a guard; the smoke fails if fixture
+visible text for setup, fetching, all-quiet, pressure, Data health, and retryable
+fetch-error surfaces. Fixture env is injected only as a guard; the smoke fails if fixture
 snapshot state is written. Missing macOS Accessibility permission exits
 successfully with `skipped` and names that exact TCC permission. Proof artifacts
 contain selectors, status text, scenario booleans, and redacted state only; no

@@ -18,10 +18,15 @@ public final class MenuActionDispatcher: NSObject {
 
     @discardableResult
     public func copy(actionTarget: MenuRowActionTarget) -> Bool {
-        guard actionTarget.kind == .copyHoldingIdentifier,
-              let copyText = actionTarget.copyText,
+        guard let copyText = actionTarget.copyText,
               !copyText.isEmpty
         else {
+            return false
+        }
+        switch actionTarget.kind {
+        case .copyHoldingIdentifier, .copyDataHealthDiagnostic:
+            break
+        case .incomeEvent:
             return false
         }
         pasteboard.clearContents()
