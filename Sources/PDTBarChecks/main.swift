@@ -1216,6 +1216,38 @@ try check(
     FileManager.default.fileExists(atPath: quietCommit.path),
     "SnapshotStore commit should write the latest snapshot file"
 )
+let quietSnapshotDirectoryPermissions = try posixPermissions(of: quietSnapshotStore.directory)
+let quietSnapshotFilePermissions = try posixPermissions(of: URL(fileURLWithPath: quietCommit.path))
+try check(
+    quietSnapshotDirectoryPermissions == 0o700,
+    "SnapshotStore should protect snapshot directories with owner-only permissions"
+)
+try check(
+    quietSnapshotFilePermissions == 0o600,
+    "SnapshotStore should protect snapshot files with owner-only permissions"
+)
+try quietSnapshotStore.saveLastDetailRefreshDiagnostic(PDTDetailRefreshFailureDiagnostic(
+    toolName: "pdt-list-symbol-prices",
+    phase: .priceHistory,
+    attemptCount: 1,
+    category: .transientFailure,
+    argumentShape: ["date_from", "date_to", "symbol_quote_id"]
+))
+let quietDiagnosticPermissions = try posixPermissions(
+    of: quietSnapshotStore.directory.appending(path: "latest-detail-refresh-diagnostic.json")
+)
+try check(
+    quietDiagnosticPermissions == 0o600,
+    "SnapshotStore should protect diagnostic files with owner-only permissions"
+)
+try PulseReadStore(directory: quietSnapshotStore.directory).markRead("pulse:v1:sanitized:fingerprint")
+let quietReadStatePermissions = try posixPermissions(
+    of: quietSnapshotStore.directory.appending(path: "pulse-read-state.json")
+)
+try check(
+    quietReadStatePermissions == 0o600,
+    "PulseReadStore should protect shared state files with owner-only permissions"
+)
 let loadedQuietSnapshot = try quietSnapshotStore.loadPriorSnapshot()
 try check(
     loadedQuietSnapshot == quietSnapshot,
@@ -2851,6 +2883,15 @@ private func require<T>(_ value: T?, _ message: String) throws -> T {
         throw CheckFailure(message)
     }
     return value
+}
+
+private func posixPermissions(of url: URL) throws -> Int {
+    let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+    let permissions = try require(
+        attributes[.posixPermissions] as? NSNumber,
+        "expected POSIX permissions for \(url.path)"
+    )
+    return permissions.intValue & 0o777
 }
 
 private func temporaryPulseReadStore() throws -> PulseReadStore {
