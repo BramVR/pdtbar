@@ -56,12 +56,42 @@ struct SnapshotStoreTests {
         #expect(try permissions(of: directory) == 0o700)
         #expect(try permissions(of: store.currentSnapshotPath) == 0o600)
     }
+
+    @Test("Failed snapshot writes remove temporary files")
+    func failedSnapshotWritesRemoveTemporaryFiles() throws {
+        let directory = try SnapshotStore.temporaryTestStore(
+            prefix: "pdtbar-failed-snapshot-write"
+        ).directory
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = SnapshotStore(directory: directory)
+        try FileManager.default.createDirectory(
+            at: store.currentSnapshotPath,
+            withIntermediateDirectories: true
+        )
+        let snapshot = try PDTFixtureDataSource.snapshot(
+            from: packageRoot.appending(path: "docs/pdt/fixtures/quiet-no-pressure.json")
+        )
+
+        #expect(throws: (any Error).self) {
+            _ = try store.commitCurrentSnapshot(snapshot)
+        }
+        #expect(try temporarySnapshotFiles(in: directory).isEmpty)
+    }
 }
 
 private func permissions(of url: URL) throws -> Int {
     let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
     let value = try #require(attributes[.posixPermissions] as? NSNumber)
     return value.intValue & 0o777
+}
+
+private func temporarySnapshotFiles(in directory: URL) throws -> [String] {
+    try FileManager.default.contentsOfDirectory(atPath: directory.path).filter {
+        $0.hasPrefix(".latest-portfolio-snapshot.json.") && $0.hasSuffix(".tmp")
+    }
 }
 
 private let packageRoot = URL(fileURLWithPath: #filePath)

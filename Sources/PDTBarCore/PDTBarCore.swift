@@ -641,6 +641,12 @@ private enum OwnerOnlyLocalStore {
         ) else {
             throw POSIXError(.EIO)
         }
+        var removeTemporaryOnFailure = true
+        defer {
+            if removeTemporaryOnFailure {
+                try? FileManager.default.removeItem(at: temporary)
+            }
+        }
         try FileManager.default.setAttributes(
             [.posixPermissions: filePermissions],
             ofItemAtPath: temporary.path
@@ -655,9 +661,9 @@ private enum OwnerOnlyLocalStore {
         }
         guard renameResult == 0 else {
             let failure = POSIXErrorCode(rawValue: errno) ?? .EIO
-            try? FileManager.default.removeItem(at: temporary)
             throw POSIXError(failure)
         }
+        removeTemporaryOnFailure = false
         try FileManager.default.setAttributes(
             [.posixPermissions: filePermissions],
             ofItemAtPath: target.path
