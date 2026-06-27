@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public struct Money: Codable, Equatable {
@@ -568,8 +569,12 @@ public struct PulseReadStore: Sendable {
 
     private func loadUnlocked() throws -> PulseReadState {
         let target = stateFile
-        guard FileManager.default.fileExists(atPath: target.path) else {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: target.path, isDirectory: &isDirectory) else {
             return PulseReadState()
+        }
+        if !isDirectory.boolValue {
+            try OwnerOnlyLocalStore.protectExistingFile(target)
         }
         let data: Data
         do {
@@ -587,12 +592,76 @@ public struct PulseReadStore: Sendable {
     }
 
     private func saveUnlocked(_ state: PulseReadState) throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try stableJSONData(state).write(to: stateFile, options: .atomic)
+        try OwnerOnlyLocalStore.write(stableJSONData(state), to: stateFile)
     }
 
     private var stateFile: URL {
         directory.appending(path: "pulse-read-state.json")
+    }
+}
+
+private enum OwnerOnlyLocalStore {
+    static let directoryPermissions = 0o700
+    static let filePermissions = 0o600
+
+    static func prepareDirectory(_ directory: URL) throws {
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: directoryPermissions]
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: directoryPermissions],
+            ofItemAtPath: directory.path
+        )
+    }
+
+    static func protectExistingFile(_ target: URL) throws {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: target.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue
+        else {
+            return
+        }
+        try prepareDirectory(target.deletingLastPathComponent())
+        try FileManager.default.setAttributes(
+            [.posixPermissions: filePermissions],
+            ofItemAtPath: target.path
+        )
+    }
+
+    static func write(_ data: Data, to target: URL) throws {
+        let directory = target.deletingLastPathComponent()
+        try prepareDirectory(directory)
+        let temporary = directory.appending(path: ".\(target.lastPathComponent).\(UUID().uuidString).tmp")
+        guard FileManager.default.createFile(
+            atPath: temporary.path,
+            contents: data,
+            attributes: [.posixPermissions: filePermissions]
+        ) else {
+            throw POSIXError(.EIO)
+        }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: filePermissions],
+            ofItemAtPath: temporary.path
+        )
+        let renameResult = temporary.withUnsafeFileSystemRepresentation { temporaryPath in
+            target.withUnsafeFileSystemRepresentation { targetPath in
+                guard let temporaryPath, let targetPath else {
+                    return -1
+                }
+                return Int(Darwin.rename(temporaryPath, targetPath))
+            }
+        }
+        guard renameResult == 0 else {
+            let failure = POSIXErrorCode(rawValue: errno) ?? .EIO
+            try? FileManager.default.removeItem(at: temporary)
+            throw POSIXError(failure)
+        }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: filePermissions],
+            ofItemAtPath: target.path
+        )
     }
 }
 
@@ -6829,7 +6898,7 @@ public struct SnapshotStore: Sendable {
     public static func temporaryTestStore(prefix: String = "pdtbar-snapshot-store") throws -> SnapshotStore {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: "\(prefix)-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try OwnerOnlyLocalStore.prepareDirectory(directory)
         return SnapshotStore(directory: directory)
     }
 
@@ -6838,13 +6907,13 @@ public struct SnapshotStore: Sendable {
         guard FileManager.default.fileExists(atPath: target.path) else {
             return nil
         }
+        try OwnerOnlyLocalStore.protectExistingFile(target)
         return try JSONDecoder().decode(PortfolioSnapshot.self, from: Data(contentsOf: target))
     }
 
     public func commitCurrentSnapshot(_ snapshot: PortfolioSnapshot) throws -> SnapshotCommit {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let target = currentSnapshotPath
-        try stableJSONData(snapshot).write(to: target, options: .atomic)
+        try OwnerOnlyLocalStore.write(stableJSONData(snapshot), to: target)
         return SnapshotCommit(written: true, path: target.path, asOf: snapshot.asOf)
     }
 
@@ -6857,12 +6926,12 @@ public struct SnapshotStore: Sendable {
         guard FileManager.default.fileExists(atPath: target.path) else {
             return nil
         }
+        try OwnerOnlyLocalStore.protectExistingFile(target)
         return try JSONDecoder().decode(PDTDetailRefreshFailureDiagnostic.self, from: Data(contentsOf: target))
     }
 
     public func saveLastDetailRefreshDiagnostic(_ diagnostic: PDTDetailRefreshFailureDiagnostic) throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try stableJSONData(diagnostic).write(to: detailRefreshDiagnosticFile, options: .atomic)
+        try OwnerOnlyLocalStore.write(stableJSONData(diagnostic), to: detailRefreshDiagnosticFile)
     }
 
     public func clearLastDetailRefreshDiagnostic() throws {
