@@ -2478,16 +2478,23 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         artifacts: artifacts,
         peekaboo: screenshotPeekaboo
     )
+    let attentionScreenshot = try? captureAttentionExplanationScreenshot(
+        snapshot: menuSnapshot,
+        artifacts: artifacts,
+        peekaboo: screenshotPeekaboo
+    )
     let priorDetail = expectedScenario.seededPrior.map { "; seeded prior snapshot \($0.asOf)" } ?? ""
     let screenshotDetail = screenshot == nil ? "" : "; captured menu screenshot"
     let freshnessScreenshotDetail = freshnessScreenshot == nil ? "" : "; captured freshness detail screenshot"
+    let attentionScreenshotDetail = attentionScreenshot == nil ? "" : "; captured attention explanation screenshot"
     let reportArtifacts = [artifactPath(evidence)]
         + (screenshot.map { [artifactPath($0)] } ?? [])
         + (freshnessScreenshot.map { [artifactPath($0)] } ?? [])
+        + (attentionScreenshot.map { [artifactPath($0)] } ?? [])
     return SmokeReport(
         name: "real-user-pulse",
         status: SmokeStatus.passed,
-        detail: "launched fixture-mode app with isolated state\(priorDetail), opened menu-bar pulse through \(openedMenu.successfulAttempt ?? "Accessibility"), verified status plus pulse/allocation/income/big-mover/freshness selectors for \(fixture.lastPathComponent)\(screenshotDetail)\(freshnessScreenshotDetail)",
+        detail: "launched fixture-mode app with isolated state\(priorDetail), opened menu-bar pulse through \(openedMenu.successfulAttempt ?? "Accessibility"), verified status plus pulse/allocation/income/big-mover/freshness selectors for \(fixture.lastPathComponent)\(screenshotDetail)\(freshnessScreenshotDetail)\(attentionScreenshotDetail)",
         artifacts: reportArtifacts
     )
 }
@@ -3062,6 +3069,63 @@ private func captureFreshnessDetailScreenshot(
     return screenshot
 }
 
+private func captureAttentionExplanationScreenshot(
+    snapshot: AccessibilitySnapshot,
+    artifacts: URL,
+    peekaboo: URL?
+) throws -> URL? {
+    guard let peekaboo else {
+        return nil
+    }
+    let attentionRect = snapshot.framesByIdentifier.keys.sorted()
+        .first(where: { $0.hasSuffix(".glance") && !$0.contains(".quiet") })
+        .flatMap { snapshot.framesByIdentifier[$0]?.rect }
+        .flatMap(validRect)
+    let menuRect = statusMenuFallbackBounds(snapshot: snapshot)
+    let hoverRect = attentionRect ?? menuRect
+    guard let hoverRect else {
+        return nil
+    }
+    let hoverY = attentionRect?.midY ?? (hoverRect.minY + 92)
+    moveMouse(to: CGPoint(x: hoverRect.maxX - 24, y: hoverY))
+    Thread.sleep(forTimeInterval: 0.6)
+
+    let display = displayBounds(containing: hoverRect)
+    let minX = attentionRect.map { max(display.minX, $0.minX - 395) }
+        ?? max(display.minX, hoverRect.maxX - 885)
+    let width = attentionRect.map { min(display.maxX - minX, $0.width + 365) }
+        ?? min(display.maxX - minX, 885)
+    let padded = CGRect(
+        x: minX,
+        y: max(display.minY, hoverRect.minY - 96),
+        width: width,
+        height: min(display.height, 340)
+    ).intersection(display).integral
+    guard !padded.isNull, !padded.isEmpty else {
+        return nil
+    }
+
+    let screenshot = artifacts.appending(path: "pdtbar-real-user-pulse-attention-explanation.png")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    _ = try run(
+        peekaboo,
+        arguments: [
+            "image",
+            "--mode", "area",
+            "--region", "\(Int(padded.minX)),\(Int(padded.minY)),\(Int(padded.width)),\(Int(padded.height))",
+            "--path", screenshot.path,
+            "--json",
+            "--no-remote",
+        ],
+        timeout: 20
+    )
+    guard imageHasVisiblePixels(screenshot) else {
+        try? FileManager.default.removeItem(at: screenshot)
+        return nil
+    }
+    return screenshot
+}
+
 private func captureMenuScreenshot(
     name: String,
     snapshot: AccessibilitySnapshot,
@@ -3183,7 +3247,7 @@ private func cropMenuScreenshot(
     if let bounds = menuFrameBounds(snapshot: snapshot, expectedMenuIdentifiers: expectedMenuIdentifiers) {
         let minX = bounds.minX
         let minY = bounds.minY - 8
-        let maxX = bounds.maxX + 40
+        let maxX = bounds.maxX - 8
         let maxY = bounds.maxY + 48
         sourceRect = CGRect(
             x: Double(minX - displayBounds.minX) * scaleX,
@@ -3240,17 +3304,20 @@ private func menuFrameBounds(
 }
 
 private func statusMenuFallbackBounds(snapshot: AccessibilitySnapshot) -> CGRect? {
-    guard let status = snapshot.framesByIdentifier["pdtbar.status"]?.rect,
-          !status.isNull, !status.isEmpty
-    else {
+    let status = snapshot.framesByIdentifier["pdtbar.status"].flatMap { validRect($0.rect) }
+    let display = displayBounds(containing: status)
+    let width = min(display.width, status == nil ? 900 : 560)
+    let x = display.maxX - width
+    let y = min(max(display.minY, (status?.maxY ?? display.minY + 44) + 2), display.maxY)
+    let height = status == nil ? min(display.maxY - y, 1280) : min(display.maxY - y, 88)
+    return CGRect(x: x, y: y, width: width, height: height).integral
+}
+
+private func validRect(_ rect: CGRect) -> CGRect? {
+    guard !rect.isNull, !rect.isEmpty, rect.width > 0, rect.height > 0 else {
         return nil
     }
-    let display = displayBounds(containing: status)
-    let width = min(display.width, 560)
-    let x = display.maxX - width
-    let y = min(max(display.minY, status.maxY + 2), display.maxY)
-    let height = min(display.maxY - y, 88)
-    return CGRect(x: x, y: y, width: width, height: height).integral
+    return rect
 }
 
 private func displayBounds(containing rect: CGRect?) -> CGRect {
