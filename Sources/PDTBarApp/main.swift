@@ -8,6 +8,7 @@ private struct PortfolioFetchOutcome: @unchecked Sendable {
     var pulse: PulseLifecycleResult? = nil
     var errorDescription: String?
     var detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome?
+    var detailRefreshDiagnostic: PDTDetailRefreshFailureDiagnostic?
     var shouldStartBackgroundRefresh = false
 }
 
@@ -241,7 +242,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                     detailRefreshOutcome: result.outcome
                 )
             } catch {
-                outcome = PortfolioFetchOutcome(errorDescription: "\(error)")
+                outcome = PortfolioFetchOutcome(
+                    errorDescription: "\(error)",
+                    detailRefreshDiagnostic: try? snapshotStore.loadLastDetailRefreshDiagnostic()
+                )
             }
             DispatchQueue.main.async { [weak self] in
                 self?.finishBackgroundPortfolioRefresh(outcome)
@@ -259,7 +263,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let errorDescription = outcome.errorDescription ?? "unknown error"
         FileHandle.standardError.write(Data("pdtbar: background refresh failed: \(errorDescription)\n".utf8))
-        handleLaunchUpdate(launchRuntime.completeBackgroundDetailRefresh(.failed(errorDescription)))
+        handleLaunchUpdate(launchRuntime.completeBackgroundDetailRefresh(
+            .failed(errorDescription, diagnostic: outcome.detailRefreshDiagnostic)
+        ))
     }
 
     @objc private func retryClaudeReadiness(_ sender: NSMenuItem) {
@@ -498,7 +504,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 item.target = self
                 item.action = #selector(loginWithClaude(_:))
             }
-            if row.actionTarget?.kind == .copyHoldingIdentifier {
+            if row.actionTarget?.kind == .copyHoldingIdentifier || row.actionTarget?.kind == .copyDataHealthDiagnostic {
                 item.target = menuActionDispatcher
                 item.action = #selector(MenuActionDispatcher.copyMenuRowAction(_:))
                 item.representedObject = row.actionTarget

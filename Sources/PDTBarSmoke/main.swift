@@ -2488,20 +2488,27 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         artifacts: artifacts,
         peekaboo: screenshotPeekaboo
     )
+    let dataHealthScreenshot = try? captureDataHealthDetailScreenshot(
+        snapshot: menuSnapshot,
+        artifacts: artifacts,
+        peekaboo: screenshotPeekaboo
+    )
     let priorDetail = expectedScenario.seededPrior.map { "; seeded prior snapshot \($0.asOf)" } ?? ""
     let screenshotDetail = screenshot == nil ? "" : "; captured menu screenshot"
     let allocationScreenshotDetail = allocationScreenshot == nil ? "" : "; captured allocation detail screenshot"
     let freshnessScreenshotDetail = freshnessScreenshot == nil ? "" : "; captured freshness detail screenshot"
     let attentionScreenshotDetail = attentionScreenshot == nil ? "" : "; captured attention explanation screenshot"
+    let dataHealthScreenshotDetail = dataHealthScreenshot == nil ? "" : "; captured Data health screenshot"
     let reportArtifacts = [artifactPath(evidence)]
         + (screenshot.map { [artifactPath($0)] } ?? [])
         + (allocationScreenshot.map { [artifactPath($0)] } ?? [])
         + (freshnessScreenshot.map { [artifactPath($0)] } ?? [])
         + (attentionScreenshot.map { [artifactPath($0)] } ?? [])
+        + (dataHealthScreenshot.map { [artifactPath($0)] } ?? [])
     return SmokeReport(
         name: "real-user-pulse",
         status: SmokeStatus.passed,
-        detail: "launched fixture-mode app with isolated state\(priorDetail), opened menu-bar pulse through \(openedMenu.successfulAttempt ?? "Accessibility"), verified status plus pulse/allocation/income/big-mover/freshness selectors for \(fixture.lastPathComponent)\(screenshotDetail)\(allocationScreenshotDetail)\(freshnessScreenshotDetail)\(attentionScreenshotDetail)",
+        detail: "launched fixture-mode app with isolated state\(priorDetail), opened menu-bar pulse through \(openedMenu.successfulAttempt ?? "Accessibility"), verified status plus pulse/allocation/income/big-mover/freshness selectors for \(fixture.lastPathComponent)\(screenshotDetail)\(allocationScreenshotDetail)\(freshnessScreenshotDetail)\(attentionScreenshotDetail)\(dataHealthScreenshotDetail)",
         artifacts: reportArtifacts
     )
 }
@@ -3081,28 +3088,58 @@ private func captureFreshnessDetailScreenshot(
     artifacts: URL,
     peekaboo: URL?
 ) throws -> URL? {
+    try captureSubmenuScreenshot(
+        rowIdentifier: "pdtbar.row.freshness.summary",
+        name: "pdtbar-real-user-pulse-freshness-detail",
+        snapshot: snapshot,
+        artifacts: artifacts,
+        peekaboo: peekaboo
+    )
+}
+
+private func captureDataHealthDetailScreenshot(
+    snapshot: AccessibilitySnapshot,
+    artifacts: URL,
+    peekaboo: URL?
+) throws -> URL? {
+    try captureSubmenuScreenshot(
+        rowIdentifier: "pdtbar.row.dataHealth",
+        name: "pdtbar-real-user-pulse-data-health",
+        snapshot: snapshot,
+        artifacts: artifacts,
+        peekaboo: peekaboo
+    )
+}
+
+private func captureSubmenuScreenshot(
+    rowIdentifier: String,
+    name: String,
+    snapshot: AccessibilitySnapshot,
+    artifacts: URL,
+    peekaboo: URL?
+) throws -> URL? {
     guard let peekaboo,
-          let freshnessRect = snapshot.framesByIdentifier["pdtbar.row.freshness.summary"]?.rect,
-          !freshnessRect.isNull,
-          !freshnessRect.isEmpty
+          let rowRect = snapshot.framesByIdentifier[rowIdentifier]?.rect,
+          !rowRect.isNull,
+          !rowRect.isEmpty
     else {
         return nil
     }
-    moveMouse(to: CGPoint(x: freshnessRect.maxX - 24, y: freshnessRect.midY))
+    moveMouse(to: CGPoint(x: rowRect.maxX - 24, y: rowRect.midY))
     Thread.sleep(forTimeInterval: 0.6)
 
-    let display = displayBounds(containing: freshnessRect)
+    let display = displayBounds(containing: rowRect)
     let padded = CGRect(
-        x: max(display.minX, freshnessRect.minX - 520),
-        y: max(display.minY, freshnessRect.minY - 96),
-        width: min(display.width, freshnessRect.width + 600),
+        x: max(display.minX, rowRect.minX - 400),
+        y: max(display.minY, rowRect.minY - 96),
+        width: min(display.width, rowRect.width + 520),
         height: min(display.height, 360)
     ).intersection(display).integral
     guard !padded.isNull, !padded.isEmpty else {
         return nil
     }
 
-    let screenshot = artifacts.appending(path: "pdtbar-real-user-pulse-freshness-detail.png")
+    let screenshot = artifacts.appending(path: "\(name).png")
     try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
     _ = try run(
         peekaboo,

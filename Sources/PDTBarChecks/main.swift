@@ -355,12 +355,26 @@ try check(
         && !backgroundProgressDescriptor.sections.flatMap(\.rows).map(\.title).contains("Details fill failed"),
     "background detail retry should render active phase/count progress instead of stale failure"
 )
+try check(
+    backgroundProgressDescriptor.sections.first { $0.id == "freshness" }?
+        .rows.first { $0.id == "dataHealth" }?
+        .children.first { $0.id == "dataHealth.detailFill" }?
+        .detail == "Price history 12/19",
+    "cached refresh descriptor should preserve the pulse while surfacing active Data health detail-fill state"
+)
 let backgroundDegradedDescriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailDegraded(cachedPulse: descriptor)
 try check(
     backgroundDegradedDescriptor.sections.flatMap(\.rows).map(\.title).contains("Details partially filled")
         && backgroundDegradedDescriptor.sections.flatMap(\.rows).map(\.title).contains("Fill details again")
         && !backgroundDegradedDescriptor.sections.flatMap(\.rows).map(\.title).contains("Details fill failed"),
     "degraded detail completion should preserve the pulse and expose retry without stale failure copy"
+)
+try check(
+    backgroundDegradedDescriptor.sections.first { $0.id == "freshness" }?
+        .rows.first { $0.id == "dataHealth" }?
+        .children.first { $0.id == "dataHealth.detailFill" }?
+        .detail == "Degraded",
+    "degraded descriptor should preserve the pulse while surfacing Data health degradation"
 )
 let cachedFailureDescriptor = ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed, cachedPulse: descriptor)
 try check(
@@ -770,8 +784,8 @@ try check(
     "quiet big-mover rows should expose stable ids"
 )
 try check(
-    descriptor.sections.first { $0.id == "freshness" }?.rows.map(\.id) == ["freshness.summary"],
-    "quiet freshness rows should expose stable ids"
+    descriptor.sections.first { $0.id == "freshness" }?.rows.map(\.id) == ["freshness.summary", "dataHealth"],
+    "quiet freshness rows should expose stable freshness and data-health ids"
 )
 try check(
     descriptor.sections.first { $0.id == "freshness" }?.rows.first?.detail == "Fresh",
@@ -780,6 +794,76 @@ try check(
 let quietFreshnessRow = try require(
     descriptor.sections.first { $0.id == "freshness" }?.rows.first,
     "quiet descriptor should expose freshness summary row"
+)
+let quietDataHealthRow = try require(
+    descriptor.sections.first { $0.id == "freshness" }?.rows.first { $0.id == "dataHealth" },
+    "quiet descriptor should expose Data health row"
+)
+try check(
+    decoded.facetSnapshots.dataHealth.status == .healthy
+        && decoded.facetSnapshots.dataHealth.source.missingReadTools.isEmpty
+        && decoded.facetSnapshots.dataHealth.source.readOnlyPolicy == .enforced,
+    "quiet model should carry structured data-health source state"
+)
+try check(
+    quietDataHealthRow.role == .dataHealthSummary
+        && quietDataHealthRow.children.map(\.id) == [
+            "dataHealth.source",
+            "dataHealth.cache",
+            "dataHealth.detailFill",
+            "dataHealth.readState",
+            "dataHealth.diagnostic",
+        ]
+        && quietDataHealthRow.children.first { $0.id == "dataHealth.source" }?.detail == "Claude ready; PDT ready; 7/7 read tools; read-only",
+    "Data health row should expose source, cache, detail-fill, read-state, and diagnostic rows"
+)
+let missingToolHealth = DataHealth.build(
+    DataHealthInput(
+        claudeReadiness: .ready,
+        pdtMCPReadiness: .ready,
+        availableReadTools: Set(PDTReadTools.requiredV1).subtracting(["pdt-list-dividends"]),
+        readOnlyPolicy: .enforced,
+        pulseSource: nil,
+        lastSuccessfulCompleteFetchAsOf: nil,
+        cachedPulseAvailable: false,
+        detailFill: .notStarted,
+        freshness: FreshnessSnapshot(worstPriceAsOf: nil, stale: false),
+        readState: PulseReadState()
+    )
+)
+try check(
+    missingToolHealth.status == .degraded
+        && missingToolHealth.source.readTools == .missingRequired
+        && missingToolHealth.source.missingReadTools == ["pdt-list-dividends"]
+        && missingToolHealth.cache.summary == "No cached pulse",
+    "Data health should flag missing required read tools deterministically"
+)
+let redactedDiagnosticHealth = DataHealth.build(
+    DataHealthInput(
+        claudeReadiness: .ready,
+        pdtMCPReadiness: .ready,
+        availableReadTools: Set(PDTReadTools.requiredV1),
+        readOnlyPolicy: .enforced,
+        pulseSource: .refreshedSnapshot,
+        lastSuccessfulCompleteFetchAsOf: "2026-06-25",
+        cachedPulseAvailable: true,
+        detailFill: .degraded,
+        freshness: FreshnessSnapshot(worstPriceAsOf: "2026-06-24", stale: false),
+        readState: PulseReadState(),
+        diagnostic: PDTDetailRefreshFailureDiagnostic(
+            toolName: "pdt-list-symbol-prices",
+            phase: .priceHistory,
+            attemptCount: 2,
+            category: .transientFailure,
+            argumentShape: ["symbol_quote_id", "date_from", "date_to"]
+        )
+    )
+)
+try check(
+    redactedDiagnosticHealth.status == .degraded
+        && redactedDiagnosticHealth.diagnostic?.copyText.contains("argument_keys: date_from,date_to,symbol_quote_id") == true
+        && redactedDiagnosticHealth.diagnostic?.copyText.contains("/Users/") == false,
+    "Data health diagnostics should be copyable and redacted"
 )
 try check(
     decoded.facetSnapshots.freshness.status == .fresh

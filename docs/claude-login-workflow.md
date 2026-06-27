@@ -48,6 +48,8 @@ Real Claude CLI first-fetch runs are bounded for launch responsiveness: they fet
 
 Returning launches may render the previous real snapshot immediately while a fresh fetch runs. After a pulse has been published, background detail fill shows active phase progress such as `Filling details`, `Step 5/5: Price history`, and per-holding price-history counts while keeping the pulse visible. Completed detail phases are committed as they finish. Optional phase failures degrade the refresh instead of discarding successful details; the menu shows `Details partially filled` plus `Fill details again`, and the local state stores only redacted last-failure diagnostics with tool name, phase, attempt count, category, and argument keys. A full background failure still preserves the previous pulse and shows `Details fill failed` plus `Fill details again`. First-fetch failures with no usable pulse still show `Could not fetch portfolio`, `Try again`, and the Claude login action.
 
+The published pulse includes a `Data health` submenu under Freshness. It reports Claude/PDT source readiness, required read-tool availability, read-only policy, cache/source state, detail-fill progress or outcome, read-state count, freshness, and copyable redacted diagnostics when a safe diagnostic exists.
+
 ## Status icon
 
 The menu bar always shows the Concentration Stack icon. It is a stable portfolio mark, not top-three holdings and not a mini dashboard:

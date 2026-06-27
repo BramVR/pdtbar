@@ -26,7 +26,7 @@ read_when:
 
 ## Data Flow
 
-Claude/PDT readiness probe -> `PortfolioDataSource` -> normalized `PortfolioSnapshot` -> `SnapshotStore` -> pressure engine -> `PortfolioPulseModel` -> `MenuDescriptor` -> `PDTBarAppSupport` action/status helpers -> AppKit menu/status item.
+Claude/PDT readiness probe -> `PortfolioDataSource` -> normalized `PortfolioSnapshot` -> `SnapshotStore` -> pressure engine + Data Health -> `PortfolioPulseModel` -> `MenuDescriptor` -> `PDTBarAppSupport` action/status helpers -> AppKit menu/status item.
 
 `PressureRunner` is the Pulse lifecycle seam for cached snapshots, first fetches,
 and refreshed snapshots: it loads prior state, computes pressure, applies/reset
@@ -45,6 +45,11 @@ launches: readiness, login handoff process handling, MCP list parsing,
 ToolSearch resolution, PDT read-tool calls, retry classification, read-only
 allowlists, and Claude tool-result parsing flow through app support instead of
 the AppKit delegate.
+
+`DataHealth` composes runtime/source facts into model state: Claude/PDT
+readiness, required read tools, read-only policy, cache/source, detail-fill,
+freshness, read-state, and redacted diagnostics. Menu descriptors render this
+state; AppKit does not derive health facts.
 
 Fixture mode uses the same engine/render path but is explicit developer tooling.
 

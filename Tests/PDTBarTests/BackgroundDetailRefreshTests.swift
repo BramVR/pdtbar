@@ -111,6 +111,33 @@ struct BackgroundDetailRefreshTests {
         #expect(try store.loadLastDetailRefreshDiagnostic() == nil)
     }
 
+    @Test("New refresh clears stale diagnostic before setup failure")
+    func newRefreshClearsStaleDiagnosticBeforeSetupFailure() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-stale-diagnostic-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        try store.saveLastDetailRefreshDiagnostic(
+            PDTDetailRefreshFailureDiagnostic(
+                toolName: "pdt-list-symbol-prices",
+                phase: .priceHistory,
+                attemptCount: 1,
+                category: .transientFailure,
+                argumentShape: ["symbol_quote_id"]
+            )
+        )
+
+        #expect(throws: Error.self) {
+            _ = try PDTBackgroundDetailRefresh(
+                connector: ScriptedPDTMCPConnector(availableTools: [], responses: [:]),
+                snapshotStore: store,
+                asOf: "2026-03-29",
+                options: PDTBackgroundDetailRefreshOptions(retryBackoffSeconds: 0)
+            ).refresh()
+        }
+        #expect(try store.loadLastDetailRefreshDiagnostic() == nil)
+    }
+
     @Test("Failed optional phase preserves prior detail slice")
     func failedOptionalPhasePreservesPriorDetailSlice() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-prior-allocation-test")

@@ -643,17 +643,40 @@ public struct FacetSnapshots: Codable, Equatable {
     public var income: IncomeSnapshot
     public var bigMovers: BigMoversSnapshot
     public var freshness: FreshnessSnapshot
+    public var dataHealth: DataHealthSnapshot
 
     public init(
         allocation: AllocationSnapshot,
         income: IncomeSnapshot,
         bigMovers: BigMoversSnapshot,
-        freshness: FreshnessSnapshot
+        freshness: FreshnessSnapshot,
+        dataHealth: DataHealthSnapshot? = nil
     ) {
         self.allocation = allocation
         self.income = income
         self.bigMovers = bigMovers
         self.freshness = freshness
+        self.dataHealth = dataHealth ?? DataHealth.build(
+            DataHealthInput.default(freshness: freshness)
+        )
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case allocation
+        case income
+        case bigMovers
+        case freshness
+        case dataHealth
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        allocation = try container.decode(AllocationSnapshot.self, forKey: .allocation)
+        income = try container.decode(IncomeSnapshot.self, forKey: .income)
+        bigMovers = try container.decode(BigMoversSnapshot.self, forKey: .bigMovers)
+        freshness = try container.decode(FreshnessSnapshot.self, forKey: .freshness)
+        dataHealth = try container.decodeIfPresent(DataHealthSnapshot.self, forKey: .dataHealth)
+            ?? DataHealth.build(DataHealthInput.default(freshness: freshness))
     }
 }
 
@@ -1530,6 +1553,410 @@ public enum FreshnessLedger {
     }
 }
 
+public enum DataHealthStatus: String, Codable, Equatable {
+    case healthy
+    case degraded
+}
+
+public enum DataHealthSourceStatus: String, Codable, Equatable {
+    case ready
+    case checking
+    case missing
+    case failed
+    case unknown
+}
+
+public enum DataHealthReadToolsStatus: String, Codable, Equatable {
+    case available
+    case missingRequired
+    case unknown
+}
+
+public enum DataHealthReadOnlyPolicyStatus: String, Codable, Equatable {
+    case enforced
+    case unknown
+}
+
+public enum DataHealthDetailFillOutcome: String, Codable, Equatable {
+    case notStarted
+    case inProgress
+    case completed
+    case degraded
+    case failed
+}
+
+public enum DataHealthDetailFillInput: Equatable {
+    case notStarted
+    case inProgress(BackgroundDetailRefreshProgress)
+    case completed(asOf: String?)
+    case degraded
+    case failed
+}
+
+public struct DataHealthInput: Equatable {
+    public var claudeReadiness: DataHealthSourceStatus
+    public var pdtMCPReadiness: DataHealthSourceStatus
+    public var availableReadTools: Set<String>?
+    public var readOnlyPolicy: DataHealthReadOnlyPolicyStatus
+    public var pulseSource: PulseLifecycleSource?
+    public var lastSuccessfulCompleteFetchAsOf: String?
+    public var cachedPulseAvailable: Bool
+    public var detailFill: DataHealthDetailFillInput
+    public var freshness: FreshnessSnapshot
+    public var readState: PulseReadState?
+    public var diagnostic: PDTDetailRefreshFailureDiagnostic?
+
+    public init(
+        claudeReadiness: DataHealthSourceStatus,
+        pdtMCPReadiness: DataHealthSourceStatus,
+        availableReadTools: Set<String>?,
+        readOnlyPolicy: DataHealthReadOnlyPolicyStatus,
+        pulseSource: PulseLifecycleSource?,
+        lastSuccessfulCompleteFetchAsOf: String?,
+        cachedPulseAvailable: Bool,
+        detailFill: DataHealthDetailFillInput,
+        freshness: FreshnessSnapshot,
+        readState: PulseReadState?,
+        diagnostic: PDTDetailRefreshFailureDiagnostic? = nil
+    ) {
+        self.claudeReadiness = claudeReadiness
+        self.pdtMCPReadiness = pdtMCPReadiness
+        self.availableReadTools = availableReadTools
+        self.readOnlyPolicy = readOnlyPolicy
+        self.pulseSource = pulseSource
+        self.lastSuccessfulCompleteFetchAsOf = lastSuccessfulCompleteFetchAsOf
+        self.cachedPulseAvailable = cachedPulseAvailable
+        self.detailFill = detailFill
+        self.freshness = freshness
+        self.readState = readState
+        self.diagnostic = diagnostic
+    }
+
+    public static func `default`(
+        freshness: FreshnessSnapshot,
+        pulseSource: PulseLifecycleSource? = nil,
+        readState: PulseReadState? = nil,
+        detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil,
+        diagnostic: PDTDetailRefreshFailureDiagnostic? = nil
+    ) -> DataHealthInput {
+        DataHealthInput(
+            claudeReadiness: .ready,
+            pdtMCPReadiness: .ready,
+            availableReadTools: Set(PDTReadTools.requiredV1),
+            readOnlyPolicy: .enforced,
+            pulseSource: pulseSource,
+            lastSuccessfulCompleteFetchAsOf: freshness.latestCompleteDetailFillAsOf,
+            cachedPulseAvailable: pulseSource != nil,
+            detailFill: detailFillInput(outcome: detailRefreshOutcome, freshness: freshness),
+            freshness: freshness,
+            readState: readState,
+            diagnostic: diagnostic
+        )
+    }
+
+    private static func detailFillInput(
+        outcome: PDTBackgroundDetailRefreshOutcome?,
+        freshness: FreshnessSnapshot
+    ) -> DataHealthDetailFillInput {
+        switch outcome {
+        case .completed:
+            return .completed(asOf: freshness.latestCompleteDetailFillAsOf)
+        case .degraded:
+            return .degraded
+        case nil:
+            if let latestComplete = freshness.latestCompleteDetailFillAsOf {
+                return .completed(asOf: latestComplete)
+            }
+            return .notStarted
+        }
+    }
+}
+
+public struct DataHealthSourceSnapshot: Codable, Equatable {
+    public var claude: DataHealthSourceStatus
+    public var pdtMCP: DataHealthSourceStatus
+    public var readTools: DataHealthReadToolsStatus
+    public var requiredReadToolCount: Int
+    public var availableReadToolCount: Int?
+    public var missingReadTools: [String]
+    public var readOnlyPolicy: DataHealthReadOnlyPolicyStatus
+    public var detail: String
+}
+
+public struct DataHealthCacheSnapshot: Codable, Equatable {
+    public var pulseSource: PulseLifecycleSource?
+    public var cachedPulseAvailable: Bool
+    public var lastSuccessfulCompleteFetchAsOf: String?
+    public var summary: String
+}
+
+public struct DataHealthDetailFillSnapshot: Codable, Equatable {
+    public var outcome: DataHealthDetailFillOutcome
+    public var phase: BackgroundDetailRefreshPhase?
+    public var completedUnitCount: Int?
+    public var totalUnitCount: Int?
+    public var asOf: String?
+    public var detail: String
+}
+
+public struct DataHealthFreshnessSummary: Codable, Equatable {
+    public var status: FreshnessState
+    public var staleHoldingCount: Int
+    public var oldestPriceAsOf: String?
+    public var detail: String
+}
+
+public struct DataHealthReadStateSnapshot: Codable, Equatable {
+    public var readFingerprintCount: Int
+    public var detail: String
+}
+
+public struct DataHealthDiagnosticSummary: Codable, Equatable {
+    public var available: Bool
+    public var detail: String
+    public var copyText: String
+}
+
+public struct DataHealthSnapshot: Codable, Equatable {
+    public var status: DataHealthStatus
+    public var source: DataHealthSourceSnapshot
+    public var cache: DataHealthCacheSnapshot
+    public var detailFill: DataHealthDetailFillSnapshot
+    public var freshness: DataHealthFreshnessSummary
+    public var readState: DataHealthReadStateSnapshot
+    public var diagnostic: DataHealthDiagnosticSummary?
+}
+
+public enum DataHealth {
+    public static func build(_ input: DataHealthInput) -> DataHealthSnapshot {
+        let requiredTools = PDTReadTools.requiredV1
+        let missingTools = input.availableReadTools.map { PDTReadTools.missingRequiredV1Tools(in: $0) } ?? []
+        let readToolsStatus: DataHealthReadToolsStatus
+        if input.availableReadTools == nil {
+            readToolsStatus = .unknown
+        } else if missingTools.isEmpty {
+            readToolsStatus = .available
+        } else {
+            readToolsStatus = .missingRequired
+        }
+        let source = DataHealthSourceSnapshot(
+            claude: input.claudeReadiness,
+            pdtMCP: input.pdtMCPReadiness,
+            readTools: readToolsStatus,
+            requiredReadToolCount: requiredTools.count,
+            availableReadToolCount: input.availableReadTools?.intersection(requiredTools).count,
+            missingReadTools: missingTools,
+            readOnlyPolicy: input.readOnlyPolicy,
+            detail: sourceDetail(
+                claude: input.claudeReadiness,
+                pdtMCP: input.pdtMCPReadiness,
+                readTools: readToolsStatus,
+                availableCount: input.availableReadTools?.intersection(requiredTools).count,
+                requiredCount: requiredTools.count,
+                missingTools: missingTools,
+                readOnlyPolicy: input.readOnlyPolicy
+            )
+        )
+        let cache = DataHealthCacheSnapshot(
+            pulseSource: input.pulseSource,
+            cachedPulseAvailable: input.cachedPulseAvailable,
+            lastSuccessfulCompleteFetchAsOf: input.lastSuccessfulCompleteFetchAsOf,
+            summary: cacheSummary(
+                cachedPulseAvailable: input.cachedPulseAvailable,
+                lastSuccessfulCompleteFetchAsOf: input.lastSuccessfulCompleteFetchAsOf
+            )
+        )
+        let detailFill = detailFillSnapshot(input.detailFill)
+        let freshness = DataHealthFreshnessSummary(
+            status: input.freshness.status,
+            staleHoldingCount: input.freshness.staleHoldingCount,
+            oldestPriceAsOf: input.freshness.oldestPriceAsOf,
+            detail: freshnessDetail(input.freshness)
+        )
+        let readState = DataHealthReadStateSnapshot(
+            readFingerprintCount: input.readState?.readFingerprints.count ?? 0,
+            detail: "\(input.readState?.readFingerprints.count ?? 0) read"
+        )
+        let diagnostic = input.diagnostic.map(diagnosticSummary)
+        return DataHealthSnapshot(
+            status: healthStatus(
+                source: source,
+                detailFill: detailFill,
+                freshness: freshness,
+                diagnostic: diagnostic
+            ),
+            source: source,
+            cache: cache,
+            detailFill: detailFill,
+            freshness: freshness,
+            readState: readState,
+            diagnostic: diagnostic
+        )
+    }
+
+    private static func healthStatus(
+        source: DataHealthSourceSnapshot,
+        detailFill: DataHealthDetailFillSnapshot,
+        freshness: DataHealthFreshnessSummary,
+        diagnostic: DataHealthDiagnosticSummary?
+    ) -> DataHealthStatus {
+        if source.claude != .ready
+            || source.pdtMCP != .ready
+            || source.readTools != .available
+            || source.readOnlyPolicy != .enforced
+            || detailFill.outcome == .degraded
+            || detailFill.outcome == .failed
+            || freshness.status != .fresh
+            || diagnostic != nil
+        {
+            return .degraded
+        }
+        return .healthy
+    }
+
+    private static func sourceDetail(
+        claude: DataHealthSourceStatus,
+        pdtMCP: DataHealthSourceStatus,
+        readTools: DataHealthReadToolsStatus,
+        availableCount: Int?,
+        requiredCount: Int,
+        missingTools: [String],
+        readOnlyPolicy: DataHealthReadOnlyPolicyStatus
+    ) -> String {
+        let toolCopy: String
+        switch readTools {
+        case .available:
+            toolCopy = "\(availableCount ?? requiredCount)/\(requiredCount) read tools"
+        case .missingRequired:
+            toolCopy = "\(availableCount ?? 0)/\(requiredCount) read tools; missing \(missingTools.joined(separator: ", "))"
+        case .unknown:
+            toolCopy = "read tools unknown"
+        }
+        return [
+            "Claude \(statusCopy(claude))",
+            "PDT \(statusCopy(pdtMCP))",
+            toolCopy,
+            readOnlyPolicy == .enforced ? "read-only" : "policy unknown",
+        ].joined(separator: "; ")
+    }
+
+    private static func statusCopy(_ status: DataHealthSourceStatus) -> String {
+        switch status {
+        case .ready:
+            return "ready"
+        case .checking:
+            return "checking"
+        case .missing:
+            return "missing"
+        case .failed:
+            return "failed"
+        case .unknown:
+            return "unknown"
+        }
+    }
+
+    private static func cacheSummary(
+        cachedPulseAvailable: Bool,
+        lastSuccessfulCompleteFetchAsOf: String?
+    ) -> String {
+        guard cachedPulseAvailable else {
+            return "No cached pulse"
+        }
+        guard let lastSuccessfulCompleteFetchAsOf else {
+            return "Cached pulse available"
+        }
+        return "Last complete \(lastSuccessfulCompleteFetchAsOf)"
+    }
+
+    private static func detailFillSnapshot(_ input: DataHealthDetailFillInput) -> DataHealthDetailFillSnapshot {
+        switch input {
+        case .notStarted:
+            return DataHealthDetailFillSnapshot(
+                outcome: .notStarted,
+                phase: nil,
+                completedUnitCount: nil,
+                totalUnitCount: nil,
+                asOf: nil,
+                detail: "Not started"
+            )
+        case .completed(let asOf):
+            return DataHealthDetailFillSnapshot(
+                outcome: .completed,
+                phase: nil,
+                completedUnitCount: nil,
+                totalUnitCount: nil,
+                asOf: asOf,
+                detail: asOf.map { "Completed \($0)" } ?? "Completed"
+            )
+        case .degraded:
+            return DataHealthDetailFillSnapshot(
+                outcome: .degraded,
+                phase: nil,
+                completedUnitCount: nil,
+                totalUnitCount: nil,
+                asOf: nil,
+                detail: "Degraded"
+            )
+        case .failed:
+            return DataHealthDetailFillSnapshot(
+                outcome: .failed,
+                phase: nil,
+                completedUnitCount: nil,
+                totalUnitCount: nil,
+                asOf: nil,
+                detail: "Failed"
+            )
+        case .inProgress(let progress):
+            let progressDetail: String
+            if let completed = progress.completedUnitCount,
+               let total = progress.totalUnitCount
+            {
+                progressDetail = "\(progress.phase.title) \(max(0, completed))/\(max(0, total))"
+            } else {
+                progressDetail = progress.phase.title
+            }
+            return DataHealthDetailFillSnapshot(
+                outcome: .inProgress,
+                phase: progress.phase,
+                completedUnitCount: progress.completedUnitCount,
+                totalUnitCount: progress.totalUnitCount,
+                asOf: nil,
+                detail: progressDetail
+            )
+        }
+    }
+
+    private static func freshnessDetail(_ freshness: FreshnessSnapshot) -> String {
+        switch freshness.status {
+        case .fresh:
+            return freshness.oldestPriceAsOf.map { "Fresh; oldest \($0)" } ?? "Fresh"
+        case .stale:
+            return "\(freshness.staleHoldingCount) stale"
+        case .partial:
+            return freshness.oldestPriceAsOf.map { "Partial; oldest \($0)" } ?? "Partial"
+        case .unknown:
+            return "Unknown"
+        }
+    }
+
+    private static func diagnosticSummary(_ diagnostic: PDTDetailRefreshFailureDiagnostic) -> DataHealthDiagnosticSummary {
+        let argumentKeys = diagnostic.argumentShape.joined(separator: ",")
+        let copyText = [
+            "PDTBar data health",
+            "tool: \(diagnostic.toolName)",
+            "phase: \(diagnostic.phase.rawValue)",
+            "category: \(diagnostic.category.rawValue)",
+            "attempts: \(diagnostic.attemptCount)",
+            "argument_keys: \(argumentKeys)",
+        ].joined(separator: "\n")
+        return DataHealthDiagnosticSummary(
+            available: true,
+            detail: "\(diagnostic.toolName); \(diagnostic.phase.rawValue); \(diagnostic.category.rawValue)",
+            copyText: copyText
+        )
+    }
+}
+
 public struct StatusVisualState: Codable, Equatable {
     public static let defaultBarHeights = [0.5, 1.0, 0.667]
 
@@ -1714,6 +2141,13 @@ public enum MenuRowRole: String, Codable, Equatable {
     case freshnessOldestHolding
     case freshnessDetailFill
     case freshnessCaveats
+    case dataHealthSummary
+    case dataHealthSource
+    case dataHealthCache
+    case dataHealthDetailFill
+    case dataHealthReadState
+    case dataHealthDiagnostic
+    case dataHealthDiagnosticCopy
     case holdingIdentifierCopy
 
     public init(from decoder: Decoder) throws {
@@ -1737,6 +2171,7 @@ public enum MenuRowRole: String, Codable, Equatable {
 public enum MenuRowActionTargetKind: String, Codable, Equatable {
     case incomeEvent
     case copyHoldingIdentifier
+    case copyDataHealthDiagnostic
 }
 
 public struct IncomeEventActionTarget: Codable, Equatable {
@@ -2262,7 +2697,12 @@ public enum ClaudeLaunchFlow {
             switch state {
             case .probingClaude:
                 return cachedPulseDescriptor(
-                    cachedPulse,
+                    cachedPulseWithRuntimeHealth(
+                        cachedPulse,
+                        claudeReadiness: .checking,
+                        pdtMCPReadiness: .unknown,
+                        detailFill: .notStarted
+                    ),
                     rowsFirst: true,
                     rows: [
                         MenuRow(
@@ -2275,7 +2715,10 @@ public enum ClaudeLaunchFlow {
                 )
             case .fetchingPortfolio:
                 return cachedPulseDescriptor(
-                    cachedPulse,
+                    cachedPulseWithRuntimeHealth(
+                        cachedPulse,
+                        detailFill: .inProgress(BackgroundDetailRefreshProgress(phase: .baseHoldings))
+                    ),
                     rowsFirst: true,
                     rows: [
                         MenuRow(
@@ -2448,9 +2891,12 @@ public enum ClaudeLaunchFlow {
         return descriptor
     }
 
-    public static func descriptorForBackgroundRefreshFailure(cachedPulse: MenuDescriptor) -> MenuDescriptor {
+    public static func descriptorForBackgroundRefreshFailure(
+        cachedPulse: MenuDescriptor,
+        diagnostic: PDTDetailRefreshFailureDiagnostic? = nil
+    ) -> MenuDescriptor {
         cachedPulseDescriptor(
-            cachedPulse,
+            cachedPulseWithRuntimeHealth(cachedPulse, detailFill: .failed, diagnostic: diagnostic, clearsDiagnostic: true),
             statusVisual: cachedPulse.statusVisual.withDimming(true),
             rowsFirst: true,
             rows: [
@@ -2474,7 +2920,7 @@ public enum ClaudeLaunchFlow {
         progress: BackgroundDetailRefreshProgress
     ) -> MenuDescriptor {
         cachedPulseDescriptor(
-            cachedPulse,
+            cachedPulseWithRuntimeHealth(cachedPulse, detailFill: .inProgress(progress)),
             rowsFirst: true,
             rows: backgroundDetailProgressRows(progress)
         )
@@ -2482,7 +2928,7 @@ public enum ClaudeLaunchFlow {
 
     public static func descriptorForBackgroundDetailDegraded(cachedPulse: MenuDescriptor) -> MenuDescriptor {
         cachedPulseDescriptor(
-            cachedPulse,
+            cachedPulseWithRuntimeHealth(cachedPulse, detailFill: .degraded),
             statusVisual: cachedPulse.statusVisual.withDimming(true),
             rowsFirst: true,
             rows: [
@@ -2573,6 +3019,144 @@ public enum ClaudeLaunchFlow {
             statusAccessibilityIdentifier: cachedPulse.statusAccessibilityIdentifier,
             sections: rowsFirst ? [fetchSection] + cachedPulse.sections : cachedPulse.sections + [fetchSection]
         )
+    }
+
+    private static func cachedPulseWithRuntimeHealth(
+        _ cachedPulse: MenuDescriptor,
+        claudeReadiness: DataHealthSourceStatus = .ready,
+        pdtMCPReadiness: DataHealthSourceStatus = .ready,
+        detailFill: DataHealthDetailFillInput,
+        diagnostic: PDTDetailRefreshFailureDiagnostic? = nil,
+        clearsDiagnostic: Bool = false
+    ) -> MenuDescriptor {
+        var descriptor = cachedPulse
+        let sourceDetail = runtimeDataHealthSourceDetail(claudeReadiness: claudeReadiness, pdtMCPReadiness: pdtMCPReadiness)
+        let detailFillDetail = runtimeDataHealthDetailFillDetail(detailFill)
+        let summaryDetail = runtimeDataHealthSummaryDetail(
+            detailFill,
+            claudeReadiness: claudeReadiness,
+            pdtMCPReadiness: pdtMCPReadiness
+        )
+        let diagnosticRow = runtimeDataHealthDiagnosticRow(for: diagnostic)
+            ?? (clearsDiagnostic ? MenuDescriptorRenderer.dataHealthDiagnosticRow(for: nil) : nil)
+
+        descriptor.sections = descriptor.sections.map { section in
+            guard section.id == "freshness" else {
+                return section
+            }
+            var section = section
+            section.rows = section.rows.map { row in
+                guard row.id == "dataHealth" else {
+                    return row
+                }
+                var row = row
+                if let summaryDetail {
+                    row.detail = summaryDetail
+                }
+                row.children = row.children.map { child in
+                    var child = child
+                    if child.id == "dataHealth.source", let sourceDetail {
+                        child.detail = sourceDetail
+                    } else if child.id == "dataHealth.detailFill" {
+                        child.detail = detailFillDetail
+                    } else if child.id == "dataHealth.diagnostic", let diagnosticRow {
+                        child = diagnosticRow
+                    }
+                    return child
+                }
+                return row
+            }
+            return section
+        }
+        return descriptor
+    }
+
+    private static func runtimeDataHealthDiagnosticRow(
+        for diagnostic: PDTDetailRefreshFailureDiagnostic?
+    ) -> MenuRow? {
+        guard let diagnostic else {
+            return nil
+        }
+        let health = DataHealth.build(
+            DataHealthInput(
+                claudeReadiness: .ready,
+                pdtMCPReadiness: .ready,
+                availableReadTools: Set(PDTReadTools.requiredV1),
+                readOnlyPolicy: .enforced,
+                pulseSource: .cachedSnapshot,
+                lastSuccessfulCompleteFetchAsOf: nil,
+                cachedPulseAvailable: true,
+                detailFill: .failed,
+                freshness: FreshnessSnapshot(worstPriceAsOf: nil, stale: false),
+                readState: nil,
+                diagnostic: diagnostic
+            )
+        )
+        return MenuDescriptorRenderer.dataHealthDiagnosticRow(for: health.diagnostic)
+    }
+
+    private static func runtimeDataHealthSourceDetail(
+        claudeReadiness: DataHealthSourceStatus,
+        pdtMCPReadiness: DataHealthSourceStatus
+    ) -> String? {
+        guard claudeReadiness != .ready || pdtMCPReadiness != .ready else {
+            return nil
+        }
+        return DataHealth.build(
+            DataHealthInput(
+                claudeReadiness: claudeReadiness,
+                pdtMCPReadiness: pdtMCPReadiness,
+                availableReadTools: Set(PDTReadTools.requiredV1),
+                readOnlyPolicy: .enforced,
+                pulseSource: .cachedSnapshot,
+                lastSuccessfulCompleteFetchAsOf: nil,
+                cachedPulseAvailable: true,
+                detailFill: .notStarted,
+                freshness: FreshnessSnapshot(worstPriceAsOf: nil, stale: false),
+                readState: nil
+            )
+        ).source.detail
+    }
+
+    private static func runtimeDataHealthDetailFillDetail(_ detailFill: DataHealthDetailFillInput) -> String {
+        switch detailFill {
+        case .notStarted:
+            return "Not started"
+        case .completed(let asOf):
+            return asOf.map { "Completed \($0)" } ?? "Completed"
+        case .degraded:
+            return "Degraded"
+        case .failed:
+            return "Failed"
+        case .inProgress(let progress):
+            if let completed = progress.completedUnitCount,
+               let total = progress.totalUnitCount
+            {
+                return "\(progress.phase.title) \(max(0, completed))/\(max(0, total))"
+            }
+            return progress.phase.title
+        }
+    }
+
+    private static func runtimeDataHealthSummaryDetail(
+        _ detailFill: DataHealthDetailFillInput,
+        claudeReadiness: DataHealthSourceStatus,
+        pdtMCPReadiness: DataHealthSourceStatus
+    ) -> String? {
+        if claudeReadiness == .checking || pdtMCPReadiness == .checking {
+            return "Checking"
+        }
+        if claudeReadiness != .ready || pdtMCPReadiness != .ready {
+            return "Needs attention"
+        }
+        switch detailFill {
+        case .degraded, .failed:
+            return "Needs attention"
+        case .inProgress:
+            return "Refreshing"
+        case .completed, .notStarted:
+            return nil
+        }
     }
 
     private static func refreshDetailsRow(id: String = "freshness.refreshDetails") -> MenuRow {
@@ -2676,7 +3260,7 @@ public enum PDTLaunchFetchResult: Equatable {
 
 public enum PDTLaunchBackgroundDetailRefreshResult: Equatable {
     case succeeded(PulseLifecycleResult, outcome: PDTBackgroundDetailRefreshOutcome)
-    case failed(String)
+    case failed(String, diagnostic: PDTDetailRefreshFailureDiagnostic? = nil)
 }
 
 public final class PDTLaunchRuntime {
@@ -2814,8 +3398,20 @@ public final class PDTLaunchRuntime {
                 state: state,
                 descriptor: descriptor
             )
-        case .failed:
-            return update(state: .portfolioFetchFailed)
+        case .failed(_, let diagnostic):
+            guard let pulse = currentPulse else {
+                return update(state: .portfolioFetchFailed)
+            }
+            state = .portfolioFetchFailed
+            let descriptor = ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(
+                cachedPulse: pulse.descriptor,
+                diagnostic: diagnostic
+            )
+            lastDescriptor = descriptor
+            return PDTOnboardingUpdate(
+                state: state,
+                descriptor: descriptor
+            )
         }
     }
 
@@ -3208,6 +3804,7 @@ public enum MenuDescriptorRenderer {
         let income = model.facetSnapshots.income
         let bigMovers = model.facetSnapshots.bigMovers
         let freshness = model.facetSnapshots.freshness
+        let dataHealth = model.facetSnapshots.dataHealth
 
         let pulseRows: [MenuRow]
         if model.allQuiet {
@@ -3310,6 +3907,7 @@ public enum MenuDescriptorRenderer {
                     title: "Freshness",
                     rows: [
                         freshnessSummaryRow(for: freshness),
+                        dataHealthRow(for: dataHealth),
                     ]
                 ),
             ]
@@ -3528,6 +4126,112 @@ public enum MenuDescriptorRenderer {
             detail: freshnessSummaryDetail(for: freshness),
             children: freshnessDetailRows(for: freshness)
         )
+    }
+
+    static func dataHealthRow(for health: DataHealthSnapshot) -> MenuRow {
+        MenuRow(
+            id: "dataHealth",
+            role: .dataHealthSummary,
+            title: "Data health",
+            detail: dataHealthSummaryDetail(for: health),
+            children: dataHealthRows(for: health)
+        )
+    }
+
+    static func descriptorByReplacingDataHealth(
+        in descriptor: MenuDescriptor,
+        with health: DataHealthSnapshot
+    ) -> MenuDescriptor {
+        var descriptor = descriptor
+        let replacement = dataHealthRow(for: health)
+        var replaced = false
+        descriptor.sections = descriptor.sections.map { section in
+            guard section.id == "freshness" else {
+                return section
+            }
+            var section = section
+            section.rows = section.rows.map { row in
+                guard row.id == "dataHealth" else {
+                    return row
+                }
+                replaced = true
+                return replacement
+            }
+            if !replaced {
+                section.rows.append(replacement)
+            }
+            return section
+        }
+        return descriptor
+    }
+
+    private static func dataHealthRows(for health: DataHealthSnapshot) -> [MenuRow] {
+        [
+            MenuRow(
+                id: "dataHealth.source",
+                role: .dataHealthSource,
+                title: "Source",
+                detail: health.source.detail
+            ),
+            MenuRow(
+                id: "dataHealth.cache",
+                role: .dataHealthCache,
+                title: "Cache",
+                detail: health.cache.summary
+            ),
+            MenuRow(
+                id: "dataHealth.detailFill",
+                role: .dataHealthDetailFill,
+                title: "Detail fill",
+                detail: health.detailFill.detail
+            ),
+            MenuRow(
+                id: "dataHealth.readState",
+                role: .dataHealthReadState,
+                title: "Read state",
+                detail: health.readState.detail
+            ),
+            dataHealthDiagnosticRow(for: health.diagnostic),
+        ]
+    }
+
+    static func dataHealthDiagnosticRow(for diagnostic: DataHealthDiagnosticSummary?) -> MenuRow {
+        guard let diagnostic else {
+            return MenuRow(
+                id: "dataHealth.diagnostic",
+                role: .dataHealthDiagnostic,
+                title: "Diagnostics",
+                detail: "None recorded"
+            )
+        }
+        return MenuRow(
+            id: "dataHealth.diagnostic",
+            role: .dataHealthDiagnostic,
+            title: "Diagnostics",
+            detail: diagnostic.detail,
+            children: [
+                MenuRow(
+                    id: "dataHealth.diagnostic.copy",
+                    role: .dataHealthDiagnosticCopy,
+                    actionTarget: MenuRowActionTarget(
+                        kind: .copyDataHealthDiagnostic,
+                        id: "dataHealth.diagnostic.copy",
+                        copyText: diagnostic.copyText
+                    ),
+                    title: "Copy diagnostics",
+                    detail: "Redacted"
+                ),
+            ]
+        )
+    }
+
+    private static func dataHealthSummaryDetail(for health: DataHealthSnapshot) -> String {
+        switch health.status {
+        case .healthy:
+            return "Healthy"
+        case .degraded:
+            return "Needs attention"
+        }
     }
 
     private static func freshnessDetailRows(for freshness: FreshnessSnapshot) -> [MenuRow] {
@@ -3820,7 +4524,8 @@ public enum PressureEngine {
                 + bigMoverItems(from: snapshot, priorSnapshot: priorSnapshot)
         )
         let totalValue = snapshot.totalValue
-        let freshness = FreshnessLedger.build(from: snapshot, detailRefreshOutcome: detailRefreshOutcome)
+        let effectiveDetailRefreshOutcome = detailRefreshOutcome ?? snapshot.latestDetailFillOutcome
+        let freshness = FreshnessLedger.build(from: snapshot, detailRefreshOutcome: effectiveDetailRefreshOutcome)
         let recentMovesByQuoteID = recentMoves(from: snapshot.priceSeries)
         let nextIncomeEventsByQuoteID = nextIncomeEventsByQuoteID(from: snapshot)
         let topHoldingSummaries = snapshot.openHoldings
@@ -3926,7 +4631,14 @@ public enum PressureEngine {
                     priceSeriesCount: snapshot.priceSeries.count,
                     maxMove: maxMove(from: snapshot.priceSeries)
                 ),
-                freshness: freshness
+                freshness: freshness,
+                dataHealth: DataHealth.build(
+                    DataHealthInput.default(
+                        freshness: freshness,
+                        readState: readState,
+                        detailRefreshOutcome: effectiveDetailRefreshOutcome
+                    )
+                )
             ),
             supportingDataSlots: supportingDataSlots
         )
@@ -4602,7 +5314,14 @@ public struct PulseLifecycleResult: Codable, Equatable {
     }
 
     public func applyingReadState(_ readState: PulseReadState?) -> PulseLifecycleResult {
-        let model = PressureRunner.modelAfterApplyingReadState(unfilteredModel, readState: readState)
+        var model = PressureRunner.modelAfterApplyingReadState(unfilteredModel, readState: readState)
+        var dataHealth = model.facetSnapshots.dataHealth
+        let readFingerprintCount = readState?.readFingerprints.count ?? 0
+        dataHealth.readState = DataHealthReadStateSnapshot(
+            readFingerprintCount: readFingerprintCount,
+            detail: "\(readFingerprintCount) read"
+        )
+        model.facetSnapshots.dataHealth = dataHealth
         return PulseLifecycleResult(
             unfilteredModel: unfilteredModel,
             model: model,
@@ -5092,6 +5811,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
     public func refresh(
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void = { _ in }
     ) throws -> PDTBackgroundDetailRefreshResult {
+        try? snapshotStore.clearLastDetailRefreshDiagnostic()
         let requiredTools = [
             "pdt-get-portfolio-holdings",
             "pdt-get-portfolio-distributions",
@@ -5186,7 +5906,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             priorSnapshot: originalPriorSnapshot,
             snapshotStore: snapshotStore,
             pulseReadStore: pulseReadStore,
-            detailRefreshOutcome: outcome
+            detailRefreshOutcome: outcome,
+            detailRefreshDiagnostic: diagnostics.last
         )
         if let lastDiagnostic = diagnostics.last {
             try snapshotStore.saveLastDetailRefreshDiagnostic(lastDiagnostic)
@@ -5795,8 +6516,19 @@ public enum PressureRunner {
             snapshotCommit: commit,
             pulseReadStore: pulseReadStore,
             source: .cachedSnapshot,
-            resetsReappearedReadState: false
+            resetsReappearedReadState: false,
+            detailRefreshDiagnostic: cachedDetailRefreshDiagnostic(for: snapshot, snapshotStore: snapshotStore)
         )
+    }
+
+    private static func cachedDetailRefreshDiagnostic(
+        for snapshot: PortfolioSnapshot,
+        snapshotStore: SnapshotStore
+    ) -> PDTDetailRefreshFailureDiagnostic? {
+        guard snapshot.latestDetailFillOutcome == .degraded else {
+            return nil
+        }
+        return try? snapshotStore.loadLastDetailRefreshDiagnostic()
     }
 
     public static func cachedPulseDescriptor(
@@ -5871,7 +6603,8 @@ public enum PressureRunner {
         priorSnapshot: PortfolioSnapshot?,
         snapshotStore: SnapshotStore,
         pulseReadStore: PulseReadStore? = nil,
-        detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil
+        detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil,
+        detailRefreshDiagnostic: PDTDetailRefreshFailureDiagnostic? = nil
     ) throws -> PulseLifecycleResult {
         let loadedReadState = displayReadState(from: pulseReadStore)
         var committedSnapshot = snapshot
@@ -5890,7 +6623,8 @@ public enum PressureRunner {
             source: .refreshedSnapshot,
             loadedReadState: loadedReadState,
             resetsReappearedReadState: true,
-            detailRefreshOutcome: detailRefreshOutcome
+            detailRefreshOutcome: detailRefreshOutcome,
+            detailRefreshDiagnostic: detailRefreshDiagnostic
         )
     }
 
@@ -5926,14 +6660,25 @@ public enum PressureRunner {
         source: PulseLifecycleSource,
         loadedReadState: PulseReadState? = nil,
         resetsReappearedReadState: Bool,
-        detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil
+        detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil,
+        detailRefreshDiagnostic: PDTDetailRefreshFailureDiagnostic? = nil
     ) throws -> PulseLifecycleResult {
         let displayReadState = loadedReadState ?? displayReadState(from: pulseReadStore)
-        let rawModel = PressureEngine.buildModel(
+        let effectiveDetailRefreshOutcome = detailRefreshOutcome ?? snapshot.latestDetailFillOutcome
+        var rawModel = PressureEngine.buildModel(
             from: snapshot,
             priorSnapshot: priorSnapshot,
             readState: displayReadState,
-            detailRefreshOutcome: detailRefreshOutcome
+            detailRefreshOutcome: effectiveDetailRefreshOutcome
+        )
+        rawModel.facetSnapshots.dataHealth = DataHealth.build(
+            DataHealthInput.default(
+                freshness: rawModel.facetSnapshots.freshness,
+                pulseSource: source,
+                readState: displayReadState,
+                detailRefreshOutcome: effectiveDetailRefreshOutcome,
+                diagnostic: detailRefreshDiagnostic
+            )
         )
         let readState = resetsReappearedReadState
             ? try readStateAfterResettingReappearedItems(
@@ -5942,7 +6687,16 @@ public enum PressureRunner {
                 pulseReadStore: pulseReadStore
             )
             : displayReadState
-        let model = modelAfterApplyingReadState(rawModel, readState: readState)
+        var model = modelAfterApplyingReadState(rawModel, readState: readState)
+        model.facetSnapshots.dataHealth = DataHealth.build(
+            DataHealthInput.default(
+                freshness: model.facetSnapshots.freshness,
+                pulseSource: source,
+                readState: readState,
+                detailRefreshOutcome: effectiveDetailRefreshOutcome,
+                diagnostic: detailRefreshDiagnostic
+            )
+        )
         return PulseLifecycleResult(
             unfilteredModel: rawModel,
             model: model,
