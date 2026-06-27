@@ -651,6 +651,7 @@ let portfolioDetailsRow = try require(
 try check(
     portfolioAllocationRow.id == "allocation.portfolio"
         && portfolioAllocationRow.role == MenuRowRole.portfolioOverviewChart
+        && portfolioAllocationRow.detail == nil
         && portfolioAllocationRow.barChart?.bars.map(\.label)
             == ["9001", "9002", "9003", "9009", "9011", "9005", "9004", "9012", "9010"]
         && portfolioAllocationRow.barChart?.bars.map(\.axisLabel)

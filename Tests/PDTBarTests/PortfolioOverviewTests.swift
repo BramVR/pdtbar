@@ -181,6 +181,7 @@ struct PortfolioOverviewTests {
         #expect(chartRow.id == "allocation.portfolio")
         #expect(chartRow.role == .portfolioOverviewChart)
         #expect(chartRow.title == "Portfolio allocation")
+        #expect(chartRow.detail == nil)
         #expect(chartRow.children.isEmpty)
         #expect(detailsRow.id == "allocation.portfolio.details")
         #expect(detailsRow.role == .portfolioOverviewDetails)

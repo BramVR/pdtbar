@@ -544,7 +544,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         barChart: MenuRowBarChart,
         accessibilityIdentifier: String
     ) -> NSView {
-        let rowHeight: CGFloat = 226
+        let hasDetail = detail?.isEmpty == false
+        let rowHeight: CGFloat = hasDetail ? 226 : 212
         let container = PortfolioAllocationChartRowView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: rowHeight))
         container.autoresizingMask = [.width]
         let chartSummary = barChart.bars.map { "\($0.label) \($0.percentageLabel)" }.joined(separator: ", ")
@@ -565,13 +566,19 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         titleField.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(titleField)
 
-        let detailField = NSTextField(labelWithString: detail ?? "")
-        detailField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize)
-        detailField.textColor = NSColor.secondaryLabelColor
-        detailField.lineBreakMode = .byTruncatingTail
-        detailField.maximumNumberOfLines = 1
-        detailField.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(detailField)
+        let detailField: NSTextField?
+        if let detail, !detail.isEmpty {
+            let field = NSTextField(labelWithString: detail)
+            field.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize)
+            field.textColor = NSColor.secondaryLabelColor
+            field.lineBreakMode = .byTruncatingTail
+            field.maximumNumberOfLines = 1
+            field.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(field)
+            detailField = field
+        } else {
+            detailField = nil
+        }
 
         let chartAxisView = PortfolioAllocationYAxisView(bars: barChart.bars)
         chartAxisView.translatesAutoresizingMaskIntoConstraints = false
@@ -667,23 +674,17 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
         container.mirrorHorizontalScroll(from: chartScrollView, to: xAxisScrollView)
 
-        NSLayoutConstraint.activate([
+        var constraints = [
             titleField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
             titleField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -28),
             titleField.topAnchor.constraint(equalTo: container.topAnchor, constant: 7),
 
-            detailField.leadingAnchor.constraint(equalTo: titleField.leadingAnchor),
-            detailField.trailingAnchor.constraint(equalTo: titleField.trailingAnchor),
-            detailField.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 1),
-
             chartAxisView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
-            chartAxisView.topAnchor.constraint(equalTo: detailField.bottomAnchor, constant: 9),
             chartAxisView.widthAnchor.constraint(equalToConstant: chartAxisWidth),
             chartAxisView.heightAnchor.constraint(equalToConstant: PortfolioAllocationVerticalBarChartView.chartHeight),
 
             chartScrollView.leadingAnchor.constraint(equalTo: chartAxisView.trailingAnchor, constant: chartAxisGap),
             chartScrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -28),
-            chartScrollView.topAnchor.constraint(equalTo: detailField.bottomAnchor, constant: 9),
             chartScrollView.heightAnchor.constraint(equalToConstant: PortfolioAllocationVerticalBarChartView.chartHeight),
 
             xAxisScrollView.leadingAnchor.constraint(equalTo: chartScrollView.leadingAnchor),
@@ -704,7 +705,22 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             selectedDetailField.trailingAnchor.constraint(equalTo: selectedTitleField.trailingAnchor),
             selectedDetailField.topAnchor.constraint(equalTo: selectedTitleField.bottomAnchor, constant: 1),
             selectedDetailField.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -8),
-        ])
+        ]
+
+        let chartTopAnchor = detailField?.bottomAnchor ?? titleField.bottomAnchor
+        constraints += [
+            chartAxisView.topAnchor.constraint(equalTo: chartTopAnchor, constant: 9),
+            chartScrollView.topAnchor.constraint(equalTo: chartTopAnchor, constant: 9),
+        ]
+        if let detailField {
+            constraints += [
+                detailField.leadingAnchor.constraint(equalTo: titleField.leadingAnchor),
+                detailField.trailingAnchor.constraint(equalTo: titleField.trailingAnchor),
+                detailField.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 1),
+            ]
+        }
+
+        NSLayoutConstraint.activate(constraints)
 
         return container
     }

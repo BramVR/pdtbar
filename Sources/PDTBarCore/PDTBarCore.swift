@@ -2856,14 +2856,6 @@ public enum MenuDescriptorRenderer {
         )
     }
 
-    private static func portfolioOverviewDetail(for overview: PortfolioOverviewSummary) -> String {
-        let concentrationDetail = overview.topNConcentration.map {
-            "top \($0.rankCount) \(percent($0.weight))"
-        }
-        return ([display(overview.totalValue), "\(overview.openHoldingCount) holdings"] + [concentrationDetail].compactMap { $0 })
-            .joined(separator: "; ")
-    }
-
     private static func portfolioOverviewChildren(for overview: PortfolioOverviewSummary) -> [MenuRow] {
         [
             portfolioOverviewHoldingsRow(for: overview),
@@ -2889,7 +2881,6 @@ public enum MenuDescriptorRenderer {
             id: "allocation.portfolio",
             role: .portfolioOverviewChart,
             title: "Portfolio allocation",
-            detail: portfolioOverviewDetail(for: overview),
             barChart: portfolioOverviewBarChart(for: overview)
         )
     }
