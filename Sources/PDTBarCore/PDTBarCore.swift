@@ -5242,7 +5242,7 @@ public enum PressureRunner {
     private static func hasOptionalDetailSlice(_ snapshot: PortfolioSnapshot) -> Bool {
         !snapshot.sectors.isEmpty
             || !snapshot.assetTypes.isEmpty
-            || snapshot.xRayHoldings != nil
+            || !(snapshot.xRayHoldings ?? []).isEmpty
             || !snapshot.incomeEvents.isEmpty
             || snapshot.dividendRowCount > 0
             || !snapshot.priceSeries.isEmpty

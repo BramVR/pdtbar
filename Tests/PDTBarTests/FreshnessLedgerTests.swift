@@ -129,7 +129,13 @@ struct FreshnessLedgerTests {
                 datedHolding("Fresh A", quoteId: 1, priceAsOf: "2026-06-24"),
             ]
         )
-        snapshot.xRayHoldings = []
+        snapshot.sectors = [
+            DistributionSummary(
+                name: "Technology",
+                percentage: 100,
+                totalValue: Money(value: "1000.00", currency: "EUR")
+            ),
+        ]
 
         let run = try PressureRunner.run(
             dataSource: StaticPortfolioDataSource(fixedSnapshot: snapshot),
@@ -141,13 +147,15 @@ struct FreshnessLedgerTests {
         #expect(cached.model.facetSnapshots.freshness.latestCompleteDetailFillAsOf == "2026-06-25")
 
         let baseOnlyStore = try SnapshotStore.temporaryTestStore(prefix: "freshness-base-run")
+        var baseOnlySnapshot = freshnessSnapshot(
+            asOf: "2026-06-25",
+            holdings: [
+                datedHolding("Fresh A", quoteId: 1, priceAsOf: "2026-06-24"),
+            ]
+        )
+        baseOnlySnapshot.xRayHoldings = []
         let baseOnly = try PressureRunner.run(
-            dataSource: StaticPortfolioDataSource(fixedSnapshot: freshnessSnapshot(
-                asOf: "2026-06-25",
-                holdings: [
-                    datedHolding("Fresh A", quoteId: 1, priceAsOf: "2026-06-24"),
-                ]
-            )),
+            dataSource: StaticPortfolioDataSource(fixedSnapshot: baseOnlySnapshot),
             snapshotStore: baseOnlyStore
         )
 
