@@ -18,7 +18,7 @@ A retail investor who already tracks their portfolio in PDT and wants to **stay 
 
 ## The aha (why it's not just another balance app)
 
-Every brokerage app shows your value and a list of holdings. None of them curate "here are the two or three things to actually look at this week." The aha is **curated relevance**: within a minute of connecting, you see the handful of things worth knowing — in v1, allocation/concentration, income/calendar, and big-mover signals; later, richer corporate-action, idle-cash, and benchmark-divergence signals — that you'd otherwise have to hunt for. Value and performance are *context*; "what changed and what needs you" is the headline.
+Every brokerage app shows your value and a list of holdings. None of them curate "here are the two or three things to actually look at this week." The aha is **curated relevance**: within a minute of connecting, you see the handful of things worth knowing — in v1, allocation/concentration, cash-drag, income/calendar, and big-mover signals; later, richer corporate-action and benchmark-divergence signals — that you'd otherwise have to hunt for. Value and performance are *context*; "what changed and what needs you" is the headline.
 
 ## The surface: the menu bar, layered
 
