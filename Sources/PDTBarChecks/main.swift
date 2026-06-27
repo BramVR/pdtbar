@@ -653,6 +653,8 @@ try check(
         && portfolioAllocationRow.role == MenuRowRole.portfolioOverviewChart
         && portfolioAllocationRow.barChart?.bars.map(\.label)
             == ["9001", "9002", "9003", "9009", "9011", "9005", "9004", "9012", "9010"]
+        && portfolioAllocationRow.barChart?.bars.map(\.axisLabel)
+            == ["N", "O", "H", "A", "A", "C", "M", "Z", "C"]
         && portfolioDetailsRow.id == "allocation.portfolio.details"
         && portfolioDetailsRow.role == MenuRowRole.portfolioOverviewDetails,
     "allocation section should render whole-portfolio allocation chart before detailed info"

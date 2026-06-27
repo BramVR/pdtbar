@@ -1357,6 +1357,7 @@ public struct MenuRowBarChart: Codable, Equatable {
     public struct Bar: Codable, Equatable {
         public var id: String
         public var label: String
+        public var axisLabel: String?
         public var weight: Double
         public var percentageLabel: String
         public var detail: String
@@ -1364,12 +1365,14 @@ public struct MenuRowBarChart: Codable, Equatable {
         public init(
             id: String,
             label: String,
+            axisLabel: String? = nil,
             weight: Double,
             percentageLabel: String,
             detail: String
         ) {
             self.id = id
             self.label = label
+            self.axisLabel = axisLabel
             self.weight = weight
             self.percentageLabel = percentageLabel
             self.detail = detail
@@ -2913,6 +2916,7 @@ public enum MenuDescriptorRenderer {
             MenuRowBarChart.Bar(
                 id: "allocation.portfolio.chart.\(holding.quoteId)",
                 label: holdingChartLabel(holding),
+                axisLabel: holdingChartAxisLabel(holding),
                 weight: holding.weight,
                 percentageLabel: percent(holding.weight),
                 detail: "\(holding.name) \(percent(holding.weight)); \(display(holding.worth))"
@@ -2956,6 +2960,20 @@ public enum MenuDescriptorRenderer {
             return copyableIdentifier
         }
         return "\(holding.quoteId)"
+    }
+
+    private static func holdingChartAxisLabel(_ holding: HoldingSummary) -> String {
+        let publicLabel = holdingChartLabel(holding)
+        if let first = publicLabel.first(where: { $0.isLetter }) {
+            return String(first).uppercased()
+        }
+        if let first = holding.name.first(where: { $0.isLetter }) {
+            return String(first).uppercased()
+        }
+        if let first = publicLabel.first(where: { $0.isNumber }) ?? holding.name.first(where: { $0.isNumber }) {
+            return String(first)
+        }
+        return "?"
     }
 
     private static func portfolioOverviewHoldingsRow(for overview: PortfolioOverviewSummary) -> MenuRow {

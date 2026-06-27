@@ -214,6 +214,7 @@ struct PortfolioOverviewTests {
             "allocation.portfolio.chart.9010",
         ])
         #expect(chart.bars.map(\.label) == ["9001", "9002", "9003", "9009", "9011", "9005", "9004", "9012", "9010"])
+        #expect(chart.bars.map(\.axisLabel) == ["N", "O", "H", "A", "A", "C", "M", "Z", "C"])
         #expect(chart.bars.map(\.weight) == [
             0.1171875,
             0.1171875,
