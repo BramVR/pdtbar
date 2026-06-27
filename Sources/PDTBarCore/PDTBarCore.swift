@@ -522,6 +522,7 @@ public struct HoldingSummary: Codable, Equatable {
     public var worth: Money
     public var price: Money?
     public var copyableIdentifier: String?
+    public var isin: String?
     public var recentMove: PriceMoveSummary?
     public var nextIncomeEvent: IncomeEventSummary?
     public var averageBuyPrice: Money?
@@ -535,6 +536,7 @@ public struct HoldingSummary: Codable, Equatable {
         worth: Money,
         price: Money?,
         copyableIdentifier: String? = nil,
+        isin: String? = nil,
         recentMove: PriceMoveSummary? = nil,
         nextIncomeEvent: IncomeEventSummary? = nil,
         averageBuyPrice: Money? = nil,
@@ -547,6 +549,7 @@ public struct HoldingSummary: Codable, Equatable {
         self.worth = worth
         self.price = price
         self.copyableIdentifier = copyableIdentifier
+        self.isin = PDTBaseHoldingNormalizer.safeISIN(isin)
         self.recentMove = recentMove
         self.nextIncomeEvent = nextIncomeEvent
         self.averageBuyPrice = averageBuyPrice
@@ -704,6 +707,7 @@ public enum PortfolioOverview {
             worth: holding.worth,
             price: sanitizedMoney(holding.price),
             copyableIdentifier: holding.copyableIdentifier,
+            isin: holding.isin,
             averageBuyPrice: sanitizedMoney(holding.averageBuyPrice),
             gainLoss: sanitizedMoney(holding.gainLoss),
             gainLossPercentage: holding.gainLossPercentage?.isFinite == true ? holding.gainLossPercentage : nil
@@ -2856,14 +2860,6 @@ public enum MenuDescriptorRenderer {
         )
     }
 
-    private static func portfolioOverviewDetail(for overview: PortfolioOverviewSummary) -> String {
-        let concentrationDetail = overview.topNConcentration.map {
-            "top \($0.rankCount) \(percent($0.weight))"
-        }
-        return ([display(overview.totalValue), "\(overview.openHoldingCount) holdings"] + [concentrationDetail].compactMap { $0 })
-            .joined(separator: "; ")
-    }
-
     private static func portfolioOverviewChildren(for overview: PortfolioOverviewSummary) -> [MenuRow] {
         [
             portfolioOverviewHoldingsRow(for: overview),
@@ -2888,8 +2884,7 @@ public enum MenuDescriptorRenderer {
         return MenuRow(
             id: "allocation.portfolio",
             role: .portfolioOverviewChart,
-            title: "Portfolio allocation",
-            detail: portfolioOverviewDetail(for: overview),
+            title: "Portfolio",
             barChart: portfolioOverviewBarChart(for: overview)
         )
     }
@@ -2959,7 +2954,27 @@ public enum MenuDescriptorRenderer {
         {
             return copyableIdentifier
         }
+        if let shortName = shortHoldingName(holding.name) {
+            return shortName
+        }
         return "\(holding.quoteId)"
+    }
+
+    private static func shortHoldingName(_ name: String) -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        let separators = CharacterSet.whitespacesAndNewlines
+            .union(CharacterSet(charactersIn: "/,("))
+        guard let token = trimmed
+            .components(separatedBy: separators)
+            .map({ $0.trimmingCharacters(in: .punctuationCharacters) })
+            .first(where: { !$0.isEmpty && $0.rangeOfCharacter(from: .letters) != nil })
+        else {
+            return nil
+        }
+        return String(token.prefix(12))
     }
 
     private static func holdingChartAxisLabel(_ holding: HoldingSummary) -> String {
@@ -3145,6 +3160,15 @@ public enum MenuDescriptorRenderer {
                 )
             )
         }
+        if let isin = holding.isin {
+            rows.append(
+                MenuRow(
+                    id: "allocation.\(holding.quoteId).isin",
+                    title: "ISIN",
+                    detail: isin
+                )
+            )
+        }
         if let recentMove = holding.recentMove {
             rows.append(
                 MenuRow(
@@ -3285,6 +3309,7 @@ public enum PressureEngine {
                     worth: $0.worth,
                     price: validMoney($0.price),
                     copyableIdentifier: $0.copyableIdentifier,
+                    isin: $0.isin,
                     recentMove: recentMovesByQuoteID[$0.quoteId],
                     nextIncomeEvent: nextIncomeEventsByQuoteID[$0.quoteId],
                     averageBuyPrice: $0.averageBuyPrice,
@@ -3809,6 +3834,7 @@ public enum PDTReadTools {
         "pdt-list-symbol-prices",
         "pdt-get-symbol-quote",
     ]
+    public static let allowedV1 = requiredV1 + ["pdt-get-symbol"]
 
     public static func missingRequiredV1Tools(in availableTools: Set<String>) -> [String] {
         requiredV1.filter { !availableTools.contains($0) }
@@ -3884,7 +3910,7 @@ public struct PDTMCPConnectorToolClient: PDTLiveToolClient {
     }
 
     public func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
-        guard PDTReadTools.requiredV1.contains(name) else {
+        guard PDTReadTools.allowedV1.contains(name) else {
             throw PDTMCPConnectorError.nonReadTool(name)
         }
         return try connector.callReadTool(name, arguments: arguments)
@@ -4781,6 +4807,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         openHoldings = openHoldings.map {
             var holding = $0
             holding.copyableIdentifier = quoteMetadata.codesByQuoteID[holding.quoteId]
+            holding.isin = quoteMetadata.isinsByQuoteID[holding.quoteId] ?? holding.isin
             return holding
         }
         let quoteIDsBySymbolID = quoteMetadata.quoteIDsBySymbolID
@@ -4811,6 +4838,9 @@ public struct PDTLiveDataSource: PortfolioDataSource {
 
     private func liveSymbolQuoteMetadata(for holdings: [NormalizedHolding]) throws -> SymbolQuoteMetadata {
         var metadata = SymbolQuoteMetadata()
+        var attemptedSymbolIDs = Set<Int>()
+        var isinsBySymbolID: [Int: String] = [:]
+        var symbolLookupUnavailable = false
         for holding in holdings {
             let quote: LiveSymbolQuoteEnvelope = try decodeLiveTool(
                 "pdt-get-symbol-quote",
@@ -4820,8 +4850,41 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             if let code = safePublicIdentifier(quote.code) {
                 metadata.codesByQuoteID[quote.id] = code
             }
+            guard holding.isin == nil, !symbolLookupUnavailable else {
+                continue
+            }
+            if let isin = isinsBySymbolID[quote.symbolId] {
+                metadata.isinsByQuoteID[quote.id] = isin
+                continue
+            }
+            guard attemptedSymbolIDs.insert(quote.symbolId).inserted else {
+                continue
+            }
+            do {
+                let symbol: LiveSymbolEnvelope = try decodeLiveTool(
+                    "pdt-get-symbol",
+                    data: toolClient.callReadTool("pdt-get-symbol", arguments: ["id": String(quote.symbolId)])
+                )
+                if let isin = PDTBaseHoldingNormalizer.safeISIN(symbol.isin) {
+                    isinsBySymbolID[quote.symbolId] = isin
+                    metadata.isinsByQuoteID[quote.id] = isin
+                }
+            } catch {
+                symbolLookupUnavailable = shouldStopOptionalSymbolLookups(after: error)
+            }
         }
         return metadata
+    }
+
+    private func shouldStopOptionalSymbolLookups(after error: Error) -> Bool {
+        switch error {
+        case is PDTMCPConnectorError:
+            return true
+        case PDTLiveDataSourceError.unavailableToolResult:
+            return true
+        default:
+            return false
+        }
     }
 
     private func liveXRayHoldings() throws -> [PDTXRayHoldingInput] {
@@ -5183,6 +5246,7 @@ public struct NormalizedHolding: Codable, Equatable {
     public var price: Money?
     public var priceAsOf: String
     public var copyableIdentifier: String?
+    public var isin: String?
     public var averageBuyPrice: Money?
     public var gainLoss: Money?
     public var gainLossPercentage: Double?
@@ -5195,6 +5259,7 @@ public struct NormalizedHolding: Codable, Equatable {
         price: Money?,
         priceAsOf: String,
         copyableIdentifier: String? = nil,
+        isin: String? = nil,
         averageBuyPrice: Money? = nil,
         gainLoss: Money? = nil,
         gainLossPercentage: Double? = nil
@@ -5206,6 +5271,7 @@ public struct NormalizedHolding: Codable, Equatable {
         self.price = price
         self.priceAsOf = priceAsOf
         self.copyableIdentifier = safePublicIdentifier(copyableIdentifier)
+        self.isin = PDTBaseHoldingNormalizer.safeISIN(isin)
         self.averageBuyPrice = averageBuyPrice
         self.gainLoss = gainLoss
         self.gainLossPercentage = gainLossPercentage
@@ -5220,6 +5286,7 @@ public struct NormalizedHolding: Codable, Equatable {
         price = validMoney(try? container.decodeIfPresent(Money.self, forKey: .price))
         priceAsOf = try container.decode(String.self, forKey: .priceAsOf)
         copyableIdentifier = safePublicIdentifier(try? container.decodeIfPresent(String.self, forKey: .copyableIdentifier))
+        isin = PDTBaseHoldingNormalizer.safeISIN(try? container.decodeIfPresent(String.self, forKey: .isin))
         averageBuyPrice = validMoney(try? container.decodeIfPresent(Money.self, forKey: .averageBuyPrice))
         gainLoss = validMoney(try? container.decodeIfPresent(Money.self, forKey: .gainLoss))
         gainLossPercentage = finite(try? container.decodeIfPresent(Double.self, forKey: .gainLossPercentage))
@@ -5380,6 +5447,7 @@ private struct LiveHolding: Decodable {
     var unrealisedGains: Money?
     var unrealisedGainsPercentage: Double?
     var closedAt: String?
+    var isin: String?
 
     enum CodingKeys: String, CodingKey {
         case symbolName
@@ -5395,6 +5463,7 @@ private struct LiveHolding: Decodable {
         case unrealisedGains
         case unrealisedGainsPercentage
         case closedAt
+        case isin
     }
 
     init(from decoder: Decoder) throws {
@@ -5418,6 +5487,7 @@ private struct LiveHolding: Decodable {
         unrealisedGains = try? container.decodeIfPresent(Money.self, forKey: .unrealisedGains)
         unrealisedGainsPercentage = try? container.decodeIfPresent(Double.self, forKey: .unrealisedGainsPercentage)
         closedAt = try container.decodeIfPresent(String.self, forKey: .closedAt)
+        isin = try container.decodeIfPresent(String.self, forKey: .isin)
     }
 }
 
@@ -5436,7 +5506,8 @@ private extension LiveHolding {
             unrealisedBoughtShares: unrealisedBoughtShares,
             unrealisedGains: unrealisedGains,
             unrealisedGainsPercentage: unrealisedGainsPercentage,
-            closedAt: closedAt
+            closedAt: closedAt,
+            isin: isin
         )
     }
 }
@@ -5535,9 +5606,14 @@ private struct LiveSymbolQuoteEnvelope: Decodable {
     var symbolId: Int
 }
 
+private struct LiveSymbolEnvelope: Decodable {
+    var isin: String?
+}
+
 private struct SymbolQuoteMetadata {
     var quoteIDsBySymbolID: [Int: Int] = [:]
     var codesByQuoteID: [Int: String] = [:]
+    var isinsByQuoteID: [Int: String] = [:]
 }
 
 private struct LivePricesEnvelope: Decodable {
@@ -5588,6 +5664,7 @@ private struct FixtureHolding: Decodable {
     var unrealisedGains: Money?
     var unrealisedGainsPercentage: Double?
     var closedAt: String?
+    var isin: String?
 
     enum CodingKeys: String, CodingKey {
         case symbolName
@@ -5603,6 +5680,7 @@ private struct FixtureHolding: Decodable {
         case unrealisedGains
         case unrealisedGainsPercentage
         case closedAt
+        case isin
     }
 
     init(from decoder: Decoder) throws {
@@ -5626,6 +5704,7 @@ private struct FixtureHolding: Decodable {
         unrealisedGains = try? container.decodeIfPresent(Money.self, forKey: .unrealisedGains)
         unrealisedGainsPercentage = try? container.decodeIfPresent(Double.self, forKey: .unrealisedGainsPercentage)
         closedAt = try container.decodeIfPresent(String.self, forKey: .closedAt)
+        isin = try container.decodeIfPresent(String.self, forKey: .isin)
     }
 }
 
@@ -5645,7 +5724,8 @@ private extension FixtureHolding {
             unrealisedGains: unrealisedGains,
             unrealisedGainsPercentage: unrealisedGainsPercentage,
             closedAt: closedAt,
-            copyableIdentifier: copyableIdentifier
+            copyableIdentifier: copyableIdentifier,
+            isin: isin
         )
     }
 }

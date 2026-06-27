@@ -22,7 +22,8 @@ struct BaseHoldingNormalizationTests {
                     unrealisedGains: Money(value: "180.00", currency: "EUR"),
                     unrealisedGainsPercentage: 0.5625,
                     closedAt: nil,
-                    copyableIdentifier: " PUBC "
+                    copyableIdentifier: " PUBC ",
+                    isin: " nl0010273215 "
                 ),
                 PDTBaseHoldingInput(
                     name: "Closed Co",
@@ -68,6 +69,7 @@ struct BaseHoldingNormalizationTests {
         #expect(holding.price == Money(value: "10.25", currency: "EUR"))
         #expect(holding.priceAsOf == "2026-06-26")
         #expect(holding.copyableIdentifier == "PUBC")
+        #expect(holding.isin == "NL0010273215")
         #expect(holding.averageBuyPrice == Money(value: "40.0000", currency: "EUR"))
         #expect(holding.gainLoss == Money(value: "180.00", currency: "EUR"))
         #expect(holding.gainLossPercentage == 0.5625)
@@ -110,6 +112,55 @@ struct BaseHoldingNormalizationTests {
 
         #expect(snapshot.openHoldings.map(\.quoteId) == [1001])
         #expect(snapshot.totalValue == Money(value: "500.00", currency: "EUR"))
+    }
+
+    @Test("Optional symbol lookup absence is cached per live snapshot")
+    func optionalSymbolLookupAbsenceIsCachedPerLiveSnapshot() throws {
+        let connector = ScriptedPDTMCPConnector(responses: [
+            "pdt-get-portfolio-holdings": Data(twoOpenHoldingsJSON.utf8),
+            "pdt-get-symbol-quote?id=1001": Data(#"{"id":1001,"code":"PUBC","symbolId":5001}"#.utf8),
+            "pdt-get-symbol-quote?id=1002": Data(#"{"id":1002,"code":"OTHR","symbolId":5002}"#.utf8),
+        ])
+        let snapshot = try PDTMCPConnectorDataSource(
+            connector: connector,
+            liveOptions: PDTLiveDataSourceOptions(
+                includeDistributions: false,
+                includeXRayHoldings: false,
+                includeIncomeEvents: false,
+                includeDividends: false,
+                includeIncomeQuoteLookups: true,
+                includePriceSeries: false
+            )
+        ).snapshot(asOf: "2026-06-26")
+
+        #expect(snapshot.openHoldings.map(\.copyableIdentifier) == ["PUBC", "OTHR"])
+        #expect(snapshot.openHoldings.map(\.isin) == [nil, nil])
+        #expect(connector.calls.filter { $0 == "pdt-get-symbol-quote" }.count == 2)
+        #expect(connector.calls.filter { $0 == "pdt-get-symbol" }.count == 1)
+    }
+
+    @Test("Live connector skips optional symbol lookup when holdings already include ISIN")
+    func liveConnectorSkipsOptionalSymbolLookupWhenHoldingsAlreadyIncludeISIN() throws {
+        let connector = ScriptedPDTMCPConnector(responses: [
+            "pdt-get-portfolio-holdings": Data(baseHoldingsJSON.utf8),
+            "pdt-get-symbol-quote?id=1001": Data(#"{"id":1001,"code":"PUBC","symbolId":5001}"#.utf8),
+        ])
+        let snapshot = try PDTMCPConnectorDataSource(
+            connector: connector,
+            liveOptions: PDTLiveDataSourceOptions(
+                includeDistributions: false,
+                includeXRayHoldings: false,
+                includeIncomeEvents: false,
+                includeDividends: false,
+                includeIncomeQuoteLookups: true,
+                includePriceSeries: false
+            )
+        ).snapshot(asOf: "2026-06-26")
+
+        #expect(snapshot.openHoldings.first?.copyableIdentifier == "PUBC")
+        #expect(snapshot.openHoldings.first?.isin == "NL0010273215")
+        #expect(connector.calls.filter { $0 == "pdt-get-symbol-quote" }.count == 1)
+        #expect(connector.calls.filter { $0 == "pdt-get-symbol" }.isEmpty)
     }
 
     @Test("Background detail refresh applies shared base holding filtering")
@@ -173,6 +224,7 @@ private let baseHoldingsJSON = """
       "currentWorth": { "value": "500.00", "currency": "EUR" },
       "currentWorthLocal": { "value": "500.00", "currency": "EUR" },
       "portfolioWeight": 0.25,
+      "isin": "NL0010273215",
       "closedAt": null
     },
     {
@@ -193,6 +245,33 @@ private let baseHoldingsJSON = """
       "currentWorth": { "value": "bad", "currency": "EUR" },
       "currentWorthLocal": { "value": "bad", "currency": "EUR" },
       "portfolioWeight": 0.05,
+      "closedAt": null
+    }
+  ]
+}
+"""
+
+private let twoOpenHoldingsJSON = """
+{
+  "holdings": [
+    {
+      "symbolName": "Open Public Co",
+      "symbolQuoteId": 1001,
+      "currentPriceDate": "2026-06-26T21:59:00+00:00",
+      "currentPriceLocal": { "value": "10.25", "currency": "EUR" },
+      "currentWorth": { "value": "500.00", "currency": "EUR" },
+      "currentWorthLocal": { "value": "500.00", "currency": "EUR" },
+      "portfolioWeight": 0.25,
+      "closedAt": null
+    },
+    {
+      "symbolName": "Other Public Co",
+      "symbolQuoteId": 1002,
+      "currentPriceDate": "2026-06-26T21:59:00+00:00",
+      "currentPriceLocal": { "value": "20.00", "currency": "EUR" },
+      "currentWorth": { "value": "250.00", "currency": "EUR" },
+      "currentWorthLocal": { "value": "250.00", "currency": "EUR" },
+      "portfolioWeight": 0.125,
       "closedAt": null
     }
   ]

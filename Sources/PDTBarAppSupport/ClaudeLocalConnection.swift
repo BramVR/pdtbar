@@ -141,7 +141,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector {
     }
 
     public func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
-        guard PDTReadTools.requiredV1.contains(name) else {
+        guard PDTReadTools.allowedV1.contains(name) else {
             throw PDTMCPConnectorError.nonReadTool(name)
         }
         guard commandRunner.executableExists(configuration.claudePath, environment: configuration.environment) else {
@@ -309,7 +309,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector {
     }
 
     private func discoveredToolName(for readToolName: String, in output: String) -> String? {
-        let pattern = #"mcp__[A-Za-z0-9_.-]+__\#(NSRegularExpression.escapedPattern(for: readToolName))"#
+        let pattern = #"mcp__[A-Za-z0-9_.-]+__\#(NSRegularExpression.escapedPattern(for: readToolName))(?![A-Za-z0-9_.-])"#
         guard let expression = try? NSRegularExpression(pattern: pattern) else {
             return nil
         }

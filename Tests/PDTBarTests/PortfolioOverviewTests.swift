@@ -11,6 +11,7 @@ struct PortfolioOverviewTests {
         #expect(overview.totalValue == Money(value: "51200.00", currency: "EUR"))
         #expect(overview.openHoldingCount == 9)
         #expect(Array(overview.topHoldings.map(\.quoteId).prefix(3)) == [9001, 9002, 9003])
+        #expect(overview.topHoldings.first?.isin == "NL0000000001")
         #expect(overview.topNConcentration == PortfolioTopNConcentrationSummary(rankCount: 3, weight: 0.34765625))
         #expect(overview.sectorSummary.first?.name == "information-technology")
         #expect(overview.sectorSummary.first?.percentage == 22.4609375)
@@ -180,7 +181,8 @@ struct PortfolioOverviewTests {
 
         #expect(chartRow.id == "allocation.portfolio")
         #expect(chartRow.role == .portfolioOverviewChart)
-        #expect(chartRow.title == "Portfolio allocation")
+        #expect(chartRow.title == "Portfolio")
+        #expect(chartRow.detail == nil)
         #expect(chartRow.children.isEmpty)
         #expect(detailsRow.id == "allocation.portfolio.details")
         #expect(detailsRow.role == .portfolioOverviewDetails)
@@ -213,7 +215,17 @@ struct PortfolioOverviewTests {
             "allocation.portfolio.chart.9012",
             "allocation.portfolio.chart.9010",
         ])
-        #expect(chart.bars.map(\.label) == ["9001", "9002", "9003", "9009", "9011", "9005", "9004", "9012", "9010"])
+        #expect(chart.bars.map(\.label) == [
+            "Nova",
+            "Orbit",
+            "Helix",
+            "Atlas",
+            "Axis",
+            "Caldera",
+            "Meridian",
+            "Zephyr",
+            "Cash",
+        ])
         #expect(chart.bars.map(\.axisLabel) == ["N", "O", "H", "A", "A", "C", "M", "Z", "C"])
         #expect(chart.bars.map(\.weight) == [
             0.1171875,
@@ -245,6 +257,10 @@ struct PortfolioOverviewTests {
         #expect(novaRow.role == .allocationHolding)
         #expect(novaRow.children.map(\.id).contains("allocation.9001.worth"))
         #expect(novaRow.children.map(\.id).contains("allocation.9001.price"))
+        #expect(novaRow.children.first { $0.id == "allocation.9001.isin" }?.detail == "NL0000000001")
+
+        let cashRow = try #require(detailsRow.children.first { $0.id == "allocation.9010" })
+        #expect(cashRow.children.contains { $0.id == "allocation.9010.isin" } == false)
 
         let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
         let surfaceOverviewRow = try #require(surface.sections.first { $0.id == "allocation" }?.rows.first)

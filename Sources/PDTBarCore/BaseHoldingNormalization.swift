@@ -15,6 +15,7 @@ public struct PDTBaseHoldingInput: Equatable {
     public var unrealisedGainsPercentage: Double?
     public var closedAt: String?
     public var copyableIdentifier: String?
+    public var isin: String?
 
     public init(
         name: String,
@@ -30,7 +31,8 @@ public struct PDTBaseHoldingInput: Equatable {
         unrealisedGains: Money? = nil,
         unrealisedGainsPercentage: Double? = nil,
         closedAt: String?,
-        copyableIdentifier: String? = nil
+        copyableIdentifier: String? = nil,
+        isin: String? = nil
     ) {
         self.name = name
         self.quoteId = quoteId
@@ -46,6 +48,7 @@ public struct PDTBaseHoldingInput: Equatable {
         self.unrealisedGainsPercentage = unrealisedGainsPercentage
         self.closedAt = closedAt
         self.copyableIdentifier = copyableIdentifier
+        self.isin = isin
     }
 }
 
@@ -81,6 +84,18 @@ public enum PDTBaseHoldingNormalizer {
               trimmed.count <= 24,
               trimmed.range(of: #"^[A-Za-z0-9._-]+$"#, options: .regularExpression) != nil,
               trimmed.range(of: #"[A-Za-z]"#, options: .regularExpression) != nil
+        else {
+            return nil
+        }
+        return trimmed
+    }
+
+    public static func safeISIN(_ raw: String?) -> String? {
+        guard let raw else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard trimmed.range(of: #"^[A-Z]{2}[A-Z0-9]{9}[0-9]$"#, options: .regularExpression) != nil
         else {
             return nil
         }
@@ -136,6 +151,7 @@ public enum PDTBaseHoldingNormalizer {
             price: validMoney(holding.currentPriceLocal),
             priceAsOf: dayPrefix(holding.currentPriceDate),
             copyableIdentifier: safePublicIdentifier(holding.copyableIdentifier),
+            isin: safeISIN(holding.isin),
             averageBuyPrice: averageBuyPrice(
                 explicit: holding.unrealisedBoughtPriceAverageLocal,
                 total: holding.unrealisedBoughtPriceTotalLocal,
