@@ -124,6 +124,32 @@ struct AttentionExplanationTests {
         #expect(income.explanation.currentValue?.value == "2026-06-24; EUR 78.00")
     }
 
+    @Test("Income explanation window only surfaces in-window events")
+    func incomeExplanationWindowOnlySurfacesInWindowEvents() {
+        let snapshot = PortfolioSnapshot(
+            asOf: "2026-06-22",
+            totalValue: Money(value: "0.00", currency: "EUR"),
+            openHoldings: [],
+            sectors: [],
+            assetTypes: [],
+            incomeEvents: [
+                incomeEvent(date: "2026-06-21", name: "Before Window", quoteId: 9101),
+                incomeEvent(date: "2026-07-22", name: "Inside Window", quoteId: 9102),
+                incomeEvent(date: "2026-07-23", name: "After Window", quoteId: 9103),
+            ],
+            dividendRowCount: 3,
+            priceSeries: []
+        )
+
+        let items = PressureEngine.buildModel(from: snapshot)
+            .rankedAttentionItems
+            .filter { $0.facet == "income" }
+
+        #expect(items.map(\.title) == ["Inside Window ex-dividend"])
+        #expect(items.first?.explanation.threshold?.value == "2026-06-22..2026-07-22")
+        #expect(items.first?.explanation.currentValue?.value == "2026-07-22")
+    }
+
     private func model(_ fixtureName: String, withPrior: Bool = false) throws -> PortfolioPulseModel {
         let fixture = packageRoot.appending(path: "docs/pdt/fixtures/\(fixtureName).json")
         let snapshot = try PDTFixtureDataSource.snapshot(from: fixture)
@@ -133,6 +159,16 @@ struct AttentionExplanationTests {
 
     private func legacyItem(_ json: String) throws -> AttentionItem {
         try JSONDecoder().decode(AttentionItem.self, from: Data(json.utf8))
+    }
+
+    private func incomeEvent(date: String, name: String, quoteId: Int) -> IncomeEventSummary {
+        IncomeEventSummary(
+            date: date,
+            kind: "ex-dividend",
+            symbolName: name,
+            estimated: false,
+            quoteId: quoteId
+        )
     }
 }
 

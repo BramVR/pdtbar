@@ -4152,8 +4152,19 @@ public enum PressureEngine {
 
     private static func incomeItems(from snapshot: PortfolioSnapshot) -> [AttentionItem] {
         let incomeWindowEnd = dayString(daysFrom: snapshot.asOf, days: 30) ?? snapshot.asOf
+        guard let incomeWindowStartDate = dayDate(from: snapshot.asOf),
+              let incomeWindowEndDate = dayDate(from: incomeWindowEnd)
+        else {
+            return []
+        }
         return snapshot.incomeEvents
             .filter { $0.kind == "ex-dividend" && !$0.estimated }
+            .filter { event in
+                guard let eventDate = dayDate(from: event.date) else {
+                    return false
+                }
+                return eventDate >= incomeWindowStartDate && eventDate <= incomeWindowEndDate
+            }
             .sorted { $0.date < $1.date }
             .enumerated()
             .map { offset, event in
