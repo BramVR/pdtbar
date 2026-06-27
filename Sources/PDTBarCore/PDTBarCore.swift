@@ -2909,7 +2909,7 @@ public enum MenuDescriptorRenderer {
     }
 
     private static func portfolioOverviewBarChart(for overview: PortfolioOverviewSummary) -> MenuRowBarChart? {
-        let bars = overview.topHoldings.prefix(PortfolioOverview.topHoldingLimit).map { holding in
+        let bars = overview.topHoldings.map { holding in
             MenuRowBarChart.Bar(
                 id: "allocation.portfolio.chart.\(holding.quoteId)",
                 label: holdingChartLabel(holding),

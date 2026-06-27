@@ -208,10 +208,34 @@ struct PortfolioOverviewTests {
             "allocation.portfolio.chart.9003",
             "allocation.portfolio.chart.9009",
             "allocation.portfolio.chart.9011",
+            "allocation.portfolio.chart.9005",
+            "allocation.portfolio.chart.9004",
+            "allocation.portfolio.chart.9012",
+            "allocation.portfolio.chart.9010",
         ])
-        #expect(chart.bars.map(\.label) == ["9001", "9002", "9003", "9009", "9011"])
-        #expect(chart.bars.map(\.weight) == [0.1171875, 0.1171875, 0.11328125, 0.10742188, 0.10742188])
-        #expect(chart.bars.map(\.percentageLabel) == ["11.7%", "11.7%", "11.3%", "10.7%", "10.7%"])
+        #expect(chart.bars.map(\.label) == ["9001", "9002", "9003", "9009", "9011", "9005", "9004", "9012", "9010"])
+        #expect(chart.bars.map(\.weight) == [
+            0.1171875,
+            0.1171875,
+            0.11328125,
+            0.10742188,
+            0.10742188,
+            0.10552734,
+            0.10160156,
+            0.09570313,
+            0.03701172,
+        ])
+        #expect(chart.bars.map(\.percentageLabel) == [
+            "11.7%",
+            "11.7%",
+            "11.3%",
+            "10.7%",
+            "10.7%",
+            "10.6%",
+            "10.2%",
+            "9.6%",
+            "3.7%",
+        ])
         #expect(chart.bars.first?.detail == "Nova Lithography 11.7%; EUR 6,000.00")
 
         let detailsRow = try #require(allocationRows.first { $0.id == "allocation.portfolio.details" })

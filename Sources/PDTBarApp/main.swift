@@ -1008,7 +1008,7 @@ private final class PortfolioAllocationVerticalBarChartView: NSView {
             height: max(1, self.bounds.height - axisHeight - 22)
         )
         let slotWidth = plotRect.width / CGFloat(self.bars.count)
-        let barWidth = min(max(slotWidth * 0.42, 5), 14)
+        let barWidth = slotWidth
         // Match CodexBar's cost history chart: auto-scale the miniature chart to the visible peak.
         // The exact portfolio percentages stay in the labels, hover detail, and accessibility text.
         let maxWeight = max(
@@ -1034,9 +1034,8 @@ private final class PortfolioAllocationVerticalBarChartView: NSView {
         for (index, bar) in self.bars.enumerated() {
             let weight = Self.clampedWeight(bar.weight)
             let barHeight = max(weight > 0 ? 3 : 0, plotRect.height * weight / maxWeight)
-            let centerX = plotRect.minX + slotWidth * (CGFloat(index) + 0.5)
             let barRect = NSRect(
-                x: centerX - barWidth / 2,
+                x: plotRect.minX + slotWidth * CGFloat(index),
                 y: plotRect.maxY - barHeight,
                 width: barWidth,
                 height: barHeight
@@ -1112,8 +1111,8 @@ private final class PortfolioAllocationVerticalBarChartView: NSView {
 
     private func axisLabelIndexes() -> [Int] {
         guard !self.bars.isEmpty else { return [] }
-        if self.bars.count <= 7 {
-            return Array(self.bars.indices)
+        if self.bars.count == 1 {
+            return [self.bars.startIndex]
         }
         return [self.bars.startIndex, self.bars.index(before: self.bars.endIndex)]
     }

@@ -651,10 +651,11 @@ let portfolioDetailsRow = try require(
 try check(
     portfolioAllocationRow.id == "allocation.portfolio"
         && portfolioAllocationRow.role == MenuRowRole.portfolioOverviewChart
-        && portfolioAllocationRow.barChart?.bars.map(\.label) == ["9001", "9002", "9003", "9009", "9011"]
+        && portfolioAllocationRow.barChart?.bars.map(\.label)
+            == ["9001", "9002", "9003", "9009", "9011", "9005", "9004", "9012", "9010"]
         && portfolioDetailsRow.id == "allocation.portfolio.details"
         && portfolioDetailsRow.role == MenuRowRole.portfolioOverviewDetails,
-    "allocation section should render Portfolio allocation chart before detailed info"
+    "allocation section should render whole-portfolio allocation chart before detailed info"
 )
 try check(
     portfolioDetailsRow.children.prefix(5).map { $0.id } == [
