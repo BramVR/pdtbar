@@ -160,6 +160,20 @@ struct FreshnessLedgerTests {
         )
 
         #expect(baseOnly.model.facetSnapshots.freshness.latestCompleteDetailFillAsOf == nil)
+
+        let priorDetailStore = try SnapshotStore.temporaryTestStore(prefix: "freshness-base-prior-run")
+        var priorDetailSnapshot = snapshot
+        priorDetailSnapshot.latestCompleteDetailFillAsOf = "2026-06-24"
+        priorDetailSnapshot.latestDetailFillOutcome = .completed
+        _ = try priorDetailStore.commitCurrentSnapshot(priorDetailSnapshot)
+        let baseOnlyWithPrior = try PressureRunner.run(
+            dataSource: StaticPortfolioDataSource(fixedSnapshot: baseOnlySnapshot),
+            snapshotStore: priorDetailStore
+        )
+        let cachedBaseOnlyWithPrior = try #require(try PressureRunner.cachedPulse(snapshotStore: priorDetailStore))
+
+        #expect(baseOnlyWithPrior.model.facetSnapshots.freshness.latestCompleteDetailFillAsOf == "2026-06-24")
+        #expect(cachedBaseOnlyWithPrior.model.facetSnapshots.freshness.latestCompleteDetailFillAsOf == "2026-06-24")
     }
 
     @Test("Pulse model carries structured freshness ledger")

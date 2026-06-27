@@ -1215,7 +1215,7 @@ public enum FreshnessLedger {
         let hasUnknownPriceDates = snapshot.openHoldings.isEmpty || datedRows.count != snapshot.openHoldings.count
         let stale = !staleRows.isEmpty
         let latestCompleteDetailFillAsOf = effectiveDetailRefreshOutcome == .completed
-            ? snapshot.asOf
+            ? snapshot.latestCompleteDetailFillAsOf ?? snapshot.asOf
             : snapshot.latestCompleteDetailFillAsOf
         let detailFillIncomplete = effectiveDetailRefreshOutcome == .degraded
             || (latestCompleteDetailFillAsOf != nil && latestCompleteDetailFillAsOf != snapshot.asOf)
@@ -5210,15 +5210,20 @@ public enum PressureRunner {
         pulseReadStore: PulseReadStore? = nil
     ) throws -> PressureRunResult {
         var snapshot = try dataSource.snapshot(asOf: asOf)
-        if hasOptionalDetailSlice(snapshot) {
-            snapshot.latestCompleteDetailFillAsOf = snapshot.asOf
-            snapshot.latestDetailFillOutcome = .completed
-        }
         let priorSnapshot: PortfolioSnapshot?
         do {
             priorSnapshot = try snapshotStore.loadPriorSnapshot()
         } catch {
             priorSnapshot = nil
+        }
+        if hasOptionalDetailSlice(snapshot) {
+            snapshot.latestCompleteDetailFillAsOf = snapshot.asOf
+            snapshot.latestDetailFillOutcome = .completed
+        } else if let priorSnapshot {
+            snapshot.latestCompleteDetailFillAsOf = snapshot.latestCompleteDetailFillAsOf
+                ?? priorSnapshot.latestCompleteDetailFillAsOf
+            snapshot.latestDetailFillOutcome = snapshot.latestDetailFillOutcome
+                ?? priorSnapshot.latestDetailFillOutcome
         }
         let loadedReadState = displayReadState(from: pulseReadStore)
         let commit = try snapshotStore.commitCurrentSnapshot(snapshot)
