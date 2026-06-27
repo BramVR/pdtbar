@@ -653,7 +653,7 @@ try check(
         && portfolioAllocationRow.role == MenuRowRole.portfolioOverviewChart
         && portfolioAllocationRow.detail == nil
         && portfolioAllocationRow.barChart?.bars.map(\.label)
-            == ["9001", "9002", "9003", "9009", "9011", "9005", "9004", "9012", "9010"]
+            == ["Nova", "Orbit", "Helix", "Atlas", "Axis", "Caldera", "Meridian", "Zephyr", "Cash"]
         && portfolioAllocationRow.barChart?.bars.map(\.axisLabel)
             == ["N", "O", "H", "A", "A", "C", "M", "Z", "C"]
         && portfolioDetailsRow.id == "allocation.portfolio.details"
@@ -673,6 +673,11 @@ try check(
 try check(
     portfolioDetailsRow.children.dropFirst(5).first?.id == "allocation.9001",
     "portfolio detailed info submenu should expose individual holding drill-down rows"
+)
+try check(
+    portfolioDetailsRow.children.dropFirst(5).first?
+        .children.first { $0.id == "allocation.9001.isin" }?.detail == "NL0000000001",
+    "portfolio detailed info submenu should expose sanitized ISIN when available"
 )
 try check(
     descriptor.sections.first { $0.id == "income" }?.rows.map(\.id) == ["income.empty"],
@@ -1079,6 +1084,9 @@ let scriptedConnectorResponses = [
     "pdt-get-symbol-quote?id=9101": try mcpContent("""
     { "id": 9101, "code": "LIVE", "symbolId": 5101 }
     """),
+    "pdt-get-symbol?id=5101": try mcpContent("""
+    { "id": 5101, "name": "Live Adapter Co", "isin": "NL0010273215" }
+    """),
     "pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9101": try mcpContent("""
     {
       "data": [
@@ -1101,6 +1109,10 @@ try check(
 try check(
     scriptedLiveRun.model.facetSnapshots.allocation.topHoldings.first?.copyableIdentifier == "LIVE",
     "live data source should expose public quote code as copyable holding identifier"
+)
+try check(
+    scriptedLiveRun.model.facetSnapshots.allocation.topHoldings.first?.isin == "NL0010273215",
+    "live data source should enrich holdings with public symbol ISIN when available"
 )
 try check(
     scriptedLiveRun.model.facetSnapshots.allocation.sectorBreakdown.count == 1,
@@ -1161,12 +1173,16 @@ let secondConnectorFetch = try coalescedConnectorFetch.fetch()
 try check(firstConnectorFetch == secondConnectorFetch, "coalesced scripted connector fetch should return the first result")
 let connectorCallCounts = Dictionary(grouping: scriptedConnector.calls, by: { $0 }).mapValues(\.count)
 try check(
-    Set(scriptedConnector.calls).isSubset(of: Set(PDTReadTools.requiredV1)),
-    "scripted connector path should call only required v1 read tools"
+    Set(scriptedConnector.calls).isSubset(of: Set(PDTReadTools.allowedV1)),
+    "scripted connector path should call only allowed v1 read tools"
 )
 try check(
     PDTReadTools.requiredV1.allSatisfy { connectorCallCounts[$0] == 1 },
     "coalesced scripted connector fetch should call every required v1 read tool exactly once"
+)
+try check(
+    connectorCallCounts["pdt-get-symbol"] == 1,
+    "coalesced scripted connector fetch should opportunistically call symbol lookup when response is available"
 )
 try check(scriptedConnector.availabilityChecks == 1, "scripted connector fetch should check required tool availability once")
 let scriptedConnectorConfiguration = ScriptedPDTMCPConnectorConfiguration(

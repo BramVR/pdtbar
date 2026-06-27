@@ -1247,7 +1247,7 @@ private func scriptedPDTConnectorSmoke(arguments: [String]) throws -> SmokeRepor
     let firstRun = try coalescedFetch.fetch()
     let secondRun = try coalescedFetch.fetch()
     let callCounts = Dictionary(grouping: connector.calls, by: { $0 }).mapValues(\.count)
-    let calledOnlyRequiredTools = Set(connector.calls).isSubset(of: Set(PDTReadTools.requiredV1))
+    let calledOnlyAllowedTools = Set(connector.calls).isSubset(of: Set(PDTReadTools.allowedV1))
     let requiredToolsCalledOnce = PDTReadTools.requiredV1.allSatisfy { callCounts[$0] == 1 }
     let scenarioResults = try scriptedPDTConnectorScenarioResults(responses: responses)
     let proofPayload = ScriptedPDTConnectorProof(
@@ -1256,7 +1256,8 @@ private func scriptedPDTConnectorSmoke(arguments: [String]) throws -> SmokeRepor
         callCounts: PDTReadTools.requiredV1.reduce(into: [String: Int]()) { counts, tool in
             counts[tool] = callCounts[tool] ?? 0
         },
-        calledOnlyRequiredReadTools: calledOnlyRequiredTools,
+        calledOnlyAllowedReadTools: calledOnlyAllowedTools,
+        optionalSymbolLookupCalls: callCounts["pdt-get-symbol"] ?? 0,
         coalescedSecondFetchReusedFirstResult: firstRun == secondRun,
         snapshotWritten: firstRun.snapshotCommit.written,
         openHoldingCount: firstRun.model.facetSnapshots.allocation.openHoldingCount,
@@ -1267,8 +1268,9 @@ private func scriptedPDTConnectorSmoke(arguments: [String]) throws -> SmokeRepor
     try stableJSONData(proofPayload).write(to: proof, options: .atomic)
 
     guard connector.availabilityChecks == 1,
-          calledOnlyRequiredTools,
+          calledOnlyAllowedTools,
           requiredToolsCalledOnce,
+          callCounts["pdt-get-symbol"] == 1,
           firstRun == secondRun,
           firstRun.snapshotCommit.written,
           firstRun.model.facetSnapshots.allocation.openHoldingCount > 0,
@@ -1277,7 +1279,7 @@ private func scriptedPDTConnectorSmoke(arguments: [String]) throws -> SmokeRepor
         return SmokeReport(
             name: "scripted-pdt-connector",
             status: SmokeStatus.failed,
-            detail: "scripted PDT connector did not prove required read-tool availability, exact coalesced call counts, progressive detail refresh, or all scripted response states",
+            detail: "scripted PDT connector did not prove required read-tool availability, allowed coalesced call counts, optional symbol lookup, progressive detail refresh, or all scripted response states",
             artifacts: [artifactPath(proof)]
         )
     }
@@ -1285,7 +1287,7 @@ private func scriptedPDTConnectorSmoke(arguments: [String]) throws -> SmokeRepor
     return SmokeReport(
         name: "scripted-pdt-connector",
         status: SmokeStatus.passed,
-        detail: "scripted Claude PDT connector checked required v1 read tools, called each read tool exactly once for a coalesced fetch, rendered through PressureRunner, and proved progressive degraded detail refresh with redacted proof",
+        detail: "scripted Claude PDT connector checked required v1 read tools, called each required tool exactly once plus optional symbol lookup for a coalesced fetch, rendered through PressureRunner, and proved progressive degraded detail refresh with redacted proof",
         artifacts: [artifactPath(proof)]
     )
 }
@@ -2656,7 +2658,8 @@ private struct ScriptedPDTConnectorProof: Codable {
     var requiredReadTools: [String]
     var availabilityChecks: Int
     var callCounts: [String: Int]
-    var calledOnlyRequiredReadTools: Bool
+    var calledOnlyAllowedReadTools: Bool
+    var optionalSymbolLookupCalls: Int
     var coalescedSecondFetchReusedFirstResult: Bool
     var snapshotWritten: Bool
     var openHoldingCount: Int
@@ -4276,6 +4279,9 @@ private func scriptedPDTConnectorResponses() throws -> [String: Data] {
         "pdt-get-symbol-quote?id=9101": try mcpContent("""
         { "id": 9101, "code": "SPDT", "symbolId": 5101 }
         """),
+        "pdt-get-symbol?id=5101": try mcpContent("""
+        { "id": 5101, "name": "Scripted Adapter Co", "isin": "NL0010273215" }
+        """),
         "pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9101": try mcpContent("""
         {
           "data": [
@@ -4334,6 +4340,9 @@ private func scriptedQuietPDTConnectorResponses() throws -> [String: Data] {
         """),
         "pdt-get-symbol-quote?id=9102": try mcpContent("""
         { "id": 9102, "symbolId": 5102 }
+        """),
+        "pdt-get-symbol?id=5102": try mcpContent("""
+        { "id": 5102, "name": "Scripted Quiet Co", "isin": "BE0000000001" }
         """),
         "pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9102": try mcpContent("""
         {

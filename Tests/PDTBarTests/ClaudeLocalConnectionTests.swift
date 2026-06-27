@@ -63,6 +63,22 @@ struct ClaudeLocalConnectionTests {
         #expect(runner.requests.last?.arguments.contains("ToolSearch") == true)
     }
 
+    @Test("ToolSearch does not resolve prefix tool names")
+    func toolSearchDoesNotResolvePrefixToolNames() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: toolSearchStream(readTools: ["pdt-get-symbol-quote"]), stderr: "", exitCode: 0),
+            .init(stdout: toolSearchStream(readTools: ["pdt-get-symbol-quote"]), stderr: "", exitCode: 0),
+        ])
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 1),
+            commandRunner: runner
+        )
+
+        #expect(throws: PDTMCPConnectorError.setupUnavailable("Claude could not find pdt-get-symbol")) {
+            try connection.callReadTool("pdt-get-symbol", arguments: ["id": "5101"])
+        }
+    }
+
     @Test("Read-tool calls use ToolSearch, read-only allowlists, parser results, and retry classification")
     func readToolCallsUseSharedResolutionAndParser() throws {
         let runner = RecordingClaudeCommandRunner(results: [
