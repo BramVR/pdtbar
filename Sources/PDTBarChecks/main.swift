@@ -1415,9 +1415,17 @@ try check(
     "malformed prior snapshot should not populate prior glance context"
 )
 let replacedMalformedPrior = try malformedSnapshotStore.loadPriorSnapshot()
+var replacedMalformedPriorFacts = replacedMalformedPrior
+replacedMalformedPriorFacts?.latestCompleteDetailFillAsOf = nil
+replacedMalformedPriorFacts?.latestDetailFillOutcome = nil
 try check(
-    replacedMalformedPrior == quietSnapshot,
+    replacedMalformedPriorFacts == quietSnapshot,
     "malformed prior snapshot should be replaced by the current committed snapshot"
+)
+try check(
+    replacedMalformedPrior?.latestCompleteDetailFillAsOf == quietSnapshot.asOf
+        && replacedMalformedPrior?.latestDetailFillOutcome == .completed,
+    "full fixture run should stamp complete freshness detail metadata"
 )
 
 let bigMoverFixture = packageRoot.appending(path: "docs/pdt/fixtures/big-mover.json")
@@ -1449,9 +1457,17 @@ let bigMoverRun = try PressureRunner.run(
 try check(bigMoverRun.snapshotCommit.written, "big-mover run should update the current snapshot")
 let loadedBigMoverSnapshot = try SnapshotStore(directory: bigMoverStore.directory).loadPriorSnapshot()
 let currentBigMoverSnapshot = try PDTFixtureDataSource.snapshot(from: bigMoverFixture)
+var loadedBigMoverFacts = loadedBigMoverSnapshot
+loadedBigMoverFacts?.latestCompleteDetailFillAsOf = nil
+loadedBigMoverFacts?.latestDetailFillOutcome = nil
 try check(
-    loadedBigMoverSnapshot == currentBigMoverSnapshot,
+    loadedBigMoverFacts == currentBigMoverSnapshot,
     "big-mover run should replace the prior snapshot with current holdings"
+)
+try check(
+    loadedBigMoverSnapshot?.latestCompleteDetailFillAsOf == currentBigMoverSnapshot.asOf
+        && loadedBigMoverSnapshot?.latestDetailFillOutcome == .completed,
+    "big-mover full run should stamp complete freshness detail metadata"
 )
 var duplicatePriorBigMoverSnapshot = bigMoverPriorSnapshot
 duplicatePriorBigMoverSnapshot.openHoldings.append(bigMoverPriorSnapshot.openHoldings[0])

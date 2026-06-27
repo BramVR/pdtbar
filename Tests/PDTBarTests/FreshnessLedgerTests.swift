@@ -54,6 +54,24 @@ struct FreshnessLedgerTests {
         #expect(unknown.sourceCaveats.contains("No open holdings with dated prices"))
     }
 
+    @Test("Ledger distinguishes mixed unknown price dates")
+    func ledgerDistinguishesMixedUnknownPriceDates() {
+        let ledger = FreshnessLedger.build(
+            from: freshnessSnapshot(
+                asOf: "2026-06-25",
+                holdings: [
+                    datedHolding("Fresh A", quoteId: 1, priceAsOf: "2026-06-24"),
+                    datedHolding("Unknown B", quoteId: 2, priceAsOf: ""),
+                ]
+            )
+        )
+
+        #expect(ledger.status == .unknown)
+        #expect(ledger.oldestRows.map(\.quoteId) == [1])
+        #expect(ledger.sourceCaveats.contains("Some holdings have unknown price dates"))
+        #expect(!ledger.sourceCaveats.contains("No open holdings with dated prices"))
+    }
+
     @Test("Ledger preserves latest complete detail fill through cached snapshot reload")
     func ledgerPreservesLatestCompleteDetailFillThroughCachedSnapshotReload() throws {
         let snapshot = freshnessSnapshot(
@@ -102,6 +120,40 @@ struct FreshnessLedgerTests {
         #expect(cachedDegraded.model.facetSnapshots.freshness.latestCompleteDetailFillAsOf == "2026-06-25")
     }
 
+    @Test("Normal full fetch records complete detail fill")
+    func normalFullFetchRecordsCompleteDetailFill() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "freshness-full-run")
+        var snapshot = freshnessSnapshot(
+            asOf: "2026-06-25",
+            holdings: [
+                datedHolding("Fresh A", quoteId: 1, priceAsOf: "2026-06-24"),
+            ]
+        )
+        snapshot.xRayHoldings = []
+
+        let run = try PressureRunner.run(
+            dataSource: StaticPortfolioDataSource(fixedSnapshot: snapshot),
+            snapshotStore: store
+        )
+        let cached = try #require(try PressureRunner.cachedPulse(snapshotStore: store))
+
+        #expect(run.model.facetSnapshots.freshness.latestCompleteDetailFillAsOf == "2026-06-25")
+        #expect(cached.model.facetSnapshots.freshness.latestCompleteDetailFillAsOf == "2026-06-25")
+
+        let baseOnlyStore = try SnapshotStore.temporaryTestStore(prefix: "freshness-base-run")
+        let baseOnly = try PressureRunner.run(
+            dataSource: StaticPortfolioDataSource(fixedSnapshot: freshnessSnapshot(
+                asOf: "2026-06-25",
+                holdings: [
+                    datedHolding("Fresh A", quoteId: 1, priceAsOf: "2026-06-24"),
+                ]
+            )),
+            snapshotStore: baseOnlyStore
+        )
+
+        #expect(baseOnly.model.facetSnapshots.freshness.latestCompleteDetailFillAsOf == nil)
+    }
+
     @Test("Pulse model carries structured freshness ledger")
     func pulseModelCarriesStructuredFreshnessLedger() throws {
         let model = PressureEngine.buildModel(
@@ -141,7 +193,7 @@ struct FreshnessLedgerTests {
 
         #expect(summary.id == "freshness.summary")
         #expect(summary.role == .freshnessSummary)
-        #expect(summary.title == "Freshness: stale")
+        #expect(summary.title == "Status")
         #expect(summary.detail == "1 stale; oldest 2026-06-22")
         #expect(summary.children.map(\.id) == [
             "freshness.staleCount",
@@ -180,4 +232,12 @@ private func datedHolding(_ name: String, quoteId: Int, priceAsOf: String) -> No
         price: Money(value: "10.00", currency: "EUR"),
         priceAsOf: priceAsOf
     )
+}
+
+private struct StaticPortfolioDataSource: PortfolioDataSource {
+    var fixedSnapshot: PortfolioSnapshot
+
+    func snapshot(asOf: String?) throws -> PortfolioSnapshot {
+        fixedSnapshot
+    }
 }

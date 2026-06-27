@@ -1240,7 +1240,8 @@ public enum FreshnessLedger {
             latestCompleteDetailFillAsOf: latestCompleteDetailFillAsOf,
             sourceCaveats: sourceCaveats(
                 status: status,
-                hasUnknownPriceDates: hasUnknownPriceDates,
+                openHoldingCount: snapshot.openHoldings.count,
+                datedHoldingCount: datedRows.count,
                 detailFillIncomplete: detailFillIncomplete
             )
         )
@@ -1248,12 +1249,15 @@ public enum FreshnessLedger {
 
     private static func sourceCaveats(
         status: FreshnessState,
-        hasUnknownPriceDates: Bool,
+        openHoldingCount: Int,
+        datedHoldingCount: Int,
         detailFillIncomplete: Bool
     ) -> [String] {
         var caveats = ["Distribution dates are not reported by PDT"]
-        if hasUnknownPriceDates {
+        if openHoldingCount == 0 || datedHoldingCount == 0 {
             caveats.append("No open holdings with dated prices")
+        } else if datedHoldingCount < openHoldingCount {
+            caveats.append("Some holdings have unknown price dates")
         }
         if status == .partial || detailFillIncomplete {
             caveats.append("Optional detail fill incomplete; some detail rows may use prior data")
@@ -3142,7 +3146,7 @@ public enum MenuDescriptorRenderer {
         MenuRow(
             id: "freshness.summary",
             role: .freshnessSummary,
-            title: "Freshness: \(freshness.status.rawValue)",
+            title: "Status",
             detail: freshnessSummaryDetail(for: freshness),
             children: freshnessDetailRows(for: freshness)
         )
@@ -5071,7 +5075,11 @@ public enum PressureRunner {
         asOf: String? = nil,
         pulseReadStore: PulseReadStore? = nil
     ) throws -> PressureRunResult {
-        let snapshot = try dataSource.snapshot(asOf: asOf)
+        var snapshot = try dataSource.snapshot(asOf: asOf)
+        if hasOptionalDetailSlice(snapshot) {
+            snapshot.latestCompleteDetailFillAsOf = snapshot.asOf
+            snapshot.latestDetailFillOutcome = .completed
+        }
         let priorSnapshot: PortfolioSnapshot?
         do {
             priorSnapshot = try snapshotStore.loadPriorSnapshot()
@@ -5089,6 +5097,15 @@ public enum PressureRunner {
             loadedReadState: loadedReadState,
             resetsReappearedReadState: true
         )
+    }
+
+    private static func hasOptionalDetailSlice(_ snapshot: PortfolioSnapshot) -> Bool {
+        !snapshot.sectors.isEmpty
+            || !snapshot.assetTypes.isEmpty
+            || snapshot.xRayHoldings != nil
+            || !snapshot.incomeEvents.isEmpty
+            || snapshot.dividendRowCount > 0
+            || !snapshot.priceSeries.isEmpty
     }
 
     public static func refreshedPulse(
