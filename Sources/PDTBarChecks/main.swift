@@ -251,8 +251,9 @@ try check(
 let cachedRefreshActionDescriptor = ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: descriptor)
 try check(
     cachedRefreshActionDescriptor.statusTitle == descriptor.statusTitle
-        && cachedRefreshActionDescriptor.sections.flatMap(\.rows).map(\.title).contains("Refresh details"),
-    "cached pulse should expose a manual details refresh action"
+        && freshnessRefreshDetailsAction(in: cachedRefreshActionDescriptor)?.role == .fetchRetry
+        && !cachedRefreshActionDescriptor.sections.map(\.id).contains("portfolioFetch"),
+    "cached pulse should expose a manual details refresh action under freshness detail"
 )
 let backgroundFailureDescriptor = ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(cachedPulse: descriptor)
 try check(
@@ -381,7 +382,7 @@ try check(
         && staleReadinessReady.effect == .startFirstFetch
         && staleReadinessComplete.descriptor.statusTitle == changedPulse.descriptor.statusTitle
         && staleLateFailure.descriptor.statusTitle == changedPulse.descriptor.statusTitle
-        && staleLateFailure.descriptor.sections.flatMap(\.rows).map(\.title).contains("Refresh details"),
+        && freshnessRefreshDetailsAction(in: staleLateFailure.descriptor)?.role == .fetchRetry,
     "launch runtime should ignore stale readiness completions from earlier attempts"
 )
 let staleCachedFailureRuntime = PDTLaunchRuntime()
@@ -398,7 +399,7 @@ let staleCachedFailure = staleCachedFailureRuntime.completeReadinessProbe(
 try check(
     staleCachedFailure.descriptor.sections.flatMap(\.rows).map(\.title).contains("Details fill failed")
         && staleCachedFailure.descriptor.sections.flatMap(\.rows).map(\.title).contains("Fill details again")
-        && !staleCachedFailure.descriptor.sections.flatMap(\.rows).map(\.title).contains("Refresh details"),
+        && freshnessRefreshDetailsAction(in: staleCachedFailure.descriptor) == nil,
     "stale readiness completions should preserve cached fetch failure copy"
 )
 let staleSetupRuntime = PDTLaunchRuntime()
@@ -411,7 +412,7 @@ let staleSetupFailure = staleSetupRuntime.completeReadinessProbe(.failed, attemp
 try check(
     staleSetupFailure.descriptor.statusTitle == "Add the PDT MCP server to Claude"
         && staleSetupFailure.descriptor.sections.flatMap(\.rows).map(\.title).contains("Check again")
-        && !staleSetupFailure.descriptor.sections.flatMap(\.rows).map(\.title).contains("Refresh details"),
+        && freshnessRefreshDetailsAction(in: staleSetupFailure.descriptor) == nil,
     "stale readiness completions should preserve active setup copy"
 )
 try check(
@@ -699,6 +700,25 @@ try check(
     descriptor.sections.first { $0.id == "freshness" }?.rows.first?.detail == "Fresh",
     "quiet descriptor should render freshness from model facts"
 )
+let quietFreshnessRow = try require(
+    descriptor.sections.first { $0.id == "freshness" }?.rows.first,
+    "quiet descriptor should expose freshness summary row"
+)
+try check(
+    decoded.facetSnapshots.freshness.status == .fresh
+        && decoded.facetSnapshots.freshness.staleHoldingCount == 0
+        && decoded.facetSnapshots.freshness.oldestRows.count == 3,
+    "quiet model should carry structured freshness ledger detail"
+)
+try check(
+    quietFreshnessRow.children.map(\.id) == [
+        "freshness.staleCount",
+        "freshness.oldestPrice",
+        "freshness.oldestRows",
+        "freshness.detailFill",
+    ],
+    "freshness summary should expose user-facing ledger detail rows without AppKit deriving facts"
+)
 
 let zeroWorthFixtureDirectory = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-zero-worth-fixture")
 defer {
@@ -765,6 +785,10 @@ let emptyHoldingsModel = PressureEngine.buildModel(
 try check(
     !emptyHoldingsModel.facetSnapshots.freshness.stale,
     "empty open holdings should preserve the previous non-stale freshness behavior"
+)
+try check(
+    emptyHoldingsModel.facetSnapshots.freshness.status == .unknown,
+    "empty open holdings should expose unknown freshness state"
 )
 
 let weekendFreshnessFixture = zeroWorthFixtureDirectory.directory.appending(path: "weekend-freshness.json")
@@ -1305,6 +1329,11 @@ let degradedDetailSnapshot = try require(
 )
 try check(degradedDetailRefresh.outcome == .degraded, "missing optional price history should degrade, not abort")
 try check(
+    degradedDetailRefresh.model.facetSnapshots.freshness.status == .partial
+        && degradedDetailRefresh.model.facetSnapshots.freshness.latestCompleteDetailFillAsOf == nil,
+    "degraded background detail refresh should feed partial freshness state"
+)
+try check(
     degradedDetailSnapshot.sectors.count == 1
         && degradedDetailSnapshot.xRayHoldings?.count == 2
         && degradedDetailSnapshot.incomeEvents.count == 1
@@ -1332,8 +1361,10 @@ let repairedDetailDiagnostic = try degradedDetailStore.loadLastDetailRefreshDiag
 try check(repairedDetailRefresh.outcome == .completed, "retry after degraded detail refresh should complete with full data")
 try check(
     repairedDetailRefresh.model.facetSnapshots.bigMovers.priceSeriesCount == 2
+        && repairedDetailRefresh.model.facetSnapshots.freshness.status == .fresh
+        && repairedDetailRefresh.model.facetSnapshots.freshness.latestCompleteDetailFillAsOf == "2026-03-29"
         && repairedDetailDiagnostic == nil,
-    "completed detail retry should restore price data and clear the last diagnostic"
+    "completed detail retry should restore price data, record latest complete detail fill, and clear the last diagnostic"
 )
 let baseRetryStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-required-base-retry-check")
 defer {
@@ -1420,9 +1451,17 @@ try check(
     "malformed prior snapshot should not populate prior glance context"
 )
 let replacedMalformedPrior = try malformedSnapshotStore.loadPriorSnapshot()
+var replacedMalformedPriorFacts = replacedMalformedPrior
+replacedMalformedPriorFacts?.latestCompleteDetailFillAsOf = nil
+replacedMalformedPriorFacts?.latestDetailFillOutcome = nil
 try check(
-    replacedMalformedPrior == quietSnapshot,
+    replacedMalformedPriorFacts == quietSnapshot,
     "malformed prior snapshot should be replaced by the current committed snapshot"
+)
+try check(
+    replacedMalformedPrior?.latestCompleteDetailFillAsOf == quietSnapshot.asOf
+        && replacedMalformedPrior?.latestDetailFillOutcome == .completed,
+    "full fixture run should stamp complete freshness detail metadata"
 )
 
 let bigMoverFixture = packageRoot.appending(path: "docs/pdt/fixtures/big-mover.json")
@@ -1454,9 +1493,17 @@ let bigMoverRun = try PressureRunner.run(
 try check(bigMoverRun.snapshotCommit.written, "big-mover run should update the current snapshot")
 let loadedBigMoverSnapshot = try SnapshotStore(directory: bigMoverStore.directory).loadPriorSnapshot()
 let currentBigMoverSnapshot = try PDTFixtureDataSource.snapshot(from: bigMoverFixture)
+var loadedBigMoverFacts = loadedBigMoverSnapshot
+loadedBigMoverFacts?.latestCompleteDetailFillAsOf = nil
+loadedBigMoverFacts?.latestDetailFillOutcome = nil
 try check(
-    loadedBigMoverSnapshot == currentBigMoverSnapshot,
+    loadedBigMoverFacts == currentBigMoverSnapshot,
     "big-mover run should replace the prior snapshot with current holdings"
+)
+try check(
+    loadedBigMoverSnapshot?.latestCompleteDetailFillAsOf == currentBigMoverSnapshot.asOf
+        && loadedBigMoverSnapshot?.latestDetailFillOutcome == .completed,
+    "big-mover full run should stamp complete freshness detail metadata"
 )
 var duplicatePriorBigMoverSnapshot = bigMoverPriorSnapshot
 duplicatePriorBigMoverSnapshot.openHoldings.append(bigMoverPriorSnapshot.openHoldings[0])
@@ -2084,8 +2131,8 @@ try check(
     "descriptor should expose allocation drill-down for the item"
 )
 try check(
-    concentrationRun.descriptor.sections.first { $0.id == "freshness" }?.rows.first?.detail == "Stale",
-    "descriptor should render stale freshness from model facts"
+    concentrationRun.descriptor.sections.first { $0.id == "freshness" }?.rows.first?.detail == "2 stale; oldest 2026-06-18",
+    "descriptor should render stale freshness ledger facts"
 )
 
 let holdingFactsFixtureDirectory = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-holding-facts-fixture")
@@ -2553,6 +2600,15 @@ private func allRows(in rows: [MenuRow]) -> [MenuRow] {
     rows.flatMap { row in
         [row] + allRows(in: row.children)
     }
+}
+
+private func freshnessRefreshDetailsAction(in descriptor: MenuDescriptor) -> MenuRow? {
+    descriptor.sections
+        .first { $0.id == "freshness" }?
+        .rows
+        .first { $0.id == "freshness.summary" }?
+        .children
+        .first { $0.id == "freshness.refreshDetails" }
 }
 
 private func containsAdviceLikeLanguage(_ value: String) -> Bool {

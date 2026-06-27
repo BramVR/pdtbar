@@ -1093,9 +1093,225 @@ public struct PriceMoveSummary: Codable, Equatable {
     public var percentChange: Double
 }
 
+public enum FreshnessState: String, Codable, Equatable {
+    case fresh
+    case stale
+    case partial
+    case unknown
+}
+
+public struct FreshnessHoldingRow: Codable, Equatable {
+    public var name: String
+    public var quoteId: Int
+    public var priceAsOf: String
+
+    public init(name: String, quoteId: Int, priceAsOf: String) {
+        self.name = name
+        self.quoteId = quoteId
+        self.priceAsOf = priceAsOf
+    }
+}
+
 public struct FreshnessSnapshot: Codable, Equatable {
+    public var status: FreshnessState
     public var worstPriceAsOf: String?
     public var stale: Bool
+    public var staleHoldingCount: Int
+    public var oldestPriceAsOf: String?
+    public var oldestRows: [FreshnessHoldingRow]
+    public var latestCompleteDetailFillAsOf: String?
+    public var sourceCaveats: [String]
+
+    public init(
+        status: FreshnessState,
+        worstPriceAsOf: String?,
+        stale: Bool,
+        staleHoldingCount: Int,
+        oldestPriceAsOf: String?,
+        oldestRows: [FreshnessHoldingRow],
+        latestCompleteDetailFillAsOf: String?,
+        sourceCaveats: [String]
+    ) {
+        self.status = status
+        self.worstPriceAsOf = worstPriceAsOf
+        self.stale = stale
+        self.staleHoldingCount = max(0, staleHoldingCount)
+        self.oldestPriceAsOf = oldestPriceAsOf
+        self.oldestRows = oldestRows
+        self.latestCompleteDetailFillAsOf = latestCompleteDetailFillAsOf
+        self.sourceCaveats = sourceCaveats
+    }
+
+    public init(worstPriceAsOf: String?, stale: Bool) {
+        self.init(
+            status: stale ? .stale : (worstPriceAsOf == nil ? .unknown : .fresh),
+            worstPriceAsOf: worstPriceAsOf,
+            stale: stale,
+            staleHoldingCount: 0,
+            oldestPriceAsOf: worstPriceAsOf,
+            oldestRows: [],
+            latestCompleteDetailFillAsOf: nil,
+            sourceCaveats: []
+        )
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case worstPriceAsOf
+        case stale
+        case staleHoldingCount
+        case oldestPriceAsOf
+        case oldestRows
+        case latestCompleteDetailFillAsOf
+        case sourceCaveats
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let worstPriceAsOf = try container.decodeIfPresent(String.self, forKey: .worstPriceAsOf)
+        let stale = try container.decodeIfPresent(Bool.self, forKey: .stale) ?? false
+        self.init(
+            status: try container.decodeIfPresent(FreshnessState.self, forKey: .status)
+                ?? (stale ? .stale : (worstPriceAsOf == nil ? .unknown : .fresh)),
+            worstPriceAsOf: worstPriceAsOf,
+            stale: stale,
+            staleHoldingCount: try container.decodeIfPresent(Int.self, forKey: .staleHoldingCount) ?? 0,
+            oldestPriceAsOf: try container.decodeIfPresent(String.self, forKey: .oldestPriceAsOf) ?? worstPriceAsOf,
+            oldestRows: try container.decodeIfPresent([FreshnessHoldingRow].self, forKey: .oldestRows) ?? [],
+            latestCompleteDetailFillAsOf: try container.decodeIfPresent(String.self, forKey: .latestCompleteDetailFillAsOf),
+            sourceCaveats: try container.decodeIfPresent([String].self, forKey: .sourceCaveats) ?? []
+        )
+    }
+}
+
+public enum FreshnessLedger {
+    public static let staleBusinessDayGrace = 1
+    public static let oldestRowLimit = 3
+
+    public static func build(
+        from snapshot: PortfolioSnapshot,
+        detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil
+    ) -> FreshnessSnapshot {
+        let effectiveDetailRefreshOutcome = detailRefreshOutcome ?? snapshot.latestDetailFillOutcome
+        let datedRows = snapshot.openHoldings.compactMap { holding -> (row: FreshnessHoldingRow, date: Date)? in
+            guard let date = freshnessDate(from: holding.priceAsOf) else {
+                return nil
+            }
+            return (
+                FreshnessHoldingRow(name: holding.name, quoteId: holding.quoteId, priceAsOf: holding.priceAsOf),
+                date
+            )
+        }
+        let sortedRows = datedRows.sorted {
+            if $0.date != $1.date {
+                return $0.date < $1.date
+            }
+            if $0.row.name != $1.row.name {
+                return $0.row.name < $1.row.name
+            }
+            return $0.row.quoteId < $1.row.quoteId
+        }
+        let staleRows = datedRows.filter {
+            isStale(priceDate: $0.date, asOf: snapshot.asOf)
+        }
+        let oldestRows = Array(sortedRows.prefix(oldestRowLimit).map(\.row))
+        let oldestPriceAsOf = sortedRows.first?.row.priceAsOf
+        let hasUnknownPriceDates = snapshot.openHoldings.isEmpty || datedRows.count != snapshot.openHoldings.count
+        let stale = !staleRows.isEmpty
+        let latestCompleteDetailFillAsOf = effectiveDetailRefreshOutcome == .completed
+            ? snapshot.latestCompleteDetailFillAsOf ?? snapshot.asOf
+            : snapshot.latestCompleteDetailFillAsOf
+        let detailFillIncomplete = effectiveDetailRefreshOutcome == .degraded
+            || (latestCompleteDetailFillAsOf != nil && latestCompleteDetailFillAsOf != snapshot.asOf)
+        let status: FreshnessState
+        if hasUnknownPriceDates {
+            status = .unknown
+        } else if stale {
+            status = .stale
+        } else if detailFillIncomplete {
+            status = .partial
+        } else {
+            status = .fresh
+        }
+
+        return FreshnessSnapshot(
+            status: status,
+            worstPriceAsOf: oldestPriceAsOf,
+            stale: stale,
+            staleHoldingCount: staleRows.count,
+            oldestPriceAsOf: oldestPriceAsOf,
+            oldestRows: oldestRows,
+            latestCompleteDetailFillAsOf: latestCompleteDetailFillAsOf,
+            sourceCaveats: sourceCaveats(
+                status: status,
+                openHoldingCount: snapshot.openHoldings.count,
+                datedHoldingCount: datedRows.count,
+                detailFillIncomplete: detailFillIncomplete
+            )
+        )
+    }
+
+    private static func sourceCaveats(
+        status: FreshnessState,
+        openHoldingCount: Int,
+        datedHoldingCount: Int,
+        detailFillIncomplete: Bool
+    ) -> [String] {
+        var caveats = ["Distribution dates are not reported by PDT"]
+        if openHoldingCount == 0 || datedHoldingCount == 0 {
+            caveats.append("No open holdings with dated prices")
+        } else if datedHoldingCount < openHoldingCount {
+            caveats.append("Some holdings have unknown price dates")
+        }
+        if status == .partial || detailFillIncomplete {
+            caveats.append("Optional detail fill incomplete; some detail rows may use prior data")
+        }
+        return caveats
+    }
+
+    private static func isStale(priceDate: Date, asOf: String) -> Bool {
+        guard let asOfDate = freshnessDate(from: asOf),
+              priceDate < asOfDate
+        else {
+            return false
+        }
+        return businessDays(after: priceDate, through: asOfDate) > staleBusinessDayGrace
+    }
+
+    private static func businessDays(after start: Date, through end: Date) -> Int {
+        let calendar = freshnessCalendar
+        var date = calendar.date(byAdding: .day, value: 1, to: start)
+        var count = 0
+        while let current = date, current <= end {
+            let weekday = calendar.component(.weekday, from: current)
+            if weekday != 1 && weekday != 7 {
+                count += 1
+            }
+            date = calendar.date(byAdding: .day, value: 1, to: current)
+        }
+        return count
+    }
+
+    private static func freshnessDate(from value: String) -> Date? {
+        let parts = value.prefix(10).split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        let calendar = freshnessCalendar
+        return calendar.date(
+            from: DateComponents(
+                calendar: calendar,
+                timeZone: calendar.timeZone,
+                year: parts[0],
+                month: parts[1],
+                day: parts[2]
+            )
+        )
+    }
+
+    private static var freshnessCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        return calendar
+    }
 }
 
 public struct StatusVisualState: Codable, Equatable {
@@ -1276,6 +1492,12 @@ public enum MenuRowRole: String, Codable, Equatable {
     case incomeDrillDown
     case bigMoverSummary
     case freshnessSummary
+    case freshnessStaleCount
+    case freshnessOldestPrice
+    case freshnessOldestRows
+    case freshnessOldestHolding
+    case freshnessDetailFill
+    case freshnessCaveats
     case holdingIdentifierCopy
 
     public init(from decoder: Decoder) throws {
@@ -1984,17 +2206,30 @@ public enum ClaudeLaunchFlow {
     }
 
     public static func descriptorWithRefreshDetailsAction(cachedPulse: MenuDescriptor) -> MenuDescriptor {
-        cachedPulseDescriptor(
-            cachedPulse,
-            rows: [
-                MenuRow(
-                    id: "portfolioFetch.refreshDetails",
-                    role: .fetchRetry,
-                    title: "Refresh details",
-                    detail: "Fill income and detail data"
-                ),
-            ]
-        )
+        var descriptor = cachedPulse
+        var addedRefreshAction = false
+        descriptor.sections = descriptor.sections.map { section in
+            guard section.id == "freshness" else {
+                return section
+            }
+            var section = section
+            section.rows = section.rows.map { row in
+                guard row.id == "freshness.summary" else {
+                    return row
+                }
+                var row = row
+                if !row.children.contains(where: { $0.id == "freshness.refreshDetails" }) {
+                    row.children.append(Self.refreshDetailsRow())
+                }
+                addedRefreshAction = true
+                return row
+            }
+            return section
+        }
+        guard addedRefreshAction else {
+            return cachedPulseDescriptor(cachedPulse, rows: [refreshDetailsRow(id: "portfolioFetch.refreshDetails")])
+        }
+        return descriptor
     }
 
     public static func descriptorForBackgroundRefreshFailure(cachedPulse: MenuDescriptor) -> MenuDescriptor {
@@ -2121,6 +2356,15 @@ public enum ClaudeLaunchFlow {
             statusVisual: statusVisual ?? cachedPulse.statusVisual,
             statusAccessibilityIdentifier: cachedPulse.statusAccessibilityIdentifier,
             sections: rowsFirst ? [fetchSection] + cachedPulse.sections : cachedPulse.sections + [fetchSection]
+        )
+    }
+
+    private static func refreshDetailsRow(id: String = "freshness.refreshDetails") -> MenuRow {
+        MenuRow(
+            id: id,
+            role: .fetchRetry,
+            title: "Refresh details",
+            detail: "Fill income and detail data"
         )
     }
 
@@ -2747,6 +2991,7 @@ public enum MenuDescriptorRenderer {
         let allocation = model.facetSnapshots.allocation
         let income = model.facetSnapshots.income
         let bigMovers = model.facetSnapshots.bigMovers
+        let freshness = model.facetSnapshots.freshness
 
         let pulseRows: [MenuRow]
         if model.allQuiet {
@@ -2848,12 +3093,7 @@ public enum MenuDescriptorRenderer {
                     id: "freshness",
                     title: "Freshness",
                     rows: [
-                        MenuRow(
-                            id: "freshness.summary",
-                            role: .freshnessSummary,
-                            title: model.facetSnapshots.freshness.worstPriceAsOf ?? "Unknown price date",
-                            detail: model.facetSnapshots.freshness.stale ? "Stale" : "Fresh"
-                        ),
+                        freshnessSummaryRow(for: freshness),
                     ]
                 ),
             ]
@@ -3057,11 +3297,72 @@ public enum MenuDescriptorRenderer {
         )
     }
 
+    private static func freshnessSummaryRow(for freshness: FreshnessSnapshot) -> MenuRow {
+        MenuRow(
+            id: "freshness.summary",
+            role: .freshnessSummary,
+            title: "Status",
+            detail: freshnessSummaryDetail(for: freshness),
+            children: freshnessDetailRows(for: freshness)
+        )
+    }
+
+    private static func freshnessDetailRows(for freshness: FreshnessSnapshot) -> [MenuRow] {
+        [
+            MenuRow(
+                id: "freshness.staleCount",
+                role: .freshnessStaleCount,
+                title: "Stale holdings",
+                detail: "\(freshness.staleHoldingCount)"
+            ),
+            MenuRow(
+                id: "freshness.oldestPrice",
+                role: .freshnessOldestPrice,
+                title: "Oldest price",
+                detail: freshness.oldestPriceAsOf ?? "Unknown"
+            ),
+            freshness.oldestRows.isEmpty ? nil : MenuRow(
+                id: "freshness.oldestRows",
+                role: .freshnessOldestRows,
+                title: "Oldest rows",
+                detail: freshness.oldestRows.count == 1 ? "1 holding" : "\(freshness.oldestRows.count) holdings",
+                children: freshness.oldestRows.map {
+                    MenuRow(
+                        id: "freshness.oldestRows.\($0.quoteId)",
+                        role: .freshnessOldestHolding,
+                        title: $0.name,
+                        detail: $0.priceAsOf
+                    )
+                }
+            ),
+            MenuRow(
+                id: "freshness.detailFill",
+                role: .freshnessDetailFill,
+                title: "Latest complete detail fill",
+                detail: freshness.latestCompleteDetailFillAsOf ?? "Not recorded"
+            ),
+        ].compactMap { $0 }
+    }
+
+    private static func freshnessSummaryDetail(for freshness: FreshnessSnapshot) -> String {
+        switch freshness.status {
+        case .fresh:
+            return "Fresh"
+        case .stale:
+            let oldest = freshness.oldestPriceAsOf.map { "; oldest \($0)" } ?? ""
+            return "\(freshness.staleHoldingCount) stale\(oldest)"
+        case .partial:
+            return freshness.oldestPriceAsOf.map { "Partial; oldest \($0)" } ?? "Partial"
+        case .unknown:
+            return "Unknown price dates"
+        }
+    }
+
     private static func statusVisual(for model: PortfolioPulseModel) -> StatusVisualState {
         StatusVisualState(
             barHeights: concentrationBarHeights(from: model.facetSnapshots.allocation),
             filledBarCount: model.rankedAttentionItems.count,
-            isDimmed: model.facetSnapshots.freshness.stale
+            isDimmed: model.facetSnapshots.freshness.status != .fresh
         )
     }
 
@@ -3281,12 +3582,12 @@ public enum MenuDescriptorRenderer {
 public enum PressureEngine {
     public static let concentrationThreshold = 0.20
     public static let bigMoverThreshold = 0.10
-    private static let freshnessBusinessDayGrace = 1
 
     public static func buildModel(
         from snapshot: PortfolioSnapshot,
         priorSnapshot: PortfolioSnapshot? = nil,
-        readState: PulseReadState? = nil
+        readState: PulseReadState? = nil,
+        detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil
     ) -> PortfolioPulseModel {
         let rankedItems = ranked(
             concentrationItems(from: snapshot, priorSnapshot: priorSnapshot, readState: readState)
@@ -3294,8 +3595,7 @@ public enum PressureEngine {
                 + bigMoverItems(from: snapshot, priorSnapshot: priorSnapshot)
         )
         let totalValue = snapshot.totalValue
-        let worstPriceAsOf = snapshot.openHoldings.map(\.priceAsOf).min()
-        let freshnessStale = isFreshnessStale(worstPriceAsOf: worstPriceAsOf, asOf: snapshot.asOf)
+        let freshness = FreshnessLedger.build(from: snapshot, detailRefreshOutcome: detailRefreshOutcome)
         let recentMovesByQuoteID = recentMoves(from: snapshot.priceSeries)
         let nextIncomeEventsByQuoteID = nextIncomeEventsByQuoteID(from: snapshot)
         let portfolioOverview = PortfolioOverview.build(from: snapshot)
@@ -3372,7 +3672,7 @@ public enum PressureEngine {
             portfolioGlance: PortfolioGlanceContext(
                 totalValue: totalValue,
                 openHoldingCount: snapshot.openHoldings.count,
-                worstPriceAsOf: worstPriceAsOf,
+                worstPriceAsOf: freshness.worstPriceAsOf,
                 priorSnapshotAsOf: priorSnapshot?.asOf
             ),
             facetSnapshots: FacetSnapshots(
@@ -3393,58 +3693,10 @@ public enum PressureEngine {
                     priceSeriesCount: snapshot.priceSeries.count,
                     maxMove: maxMove(from: snapshot.priceSeries)
                 ),
-                freshness: FreshnessSnapshot(
-                    worstPriceAsOf: worstPriceAsOf,
-                    stale: freshnessStale
-                )
+                freshness: freshness
             ),
             supportingDataSlots: supportingDataSlots
         )
-    }
-
-    private static func isFreshnessStale(worstPriceAsOf: String?, asOf: String) -> Bool {
-        guard let worstPriceAsOf,
-              let priceDate = dayDate(from: worstPriceAsOf),
-              let asOfDate = dayDate(from: asOf),
-              priceDate < asOfDate
-        else {
-            return false
-        }
-        return businessDays(after: priceDate, through: asOfDate) > freshnessBusinessDayGrace
-    }
-
-    private static func businessDays(after start: Date, through end: Date) -> Int {
-        let calendar = freshnessCalendar
-        var date = calendar.date(byAdding: .day, value: 1, to: start)
-        var count = 0
-        while let current = date, current <= end {
-            let weekday = calendar.component(.weekday, from: current)
-            if weekday != 1 && weekday != 7 {
-                count += 1
-            }
-            date = calendar.date(byAdding: .day, value: 1, to: current)
-        }
-        return count
-    }
-
-    private static func dayDate(from value: String) -> Date? {
-        let parts = value.prefix(10).split(separator: "-").compactMap { Int($0) }
-        guard parts.count == 3 else { return nil }
-        return freshnessCalendar.date(
-            from: DateComponents(
-                calendar: freshnessCalendar,
-                timeZone: freshnessCalendar.timeZone,
-                year: parts[0],
-                month: parts[1],
-                day: parts[2]
-            )
-        )
-    }
-
-    private static var freshnessCalendar: Calendar {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
-        return calendar
     }
 
     private static func ranked(_ items: [AttentionItem]) -> [AttentionItem] {
@@ -3456,6 +3708,26 @@ public enum PressureEngine {
                 rankedItem.rank = offset + 1
                 return rankedItem
             }
+    }
+
+    private static func dayDate(from value: String) -> Date? {
+        let parts = value.prefix(10).split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return dateCalendar.date(
+            from: DateComponents(
+                calendar: dateCalendar,
+                timeZone: dateCalendar.timeZone,
+                year: parts[0],
+                month: parts[1],
+                day: parts[2]
+            )
+        )
+    }
+
+    private static var dateCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        return calendar
     }
 
     private static func ranksBefore(_ lhs: AttentionItem, _ rhs: AttentionItem) -> Bool {
@@ -4352,13 +4624,14 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             return $0.date < $1.date
         }
         diagnostics.append(contentsOf: priceHistory.diagnostics)
+        let outcome: PDTBackgroundDetailRefreshOutcome = diagnostics.isEmpty ? .completed : .degraded
         let pulse = try PressureRunner.refreshedPulse(
             snapshot: snapshot,
             priorSnapshot: originalPriorSnapshot,
             snapshotStore: snapshotStore,
             pulseReadStore: pulseReadStore,
+            detailRefreshOutcome: outcome
         )
-        let outcome: PDTBackgroundDetailRefreshOutcome = diagnostics.isEmpty ? .completed : .degraded
         if let lastDiagnostic = diagnostics.last {
             try snapshotStore.saveLastDetailRefreshDiagnostic(lastDiagnostic)
         } else {
@@ -4412,6 +4685,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         snapshot.incomeEvents = priorSnapshot.incomeEvents
         snapshot.dividendRowCount = priorSnapshot.dividendRowCount
         snapshot.priceSeries = priorSnapshot.priceSeries.filter { currentQuoteIDs.contains($0.quoteId) }
+        snapshot.latestCompleteDetailFillAsOf = priorSnapshot.latestCompleteDetailFillAsOf
     }
 
     private func priceSeriesWithPriorFallback(
@@ -4998,12 +5272,21 @@ public enum PressureRunner {
         asOf: String? = nil,
         pulseReadStore: PulseReadStore? = nil
     ) throws -> PressureRunResult {
-        let snapshot = try dataSource.snapshot(asOf: asOf)
+        var snapshot = try dataSource.snapshot(asOf: asOf)
         let priorSnapshot: PortfolioSnapshot?
         do {
             priorSnapshot = try snapshotStore.loadPriorSnapshot()
         } catch {
             priorSnapshot = nil
+        }
+        if hasOptionalDetailSlice(snapshot) {
+            snapshot.latestCompleteDetailFillAsOf = snapshot.asOf
+            snapshot.latestDetailFillOutcome = .completed
+        } else if let priorSnapshot {
+            snapshot.latestCompleteDetailFillAsOf = snapshot.latestCompleteDetailFillAsOf
+                ?? priorSnapshot.latestCompleteDetailFillAsOf
+            snapshot.latestDetailFillOutcome = snapshot.latestDetailFillOutcome
+                ?? priorSnapshot.latestDetailFillOutcome
         }
         let loadedReadState = displayReadState(from: pulseReadStore)
         let commit = try snapshotStore.commitCurrentSnapshot(snapshot)
@@ -5018,22 +5301,40 @@ public enum PressureRunner {
         )
     }
 
+    private static func hasOptionalDetailSlice(_ snapshot: PortfolioSnapshot) -> Bool {
+        !snapshot.sectors.isEmpty
+            || !snapshot.assetTypes.isEmpty
+            || !(snapshot.xRayHoldings ?? []).isEmpty
+            || !snapshot.incomeEvents.isEmpty
+            || snapshot.dividendRowCount > 0
+            || !snapshot.priceSeries.isEmpty
+    }
+
     public static func refreshedPulse(
         snapshot: PortfolioSnapshot,
         priorSnapshot: PortfolioSnapshot?,
         snapshotStore: SnapshotStore,
-        pulseReadStore: PulseReadStore? = nil
+        pulseReadStore: PulseReadStore? = nil,
+        detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil
     ) throws -> PulseLifecycleResult {
         let loadedReadState = displayReadState(from: pulseReadStore)
-        let commit = try snapshotStore.commitCurrentSnapshot(snapshot)
+        var committedSnapshot = snapshot
+        if let detailRefreshOutcome {
+            committedSnapshot.latestDetailFillOutcome = detailRefreshOutcome
+        }
+        if detailRefreshOutcome == .completed {
+            committedSnapshot.latestCompleteDetailFillAsOf = committedSnapshot.asOf
+        }
+        let commit = try snapshotStore.commitCurrentSnapshot(committedSnapshot)
         return try lifecycleResult(
-            snapshot: snapshot,
+            snapshot: committedSnapshot,
             priorSnapshot: priorSnapshot,
             snapshotCommit: commit,
             pulseReadStore: pulseReadStore,
             source: .refreshedSnapshot,
             loadedReadState: loadedReadState,
-            resetsReappearedReadState: true
+            resetsReappearedReadState: true,
+            detailRefreshOutcome: detailRefreshOutcome
         )
     }
 
@@ -5068,13 +5369,15 @@ public enum PressureRunner {
         pulseReadStore: PulseReadStore?,
         source: PulseLifecycleSource,
         loadedReadState: PulseReadState? = nil,
-        resetsReappearedReadState: Bool
+        resetsReappearedReadState: Bool,
+        detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil
     ) throws -> PulseLifecycleResult {
         let displayReadState = loadedReadState ?? displayReadState(from: pulseReadStore)
         let rawModel = PressureEngine.buildModel(
             from: snapshot,
             priorSnapshot: priorSnapshot,
-            readState: displayReadState
+            readState: displayReadState,
+            detailRefreshOutcome: detailRefreshOutcome
         )
         let readState = resetsReappearedReadState
             ? try readStateAfterResettingReappearedItems(
@@ -5214,6 +5517,8 @@ public struct PortfolioSnapshot: Codable, Equatable {
     public var incomeEvents: [IncomeEventSummary]
     public var dividendRowCount: Int
     public var priceSeries: [PricePoint]
+    public var latestCompleteDetailFillAsOf: String?
+    public var latestDetailFillOutcome: PDTBackgroundDetailRefreshOutcome?
 
     public init(
         asOf: String,
@@ -5224,7 +5529,9 @@ public struct PortfolioSnapshot: Codable, Equatable {
         xRayHoldings: [XRayHoldingSummary]? = nil,
         incomeEvents: [IncomeEventSummary],
         dividendRowCount: Int,
-        priceSeries: [PricePoint]
+        priceSeries: [PricePoint],
+        latestCompleteDetailFillAsOf: String? = nil,
+        latestDetailFillOutcome: PDTBackgroundDetailRefreshOutcome? = nil
     ) {
         self.asOf = asOf
         self.totalValue = totalValue
@@ -5235,6 +5542,8 @@ public struct PortfolioSnapshot: Codable, Equatable {
         self.incomeEvents = incomeEvents
         self.dividendRowCount = dividendRowCount
         self.priceSeries = priceSeries
+        self.latestCompleteDetailFillAsOf = latestCompleteDetailFillAsOf
+        self.latestDetailFillOutcome = latestDetailFillOutcome
     }
 }
 

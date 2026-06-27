@@ -174,7 +174,8 @@ struct ClaudeLaunchFlowTests {
         #expect(rowTitles(in: cachedFailure).contains("Details fill failed"))
         #expect(rowTitles(in: cachedFailure).contains("Fill details again"))
         #expect(!rowTitles(in: cachedFailure).contains("Log in with Claude"))
-        #expect(rowTitles(in: cachedRefreshAction).contains("Refresh details"))
+        #expect(freshnessRefreshDetailsAction(in: cachedRefreshAction)?.role == .fetchRetry)
+        #expect(!cachedRefreshAction.sections.map(\.id).contains("portfolioFetch"))
         #expect(cachedRefreshAction.sections.first?.id == cachedPulse.sections.first?.id)
         #expect(backgroundFailure.sections.first?.id == "portfolioFetch")
         #expect(rowTitles(in: backgroundFailure).contains("Details fill failed"))
@@ -289,7 +290,7 @@ struct PDTOnboardingRunnerTests {
         #expect(ready.descriptor.statusTitle == "Fetching portfolio")
         #expect(complete.effect == .none)
         #expect(complete.descriptor.statusTitle == pulse.descriptor.statusTitle)
-        #expect(rowTitles(in: complete.descriptor).contains("Refresh details"))
+        #expect(freshnessRefreshDetailsAction(in: complete.descriptor)?.role == .fetchRetry)
         #expect(runtime.currentPulse?.source == .fetchedSnapshot)
     }
 
@@ -362,7 +363,7 @@ struct PDTOnboardingRunnerTests {
         #expect(!runtime.backgroundDetailRefreshInFlight)
         #expect(runtime.currentPulse?.source == .fetchedSnapshot)
         #expect(completed.descriptor.statusTitle == refreshedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: completed.descriptor).contains("Refresh details"))
+        #expect(freshnessRefreshDetailsAction(in: completed.descriptor)?.role == .fetchRetry)
         #expect(!rowTitles(in: completed.descriptor).contains("Details partially filled"))
         #expect(!rowTitles(in: completed.descriptor).contains("Details fill failed"))
     }
@@ -505,7 +506,7 @@ struct PDTOnboardingRunnerTests {
         #expect(ready.effect == .startFirstFetch)
         #expect(complete.descriptor.statusTitle == pulse.descriptor.statusTitle)
         #expect(laterStaleFailure.descriptor.statusTitle == pulse.descriptor.statusTitle)
-        #expect(rowTitles(in: laterStaleFailure.descriptor).contains("Refresh details"))
+        #expect(freshnessRefreshDetailsAction(in: laterStaleFailure.descriptor)?.role == .fetchRetry)
         #expect(runtime.currentPulse?.source == .fetchedSnapshot)
     }
 
@@ -525,7 +526,7 @@ struct PDTOnboardingRunnerTests {
         #expect(failure.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
         #expect(rowTitles(in: staleFailure.descriptor).contains("Details fill failed"))
         #expect(rowTitles(in: staleFailure.descriptor).contains("Fill details again"))
-        #expect(!rowTitles(in: staleFailure.descriptor).contains("Refresh details"))
+        #expect(freshnessRefreshDetailsAction(in: staleFailure.descriptor) == nil)
     }
 
     @Test("Launch runtime stale readiness completion preserves active setup copy")
@@ -543,7 +544,7 @@ struct PDTOnboardingRunnerTests {
         #expect(missingSetup.descriptor.statusTitle == "Add the PDT MCP server to Claude")
         #expect(staleFailure.descriptor.statusTitle == "Add the PDT MCP server to Claude")
         #expect(rowTitles(in: staleFailure.descriptor).contains("Check again"))
-        #expect(!rowTitles(in: staleFailure.descriptor).contains("Refresh details"))
+        #expect(freshnessRefreshDetailsAction(in: staleFailure.descriptor) == nil)
     }
 
     @Test("Fresh setup login handoff success rechecks readiness and starts first fetch")
@@ -837,4 +838,13 @@ private func rowTitles(in descriptor: MenuDescriptor) -> [String] {
         .sections
         .flatMap(\.rows)
         .map(\.title)
+}
+
+private func freshnessRefreshDetailsAction(in descriptor: MenuDescriptor) -> MenuRow? {
+    descriptor.sections
+        .first { $0.id == "freshness" }?
+        .rows
+        .first { $0.id == "freshness.summary" }?
+        .children
+        .first { $0.id == "freshness.refreshDetails" }
 }
