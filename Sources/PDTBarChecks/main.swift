@@ -325,12 +325,28 @@ try check(
         && cachedRefreshDescriptor.sections.flatMap(\.rows).map(\.title).contains("Refreshing portfolio"),
     "returning launch should keep the cached pulse visible while a refresh is running"
 )
+try check(
+    cachedRefreshDescriptor.sections.first { $0.id == "actions" }?
+        .rows.first { $0.id == "actions.refreshNow" }?.role == .fetchStatus
+        && cachedRefreshDescriptor.sections.first { $0.id == "actions" }?
+            .rows.first { $0.id == "actions.refreshNow" }?.title == "Refreshing now"
+        && cachedRefreshDescriptor.sections.first { $0.id == "actions" }?
+            .rows.first { $0.id == "actions.openPDT" }?.role == .openPDT,
+    "active cached refresh should coalesce Refresh now and keep Open PDT available"
+)
 let cachedRefreshActionDescriptor = ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: descriptor)
 try check(
     cachedRefreshActionDescriptor.statusTitle == descriptor.statusTitle
         && freshnessRefreshDetailsAction(in: cachedRefreshActionDescriptor)?.role == .fetchRetry
         && !cachedRefreshActionDescriptor.sections.map(\.id).contains("portfolioFetch"),
     "cached pulse should expose a manual details refresh action under freshness detail"
+)
+try check(
+    cachedRefreshActionDescriptor.sections.first { $0.id == "actions" }?
+        .rows.first { $0.id == "actions.refreshNow" }?.role == .fetchRetry
+        && cachedRefreshActionDescriptor.sections.first { $0.id == "actions" }?
+            .rows.first { $0.id == "actions.openPDT" }?.role == .openPDT,
+    "idle cached pulse should expose top-level Refresh now and Open PDT actions"
 )
 let backgroundFailureDescriptor = ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(cachedPulse: descriptor)
 try check(
@@ -361,6 +377,13 @@ try check(
         .children.first { $0.id == "dataHealth.detailFill" }?
         .detail == "Price history 12/19",
     "cached refresh descriptor should preserve the pulse while surfacing active Data health detail-fill state"
+)
+try check(
+    backgroundProgressDescriptor.sections.first { $0.id == "actions" }?
+        .rows.first { $0.id == "actions.refreshNow" }?.role == .fetchStatus
+        && backgroundProgressDescriptor.sections.first { $0.id == "actions" }?
+            .rows.first { $0.id == "actions.openPDT" }?.role == .openPDT,
+    "background detail progress should keep top-level actions while preventing duplicate refresh work"
 )
 let backgroundDegradedDescriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailDegraded(cachedPulse: descriptor)
 try check(
@@ -647,7 +670,16 @@ try check(
 )
 try check(descriptorObject.keys.contains("statusBadge"), "descriptor JSON should explicitly encode statusBadge")
 try check(descriptorObject.keys.contains("statusVisual"), "descriptor JSON should encode the plain status visual state")
-try check(descriptor.sections.map(\.id) == ["pulse", "allocation", "income", "bigMovers", "freshness"], "descriptor should expose drill-down sections")
+try check(
+    descriptor.sections.map(\.id) == ["pulse", "allocation", "income", "bigMovers", "freshness", "actions"],
+    "descriptor should expose drill-down sections and top-level actions"
+)
+try check(
+    descriptor.sections.first { $0.id == "actions" }?.rows.map(\.id) == ["actions.refreshNow", "actions.openPDT"]
+        && descriptor.sections.first { $0.id == "actions" }?.rows.first?.role == .fetchRetry
+        && descriptor.sections.first { $0.id == "actions" }?.rows.last?.role == .openPDT,
+    "descriptor should expose Refresh now and Open PDT as typed top-level actions"
+)
 try check(
     descriptor.statusAccessibilityIdentifier == "pdtbar.status",
     "descriptor should expose a stable status accessibility identifier"
@@ -716,6 +748,7 @@ try check(
         "pdtbar.section.income",
         "pdtbar.section.bigMovers",
         "pdtbar.section.freshness",
+        "pdtbar.section.actions",
     ],
     "descriptor should expose stable section accessibility identifiers"
 )
@@ -1592,7 +1625,7 @@ try check(
     "quiet E2E descriptor should render all quiet"
 )
 try check(
-    quietRunWithPrior.descriptor.sections.map(\.id) == ["pulse", "allocation", "income", "bigMovers", "freshness"],
+    quietRunWithPrior.descriptor.sections.map(\.id) == ["pulse", "allocation", "income", "bigMovers", "freshness", "actions"],
     "quiet E2E descriptor should keep drill-down sections reachable"
 )
 let malformedSnapshotStore = try SnapshotStore.temporaryTestStore()
