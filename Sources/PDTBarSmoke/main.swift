@@ -3139,8 +3139,11 @@ private func captureMenuScreenshot(
     let rawScreenshot = artifacts.appending(path: "\(name)-screen.png")
     let screenshot = artifacts.appending(path: "\(name)-menu.png")
     try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-    let menuBounds = menuFrameBounds(snapshot: snapshot, expectedMenuIdentifiers: expectedMenuIdentifiers)
+    guard let menuBounds = menuFrameBounds(snapshot: snapshot, expectedMenuIdentifiers: expectedMenuIdentifiers)
         ?? statusMenuFallbackBounds(snapshot: snapshot)
+    else {
+        return nil
+    }
     let captureBounds = screenshotCaptureBounds(containing: menuBounds)
     let displayRegion = "\(Int(captureBounds.minX)),\(Int(captureBounds.minY)),\(Int(captureBounds.width)),\(Int(captureBounds.height))"
     _ = try run(
@@ -3304,12 +3307,14 @@ private func menuFrameBounds(
 }
 
 private func statusMenuFallbackBounds(snapshot: AccessibilitySnapshot) -> CGRect? {
-    let status = snapshot.framesByIdentifier["pdtbar.status"].flatMap { validRect($0.rect) }
+    guard let status = snapshot.framesByIdentifier["pdtbar.status"].flatMap({ validRect($0.rect) }) else {
+        return nil
+    }
     let display = displayBounds(containing: status)
-    let width = min(display.width, status == nil ? 900 : 560)
+    let width = min(display.width, 560)
     let x = display.maxX - width
-    let y = min(max(display.minY, (status?.maxY ?? display.minY + 44) + 2), display.maxY)
-    let height = status == nil ? min(display.maxY - y, 1280) : min(display.maxY - y, 88)
+    let y = min(max(display.minY, status.maxY + 2), display.maxY)
+    let height = min(display.maxY - y, 88)
     return CGRect(x: x, y: y, width: width, height: height).integral
 }
 

@@ -281,10 +281,21 @@ public struct AttentionItem: Codable, Equatable {
         self.windowEnd = windowEnd
         self.resetsReadState = resetsReadState
         self.supportingDataSlotIDs = supportingDataSlotIDs
-        self.explanation = explanation ?? AttentionExplanation.legacy(
-            trigger: title,
+        self.explanation = explanation ?? Self.legacyExplanation(
+            title: title,
             severity: severity,
             score: score,
+            currentWeight: currentWeight,
+            threshold: threshold,
+            beforeValue: beforeValue,
+            afterValue: afterValue,
+            moveSize: moveSize,
+            beforeWeight: beforeWeight,
+            valueCurrency: valueCurrency,
+            eventDate: eventDate,
+            amount: amount,
+            windowStart: windowStart,
+            windowEnd: windowEnd,
             supportingDataSlotIDs: supportingDataSlotIDs
         )
     }
@@ -315,12 +326,119 @@ public struct AttentionItem: Codable, Equatable {
         resetsReadState = try container.decodeIfPresent(Bool.self, forKey: .resetsReadState) ?? false
         supportingDataSlotIDs = try container.decode([String].self, forKey: .supportingDataSlotIDs)
         explanation = try container.decodeIfPresent(AttentionExplanation.self, forKey: .explanation)
-            ?? AttentionExplanation.legacy(
-                trigger: title,
+            ?? Self.legacyExplanation(
+                title: title,
                 severity: severity,
                 score: score,
+                currentWeight: currentWeight,
+                threshold: threshold,
+                beforeValue: beforeValue,
+                afterValue: afterValue,
+                moveSize: moveSize,
+                beforeWeight: beforeWeight,
+                valueCurrency: valueCurrency,
+                eventDate: eventDate,
+                amount: amount,
+                windowStart: windowStart,
+                windowEnd: windowEnd,
                 supportingDataSlotIDs: supportingDataSlotIDs
             )
+    }
+
+    private static func legacyExplanation(
+        title: String,
+        severity: String,
+        score: Double,
+        currentWeight: Double?,
+        threshold: Double?,
+        beforeValue: Double?,
+        afterValue: Double?,
+        moveSize: Double?,
+        beforeWeight: Double?,
+        valueCurrency: String?,
+        eventDate: String?,
+        amount: Money?,
+        windowStart: String?,
+        windowEnd: String?,
+        supportingDataSlotIDs: [String]
+    ) -> AttentionExplanation {
+        var explanation = AttentionExplanation.legacy(
+            trigger: title,
+            severity: severity,
+            score: score,
+            supportingDataSlotIDs: supportingDataSlotIDs
+        )
+        if let threshold {
+            explanation.threshold = AttentionExplanationFact(
+                key: "threshold",
+                label: "Threshold",
+                value: percent(threshold),
+                numericValue: threshold,
+                unit: "fraction"
+            )
+        } else if let windowStart,
+                  let windowEnd
+        {
+            explanation.threshold = AttentionExplanationFact(
+                key: "threshold",
+                label: "Threshold",
+                value: "\(windowStart)..\(windowEnd)"
+            )
+        }
+        if let currentWeight {
+            explanation.currentValue = AttentionExplanationFact(
+                key: "currentValue",
+                label: "Current",
+                value: percent(currentWeight),
+                numericValue: currentWeight,
+                unit: "fraction"
+            )
+        } else if let afterValue,
+                  let valueCurrency
+        {
+            explanation.currentValue = AttentionExplanationFact(
+                key: "currentValue",
+                label: "Current",
+                value: "\(valueCurrency) \(decimalString(String(afterValue), places: 2))",
+                numericValue: afterValue,
+                unit: valueCurrency
+            )
+        } else if let moveSize {
+            explanation.currentValue = AttentionExplanationFact(
+                key: "currentValue",
+                label: "Current",
+                value: signedPercent(moveSize),
+                numericValue: moveSize,
+                unit: "fraction"
+            )
+        } else if let eventDate {
+            let amountDetail = amount.map { "; \(display($0))" } ?? ""
+            explanation.currentValue = AttentionExplanationFact(
+                key: "currentValue",
+                label: "Current",
+                value: "\(eventDate)\(amountDetail)"
+            )
+        }
+        if let beforeValue,
+           let valueCurrency
+        {
+            explanation.priorValue = AttentionExplanationFact(
+                key: "priorValue",
+                label: "Prior",
+                value: "\(valueCurrency) \(decimalString(String(beforeValue), places: 2))",
+                numericValue: beforeValue,
+                unit: valueCurrency
+            )
+        } else if let beforeWeight {
+            explanation.priorValue = AttentionExplanationFact(
+                key: "priorValue",
+                label: "Prior",
+                value: percent(beforeWeight),
+                numericValue: beforeWeight,
+                unit: "fraction"
+            )
+        }
+        return explanation
     }
 }
 
@@ -4015,9 +4133,9 @@ public enum PressureEngine {
                     currentValue: AttentionExplanationFact(
                         key: "currentValue",
                         label: "Current",
-                        value: signedPercent(moveSize),
-                        numericValue: moveSize,
-                        unit: "fraction"
+                        value: "\(price.currency) \(decimalString(String(afterValue), places: 2))",
+                        numericValue: afterValue,
+                        unit: price.currency
                     ),
                     priorValue: AttentionExplanationFact(
                         key: "priorValue",

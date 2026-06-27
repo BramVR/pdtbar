@@ -1554,7 +1554,7 @@ let bigMoverCurrentExpansion = try require(
 )
 try check(
     bigMoverCurrentExpansion.title == "Current"
-        && bigMoverCurrentExpansion.detail == "+12.4%",
+        && bigMoverCurrentExpansion.detail == "EUR 612.40",
     "big-mover descriptor should render supplied current explanation fact"
 )
 let bigMoverPriorExpansion = try require(
