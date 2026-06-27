@@ -1271,20 +1271,32 @@ public enum FreshnessLedger {
     }
 
     private static func businessDays(after start: Date, through end: Date) -> Int {
-        var date = freshnessCalendar.date(byAdding: .day, value: 1, to: start)
+        let calendar = freshnessCalendar
+        var date = calendar.date(byAdding: .day, value: 1, to: start)
         var count = 0
         while let current = date, current <= end {
-            let weekday = freshnessCalendar.component(.weekday, from: current)
+            let weekday = calendar.component(.weekday, from: current)
             if weekday != 1 && weekday != 7 {
                 count += 1
             }
-            date = freshnessCalendar.date(byAdding: .day, value: 1, to: current)
+            date = calendar.date(byAdding: .day, value: 1, to: current)
         }
         return count
     }
 
     private static func freshnessDate(from value: String) -> Date? {
-        dayFormatter().date(from: dayPrefix(value))
+        let parts = value.prefix(10).split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        let calendar = freshnessCalendar
+        return calendar.date(
+            from: DateComponents(
+                calendar: calendar,
+                timeZone: calendar.timeZone,
+                year: parts[0],
+                month: parts[1],
+                day: parts[2]
+            )
+        )
     }
 
     private static var freshnessCalendar: Calendar {
@@ -3184,9 +3196,8 @@ public enum MenuDescriptorRenderer {
         case .fresh:
             return "Fresh"
         case .stale:
-            let staleWord = freshness.staleHoldingCount == 1 ? "stale" : "stale"
             let oldest = freshness.oldestPriceAsOf.map { "; oldest \($0)" } ?? ""
-            return "\(freshness.staleHoldingCount) \(staleWord)\(oldest)"
+            return "\(freshness.staleHoldingCount) stale\(oldest)"
         case .partial:
             return freshness.oldestPriceAsOf.map { "Partial; oldest \($0)" } ?? "Partial"
         case .unknown:
