@@ -870,6 +870,7 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
     private let model: String
     private let timeout: TimeInterval
     private let toolCallRetryPolicy: ClaudeToolCallRetryPolicy
+    private let toolResultParser = ClaudeToolResultParser()
     private var discoveredToolNames: [String: String] = [:]
 
     init(environment: [String: String]) {
@@ -959,19 +960,23 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
             timeout: timeout,
             environment: environment
         )
-        let createdFiles = claudeToolResultFiles(sessionID: sessionID)
+        let currentSessionFiles = currentSessionToolResultFiles(readToolNames: [name], sessionID: sessionID)
         defer {
             deleteClaudeToolResultFiles(pdtToolResultFiles(
-                in: createdFiles,
                 referencedBy: result.stdout,
-                readToolName: name,
-                sessionID: sessionID
+                readToolNames: [name],
+                currentSessionFiles: currentSessionFiles
             ))
         }
         guard result.exitCode == 0 else {
             throw PDTMCPConnectorError.transientFailure("Claude \(name) call failed")
         }
-        return try toolResultData(for: toolName, createdFiles: createdFiles, in: result.stdout)
+        return try toolResultData(
+            for: toolName,
+            readToolName: name,
+            currentSessionFiles: currentSessionFiles,
+            in: result.stdout
+        )
     }
 
     static func pdtServerIsConnected(in output: String) -> Bool {
@@ -1027,12 +1032,11 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
                 timeout: min(timeout, 60.0),
                 environment: environment
             )
-            let createdFiles = claudeToolResultFiles(sessionID: sessionID)
+            let currentSessionFiles = currentSessionToolResultFiles(readToolNames: stillUnresolved, sessionID: sessionID)
             deleteClaudeToolResultFiles(pdtToolResultFiles(
-                in: createdFiles,
                 referencedBy: result.stdout,
                 readToolNames: stillUnresolved,
-                sessionID: sessionID
+                currentSessionFiles: currentSessionFiles
             ))
             lastResultExitCode = result.exitCode
             guard result.exitCode == 0 else {
@@ -1074,12 +1078,11 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
                 timeout: min(timeout, 60.0),
                 environment: environment
             )
-            let createdFiles = claudeToolResultFiles(sessionID: sessionID)
+            let currentSessionFiles = currentSessionToolResultFiles(readToolNames: [readToolName], sessionID: sessionID)
             deleteClaudeToolResultFiles(pdtToolResultFiles(
-                in: createdFiles,
                 referencedBy: result.stdout,
                 readToolNames: [readToolName],
-                sessionID: sessionID
+                currentSessionFiles: currentSessionFiles
             ))
             guard result.exitCode == 0 else {
                 continue
@@ -1174,207 +1177,24 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
         disallowedTools().filter { !$0.hasPrefix("mcp__") }
     }
 
-    private func toolResultData(for toolName: String, createdFiles: Set<URL>, in output: String) throws -> Data {
-        let objects = output
-            .split(separator: "\n")
-            .compactMap { line -> [String: Any]? in
-                try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
-            }
-        let matchingToolUseIDs = Set(objects.flatMap { toolUseIDs(for: toolName, in: $0) })
-        guard !matchingToolUseIDs.isEmpty else {
+    private func toolResultData(
+        for toolName: String,
+        readToolName: String,
+        currentSessionFiles: Set<URL>,
+        in output: String
+    ) throws -> Data {
+        do {
+            return try toolResultParser.resultData(
+                for: toolName,
+                readToolName: readToolName,
+                output: output,
+                currentSessionResultFiles: currentSessionFiles
+            )
+        } catch ClaudeToolResultParserError.missingToolCall {
             throw PDTMCPConnectorError.transientFailure("Claude did not call \(toolName)")
+        } catch {
+            throw PDTMCPConnectorError.transientFailure("Claude did not return structured data for \(toolName)")
         }
-        for object in objects {
-            if let structured = structuredToolResult(in: object, matching: matchingToolUseIDs) {
-                return try JSONSerialization.data(withJSONObject: structured, options: [.sortedKeys])
-            }
-            if let file = toolResultFile(in: object, matching: matchingToolUseIDs, createdFiles: createdFiles),
-               let data = try? Data(contentsOf: file)
-            {
-                return data
-            }
-            if let data = toolResultContentData(in: object, matching: matchingToolUseIDs) {
-                return data
-            }
-        }
-        throw PDTMCPConnectorError.transientFailure("Claude did not return structured data for \(toolName)")
-    }
-
-    private func toolUseIDs(for toolName: String, in object: Any) -> [String] {
-        if let array = object as? [Any] {
-            return array.flatMap { toolUseIDs(for: toolName, in: $0) }
-        }
-        guard let dictionary = object as? [String: Any] else {
-            return []
-        }
-        let current: [String]
-        if dictionary["type"] as? String == "tool_use",
-           dictionary["name"] as? String == toolName,
-           let id = dictionary["id"] as? String
-        {
-            current = [id]
-        } else {
-            current = []
-        }
-        return current + dictionary.values.flatMap { toolUseIDs(for: toolName, in: $0) }
-    }
-
-    private func structuredToolResult(in object: Any, matching ids: Set<String>) -> Any? {
-        if let array = object as? [Any] {
-            for item in array {
-                if let structured = structuredToolResult(in: item, matching: ids) {
-                    return structured
-                }
-            }
-            return nil
-        }
-        guard let dictionary = object as? [String: Any] else {
-            return nil
-        }
-        if dictionary["type"] as? String == "tool_result",
-           let toolUseID = dictionary["tool_use_id"] as? String,
-           ids.contains(toolUseID),
-           let structured = dictionary["structuredContent"]
-        {
-            return structured
-        }
-        for value in dictionary.values {
-            if let structured = structuredToolResult(in: value, matching: ids) {
-                return structured
-            }
-        }
-        return nil
-    }
-
-    private func toolResultContentData(in object: Any, matching ids: Set<String>) -> Data? {
-        if let array = object as? [Any] {
-            for item in array {
-                if let data = toolResultContentData(in: item, matching: ids) {
-                    return data
-                }
-            }
-            return nil
-        }
-        guard let dictionary = object as? [String: Any] else {
-            return nil
-        }
-        if dictionary["type"] as? String == "tool_result",
-           let toolUseID = dictionary["tool_use_id"] as? String,
-           ids.contains(toolUseID),
-           let content = dictionary["content"],
-           let data = jsonData(inToolResultContent: content)
-        {
-            return data
-        }
-        for value in dictionary.values {
-            if let data = toolResultContentData(in: value, matching: ids) {
-                return data
-            }
-        }
-        return nil
-    }
-
-    private func toolResultFile(in object: Any, matching ids: Set<String>, createdFiles: Set<URL>) -> URL? {
-        if let array = object as? [Any] {
-            for item in array {
-                if let file = toolResultFile(in: item, matching: ids, createdFiles: createdFiles) {
-                    return file
-                }
-            }
-            return nil
-        }
-        guard let dictionary = object as? [String: Any] else {
-            return nil
-        }
-        if dictionary["type"] as? String == "tool_result",
-           let toolUseID = dictionary["tool_use_id"] as? String,
-           ids.contains(toolUseID),
-           let content = dictionary["content"],
-           let file = savedToolResultFile(inToolResultContent: content, createdFiles: createdFiles)
-        {
-            return file
-        }
-        for value in dictionary.values {
-            if let file = toolResultFile(in: value, matching: ids, createdFiles: createdFiles) {
-                return file
-            }
-        }
-        return nil
-    }
-
-    private func jsonData(inToolResultContent content: Any) -> Data? {
-        if let text = content as? String {
-            let data = Data(text.utf8)
-            return (try? JSONSerialization.jsonObject(with: data)) == nil ? nil : data
-        }
-        if let array = content as? [Any] {
-            for item in array {
-                if let data = jsonData(inToolResultContent: item) {
-                    return data
-                }
-            }
-            return nil
-        }
-        guard let dictionary = content as? [String: Any] else {
-            return nil
-        }
-        if let text = dictionary["text"] as? String,
-           let data = jsonData(inToolResultContent: text)
-        {
-            return data
-        }
-        for value in dictionary.values {
-            if let data = jsonData(inToolResultContent: value) {
-                return data
-            }
-        }
-        return nil
-    }
-
-    private func savedToolResultFile(inToolResultContent content: Any, createdFiles: Set<URL>) -> URL? {
-        if let text = content as? String {
-            return savedToolResultFile(in: text, createdFiles: createdFiles)
-        }
-        if let array = content as? [Any] {
-            for item in array {
-                if let file = savedToolResultFile(inToolResultContent: item, createdFiles: createdFiles) {
-                    return file
-                }
-            }
-            return nil
-        }
-        guard let dictionary = content as? [String: Any] else {
-            return nil
-        }
-        if let text = dictionary["text"] as? String,
-           let file = savedToolResultFile(in: text, createdFiles: createdFiles)
-        {
-            return file
-        }
-        for value in dictionary.values {
-            if let file = savedToolResultFile(inToolResultContent: value, createdFiles: createdFiles) {
-                return file
-            }
-        }
-        return nil
-    }
-
-    private func savedToolResultFile(in content: String, createdFiles: Set<URL>) -> URL? {
-        savedToolResultFiles(in: content).first { createdFiles.contains($0) }
-    }
-
-    private func savedToolResultFiles(in content: String) -> [URL] {
-        let projectsRoot = claudeProjectsDirectory().path
-        var files: [URL] = []
-        var searchStart = content.startIndex
-        while let rootRange = content.range(of: projectsRoot, range: searchStart..<content.endIndex),
-              let extensionRange = content.range(of: ".txt", range: rootRange.lowerBound..<content.endIndex)
-        {
-            let path = String(content[rootRange.lowerBound..<extensionRange.upperBound])
-            files.append(URL(fileURLWithPath: path))
-            searchStart = extensionRange.upperBound
-        }
-        return files
     }
 
     private func claudeToolResultFiles(sessionID: String? = nil) -> Set<URL> {
@@ -1427,26 +1247,7 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
         }
     }
 
-    private func pdtToolResultFiles(
-        in createdFiles: Set<URL>,
-        referencedBy output: String,
-        readToolName: String,
-        sessionID: String
-    ) -> [URL] {
-        pdtToolResultFiles(
-            in: createdFiles,
-            referencedBy: output,
-            readToolNames: [readToolName],
-            sessionID: sessionID
-        )
-    }
-
-    private func pdtToolResultFiles(
-        in createdFiles: Set<URL>,
-        referencedBy output: String,
-        readToolNames: [String],
-        sessionID: String
-    ) -> [URL] {
+    private func currentSessionToolResultFiles(readToolNames: [String], sessionID: String) -> Set<URL> {
         let deadline = Date().addingTimeInterval(1.0)
         var sessionFiles = Set<URL>()
         repeat {
@@ -1458,11 +1259,19 @@ private final class ClaudeCLIPDTMCPConnector: PDTMCPConnector {
             }
             Thread.sleep(forTimeInterval: 0.1)
         } while Date() < deadline
-        let referenced = savedToolResultFiles(in: output).filter { createdFiles.contains($0) }
-        let matchingReadTool = createdFiles.union(sessionFiles).filter { file in
-            readToolNames.contains { file.lastPathComponent.contains($0) }
-        }
-        return referenced + matchingReadTool
+        return sessionFiles
+    }
+
+    private func pdtToolResultFiles(
+        referencedBy output: String,
+        readToolNames: [String],
+        currentSessionFiles: Set<URL>
+    ) -> [URL] {
+        toolResultParser.cleanupResultFiles(
+            output: output,
+            readToolNames: readToolNames,
+            currentSessionResultFiles: currentSessionFiles
+        )
     }
 }
 
