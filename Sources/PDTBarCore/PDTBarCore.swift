@@ -2880,7 +2880,7 @@ public enum MenuDescriptorRenderer {
         return MenuRow(
             id: "allocation.portfolio",
             role: .portfolioOverviewChart,
-            title: "Portfolio allocation",
+            title: "Portfolio",
             barChart: portfolioOverviewBarChart(for: overview)
         )
     }
