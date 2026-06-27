@@ -544,7 +544,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         barChart: MenuRowBarChart,
         accessibilityIdentifier: String
     ) -> NSView {
-        let rowHeight = CGFloat(48 + (barChart.bars.count * 34))
+        let rowHeight: CGFloat = 202
         let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: rowHeight))
         container.autoresizingMask = [.width]
         let chartSummary = barChart.bars.map { "\($0.label) \($0.percentageLabel)" }.joined(separator: ", ")
@@ -573,85 +573,49 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         detailField.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(detailField)
 
-        let chartStack = NSStackView()
-        chartStack.orientation = .vertical
-        chartStack.alignment = .leading
-        chartStack.distribution = .fill
-        chartStack.spacing = 7
-        chartStack.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(chartStack)
+        let chartView = PortfolioAllocationVerticalBarChartView(bars: barChart.bars)
+        chartView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(chartView)
 
-        for bar in barChart.bars {
-            let row = NSStackView()
-            row.orientation = .vertical
-            row.alignment = .leading
-            row.distribution = .fill
-            row.spacing = 4
-            row.toolTip = bar.detail
-            row.translatesAutoresizingMaskIntoConstraints = false
+        let selectedAccent = NSBox()
+        selectedAccent.boxType = .custom
+        selectedAccent.borderWidth = 0
+        selectedAccent.cornerRadius = 1
+        selectedAccent.fillColor = PortfolioAllocationVerticalBarChartView.barColor
+        selectedAccent.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(selectedAccent)
 
-            let progressTrack = NSBox()
-            progressTrack.boxType = .custom
-            progressTrack.borderWidth = 0
-            progressTrack.cornerRadius = 3
-            progressTrack.fillColor = NSColor.tertiaryLabelColor.withAlphaComponent(0.22)
-            progressTrack.translatesAutoresizingMaskIntoConstraints = false
-            progressTrack.toolTip = bar.detail
+        let selectedTitleField = NSTextField(labelWithString: "")
+        selectedTitleField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize)
+        selectedTitleField.textColor = NSColor.secondaryLabelColor
+        selectedTitleField.lineBreakMode = .byTruncatingTail
+        selectedTitleField.maximumNumberOfLines = 1
+        selectedTitleField.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(selectedTitleField)
 
-            let progressFill = NSBox()
-            progressFill.boxType = .custom
-            progressFill.borderWidth = 0
-            progressFill.cornerRadius = 3
-            progressFill.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.86)
-            progressFill.translatesAutoresizingMaskIntoConstraints = false
-            progressFill.toolTip = bar.detail
-            progressTrack.addSubview(progressFill)
+        let selectedDetailField = NSTextField(labelWithString: "")
+        selectedDetailField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize - 1)
+        selectedDetailField.textColor = NSColor.tertiaryLabelColor
+        selectedDetailField.lineBreakMode = .byTruncatingTail
+        selectedDetailField.maximumNumberOfLines = 1
+        selectedDetailField.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(selectedDetailField)
 
-            let fillWidth = CGFloat(max(0.004, min(1.0, bar.weight)))
-            NSLayoutConstraint.activate([
-                progressTrack.heightAnchor.constraint(equalToConstant: 6),
-                progressFill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
-                progressFill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
-                progressFill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
-                progressFill.widthAnchor.constraint(equalTo: progressTrack.widthAnchor, multiplier: fillWidth),
-            ])
-
-            let valueRow = NSStackView()
-            valueRow.orientation = .horizontal
-            valueRow.alignment = .firstBaseline
-            valueRow.distribution = .fill
-            valueRow.spacing = 8
-            valueRow.toolTip = bar.detail
-            valueRow.translatesAutoresizingMaskIntoConstraints = false
-
-            let labelField = NSTextField(labelWithString: bar.label)
-            labelField.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-            labelField.textColor = NSColor.labelColor
-            labelField.lineBreakMode = .byTruncatingTail
-            labelField.maximumNumberOfLines = 1
-            labelField.toolTip = bar.detail
-
-            let percentageField = NSTextField(labelWithString: bar.percentageLabel)
-            percentageField.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-            percentageField.textColor = NSColor.secondaryLabelColor
-            percentageField.alignment = .right
-            percentageField.lineBreakMode = .byTruncatingTail
-            percentageField.maximumNumberOfLines = 1
-            percentageField.toolTip = bar.detail
-
-            valueRow.addArrangedSubview(labelField)
-            valueRow.addArrangedSubview(NSView())
-            valueRow.addArrangedSubview(percentageField)
-            row.addArrangedSubview(progressTrack)
-            row.addArrangedSubview(valueRow)
-            chartStack.addArrangedSubview(row)
-
-            NSLayoutConstraint.activate([
-                row.widthAnchor.constraint(equalTo: chartStack.widthAnchor),
-                progressTrack.widthAnchor.constraint(equalTo: row.widthAnchor),
-                valueRow.widthAnchor.constraint(equalTo: row.widthAnchor),
-            ])
+        let applySelection: (MenuRowBarChart.Bar?) -> Void = { bar in
+            guard let bar else {
+                selectedTitleField.stringValue = "Hover a bar for details"
+                selectedDetailField.stringValue = ""
+                selectedAccent.isHidden = true
+                return
+            }
+            selectedTitleField.stringValue = "\(bar.label): \(bar.percentageLabel)"
+            selectedDetailField.stringValue = bar.detail
+            selectedTitleField.toolTip = bar.detail
+            selectedDetailField.toolTip = bar.detail
+            selectedAccent.isHidden = false
         }
+        chartView.onSelectionChanged = applySelection
+        applySelection(chartView.selectedBar)
 
         NSLayoutConstraint.activate([
             titleField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
@@ -662,10 +626,24 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             detailField.trailingAnchor.constraint(equalTo: titleField.trailingAnchor),
             detailField.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 1),
 
-            chartStack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
-            chartStack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -28),
-            chartStack.topAnchor.constraint(equalTo: detailField.bottomAnchor, constant: 8),
-            chartStack.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -7),
+            chartView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            chartView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -28),
+            chartView.topAnchor.constraint(equalTo: detailField.bottomAnchor, constant: 9),
+            chartView.heightAnchor.constraint(equalToConstant: 104),
+
+            selectedAccent.leadingAnchor.constraint(equalTo: chartView.leadingAnchor),
+            selectedAccent.topAnchor.constraint(equalTo: chartView.bottomAnchor, constant: 11),
+            selectedAccent.widthAnchor.constraint(equalToConstant: 2),
+            selectedAccent.heightAnchor.constraint(equalToConstant: 30),
+
+            selectedTitleField.leadingAnchor.constraint(equalTo: selectedAccent.trailingAnchor, constant: 8),
+            selectedTitleField.trailingAnchor.constraint(equalTo: chartView.trailingAnchor),
+            selectedTitleField.topAnchor.constraint(equalTo: chartView.bottomAnchor, constant: 8),
+
+            selectedDetailField.leadingAnchor.constraint(equalTo: selectedTitleField.leadingAnchor),
+            selectedDetailField.trailingAnchor.constraint(equalTo: selectedTitleField.trailingAnchor),
+            selectedDetailField.topAnchor.constraint(equalTo: selectedTitleField.bottomAnchor, constant: 1),
+            selectedDetailField.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -8),
         ])
 
         return container
@@ -945,6 +923,204 @@ private struct ScriptedClaudeReadinessProbe {
     private struct Script: Decodable {
         var result: String
         var delaySeconds: Double?
+    }
+}
+
+private final class PortfolioAllocationVerticalBarChartView: NSView {
+    static let barColor = NSColor(calibratedRed: 0.28, green: 0.68, blue: 0.73, alpha: 0.92)
+
+    private let bars: [MenuRowBarChart.Bar]
+    private var trackingArea: NSTrackingArea?
+    private var selectedIndex: Int? {
+        didSet {
+            guard selectedIndex != oldValue else { return }
+            self.toolTip = self.selectedBar?.detail
+            self.needsDisplay = true
+            self.onSelectionChanged?(self.selectedBar)
+        }
+    }
+
+    var onSelectionChanged: ((MenuRowBarChart.Bar?) -> Void)?
+
+    var selectedBar: MenuRowBarChart.Bar? {
+        guard let selectedIndex, self.bars.indices.contains(selectedIndex) else { return nil }
+        return self.bars[selectedIndex]
+    }
+
+    override var isFlipped: Bool {
+        true
+    }
+
+    init(bars: [MenuRowBarChart.Bar]) {
+        self.bars = bars
+        self.selectedIndex = bars.isEmpty ? nil : 0
+        super.init(frame: .zero)
+        self.wantsLayer = true
+        self.toolTip = self.selectedBar?.detail
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is unavailable")
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        self.window?.acceptsMouseMovedEvents = true
+        self.updateTrackingAreas()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            self.removeTrackingArea(trackingArea)
+        }
+        let options: NSTrackingArea.Options = [
+            .activeAlways,
+            .inVisibleRect,
+            .mouseEnteredAndExited,
+            .mouseMoved,
+        ]
+        let area = NSTrackingArea(rect: .zero, options: options, owner: self, userInfo: nil)
+        self.addTrackingArea(area)
+        self.trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        self.updateSelection(with: event)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        self.updateSelection(with: event)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard !self.bars.isEmpty, self.bounds.width > 1, self.bounds.height > 1 else { return }
+
+        let axisHeight: CGFloat = 17
+        let plotRect = NSRect(
+            x: 0,
+            y: 16,
+            width: self.bounds.width,
+            height: max(1, self.bounds.height - axisHeight - 22)
+        )
+        let slotWidth = plotRect.width / CGFloat(self.bars.count)
+        let barWidth = min(max(slotWidth * 0.42, 5), 14)
+        // Match CodexBar's cost history chart: auto-scale the miniature chart to the visible peak.
+        // The exact portfolio percentages stay in the labels, hover detail, and accessibility text.
+        let maxWeight = max(
+            self.bars.map { Self.clampedWeight($0.weight) }.max() ?? 0,
+            0.01
+        )
+        let peakIndex = self.bars.indices.max { lhs, rhs in
+            Self.clampedWeight(self.bars[lhs].weight) < Self.clampedWeight(self.bars[rhs].weight)
+        }
+
+        if let selectedIndex {
+            let centerX = plotRect.minX + slotWidth * (CGFloat(selectedIndex) + 0.5)
+            let bandRect = NSRect(
+                x: centerX - slotWidth * 0.36,
+                y: plotRect.minY,
+                width: slotWidth * 0.72,
+                height: plotRect.height
+            )
+            NSColor.labelColor.withAlphaComponent(0.10).setFill()
+            bandRect.fill()
+        }
+
+        for (index, bar) in self.bars.enumerated() {
+            let weight = Self.clampedWeight(bar.weight)
+            let barHeight = max(weight > 0 ? 3 : 0, plotRect.height * weight / maxWeight)
+            let centerX = plotRect.minX + slotWidth * (CGFloat(index) + 0.5)
+            let barRect = NSRect(
+                x: centerX - barWidth / 2,
+                y: plotRect.maxY - barHeight,
+                width: barWidth,
+                height: barHeight
+            )
+            Self.barColor.setFill()
+            NSBezierPath(roundedRect: barRect, xRadius: 3, yRadius: 3).fill()
+
+            if index == peakIndex, barRect.height > 8 {
+                let capHeight = min(6, max(3, barRect.height * 0.12))
+                let capRect = NSRect(
+                    x: barRect.minX,
+                    y: barRect.minY,
+                    width: barRect.width,
+                    height: capHeight
+                )
+                NSColor.systemYellow.setFill()
+                NSBezierPath(roundedRect: capRect, xRadius: 3, yRadius: 3).fill()
+            }
+        }
+
+        self.drawPeakScaleLabel(maxWeight: maxWeight, plotRect: plotRect)
+        self.drawAxisLabels(plotRect: plotRect, slotWidth: slotWidth)
+    }
+
+    private func updateSelection(with event: NSEvent) {
+        let location = self.convert(event.locationInWindow, from: nil)
+        guard self.bounds.contains(location), !self.bars.isEmpty else { return }
+        let plotWidth = max(self.bounds.width, 1)
+        let slotWidth = plotWidth / CGFloat(self.bars.count)
+        let rawIndex = Int(floor(location.x / slotWidth))
+        let index = min(max(rawIndex, 0), self.bars.count - 1)
+        self.selectedIndex = index
+    }
+
+    private func drawAxisLabels(plotRect: NSRect, slotWidth: CGFloat) {
+        let labels = self.axisLabelIndexes()
+        guard !labels.isEmpty else { return }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byTruncatingTail
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize - 1, weight: .regular),
+            .foregroundColor: NSColor.tertiaryLabelColor,
+            .paragraphStyle: paragraph,
+        ]
+
+        for index in labels {
+            let centerX = plotRect.minX + slotWidth * (CGFloat(index) + 0.5)
+            let labelWidth = max(slotWidth, 28)
+            let labelRect = NSRect(
+                x: centerX - labelWidth / 2,
+                y: plotRect.maxY + 4,
+                width: labelWidth,
+                height: 13
+            )
+            NSString(string: self.bars[index].label).draw(in: labelRect, withAttributes: attrs)
+        }
+    }
+
+    private func drawPeakScaleLabel(maxWeight: CGFloat, plotRect: NSRect) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .right
+        paragraph.lineBreakMode = .byTruncatingTail
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize - 2, weight: .regular),
+            .foregroundColor: NSColor.tertiaryLabelColor,
+            .paragraphStyle: paragraph,
+        ]
+        let text = String(format: "Peak %.1f%%", Double(maxWeight * 100))
+        let rect = NSRect(x: plotRect.maxX - 90, y: 0, width: 90, height: 12)
+        NSString(string: text).draw(in: rect, withAttributes: attrs)
+    }
+
+    private func axisLabelIndexes() -> [Int] {
+        guard !self.bars.isEmpty else { return [] }
+        if self.bars.count <= 7 {
+            return Array(self.bars.indices)
+        }
+        return [self.bars.startIndex, self.bars.index(before: self.bars.endIndex)]
+    }
+
+    private static func clampedWeight(_ weight: Double) -> CGFloat {
+        guard weight.isFinite, weight > 0 else { return 0 }
+        return CGFloat(min(weight, 1))
     }
 }
 
