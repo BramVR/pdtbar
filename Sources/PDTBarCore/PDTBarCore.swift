@@ -456,6 +456,63 @@ public struct AllocationSnapshot: Codable, Equatable {
     public var sectorBreakdown: [DistributionSummary]
     public var assetTypeBreakdown: [DistributionSummary]
     public var xRayHoldings: [XRayHoldingSummary]?
+    public var portfolioOverview: PortfolioOverviewSummary
+
+    public init(
+        totalValue: Money,
+        openHoldingCount: Int,
+        topHoldings: [HoldingSummary],
+        sectorBreakdown: [DistributionSummary],
+        assetTypeBreakdown: [DistributionSummary],
+        xRayHoldings: [XRayHoldingSummary]? = nil,
+        portfolioOverview: PortfolioOverviewSummary? = nil
+    ) {
+        self.totalValue = totalValue
+        self.openHoldingCount = openHoldingCount
+        self.topHoldings = topHoldings
+        self.sectorBreakdown = sectorBreakdown
+        self.assetTypeBreakdown = assetTypeBreakdown
+        self.xRayHoldings = xRayHoldings
+        self.portfolioOverview = portfolioOverview ?? PortfolioOverview.build(
+            totalValue: totalValue,
+            openHoldingCount: openHoldingCount,
+            topHoldings: topHoldings,
+            sectorBreakdown: sectorBreakdown,
+            assetTypeBreakdown: assetTypeBreakdown
+        )
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case totalValue
+        case openHoldingCount
+        case topHoldings
+        case sectorBreakdown
+        case assetTypeBreakdown
+        case xRayHoldings
+        case portfolioOverview
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let totalValue = try container.decode(Money.self, forKey: .totalValue)
+        let openHoldingCount = try container.decode(Int.self, forKey: .openHoldingCount)
+        let topHoldings = try container.decode([HoldingSummary].self, forKey: .topHoldings)
+        let sectorBreakdown = try container.decode([DistributionSummary].self, forKey: .sectorBreakdown)
+        let assetTypeBreakdown = try container.decode([DistributionSummary].self, forKey: .assetTypeBreakdown)
+        let xRayHoldings = try container.decodeIfPresent([XRayHoldingSummary].self, forKey: .xRayHoldings)
+        self.init(
+            totalValue: totalValue,
+            openHoldingCount: openHoldingCount,
+            topHoldings: topHoldings,
+            sectorBreakdown: sectorBreakdown,
+            assetTypeBreakdown: assetTypeBreakdown,
+            xRayHoldings: xRayHoldings,
+            portfolioOverview: try container.decodeIfPresent(
+                PortfolioOverviewSummary.self,
+                forKey: .portfolioOverview
+            )
+        )
+    }
 }
 
 public struct HoldingSummary: Codable, Equatable {
@@ -470,12 +527,228 @@ public struct HoldingSummary: Codable, Equatable {
     public var averageBuyPrice: Money?
     public var gainLoss: Money?
     public var gainLossPercentage: Double?
+
+    public init(
+        name: String,
+        quoteId: Int,
+        weight: Double,
+        worth: Money,
+        price: Money?,
+        copyableIdentifier: String? = nil,
+        recentMove: PriceMoveSummary? = nil,
+        nextIncomeEvent: IncomeEventSummary? = nil,
+        averageBuyPrice: Money? = nil,
+        gainLoss: Money? = nil,
+        gainLossPercentage: Double? = nil
+    ) {
+        self.name = name
+        self.quoteId = quoteId
+        self.weight = weight
+        self.worth = worth
+        self.price = price
+        self.copyableIdentifier = copyableIdentifier
+        self.recentMove = recentMove
+        self.nextIncomeEvent = nextIncomeEvent
+        self.averageBuyPrice = averageBuyPrice
+        self.gainLoss = gainLoss
+        self.gainLossPercentage = gainLossPercentage
+    }
 }
 
 public struct DistributionSummary: Codable, Equatable {
     public var name: String
     public var percentage: Double
     public var totalValue: Money
+
+    public init(name: String, percentage: Double, totalValue: Money) {
+        self.name = name
+        self.percentage = percentage
+        self.totalValue = totalValue
+    }
+}
+
+public struct PortfolioOverviewSummary: Codable, Equatable {
+    public var totalValue: Money
+    public var openHoldingCount: Int
+    public var topHoldings: [HoldingSummary]
+    public var topNConcentration: PortfolioTopNConcentrationSummary?
+    public var sectorSummary: [DistributionSummary]
+    public var assetTypeSummary: [DistributionSummary]
+    public var cashSummary: PortfolioCashSummary?
+
+    public init(
+        totalValue: Money,
+        openHoldingCount: Int,
+        topHoldings: [HoldingSummary],
+        topNConcentration: PortfolioTopNConcentrationSummary?,
+        sectorSummary: [DistributionSummary],
+        assetTypeSummary: [DistributionSummary],
+        cashSummary: PortfolioCashSummary?
+    ) {
+        self.totalValue = totalValue
+        self.openHoldingCount = openHoldingCount
+        self.topHoldings = topHoldings
+        self.topNConcentration = topNConcentration
+        self.sectorSummary = sectorSummary
+        self.assetTypeSummary = assetTypeSummary
+        self.cashSummary = cashSummary
+    }
+}
+
+public struct PortfolioTopNConcentrationSummary: Codable, Equatable {
+    public var rankCount: Int
+    public var weight: Double
+
+    public init(rankCount: Int, weight: Double) {
+        self.rankCount = rankCount
+        self.weight = weight
+    }
+}
+
+public struct PortfolioCashSummary: Codable, Equatable {
+    public var value: Money
+    public var weight: Double
+
+    public init(value: Money, weight: Double) {
+        self.value = value
+        self.weight = weight
+    }
+}
+
+public enum PortfolioOverview {
+    public static let topHoldingLimit = 5
+    public static let concentrationRankCount = 3
+
+    public static func build(from snapshot: PortfolioSnapshot) -> PortfolioOverviewSummary {
+        let topHoldings = snapshot.openHoldings
+            .compactMap(holdingSummary)
+            .sorted(by: ranksByAllocation)
+        return build(
+            totalValue: snapshot.totalValue,
+            openHoldingCount: snapshot.openHoldings.count,
+            topHoldings: topHoldings,
+            sectorBreakdown: snapshot.sectors,
+            assetTypeBreakdown: snapshot.assetTypes
+        )
+    }
+
+    public static func build(
+        totalValue: Money,
+        openHoldingCount: Int,
+        topHoldings: [HoldingSummary],
+        sectorBreakdown: [DistributionSummary],
+        assetTypeBreakdown: [DistributionSummary]
+    ) -> PortfolioOverviewSummary {
+        let topHoldings = topHoldings
+            .filter { validWeight($0.weight) && validMoney($0.worth) }
+            .sorted(by: ranksByAllocation)
+        let sectors = summaryDistributions(sectorBreakdown)
+        let assetTypes = summaryDistributions(assetTypeBreakdown)
+        return PortfolioOverviewSummary(
+            totalValue: totalValue,
+            openHoldingCount: openHoldingCount,
+            topHoldings: topHoldings,
+            topNConcentration: topNConcentration(from: topHoldings),
+            sectorSummary: sectors,
+            assetTypeSummary: assetTypes,
+            cashSummary: cashSummary(from: topHoldings, assetTypes: assetTypes)
+        )
+    }
+
+    public static func topNConcentration(
+        from holdings: [HoldingSummary],
+        rankCount: Int = concentrationRankCount
+    ) -> PortfolioTopNConcentrationSummary? {
+        let top = Array(holdings.filter { validWeight($0.weight) }.prefix(max(0, rankCount)))
+        guard !top.isEmpty else {
+            return nil
+        }
+        return PortfolioTopNConcentrationSummary(
+            rankCount: top.count,
+            weight: top.reduce(0.0) { $0 + $1.weight }
+        )
+    }
+
+    public static func cashSummary(
+        from holdings: [HoldingSummary],
+        assetTypes: [DistributionSummary]
+    ) -> PortfolioCashSummary? {
+        if let holding = holdings.first(where: { $0.name.caseInsensitiveCompare("Cash") == .orderedSame }),
+           validWeight(holding.weight),
+           validMoney(holding.worth)
+        {
+            return PortfolioCashSummary(value: holding.worth, weight: holding.weight)
+        }
+        guard let cashAssetType = assetTypes.first(where: { $0.name.caseInsensitiveCompare("cash") == .orderedSame }),
+              validPercentage(cashAssetType.percentage),
+              validMoney(cashAssetType.totalValue)
+        else {
+            return nil
+        }
+        return PortfolioCashSummary(value: cashAssetType.totalValue, weight: cashAssetType.percentage / 100.0)
+    }
+
+    private static func holdingSummary(_ holding: NormalizedHolding) -> HoldingSummary? {
+        guard validWeight(holding.weight),
+              validMoney(holding.worth)
+        else {
+            return nil
+        }
+        return HoldingSummary(
+            name: holding.name,
+            quoteId: holding.quoteId,
+            weight: holding.weight,
+            worth: holding.worth,
+            price: sanitizedMoney(holding.price),
+            copyableIdentifier: holding.copyableIdentifier,
+            averageBuyPrice: sanitizedMoney(holding.averageBuyPrice),
+            gainLoss: sanitizedMoney(holding.gainLoss),
+            gainLossPercentage: holding.gainLossPercentage?.isFinite == true ? holding.gainLossPercentage : nil
+        )
+    }
+
+    private static func summaryDistributions(_ distributions: [DistributionSummary]) -> [DistributionSummary] {
+        distributions
+            .filter { validPercentage($0.percentage) && validMoney($0.totalValue) }
+            .sorted {
+                if $0.percentage != $1.percentage {
+                    return $0.percentage > $1.percentage
+                }
+                return $0.name < $1.name
+            }
+    }
+
+    private static func ranksByAllocation(_ lhs: HoldingSummary, _ rhs: HoldingSummary) -> Bool {
+        if lhs.weight != rhs.weight {
+            return lhs.weight > rhs.weight
+        }
+        if lhs.name != rhs.name {
+            return lhs.name < rhs.name
+        }
+        return lhs.quoteId < rhs.quoteId
+    }
+
+    private static func validWeight(_ value: Double) -> Bool {
+        value.isFinite && value >= 0
+    }
+
+    private static func validPercentage(_ value: Double) -> Bool {
+        value.isFinite && value >= 0
+    }
+
+    private static func validMoney(_ money: Money?) -> Bool {
+        guard let money,
+              !money.currency.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              Decimal(string: money.value, locale: Locale(identifier: "en_US_POSIX")) != nil
+        else {
+            return false
+        }
+        return true
+    }
+
+    private static func sanitizedMoney(_ money: Money?) -> Money? {
+        validMoney(money) ? money : nil
+    }
 }
 
 public struct XRayHoldingSummary: Codable, Equatable {
@@ -972,6 +1245,12 @@ public enum MenuRowRole: String, Codable, Equatable {
     case pulseAttention
     case pulseAttentionExpansion
     case pulseMarkRead
+    case portfolioOverview
+    case portfolioOverviewHoldings
+    case portfolioOverviewConcentration
+    case portfolioOverviewSector
+    case portfolioOverviewAssetType
+    case portfolioOverviewCash
     case allocationHolding
     case allocationDrillDown
     case incomeEmpty
@@ -2435,12 +2714,19 @@ public enum MenuDescriptorRenderer {
                             title: "Open holdings",
                             detail: "\(model.portfolioGlance.openHoldingCount)"
                         ),
+                        model.facetSnapshots.allocation.portfolioOverview.topNConcentration.map {
+                            MenuRow(
+                                id: "pulse.quiet.topAllocation",
+                                title: "Top \($0.rankCount)",
+                                detail: percent($0.weight)
+                            )
+                        },
                         MenuRow(
                             id: "pulse.quiet.freshness",
                             title: "Latest prices",
                             detail: model.portfolioGlance.worstPriceAsOf ?? "Unknown"
                         ),
-                    ]
+                    ].compactMap { $0 }
                 ),
             ]
         } else {
@@ -2480,7 +2766,7 @@ public enum MenuDescriptorRenderer {
                 MenuSection(
                     id: "allocation",
                     title: "Allocation",
-                    rows: allocation.topHoldings.map { holding in
+                    rows: [portfolioOverviewRow(for: allocation.portfolioOverview)] + allocation.topHoldings.map { holding in
                         let attention = model.rankedAttentionItems.first { item in
                             item.facet == "allocation" && item.holdingIdentity?.quoteId == holding.quoteId
                         }
@@ -2532,6 +2818,104 @@ public enum MenuDescriptorRenderer {
                     ]
                 ),
             ]
+        )
+    }
+
+    private static func portfolioOverviewRow(for overview: PortfolioOverviewSummary) -> MenuRow {
+        let concentrationDetail = overview.topNConcentration.map {
+            "top \($0.rankCount) \(percent($0.weight))"
+        }
+        let detail = ([display(overview.totalValue), "\(overview.openHoldingCount) holdings"] + [concentrationDetail].compactMap { $0 })
+            .joined(separator: "; ")
+        let children = [
+            portfolioOverviewHoldingsRow(for: overview),
+            portfolioOverviewConcentrationRow(for: overview),
+            portfolioOverviewDistributionRow(
+                id: "allocation.portfolio.sectors",
+                role: .portfolioOverviewSector,
+                title: "Sectors",
+                summaries: overview.sectorSummary
+            ),
+            portfolioOverviewDistributionRow(
+                id: "allocation.portfolio.assetTypes",
+                role: .portfolioOverviewAssetType,
+                title: "Asset types",
+                summaries: overview.assetTypeSummary
+            ),
+            overview.cashSummary.map(portfolioOverviewCashRow),
+        ].compactMap { $0 }
+        return MenuRow(
+            id: "allocation.portfolio",
+            role: .portfolioOverview,
+            title: "Portfolio allocation",
+            detail: detail,
+            children: children
+        )
+    }
+
+    private static func portfolioOverviewHoldingsRow(for overview: PortfolioOverviewSummary) -> MenuRow {
+        let topRows = overview.topHoldings.prefix(PortfolioOverview.topHoldingLimit).map {
+            MenuRow(
+                id: "allocation.portfolio.holdings.\($0.quoteId)",
+                role: .allocationHolding,
+                title: $0.name,
+                detail: "\(percent($0.weight)); \(display($0.worth))"
+            )
+        }
+        let topHolding = overview.topHoldings.first.map { "top \($0.name) \(percent($0.weight))" }
+        return MenuRow(
+            id: "allocation.portfolio.holdings",
+            role: .portfolioOverviewHoldings,
+            title: "Holdings",
+            detail: (["\(overview.openHoldingCount) open"] + [topHolding].compactMap { $0 }).joined(separator: "; "),
+            children: Array(topRows)
+        )
+    }
+
+    private static func portfolioOverviewConcentrationRow(for overview: PortfolioOverviewSummary) -> MenuRow? {
+        guard let concentration = overview.topNConcentration else {
+            return nil
+        }
+        return MenuRow(
+            id: "allocation.portfolio.concentration",
+            role: .portfolioOverviewConcentration,
+            title: "Top \(concentration.rankCount) concentration",
+            detail: percent(concentration.weight)
+        )
+    }
+
+    private static func portfolioOverviewDistributionRow(
+        id: String,
+        role: MenuRowRole,
+        title: String,
+        summaries: [DistributionSummary]
+    ) -> MenuRow? {
+        guard let first = summaries.first else {
+            return nil
+        }
+        let rows = summaries.prefix(PortfolioOverview.topHoldingLimit).map {
+            MenuRow(
+                id: "\(id).\(stableIDToken($0.name))",
+                role: role,
+                title: distributionLabel($0.name),
+                detail: "\(percent($0.percentage / 100.0)); \(display($0.totalValue))"
+            )
+        }
+        return MenuRow(
+            id: id,
+            role: role,
+            title: title,
+            detail: "\(distributionLabel(first.name)) \(percent(first.percentage / 100.0))",
+            children: Array(rows)
+        )
+    }
+
+    private static func portfolioOverviewCashRow(_ cash: PortfolioCashSummary) -> MenuRow {
+        MenuRow(
+            id: "allocation.portfolio.cash",
+            role: .portfolioOverviewCash,
+            title: "Cash",
+            detail: "\(display(cash.value)); \(percent(cash.weight))"
         )
     }
 
@@ -2767,7 +3151,31 @@ public enum PressureEngine {
         let freshnessStale = isFreshnessStale(worstPriceAsOf: worstPriceAsOf, asOf: snapshot.asOf)
         let recentMovesByQuoteID = recentMoves(from: snapshot.priceSeries)
         let nextIncomeEventsByQuoteID = nextIncomeEventsByQuoteID(from: snapshot)
+        let portfolioOverview = PortfolioOverview.build(from: snapshot)
+        let topHoldingSummaries = snapshot.openHoldings
+            .sorted(by: ranksByAllocation)
+            .map {
+                HoldingSummary(
+                    name: $0.name,
+                    quoteId: $0.quoteId,
+                    weight: $0.weight,
+                    worth: $0.worth,
+                    price: validMoney($0.price),
+                    copyableIdentifier: $0.copyableIdentifier,
+                    recentMove: recentMovesByQuoteID[$0.quoteId],
+                    nextIncomeEvent: nextIncomeEventsByQuoteID[$0.quoteId],
+                    averageBuyPrice: $0.averageBuyPrice,
+                    gainLoss: $0.gainLoss,
+                    gainLossPercentage: $0.gainLossPercentage
+                )
+            }
         var supportingDataSlots = [
+            SupportingDataSlot(
+                id: "allocation.overview",
+                facet: "allocation",
+                label: "Portfolio overview",
+                itemCount: portfolioOverview.openHoldingCount
+            ),
             SupportingDataSlot(
                 id: "allocation.holdings",
                 facet: "allocation",
@@ -2823,26 +3231,11 @@ public enum PressureEngine {
                 allocation: AllocationSnapshot(
                     totalValue: totalValue,
                     openHoldingCount: snapshot.openHoldings.count,
-                    topHoldings: snapshot.openHoldings
-                        .sorted(by: ranksByAllocation)
-                        .map {
-                            HoldingSummary(
-                                name: $0.name,
-                                quoteId: $0.quoteId,
-                                weight: $0.weight,
-                                worth: $0.worth,
-                                price: validMoney($0.price),
-                                copyableIdentifier: $0.copyableIdentifier,
-                                recentMove: recentMovesByQuoteID[$0.quoteId],
-                                nextIncomeEvent: nextIncomeEventsByQuoteID[$0.quoteId],
-                                averageBuyPrice: $0.averageBuyPrice,
-                                gainLoss: $0.gainLoss,
-                                gainLossPercentage: $0.gainLossPercentage
-                            )
-                        },
+                    topHoldings: topHoldingSummaries,
                     sectorBreakdown: snapshot.sectors,
                     assetTypeBreakdown: snapshot.assetTypes,
-                    xRayHoldings: snapshot.xRayHoldings
+                    xRayHoldings: snapshot.xRayHoldings,
+                    portfolioOverview: portfolioOverview
                 ),
                 income: IncomeSnapshot(
                     upcomingEvents: snapshot.incomeEvents.sorted { $0.date < $1.date },
@@ -4635,6 +5028,28 @@ public struct PortfolioSnapshot: Codable, Equatable {
     public var incomeEvents: [IncomeEventSummary]
     public var dividendRowCount: Int
     public var priceSeries: [PricePoint]
+
+    public init(
+        asOf: String,
+        totalValue: Money,
+        openHoldings: [NormalizedHolding],
+        sectors: [DistributionSummary],
+        assetTypes: [DistributionSummary],
+        xRayHoldings: [XRayHoldingSummary]? = nil,
+        incomeEvents: [IncomeEventSummary],
+        dividendRowCount: Int,
+        priceSeries: [PricePoint]
+    ) {
+        self.asOf = asOf
+        self.totalValue = totalValue
+        self.openHoldings = openHoldings
+        self.sectors = sectors
+        self.assetTypes = assetTypes
+        self.xRayHoldings = xRayHoldings
+        self.incomeEvents = incomeEvents
+        self.dividendRowCount = dividendRowCount
+        self.priceSeries = priceSeries
+    }
 }
 
 public struct NormalizedHolding: Codable, Equatable {
@@ -5300,6 +5715,25 @@ private func fingerprintToken(_ value: String) -> String {
             result.append(character)
         }
         .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+}
+
+private func stableIDToken(_ value: String) -> String {
+    fingerprintToken(value).isEmpty ? "unknown" : fingerprintToken(value)
+}
+
+private func distributionLabel(_ value: String) -> String {
+    value
+        .split(separator: "-")
+        .map { part in
+            if part.uppercased() == "ETF" {
+                return "ETF"
+            }
+            guard let first = part.first else {
+                return ""
+            }
+            return first.uppercased() + part.dropFirst()
+        }
+        .joined(separator: " ")
 }
 
 private func moneyFingerprint(_ money: Money?) -> String {

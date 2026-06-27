@@ -21,6 +21,13 @@ try check(decoded.facetSnapshots.allocation.openHoldingCount == 9, "quiet fixtur
 try check(decoded.portfolioGlance.openHoldingCount == 9, "quiet model should expose open holding count glance context")
 try check(decoded.portfolioGlance.totalValue == Money(value: "51200.00", currency: "EUR"), "quiet model should expose total value glance context")
 try check(decoded.portfolioGlance.worstPriceAsOf == "2026-06-22", "quiet model should expose price freshness glance context")
+try check(
+    decoded.facetSnapshots.allocation.portfolioOverview.totalValue == Money(value: "51200.00", currency: "EUR")
+        && decoded.facetSnapshots.allocation.portfolioOverview.openHoldingCount == 9
+        && decoded.facetSnapshots.allocation.portfolioOverview.topNConcentration?.rankCount == 3
+        && decoded.facetSnapshots.allocation.portfolioOverview.cashSummary?.value == Money(value: "1895.00", currency: "EUR"),
+    "quiet model should carry structured portfolio overview context"
+)
 try check(!decoded.facetSnapshots.freshness.stale, "quiet model should expose fresh EOD state")
 try check(decoded.supportingDataSlots.map(\.id).contains("bigMovers.prices"), "model should expose supporting data slots")
 var legacyModelObject = try require(
@@ -603,8 +610,8 @@ try check(
 )
 try check(
     descriptor.sections.first { $0.id == "pulse" }?.rows.dropFirst().first?.children.map(\.id)
-        == ["pulse.quiet.value", "pulse.quiet.holdings", "pulse.quiet.freshness"],
-    "quiet pulse row should expose compact nested readouts"
+        == ["pulse.quiet.value", "pulse.quiet.holdings", "pulse.quiet.topAllocation", "pulse.quiet.freshness"],
+    "quiet pulse row should expose compact portfolio overview readouts"
 )
 try check(
     descriptor.sections.map(\.accessibilityIdentifier) == [
@@ -624,6 +631,30 @@ try check(quietPulseRow.role == .pulseQuiet, "quiet pulse row should expose a ty
 try check(
     quietPulseRow.accessibilityIdentifier == "pdtbar.row.pulse.quiet",
     "quiet pulse row should expose a stable accessibility identifier"
+)
+let quietAllocationRows = try require(
+    descriptor.sections.first { $0.id == "allocation" }?.rows,
+    "descriptor should expose allocation rows"
+)
+let portfolioAllocationRow = try require(
+    quietAllocationRows.first,
+    "allocation section should start with a portfolio allocation row"
+)
+try check(
+    portfolioAllocationRow.id == "allocation.portfolio"
+        && portfolioAllocationRow.role == MenuRowRole.portfolioOverview
+        && quietAllocationRows.dropFirst().first?.id == "allocation.9001",
+    "allocation section should render Portfolio allocation before individual holding rows"
+)
+try check(
+    portfolioAllocationRow.children.map { $0.id } == [
+        "allocation.portfolio.holdings",
+        "allocation.portfolio.concentration",
+        "allocation.portfolio.sectors",
+        "allocation.portfolio.assetTypes",
+        "allocation.portfolio.cash",
+    ],
+    "portfolio allocation submenu should expose holdings, concentration, sectors, asset types, and cash"
 )
 try check(
     descriptor.sections.first { $0.id == "income" }?.rows.map(\.id) == ["income.empty"],
@@ -2001,7 +2032,8 @@ let allocationDrillDownRow = allocationRows.first {
     $0.role == .allocationDrillDown && $0.title == "Nova Lithography"
 }
 try check(
-    allocationRows.count == concentrationRun.model.facetSnapshots.allocation.openHoldingCount,
+    allocationRows.filter { $0.role == .allocationHolding || $0.role == .allocationDrillDown }.count
+        == concentrationRun.model.facetSnapshots.allocation.openHoldingCount,
     "allocation drill-down should list every open holding"
 )
 try check(
@@ -2410,7 +2442,11 @@ for fixture in allFixtures {
         renderedRows.allSatisfy { $0.role != .row },
         "\(fixture.lastPathComponent) should expose typed row roles"
     )
-    try check(decoded.supportingDataSlots.count == 4, "\(fixture.lastPathComponent) should include supporting slots")
+    try check(
+        decoded.supportingDataSlots.map(\.id).contains("allocation.overview")
+            && decoded.supportingDataSlots.count == 5,
+        "\(fixture.lastPathComponent) should include supporting slots"
+    )
     try check(!decoded.facetSnapshots.allocation.totalValue.value.contains(","), "\(fixture.lastPathComponent) should keep Money.value canonical")
 }
 
