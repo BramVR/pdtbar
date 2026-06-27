@@ -676,6 +676,26 @@ try check(
     descriptor.sections.first { $0.id == "freshness" }?.rows.first?.detail == "Fresh",
     "quiet descriptor should render freshness from model facts"
 )
+let quietFreshnessRow = try require(
+    descriptor.sections.first { $0.id == "freshness" }?.rows.first,
+    "quiet descriptor should expose freshness summary row"
+)
+try check(
+    decoded.facetSnapshots.freshness.status == .fresh
+        && decoded.facetSnapshots.freshness.staleHoldingCount == 0
+        && decoded.facetSnapshots.freshness.oldestRows.count == 3,
+    "quiet model should carry structured freshness ledger detail"
+)
+try check(
+    quietFreshnessRow.children.map(\.id) == [
+        "freshness.staleCount",
+        "freshness.oldestPrice",
+        "freshness.oldestRows",
+        "freshness.detailFill",
+        "freshness.caveats",
+    ],
+    "freshness summary should expose ledger detail rows without AppKit deriving facts"
+)
 
 let zeroWorthFixtureDirectory = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-zero-worth-fixture")
 defer {
@@ -742,6 +762,10 @@ let emptyHoldingsModel = PressureEngine.buildModel(
 try check(
     !emptyHoldingsModel.facetSnapshots.freshness.stale,
     "empty open holdings should preserve the previous non-stale freshness behavior"
+)
+try check(
+    emptyHoldingsModel.facetSnapshots.freshness.status == .unknown,
+    "empty open holdings should expose unknown freshness state"
 )
 
 let weekendFreshnessFixture = zeroWorthFixtureDirectory.directory.appending(path: "weekend-freshness.json")
@@ -1269,6 +1293,11 @@ let degradedDetailSnapshot = try require(
 )
 try check(degradedDetailRefresh.outcome == .degraded, "missing optional price history should degrade, not abort")
 try check(
+    degradedDetailRefresh.model.facetSnapshots.freshness.status == .partial
+        && degradedDetailRefresh.model.facetSnapshots.freshness.latestCompleteDetailFillAsOf == nil,
+    "degraded background detail refresh should feed partial freshness state"
+)
+try check(
     degradedDetailSnapshot.sectors.count == 1
         && degradedDetailSnapshot.xRayHoldings?.count == 2
         && degradedDetailSnapshot.incomeEvents.count == 1
@@ -1296,8 +1325,10 @@ let repairedDetailDiagnostic = try degradedDetailStore.loadLastDetailRefreshDiag
 try check(repairedDetailRefresh.outcome == .completed, "retry after degraded detail refresh should complete with full data")
 try check(
     repairedDetailRefresh.model.facetSnapshots.bigMovers.priceSeriesCount == 2
+        && repairedDetailRefresh.model.facetSnapshots.freshness.status == .fresh
+        && repairedDetailRefresh.model.facetSnapshots.freshness.latestCompleteDetailFillAsOf == "2026-03-29"
         && repairedDetailDiagnostic == nil,
-    "completed detail retry should restore price data and clear the last diagnostic"
+    "completed detail retry should restore price data, record latest complete detail fill, and clear the last diagnostic"
 )
 let baseRetryStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-required-base-retry-check")
 defer {
@@ -2041,8 +2072,8 @@ try check(
     "descriptor should expose allocation drill-down for the item"
 )
 try check(
-    concentrationRun.descriptor.sections.first { $0.id == "freshness" }?.rows.first?.detail == "Stale",
-    "descriptor should render stale freshness from model facts"
+    concentrationRun.descriptor.sections.first { $0.id == "freshness" }?.rows.first?.detail == "2 stale; oldest 2026-06-18",
+    "descriptor should render stale freshness ledger facts"
 )
 
 let holdingFactsFixtureDirectory = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-holding-facts-fixture")
