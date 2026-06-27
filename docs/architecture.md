@@ -11,7 +11,7 @@ read_when:
 ## Modules
 
 - `Sources/PDTBarCore`: normalized portfolio model, pressure engine, fixture/live data sources, menu descriptor rendering.
-- `Sources/PDTBarAppSupport`: shared AppKit-adjacent support used by the app, smoke runner, and tests for app state, status visuals, menu actions, and scripted launch seams.
+- `Sources/PDTBarAppSupport`: shared AppKit-adjacent support used by the app, smoke runner, and tests for app state, status visuals, menu actions, scripted launch seams, and local Claude/PDT connection handling.
 - `Sources/PDTBarApp`: AppKit status item, Claude-first readiness probe, first fetch, cached pulse, menu actions.
 - `Sources/PDTBarDev`: command-line model and descriptor inspection.
 - `Sources/PDTBarSmoke`: scripted, packaged, Accessibility, manual Claude, and live PDT smoke checks.
@@ -40,6 +40,12 @@ The AppKit delegate renders runtime descriptors, forwards menu actions, and
 performs platform lifecycle work such as timers, async process calls, and
 status-item installation.
 
+`ClaudeLocalConnection` is the local Claude/PDT connection seam for real product
+launches: readiness, login handoff process handling, MCP list parsing,
+ToolSearch resolution, PDT read-tool calls, retry classification, read-only
+allowlists, and Claude tool-result parsing flow through app support instead of
+the AppKit delegate.
+
 Fixture mode uses the same engine/render path but is explicit developer tooling.
 
 ## Boundaries
@@ -47,6 +53,7 @@ Fixture mode uses the same engine/render path but is explicit developer tooling.
 - Engine computes pressure. Bar renders descriptors.
 - App support holds reusable AppKit-adjacent glue; it is not a second engine.
 - Launch runtime owns setup, retry, cached-pulse display, and background detail refresh state; Bar forwards menu actions.
+- `ClaudeLocalConnection` owns local Claude CLI process/result handling; AppKit chooses when to start work and renders descriptors.
 - PDT/MCP adapters normalize raw shapes before engine logic sees them.
 - Financial data stays local; public proof is sanitized.
 
