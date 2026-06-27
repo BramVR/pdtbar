@@ -168,13 +168,20 @@ struct ClaudeLaunchFlowTests {
         #expect(cachedRefresh.sections.first?.id == "portfolioFetch")
         #expect(cachedRefresh.sections.map(\.id).contains("pulse"))
         #expect(rowTitles(in: cachedRefresh).contains("Refreshing portfolio"))
+        #expect(actionRow("actions.refreshNow", in: cachedRefresh)?.title == "Refreshing now")
+        #expect(actionRow("actions.refreshNow", in: cachedRefresh)?.role == .fetchStatus)
+        #expect(actionRow("actions.openPDT", in: cachedRefresh)?.role == .openPDT)
         #expect(cachedFailure.statusVisual.isDimmed)
         #expect(cachedFailure.statusVisual.barHeights == cachedPulse.statusVisual.barHeights)
         #expect(cachedFailure.statusVisual.filledBarCount == cachedPulse.statusVisual.filledBarCount)
         #expect(rowTitles(in: cachedFailure).contains("Details fill failed"))
         #expect(rowTitles(in: cachedFailure).contains("Fill details again"))
         #expect(!rowTitles(in: cachedFailure).contains("Log in with Claude"))
+        #expect(actionRow("actions.refreshNow", in: cachedFailure)?.role == .fetchRetry)
+        #expect(actionRow("actions.openPDT", in: cachedFailure)?.title == "Open PDT")
         #expect(freshnessRefreshDetailsAction(in: cachedRefreshAction)?.role == .fetchRetry)
+        #expect(actionRow("actions.refreshNow", in: cachedRefreshAction)?.title == "Refresh now")
+        #expect(actionRow("actions.openPDT", in: cachedRefreshAction)?.role == .openPDT)
         #expect(!cachedRefreshAction.sections.map(\.id).contains("portfolioFetch"))
         #expect(cachedRefreshAction.sections.first?.id == cachedPulse.sections.first?.id)
         #expect(backgroundFailure.sections.first?.id == "portfolioFetch")
@@ -202,6 +209,9 @@ struct ClaudeLaunchFlowTests {
         #expect(rowTitles(in: descriptor).contains("12/19 price histories checked"))
         #expect(!rowTitles(in: descriptor).contains("Details fill failed"))
         #expect(!rowTitles(in: descriptor).contains("Fill details again"))
+        #expect(actionRow("actions.refreshNow", in: descriptor)?.title == "Refreshing now")
+        #expect(actionRow("actions.refreshNow", in: descriptor)?.role == .fetchStatus)
+        #expect(actionRow("actions.openPDT", in: descriptor)?.role == .openPDT)
     }
 
     @Test("Background degraded completion keeps pulse rows and exposes retry")
@@ -813,7 +823,9 @@ struct LaunchSurfaceTests {
         #expect(descriptor.statusTitle == "EUR 51,200.00 - All quiet")
         #expect(descriptor.statusVisual.filledBarCount == 0)
         #expect(!descriptor.statusVisual.isDimmed)
-        #expect(descriptor.sections.map(\.id) == ["pulse", "allocation", "income", "bigMovers", "freshness"])
+        #expect(descriptor.sections.map(\.id) == ["pulse", "allocation", "income", "bigMovers", "freshness", "actions"])
+        #expect(actionRow("actions.refreshNow", in: descriptor)?.role == .fetchRetry)
+        #expect(actionRow("actions.openPDT", in: descriptor)?.role == .openPDT)
         #expect(surface.status.title == "EUR 51,200.00 - All quiet")
         #expect(surface.status.menuBarTitle.isEmpty)
         #expect(surface.status.visual == descriptor.statusVisual)
@@ -877,4 +889,11 @@ private func freshnessRefreshDetailsAction(in descriptor: MenuDescriptor) -> Men
         .first { $0.id == "freshness.summary" }?
         .children
         .first { $0.id == "freshness.refreshDetails" }
+}
+
+private func actionRow(_ id: String, in descriptor: MenuDescriptor) -> MenuRow? {
+    descriptor.sections
+        .first { $0.id == "actions" }?
+        .rows
+        .first { $0.id == id }
 }

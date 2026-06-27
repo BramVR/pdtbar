@@ -514,6 +514,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 item.action = #selector(markPulseItemRead(_:))
                 item.representedObject = fingerprint
             }
+            if row.role == .openPDT {
+                item.target = self
+                item.action = #selector(openPDT(_:))
+            }
         } else {
             let submenu = NSMenu()
             submenu.autoenablesItems = false
@@ -542,6 +546,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             applyDetailSubtitle(row.detail, to: item, title: row.title)
         }
         return item
+    }
+
+    @objc private func openPDT(_ sender: NSMenuItem) {
+        guard let url = URL(string: "https://app.portfoliodividendtracker.com/login?locale=en") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     private func makePortfolioAllocationChartRowView(

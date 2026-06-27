@@ -2149,6 +2149,7 @@ public enum MenuRowRole: String, Codable, Equatable {
     case dataHealthDiagnostic
     case dataHealthDiagnosticCopy
     case holdingIdentifierCopy
+    case openPDT
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -2718,7 +2719,7 @@ public enum ClaudeLaunchFlow {
                     cachedPulseWithRuntimeHealth(
                         cachedPulse,
                         detailFill: .inProgress(BackgroundDetailRefreshProgress(phase: .baseHoldings))
-                    ),
+                    ).withRefreshAction(.inProgress),
                     rowsFirst: true,
                     rows: [
                         MenuRow(
@@ -2865,7 +2866,7 @@ public enum ClaudeLaunchFlow {
     }
 
     public static func descriptorWithRefreshDetailsAction(cachedPulse: MenuDescriptor) -> MenuDescriptor {
-        var descriptor = cachedPulse
+        var descriptor = cachedPulse.withRefreshAction(.available)
         var addedRefreshAction = false
         descriptor.sections = descriptor.sections.map { section in
             guard section.id == "freshness" else {
@@ -2886,7 +2887,10 @@ public enum ClaudeLaunchFlow {
             return section
         }
         guard addedRefreshAction else {
-            return cachedPulseDescriptor(cachedPulse, rows: [refreshDetailsRow(id: "portfolioFetch.refreshDetails")])
+            return cachedPulseDescriptor(
+                cachedPulse.withRefreshAction(.available),
+                rows: [refreshDetailsRow(id: "portfolioFetch.refreshDetails")]
+            )
         }
         return descriptor
     }
@@ -2896,7 +2900,8 @@ public enum ClaudeLaunchFlow {
         diagnostic: PDTDetailRefreshFailureDiagnostic? = nil
     ) -> MenuDescriptor {
         cachedPulseDescriptor(
-            cachedPulseWithRuntimeHealth(cachedPulse, detailFill: .failed, diagnostic: diagnostic, clearsDiagnostic: true),
+            cachedPulseWithRuntimeHealth(cachedPulse, detailFill: .failed, diagnostic: diagnostic, clearsDiagnostic: true)
+                .withRefreshAction(.available),
             statusVisual: cachedPulse.statusVisual.withDimming(true),
             rowsFirst: true,
             rows: [
@@ -2920,7 +2925,8 @@ public enum ClaudeLaunchFlow {
         progress: BackgroundDetailRefreshProgress
     ) -> MenuDescriptor {
         cachedPulseDescriptor(
-            cachedPulseWithRuntimeHealth(cachedPulse, detailFill: .inProgress(progress)),
+            cachedPulseWithRuntimeHealth(cachedPulse, detailFill: .inProgress(progress))
+                .withRefreshAction(.inProgress),
             rowsFirst: true,
             rows: backgroundDetailProgressRows(progress)
         )
@@ -2928,7 +2934,8 @@ public enum ClaudeLaunchFlow {
 
     public static func descriptorForBackgroundDetailDegraded(cachedPulse: MenuDescriptor) -> MenuDescriptor {
         cachedPulseDescriptor(
-            cachedPulseWithRuntimeHealth(cachedPulse, detailFill: .degraded),
+            cachedPulseWithRuntimeHealth(cachedPulse, detailFill: .degraded)
+                .withRefreshAction(.available),
             statusVisual: cachedPulse.statusVisual.withDimming(true),
             rowsFirst: true,
             rows: [
@@ -3216,6 +3223,12 @@ public enum ClaudeLaunchFlow {
                 title: "Log in with Claude"
             ),
         ]
+    }
+}
+
+private extension MenuDescriptor {
+    func withRefreshAction(_ state: MenuRefreshActionState) -> MenuDescriptor {
+        MenuDescriptorRenderer.descriptorWithTopLevelActions(self, refreshState: state)
     }
 }
 
@@ -3910,8 +3923,57 @@ public enum MenuDescriptorRenderer {
                         dataHealthRow(for: dataHealth),
                     ]
                 ),
+                topLevelActionsSection(refreshState: .available),
             ]
         )
+    }
+
+    static func descriptorWithTopLevelActions(
+        _ descriptor: MenuDescriptor,
+        refreshState: MenuRefreshActionState
+    ) -> MenuDescriptor {
+        var descriptor = descriptor
+        let actions = topLevelActionsSection(refreshState: refreshState)
+        if let index = descriptor.sections.firstIndex(where: { $0.id == actions.id }) {
+            descriptor.sections[index] = actions
+        } else {
+            descriptor.sections.append(actions)
+        }
+        return descriptor
+    }
+
+    private static func topLevelActionsSection(refreshState: MenuRefreshActionState) -> MenuSection {
+        MenuSection(
+            id: "actions",
+            title: "Actions",
+            rows: [
+                refreshActionRow(state: refreshState),
+                MenuRow(
+                    id: "actions.openPDT",
+                    role: .openPDT,
+                    title: "Open PDT"
+                ),
+            ]
+        )
+    }
+
+    private static func refreshActionRow(state: MenuRefreshActionState) -> MenuRow {
+        switch state {
+        case .available:
+            return MenuRow(
+                id: "actions.refreshNow",
+                role: .fetchRetry,
+                title: "Refresh now",
+                detail: "Fill latest details"
+            )
+        case .inProgress:
+            return MenuRow(
+                id: "actions.refreshNow",
+                role: .fetchStatus,
+                title: "Refreshing now",
+                detail: "Already in progress"
+            )
+        }
     }
 
     private static func portfolioOverviewChildren(for overview: PortfolioOverviewSummary) -> [MenuRow] {
@@ -4495,6 +4557,11 @@ public enum MenuDescriptorRenderer {
         return rows
     }
 
+}
+
+enum MenuRefreshActionState {
+    case available
+    case inProgress
 }
 
 public enum PressureEngine {

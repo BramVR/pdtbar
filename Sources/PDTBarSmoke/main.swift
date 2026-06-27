@@ -1367,12 +1367,12 @@ private func scriptedPulseMarkReadSmoke(arguments: [String]) throws -> SmokeRepo
     )
     let resurfacedItem = changedRun.model.rankedAttentionItems.first
     let payloadMatchesFirstItem = clickedPayload == firstItem.readFingerprint
-    let afterClickHidden = afterClickPulse.descriptor.statusBadge == nil
-        && afterClickPulse.descriptor.statusTitle.contains("All caught up")
-        && afterClickPulse.source == .cachedSnapshot
-    let relaunchHidden = relaunchPulse.descriptor.statusBadge == nil
-        && relaunchPulse.descriptor.statusTitle.contains("All caught up")
-        && relaunchPulse.source == .cachedSnapshot
+    let afterClickHidden = !afterClickPulse.model.rankedAttentionItems.contains {
+        $0.readFingerprint == clickedPayload
+    } && afterClickPulse.source == .cachedSnapshot
+    let relaunchHidden = !relaunchPulse.model.rankedAttentionItems.contains {
+        $0.readFingerprint == clickedPayload
+    } && relaunchPulse.source == .cachedSnapshot
     let changedResurfaced = resurfacedItem?.holdingIdentity?.quoteId == firstItem.holdingIdentity?.quoteId
         && resurfacedItem?.readFingerprint != clickedPayload
     let proofPayload = ScriptedPulseMarkReadProof(

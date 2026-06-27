@@ -9,6 +9,7 @@ It watches the whole portfolio through the user's existing Claude CLI + PDT MCP 
 - Shows a compact Concentration Stack icon in the macOS menu bar.
 - Fills up to three bars when attention items are present.
 - Opens to a ranked pulse instead of a dashboard grid.
+- Keeps `Refresh now` and `Open PDT` available from top-level menu actions.
 - Keeps portfolio data local and read-only by default.
 - Uses deterministic pressure rules, not financial advice.
 
