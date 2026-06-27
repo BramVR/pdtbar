@@ -131,6 +131,81 @@ public struct AllQuietSignal: Codable, Equatable {
     }
 }
 
+public struct AttentionExplanationFact: Codable, Equatable {
+    public var key: String
+    public var label: String
+    public var value: String
+    public var numericValue: Double?
+    public var unit: String?
+
+    public init(
+        key: String,
+        label: String,
+        value: String,
+        numericValue: Double? = nil,
+        unit: String? = nil
+    ) {
+        self.key = key
+        self.label = label
+        self.value = value
+        self.numericValue = numericValue
+        self.unit = unit
+    }
+}
+
+public struct AttentionExplanationSourceSlot: Codable, Equatable {
+    public var id: String
+    public var label: String?
+
+    public init(id: String, label: String? = nil) {
+        self.id = id
+        self.label = label
+    }
+}
+
+public struct AttentionExplanation: Codable, Equatable {
+    public var trigger: AttentionExplanationFact
+    public var severity: AttentionExplanationFact
+    public var threshold: AttentionExplanationFact?
+    public var currentValue: AttentionExplanationFact?
+    public var priorValue: AttentionExplanationFact?
+    public var supportingSourceSlots: [AttentionExplanationSourceSlot]
+
+    public init(
+        trigger: AttentionExplanationFact,
+        severity: AttentionExplanationFact,
+        threshold: AttentionExplanationFact? = nil,
+        currentValue: AttentionExplanationFact? = nil,
+        priorValue: AttentionExplanationFact? = nil,
+        supportingSourceSlots: [AttentionExplanationSourceSlot] = []
+    ) {
+        self.trigger = trigger
+        self.severity = severity
+        self.threshold = threshold
+        self.currentValue = currentValue
+        self.priorValue = priorValue
+        self.supportingSourceSlots = supportingSourceSlots
+    }
+
+    public static func legacy(
+        trigger: String,
+        severity: String,
+        score: Double,
+        supportingDataSlotIDs: [String]
+    ) -> AttentionExplanation {
+        AttentionExplanation(
+            trigger: AttentionExplanationFact(key: "trigger", label: "Trigger", value: trigger),
+            severity: AttentionExplanationFact(
+                key: "severity",
+                label: "Severity",
+                value: severity,
+                numericValue: score
+            ),
+            supportingSourceSlots: supportingDataSlotIDs.map { AttentionExplanationSourceSlot(id: $0) }
+        )
+    }
+}
+
 public struct AttentionItem: Codable, Equatable {
     public var id: String
     public var facet: String
@@ -155,6 +230,7 @@ public struct AttentionItem: Codable, Equatable {
     public var windowEnd: String?
     public var resetsReadState: Bool
     public var supportingDataSlotIDs: [String]
+    public var explanation: AttentionExplanation
 
     public init(
         id: String,
@@ -179,7 +255,8 @@ public struct AttentionItem: Codable, Equatable {
         windowStart: String? = nil,
         windowEnd: String? = nil,
         resetsReadState: Bool = false,
-        supportingDataSlotIDs: [String]
+        supportingDataSlotIDs: [String],
+        explanation: AttentionExplanation? = nil
     ) {
         self.id = id
         self.facet = facet
@@ -204,6 +281,23 @@ public struct AttentionItem: Codable, Equatable {
         self.windowEnd = windowEnd
         self.resetsReadState = resetsReadState
         self.supportingDataSlotIDs = supportingDataSlotIDs
+        self.explanation = explanation ?? Self.legacyExplanation(
+            title: title,
+            severity: severity,
+            score: score,
+            currentWeight: currentWeight,
+            threshold: threshold,
+            beforeValue: beforeValue,
+            afterValue: afterValue,
+            moveSize: moveSize,
+            beforeWeight: beforeWeight,
+            valueCurrency: valueCurrency,
+            eventDate: eventDate,
+            amount: amount,
+            windowStart: windowStart,
+            windowEnd: windowEnd,
+            supportingDataSlotIDs: supportingDataSlotIDs
+        )
     }
 
     public init(from decoder: Decoder) throws {
@@ -231,6 +325,120 @@ public struct AttentionItem: Codable, Equatable {
         windowEnd = try container.decodeIfPresent(String.self, forKey: .windowEnd)
         resetsReadState = try container.decodeIfPresent(Bool.self, forKey: .resetsReadState) ?? false
         supportingDataSlotIDs = try container.decode([String].self, forKey: .supportingDataSlotIDs)
+        explanation = try container.decodeIfPresent(AttentionExplanation.self, forKey: .explanation)
+            ?? Self.legacyExplanation(
+                title: title,
+                severity: severity,
+                score: score,
+                currentWeight: currentWeight,
+                threshold: threshold,
+                beforeValue: beforeValue,
+                afterValue: afterValue,
+                moveSize: moveSize,
+                beforeWeight: beforeWeight,
+                valueCurrency: valueCurrency,
+                eventDate: eventDate,
+                amount: amount,
+                windowStart: windowStart,
+                windowEnd: windowEnd,
+                supportingDataSlotIDs: supportingDataSlotIDs
+            )
+    }
+
+    private static func legacyExplanation(
+        title: String,
+        severity: String,
+        score: Double,
+        currentWeight: Double?,
+        threshold: Double?,
+        beforeValue: Double?,
+        afterValue: Double?,
+        moveSize: Double?,
+        beforeWeight: Double?,
+        valueCurrency: String?,
+        eventDate: String?,
+        amount: Money?,
+        windowStart: String?,
+        windowEnd: String?,
+        supportingDataSlotIDs: [String]
+    ) -> AttentionExplanation {
+        var explanation = AttentionExplanation.legacy(
+            trigger: title,
+            severity: severity,
+            score: score,
+            supportingDataSlotIDs: supportingDataSlotIDs
+        )
+        if let threshold {
+            explanation.threshold = AttentionExplanationFact(
+                key: "threshold",
+                label: "Threshold",
+                value: percent(threshold),
+                numericValue: threshold,
+                unit: "fraction"
+            )
+        } else if let windowStart,
+                  let windowEnd
+        {
+            explanation.threshold = AttentionExplanationFact(
+                key: "threshold",
+                label: "Threshold",
+                value: "\(windowStart)..\(windowEnd)"
+            )
+        }
+        if let currentWeight {
+            explanation.currentValue = AttentionExplanationFact(
+                key: "currentValue",
+                label: "Current",
+                value: percent(currentWeight),
+                numericValue: currentWeight,
+                unit: "fraction"
+            )
+        } else if let afterValue,
+                  let valueCurrency
+        {
+            explanation.currentValue = AttentionExplanationFact(
+                key: "currentValue",
+                label: "Current",
+                value: "\(valueCurrency) \(decimalString(String(afterValue), places: 2))",
+                numericValue: afterValue,
+                unit: valueCurrency
+            )
+        } else if let moveSize {
+            explanation.currentValue = AttentionExplanationFact(
+                key: "currentValue",
+                label: "Current",
+                value: signedPercent(moveSize),
+                numericValue: moveSize,
+                unit: "fraction"
+            )
+        } else if let eventDate {
+            let amountDetail = amount.map { "; \(display($0))" } ?? ""
+            explanation.currentValue = AttentionExplanationFact(
+                key: "currentValue",
+                label: "Current",
+                value: "\(eventDate)\(amountDetail)"
+            )
+        }
+        if let beforeValue,
+           let valueCurrency
+        {
+            explanation.priorValue = AttentionExplanationFact(
+                key: "priorValue",
+                label: "Prior",
+                value: "\(valueCurrency) \(decimalString(String(beforeValue), places: 2))",
+                numericValue: beforeValue,
+                unit: valueCurrency
+            )
+        } else if let beforeWeight {
+            explanation.priorValue = AttentionExplanationFact(
+                key: "priorValue",
+                label: "Prior",
+                value: percent(beforeWeight),
+                numericValue: beforeWeight,
+                unit: "fraction"
+            )
+        }
+        return explanation
     }
 }
 
@@ -3171,12 +3379,7 @@ public enum MenuDescriptorRenderer {
             let attention = model.rankedAttentionItems.first { item in
                 item.facet == "allocation" && item.holdingIdentity?.quoteId == holding.quoteId
             }
-            let drillDownDetail = attention.flatMap { item -> String? in
-                guard let currentWeight = item.currentWeight,
-                      item.threshold != nil
-                else { return nil }
-                return percent(currentWeight)
-            }
+            let drillDownDetail = attention?.explanation.currentValue?.value
             return MenuRow(
                 id: "allocation.\(holding.quoteId)",
                 role: drillDownDetail == nil ? .allocationHolding : .allocationDrillDown,
@@ -3401,35 +3604,14 @@ public enum MenuDescriptorRenderer {
         for item: AttentionItem,
         supportingDataSlots: [SupportingDataSlot]
     ) -> [MenuRow] {
-        var rows = [
-            MenuRow(
-                id: "\(item.id).severity",
-                role: .pulseAttentionExpansion,
-                title: "Pressure",
-                detail: "\(item.facet) \(item.severity); score \(decimalString(String(item.score), places: 2))"
-            ),
-        ]
-        if let detail = supportDetail(for: item) {
-            rows.append(
-                MenuRow(
-                    id: "\(item.id).readout",
-                    role: .pulseAttentionExpansion,
-                    title: "Readout",
-                    detail: detail
-                )
-            )
-        }
-        if !item.supportingDataSlotIDs.isEmpty {
-            let slotLabelsByID = supportingDataSlots.reduce(into: [String: String]()) { labelsByID, slot in
-                labelsByID[slot.id] = slot.label
-            }
-            let labels = item.supportingDataSlotIDs.map { slotLabelsByID[$0] ?? $0 }
+        var rows = explanationRows(for: item.explanation, itemID: item.id)
+        if let sources = sourceSlotsDetail(for: item, supportingDataSlots: supportingDataSlots) {
             rows.append(
                 MenuRow(
                     id: "\(item.id).sources",
                     role: .pulseAttentionExpansion,
                     title: "Sources",
-                    detail: labels.joined(separator: ", ")
+                    detail: sources
                 )
             )
         }
@@ -3442,6 +3624,53 @@ public enum MenuDescriptorRenderer {
             )
         )
         return rows
+    }
+
+    private static func explanationRows(for explanation: AttentionExplanation, itemID: String) -> [MenuRow] {
+        [
+            ("trigger", explanation.trigger),
+            ("severity", explanation.severity),
+            ("threshold", explanation.threshold),
+            ("currentValue", explanation.currentValue),
+            ("priorValue", explanation.priorValue),
+        ].compactMap { suffix, fact in
+            guard let fact else { return nil }
+            return MenuRow(
+                id: "\(itemID).\(suffix)",
+                role: .pulseAttentionExpansion,
+                title: fact.label,
+                detail: factDetail(fact)
+            )
+        }
+    }
+
+    private static func factDetail(_ fact: AttentionExplanationFact) -> String {
+        if fact.key == "severity",
+           let score = fact.numericValue
+        {
+            return "\(fact.value); score \(decimalString(String(score), places: 2))"
+        }
+        return fact.value
+    }
+
+    private static func sourceSlotsDetail(
+        for item: AttentionItem,
+        supportingDataSlots: [SupportingDataSlot]
+    ) -> String? {
+        let labelsByID = supportingDataSlots.reduce(into: [String: String]()) { labelsByID, slot in
+            labelsByID[slot.id] = slot.label
+        }
+        let explanationSlots = item.explanation.supportingSourceSlots
+        let slots = explanationSlots.isEmpty
+            ? item.supportingDataSlotIDs.map { AttentionExplanationSourceSlot(id: $0) }
+            : explanationSlots
+        let labels = slots.map { slot in
+            slot.label ?? labelsByID[slot.id] ?? slot.id
+        }
+        guard !labels.isEmpty else {
+            return nil
+        }
+        return labels.joined(separator: ", ")
     }
 
     private static func allocationChildren(for holding: HoldingSummary, attention: AttentionItem?) -> [MenuRow] {
@@ -3530,53 +3759,18 @@ public enum MenuDescriptorRenderer {
                 )
             )
         }
-        if let attention,
-           let threshold = attention.threshold
-        {
+        if let threshold = attention?.explanation.threshold {
             rows.append(
                 MenuRow(
                     id: "allocation.\(holding.quoteId).line",
-                    title: "Concentration line",
-                    detail: percent(threshold)
+                    title: threshold.label,
+                    detail: threshold.value
                 )
             )
         }
         return rows
     }
 
-    private static func supportDetail(for item: AttentionItem) -> String? {
-        if item.facet == "income",
-           let eventDate = item.eventDate
-        {
-            let amount = item.amount.map(display)
-            let change = item.changePercent.map { "change \(signedPercent($0))" }
-            return ([eventDate] + [amount, change].compactMap { $0 } + ["score \(decimalString(String(item.score), places: 2))"])
-                .joined(separator: "; ")
-        }
-
-        if item.facet == "bigMovers",
-           let beforeValue = item.beforeValue,
-           let afterValue = item.afterValue,
-           let moveSize = item.moveSize,
-           let currency = item.valueCurrency
-        {
-            return "\(currency) \(decimalString(String(beforeValue), places: 2)) -> \(currency) \(decimalString(String(afterValue), places: 2)); move \(signedPercent(moveSize)); score \(decimalString(String(item.score), places: 2))"
-        }
-
-        guard let currentWeight = item.currentWeight,
-              let threshold = item.threshold
-        else {
-            return "score \(decimalString(String(item.score), places: 2))"
-        }
-        return "\(bar(fraction: currentWeight)) \(percent(currentWeight)); line \(percent(threshold))"
-    }
-
-    private static func bar(fraction: Double) -> String {
-        let width = 10
-        let clamped = max(0.0, min(1.0, fraction))
-        let filled = Int((clamped * Double(width)).rounded())
-        return "[\(String(repeating: "#", count: filled))\(String(repeating: "-", count: width - filled))]"
-    }
 }
 
 public enum PressureEngine {
@@ -3766,18 +3960,26 @@ public enum PressureEngine {
             .compactMap { item in
                 guard priorSnapshot != nil else { return item }
                 let priorWeight = item.holdingIdentity.flatMap { priorHoldings?[$0.quoteId]?.weight } ?? 0
+                var itemWithPrior = item
+                itemWithPrior.explanation.priorValue = AttentionExplanationFact(
+                    key: "priorValue",
+                    label: "Prior",
+                    value: percent(priorWeight),
+                    numericValue: priorWeight,
+                    unit: "fraction"
+                )
                 if priorWeight < concentrationThreshold {
-                    var freshItem = item
+                    var freshItem = itemWithPrior
                     freshItem.resetsReadState = true
                     return freshItem
                 }
-                guard let prefix = item.concentrationReadFingerprintPrefix else {
+                guard let prefix = itemWithPrior.concentrationReadFingerprintPrefix else {
                     return nil
                 }
                 let changedReadFingerprintExists = readFingerprints.contains { fingerprint in
-                    fingerprint.hasPrefix(prefix) && fingerprint != item.readFingerprint
+                    fingerprint.hasPrefix(prefix) && fingerprint != itemWithPrior.readFingerprint
                 }
-                return changedReadFingerprintExists ? item : nil
+                return changedReadFingerprintExists ? itemWithPrior : nil
             }
     }
 
@@ -3799,7 +4001,33 @@ public enum PressureEngine {
                     holdingIdentity: HoldingIdentity(name: holding.name, quoteId: holding.quoteId),
                     currentWeight: holding.weight,
                     threshold: concentrationThreshold,
-                    supportingDataSlotIDs: ["allocation.holdings"]
+                    supportingDataSlotIDs: ["allocation.holdings"],
+                    explanation: AttentionExplanation(
+                        trigger: AttentionExplanationFact(
+                            key: "trigger",
+                            label: "Trigger",
+                            value: "Concentration line crossed"
+                        ),
+                        severity: explanationSeverity(
+                            severity: score >= 0.8 ? "high" : "medium",
+                            score: score
+                        ),
+                        threshold: AttentionExplanationFact(
+                            key: "threshold",
+                            label: "Threshold",
+                            value: percent(concentrationThreshold),
+                            numericValue: concentrationThreshold,
+                            unit: "fraction"
+                        ),
+                        currentValue: AttentionExplanationFact(
+                            key: "currentValue",
+                            label: "Current",
+                            value: percent(holding.weight),
+                            numericValue: holding.weight,
+                            unit: "fraction"
+                        ),
+                        supportingSourceSlots: explanationSourceSlots(["allocation.holdings"])
+                    )
                 )
             }
     }
@@ -3884,14 +4112,59 @@ public enum PressureEngine {
                 valueCurrency: price.currency,
                 windowStart: priorSnapshot.asOf,
                 windowEnd: snapshot.asOf,
-                supportingDataSlotIDs: ["bigMovers.priorSnapshot", "bigMovers.prices"]
+                supportingDataSlotIDs: ["bigMovers.priorSnapshot", "bigMovers.prices"],
+                explanation: AttentionExplanation(
+                    trigger: AttentionExplanationFact(
+                        key: "trigger",
+                        label: "Trigger",
+                        value: "Price move crossed recent-window line"
+                    ),
+                    severity: explanationSeverity(
+                        severity: abs(moveSize) >= 0.20 ? "high" : "medium",
+                        score: score
+                    ),
+                    threshold: AttentionExplanationFact(
+                        key: "threshold",
+                        label: "Threshold",
+                        value: percent(bigMoverThreshold),
+                        numericValue: bigMoverThreshold,
+                        unit: "fraction"
+                    ),
+                    currentValue: AttentionExplanationFact(
+                        key: "currentValue",
+                        label: "Current",
+                        value: "\(price.currency) \(decimalString(String(afterValue), places: 2))",
+                        numericValue: afterValue,
+                        unit: price.currency
+                    ),
+                    priorValue: AttentionExplanationFact(
+                        key: "priorValue",
+                        label: "Prior",
+                        value: "\(price.currency) \(decimalString(String(beforeValue), places: 2))",
+                        numericValue: beforeValue,
+                        unit: price.currency
+                    ),
+                    supportingSourceSlots: explanationSourceSlots(["bigMovers.priorSnapshot", "bigMovers.prices"])
+                )
             )
         }
     }
 
     private static func incomeItems(from snapshot: PortfolioSnapshot) -> [AttentionItem] {
-        snapshot.incomeEvents
+        let incomeWindowEnd = dayString(daysFrom: snapshot.asOf, days: 30) ?? snapshot.asOf
+        guard let incomeWindowStartDate = dayDate(from: snapshot.asOf),
+              let incomeWindowEndDate = dayDate(from: incomeWindowEnd)
+        else {
+            return []
+        }
+        return snapshot.incomeEvents
             .filter { $0.kind == "ex-dividend" && !$0.estimated }
+            .filter { event in
+                guard let eventDate = dayDate(from: event.date) else {
+                    return false
+                }
+                return eventDate >= incomeWindowStartDate && eventDate <= incomeWindowEndDate
+            }
             .sorted { $0.date < $1.date }
             .enumerated()
             .map { offset, event in
@@ -3910,7 +4183,35 @@ public enum PressureEngine {
                     eventDate: event.date,
                     amount: event.amount,
                     changePercent: event.priorAmount == nil ? nil : event.changePercent,
-                    supportingDataSlotIDs: ["income.calendar"]
+                    windowStart: snapshot.asOf,
+                    windowEnd: incomeWindowEnd,
+                    supportingDataSlotIDs: ["income.calendar"],
+                    explanation: AttentionExplanation(
+                        trigger: AttentionExplanationFact(
+                            key: "trigger",
+                            label: "Trigger",
+                            value: "Ex-dividend date in income window"
+                        ),
+                        severity: explanationSeverity(severity: "low", score: 0.45),
+                        threshold: AttentionExplanationFact(
+                            key: "threshold",
+                            label: "Threshold",
+                            value: "\(snapshot.asOf)..\(incomeWindowEnd)"
+                        ),
+                        currentValue: AttentionExplanationFact(
+                            key: "currentValue",
+                            label: "Current",
+                            value: event.date
+                        ),
+                        priorValue: event.priorAmount.map {
+                            AttentionExplanationFact(
+                                key: "priorValue",
+                                label: "Prior",
+                                value: display($0)
+                            )
+                        },
+                        supportingSourceSlots: explanationSourceSlots(["income.calendar"])
+                    )
                 )
             }
     }
@@ -3938,6 +4239,56 @@ public enum PressureEngine {
 
         let direction = changePercent >= 0 ? "up" : "down"
         return "\(base); latest recorded dividend \(display(amount)), \(direction) \(percent(abs(changePercent))) from prior \(display(priorAmount))."
+    }
+
+    private static func explanationSeverity(severity: String, score: Double) -> AttentionExplanationFact {
+        AttentionExplanationFact(
+            key: "severity",
+            label: "Severity",
+            value: severity,
+            numericValue: score
+        )
+    }
+
+    private static func explanationSourceSlots(_ ids: [String]) -> [AttentionExplanationSourceSlot] {
+        ids.map {
+            AttentionExplanationSourceSlot(id: $0, label: explanationSourceLabel(for: $0))
+        }
+    }
+
+    private static func explanationSourceLabel(for id: String) -> String? {
+        switch id {
+        case "allocation.overview":
+            return "Portfolio overview"
+        case "allocation.holdings":
+            return "Open holdings"
+        case "allocation.sectors":
+            return "Sector breakdown"
+        case "income.calendar":
+            return "Calendar events"
+        case "bigMovers.priorSnapshot":
+            return "Prior snapshot"
+        case "bigMovers.prices":
+            return "Price rows"
+        default:
+            return nil
+        }
+    }
+
+    private static func dayString(daysFrom value: String, days: Int) -> String? {
+        guard let date = dayDate(from: value),
+              let result = dateCalendar.date(byAdding: .day, value: days, to: date)
+        else {
+            return nil
+        }
+        let components = dateCalendar.dateComponents([.year, .month, .day], from: result)
+        guard let year = components.year,
+              let month = components.month,
+              let day = components.day
+        else {
+            return nil
+        }
+        return String(format: "%04d-%02d-%02d", year, month, day)
     }
 
     private static func concentrationScore(weight: Double, threshold: Double) -> Double {

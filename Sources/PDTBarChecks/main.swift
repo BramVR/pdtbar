@@ -75,6 +75,13 @@ try check(
         && pressureItem.readFingerprint.contains("weight-bucket-bp:2400"),
     "concentration read fingerprint should include holding identity, threshold, severity, and weight bucket"
 )
+try check(
+    pressureItem.explanation.trigger.value == "Concentration line crossed"
+        && pressureItem.explanation.threshold?.value == "20.0%"
+        && pressureItem.explanation.currentValue?.value == "24.2%"
+        && pressureItem.explanation.supportingSourceSlots.map(\.id) == ["allocation.holdings"],
+    "concentration attention should carry structured explanation facts for renderer formatting"
+)
 let readStore = try temporaryPulseReadStore()
 let emptyReadState = try readStore.load()
 try check(emptyReadState.readFingerprints.isEmpty, "read store should load empty when no local state exists")
@@ -1537,17 +1544,31 @@ try check(
 try check(!bigMoverItem.detail.localizedCaseInsensitiveContains("sell"), "big-mover copy should not prescribe selling")
 try check(!bigMoverItem.detail.localizedCaseInsensitiveContains("buy"), "big-mover copy should not prescribe buying")
 try check(!bigMoverItem.detail.localizedCaseInsensitiveContains("should"), "big-mover copy should not be prescriptive")
-let bigMoverExpansion = try require(
+let bigMoverCurrentExpansion = try require(
     bigMoverRun.descriptor.sections.first { $0.id == "pulse" }?
         .rows
         .first { $0.id == "bigMovers.move.9001.glance" }?
         .children
-        .first { $0.id == "bigMovers.move.9001.readout" },
-    "descriptor should expose big-mover expansion row as a nested readout"
+        .first { $0.id == "bigMovers.move.9001.currentValue" },
+    "descriptor should expose big-mover current explanation fact as a nested row"
 )
 try check(
-    bigMoverExpansion.detail == "EUR 545.00 -> EUR 612.40; move +12.4%; score 0.62",
-    "big-mover descriptor should render before/after support"
+    bigMoverCurrentExpansion.title == "Current"
+        && bigMoverCurrentExpansion.detail == "EUR 612.40",
+    "big-mover descriptor should render supplied current explanation fact"
+)
+let bigMoverPriorExpansion = try require(
+    bigMoverRun.descriptor.sections.first { $0.id == "pulse" }?
+        .rows
+        .first { $0.id == "bigMovers.move.9001.glance" }?
+        .children
+        .first { $0.id == "bigMovers.move.9001.priorValue" },
+    "descriptor should expose big-mover prior explanation fact as a nested row"
+)
+try check(
+    bigMoverPriorExpansion.title == "Prior"
+        && bigMoverPriorExpansion.detail == "EUR 545.00",
+    "big-mover descriptor should render supplied prior explanation fact"
 )
 
 let incomeFixture = packageRoot.appending(path: "docs/pdt/fixtures/income-event.json")
@@ -1587,12 +1608,13 @@ let incomeExpansion = try require(
         .rows
         .first { $0.id == "income.ex-dividend.9003.glance" }?
         .children
-        .first { $0.id == "income.ex-dividend.9003.readout" },
-    "descriptor should expose income expansion row as a nested readout"
+        .first { $0.id == "income.ex-dividend.9003.currentValue" },
+    "descriptor should expose income current explanation fact as a nested row"
 )
 try check(
-    incomeExpansion.detail == "2026-06-24; EUR 78.00; score 0.45",
-    "income descriptor should render date, amount, and score"
+    incomeExpansion.title == "Current"
+        && incomeExpansion.detail == "2026-06-24",
+    "income descriptor should render supplied current explanation fact"
 )
 let incomeRows = incomeRun.descriptor.sections.first { $0.id == "income" }?.rows ?? []
 try check(
