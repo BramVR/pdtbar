@@ -7782,7 +7782,7 @@ private func decodeLiveTool<T: Decodable>(_ tool: String, data: Data) throws -> 
         return decoded
     }
     if extraction.unavailable
-        || extraction.failureClassificationText.map(PDTLiveUnavailableClassifier.shouldSkip) == true
+        || unavailableTextPayload(extraction.payloadData)
     {
         throw PDTLiveDataSourceError.unavailableToolResult(tool)
     }
@@ -7792,28 +7792,24 @@ private func decodeLiveTool<T: Decodable>(_ tool: String, data: Data) throws -> 
 private struct LiveToolPayloadExtraction {
     var payloadData: Data
     var unavailable: Bool
-    var failureClassificationText: String?
 }
 
 private struct ExtractedMCPPayload {
     var data: Data
     var unavailable: Bool
-    var failureClassificationText: String?
 }
 
 private func extractLiveToolPayload(from data: Data) -> LiveToolPayloadExtraction {
     guard let object = try? JSONSerialization.jsonObject(with: data) else {
         return LiveToolPayloadExtraction(
             payloadData: data,
-            unavailable: unavailableTextPayload(data),
-            failureClassificationText: nil
+            unavailable: unavailableTextPayload(data)
         )
     }
     let extracted = extractedMCPPayload(from: object)
     return LiveToolPayloadExtraction(
         payloadData: extracted?.data ?? data,
-        unavailable: PDTLiveUnavailableClassifier.shouldSkipObject(object) || (extracted?.unavailable ?? false),
-        failureClassificationText: extracted?.failureClassificationText
+        unavailable: PDTLiveUnavailableClassifier.shouldSkipObject(object) || (extracted?.unavailable ?? false)
     )
 }
 
@@ -7822,19 +7818,27 @@ private func extractedMCPPayload(from object: Any) -> ExtractedMCPPayload? {
         if let content = dictionary["content"] as? [Any] {
             for item in content {
                 guard let item = item as? [String: Any],
+                      item["type"] as? String == "text",
                       let text = item["text"] as? String,
                       let textData = text.data(using: .utf8)
                 else { continue }
-                return ExtractedMCPPayload(data: textData, unavailable: false, failureClassificationText: text)
+                return ExtractedMCPPayload(data: textData, unavailable: false)
             }
         }
         guard let nested = dictionary["result"],
               let nestedData = try? JSONSerialization.data(withJSONObject: nested, options: [.sortedKeys])
-        else { return nil }
+        else {
+            guard let nested = dictionary["data"] as? [String: Any],
+                  let nestedData = try? JSONSerialization.data(withJSONObject: nested, options: [.sortedKeys])
+            else { return nil }
+            return ExtractedMCPPayload(
+                data: nestedData,
+                unavailable: PDTLiveUnavailableClassifier.shouldSkipErrorPayload(nested)
+            )
+        }
         return ExtractedMCPPayload(
             data: nestedData,
-            unavailable: PDTLiveUnavailableClassifier.shouldSkipErrorPayload(nested),
-            failureClassificationText: nil
+            unavailable: PDTLiveUnavailableClassifier.shouldSkipErrorPayload(nested)
         )
     }
     return nil

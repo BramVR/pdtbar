@@ -222,6 +222,53 @@ struct BaseHoldingNormalizationTests {
         #expect(snapshot.totalValue == Money(value: "500.00", currency: "EUR"))
     }
 
+    @Test("Live wrapped MCP content ignores non-text items before JSON text")
+    func liveWrappedMCPContentIgnoresNonTextItemsBeforeJSONText() throws {
+        let connector = ScriptedPDTMCPConnector(responses: [
+            "pdt-get-portfolio-holdings": try mcpContentItems([
+                ["type": "image", "text": "authentication required"],
+                ["type": "text", "text": baseHoldingsJSON],
+            ]),
+        ])
+
+        let snapshot = try PDTMCPConnectorDataSource(
+            connector: connector,
+            liveOptions: PDTLiveDataSourceOptions(
+                includeDistributions: false,
+                includeXRayHoldings: false,
+                includeIncomeEvents: false,
+                includeDividends: false,
+                includeIncomeQuoteLookups: false,
+                includePriceSeries: false
+            )
+        ).snapshot(asOf: "2026-06-26")
+
+        #expect(snapshot.openHoldings.map(\.quoteId) == [1001])
+        #expect(snapshot.totalValue == Money(value: "500.00", currency: "EUR"))
+    }
+
+    @Test("Live connector decodes object data-wrapped MCP holdings payload")
+    func liveConnectorDecodesObjectDataWrappedMCPHoldingsPayload() throws {
+        let connector = ScriptedPDTMCPConnector(responses: [
+            "pdt-get-portfolio-holdings": try mcpDataObject(baseHoldingsJSON),
+        ])
+
+        let snapshot = try PDTMCPConnectorDataSource(
+            connector: connector,
+            liveOptions: PDTLiveDataSourceOptions(
+                includeDistributions: false,
+                includeXRayHoldings: false,
+                includeIncomeEvents: false,
+                includeDividends: false,
+                includeIncomeQuoteLookups: false,
+                includePriceSeries: false
+            )
+        ).snapshot(asOf: "2026-06-26")
+
+        #expect(snapshot.openHoldings.map(\.quoteId) == [1001])
+        #expect(snapshot.totalValue == Money(value: "500.00", currency: "EUR"))
+    }
+
     @Test("Filtered live holdings do not trigger quote lookup or price history")
     func filteredLiveHoldingsDoNotTriggerQuoteLookupOrPriceHistory() throws {
         let connector = ScriptedPDTMCPConnector(responses: [
@@ -398,6 +445,24 @@ private func mcpTextContent(_ text: String, isError: Bool = false) throws -> Dat
                     "text": text,
                 ],
             ],
+        ],
+        options: [.sortedKeys]
+    )
+}
+
+private func mcpDataObject(_ json: String) throws -> Data {
+    let object = try JSONSerialization.jsonObject(with: Data(json.utf8))
+    return try JSONSerialization.data(
+        withJSONObject: ["data": object],
+        options: [.sortedKeys]
+    )
+}
+
+private func mcpContentItems(_ content: [[String: Any]]) throws -> Data {
+    try JSONSerialization.data(
+        withJSONObject: [
+            "isError": false,
+            "content": content,
         ],
         options: [.sortedKeys]
     )
