@@ -798,7 +798,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
     }
     let missingClaudeMenuVisible = missingClaudeIDs.isSubset(of: missingClaudeMenu.identifiers)
         && missingClaudeMenu.texts.contains { $0.contains("Claude login failed") }
-        && missingClaudeMenu.texts.contains("Log in with Claude")
+        && missingClaudeMenu.texts.contains { $0.contains("Log in with Claude") }
 
     let proofPayload = ScriptedLoginHandoffProof(
         successIdleBeforeClick: successWasIdleBeforeClick,
@@ -2526,12 +2526,22 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
     let freshnessScreenshotDetail = freshnessScreenshot == nil ? "" : "; captured freshness detail screenshot"
     let attentionScreenshotDetail = attentionScreenshot == nil ? "" : "; captured attention explanation screenshot"
     let dataHealthScreenshotDetail = dataHealthScreenshot == nil ? "" : "; captured Data health screenshot"
-    let reportArtifacts = [artifactPath(evidence)]
-        + (screenshot.map { [artifactPath($0)] } ?? [])
-        + (allocationScreenshot.map { [artifactPath($0)] } ?? [])
-        + (freshnessScreenshot.map { [artifactPath($0)] } ?? [])
-        + (attentionScreenshot.map { [artifactPath($0)] } ?? [])
-        + (dataHealthScreenshot.map { [artifactPath($0)] } ?? [])
+    var reportArtifacts = [artifactPath(evidence)]
+    if let screenshot {
+        reportArtifacts.append(artifactPath(screenshot))
+    }
+    if let allocationScreenshot {
+        reportArtifacts.append(artifactPath(allocationScreenshot))
+    }
+    if let freshnessScreenshot {
+        reportArtifacts.append(artifactPath(freshnessScreenshot))
+    }
+    if let attentionScreenshot {
+        reportArtifacts.append(artifactPath(attentionScreenshot))
+    }
+    if let dataHealthScreenshot {
+        reportArtifacts.append(artifactPath(dataHealthScreenshot))
+    }
     return SmokeReport(
         name: "real-user-pulse",
         status: SmokeStatus.passed,
