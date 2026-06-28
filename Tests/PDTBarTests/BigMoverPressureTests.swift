@@ -54,6 +54,26 @@ struct BigMoverPressureTests {
         #expect(item.explanation.priorValue?.value == "USD 100.00")
     }
 
+    @Test("Same-day price history tie break uses numeric close")
+    func sameDayPriceHistoryTieBreakUsesNumericClose() throws {
+        var snapshot = try snapshot("big-mover")
+        snapshot.priceSeries = try priceSeries("""
+        [
+          { "quoteId": 9001, "date": "2026-06-15", "closeAdjusted": "10.00" },
+          { "quoteId": 9001, "date": "2026-06-15", "closeAdjusted": "9.00" },
+          { "quoteId": 9001, "date": "2026-06-19", "closeAdjusted": "11.00" }
+        ]
+        """)
+
+        let item = try #require(
+            PressureEngine.buildModel(from: snapshot).rankedAttentionItems.first { $0.id == "bigMovers.move.9001" }
+        )
+
+        #expect(item.beforeValue == 9.00)
+        #expect(item.afterValue == 11.00)
+        #expect(item.moveSize == 0.2222)
+    }
+
     @Test("Seeded prior snapshot still emits big-mover pressure")
     func seededPriorSnapshotStillEmitsBigMoverPressure() throws {
         let model = try model("big-mover", withPrior: true)
@@ -83,6 +103,21 @@ struct BigMoverPressureTests {
         let model = PressureEngine.buildModel(from: snapshot, priorSnapshot: prior)
 
         #expect(!model.rankedAttentionItems.contains { $0.id == "bigMovers.move.9001" })
+    }
+
+    @Test("Prior snapshot missing a quote uses price history pressure")
+    func priorSnapshotMissingQuoteUsesPriceHistoryPressure() throws {
+        let fixture = packageRoot.appending(path: "docs/pdt/fixtures/big-mover.json")
+        let snapshot = try PDTFixtureDataSource.snapshot(from: fixture)
+        var prior = try PDTFixtureDataSource.priorSnapshot(from: fixture)
+        prior.openHoldings.removeAll { $0.quoteId == 9001 }
+
+        let item = try #require(
+            PressureEngine.buildModel(from: snapshot, priorSnapshot: prior).rankedAttentionItems.first { $0.id == "bigMovers.move.9001" }
+        )
+
+        #expect(item.beforeWeight == nil)
+        #expect(item.supportingDataSlotIDs == ["bigMovers.prices"])
     }
 
     @Test("All-quiet fixture remains quiet")

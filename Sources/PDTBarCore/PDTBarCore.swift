@@ -5173,7 +5173,7 @@ public enum PressureEngine {
                 )
             }
 
-            guard priorSnapshot == nil,
+            guard priorHoldings[holding.quoteId] == nil,
                   let signal = priceHistorySignals[holding.quoteId],
                   signal.absoluteDecimalMove >= moverThreshold
             else { return nil }
@@ -5246,7 +5246,7 @@ public enum PressureEngine {
             if $0.date != $1.date {
                 return $0.date < $1.date
             }
-            return $0.point.closeAdjusted < $1.point.closeAdjusted
+            return $0.close < $1.close
         }
         guard let first = sorted.first,
               let last = sorted.last,
