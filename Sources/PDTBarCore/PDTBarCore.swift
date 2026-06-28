@@ -407,23 +407,27 @@ public struct AttentionItem: Codable, Equatable {
         self.windowEnd = windowEnd
         self.resetsReadState = resetsReadState
         self.supportingDataSlotIDs = supportingDataSlotIDs
-        self.explanation = explanation ?? Self.legacyExplanation(
-            title: title,
-            severity: self.severity,
-            score: score,
-            currentWeight: currentWeight,
-            threshold: threshold,
-            beforeValue: beforeValue,
-            afterValue: afterValue,
-            moveSize: moveSize,
-            beforeWeight: beforeWeight,
-            valueCurrency: valueCurrency,
-            eventDate: eventDate,
-            amount: amount,
-            windowStart: windowStart,
-            windowEnd: windowEnd,
-            supportingDataSlotIDs: supportingDataSlotIDs
-        )
+        if let explanation {
+            self.explanation = Self.normalizedExplanation(explanation, severity: self.severity)
+        } else {
+            self.explanation = Self.legacyExplanation(
+                title: title,
+                severity: self.severity,
+                score: score,
+                currentWeight: currentWeight,
+                threshold: threshold,
+                beforeValue: beforeValue,
+                afterValue: afterValue,
+                moveSize: moveSize,
+                beforeWeight: beforeWeight,
+                valueCurrency: valueCurrency,
+                eventDate: eventDate,
+                amount: amount,
+                windowStart: windowStart,
+                windowEnd: windowEnd,
+                supportingDataSlotIDs: supportingDataSlotIDs
+            )
+        }
     }
 
     public init(from decoder: Decoder) throws {
@@ -451,8 +455,10 @@ public struct AttentionItem: Codable, Equatable {
         windowEnd = try container.decodeIfPresent(String.self, forKey: .windowEnd)
         resetsReadState = try container.decodeIfPresent(Bool.self, forKey: .resetsReadState) ?? false
         supportingDataSlotIDs = try container.decode([String].self, forKey: .supportingDataSlotIDs)
-        explanation = try container.decodeIfPresent(AttentionExplanation.self, forKey: .explanation)
-            ?? Self.legacyExplanation(
+        if let decodedExplanation = try container.decodeIfPresent(AttentionExplanation.self, forKey: .explanation) {
+            explanation = Self.normalizedExplanation(decodedExplanation, severity: severity)
+        } else {
+            explanation = Self.legacyExplanation(
                 title: title,
                 severity: severity,
                 score: score,
@@ -469,6 +475,16 @@ public struct AttentionItem: Codable, Equatable {
                 windowEnd: windowEnd,
                 supportingDataSlotIDs: supportingDataSlotIDs
             )
+        }
+    }
+
+    private static func normalizedExplanation(
+        _ explanation: AttentionExplanation,
+        severity: String
+    ) -> AttentionExplanation {
+        var explanation = explanation
+        explanation.severity.value = severity
+        return explanation
     }
 
     private static func legacyExplanation(

@@ -134,7 +134,21 @@ struct AttentionExplanationTests {
           "title": "Legacy typo",
           "severity": "critical",
           "score": 0.9,
-          "supportingDataSlotIDs": []
+          "supportingDataSlotIDs": [],
+          "explanation": {
+            "trigger": {
+              "key": "trigger",
+              "label": "Trigger",
+              "value": "Legacy typo"
+            },
+            "severity": {
+              "key": "severity",
+              "label": "Severity",
+              "value": "critical",
+              "numericValue": 0.9
+            },
+            "supportingSourceSlots": []
+          }
         }
         """)
 
