@@ -798,7 +798,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
     }
     let missingClaudeMenuVisible = missingClaudeIDs.isSubset(of: missingClaudeMenu.identifiers)
         && missingClaudeMenu.texts.contains { $0.contains("Claude login failed") }
-        && missingClaudeMenu.texts.contains("Log in with Claude")
+        && missingClaudeMenu.texts.contains { $0.contains("Log in with Claude") }
 
     let proofPayload = ScriptedLoginHandoffProof(
         successIdleBeforeClick: successWasIdleBeforeClick,
