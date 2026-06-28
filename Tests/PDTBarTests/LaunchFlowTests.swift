@@ -21,6 +21,32 @@ struct LaunchOptionTests {
         #expect(options.mode == .claudeFirst)
         #expect(options.snapshotDirectory == nil)
         #expect(options.appSupportDirectory == URL(fileURLWithPath: appSupport))
+        #expect(options.claudeLoginBinaryOverride == nil)
+    }
+
+    @Test("No-argument launch ignores scripted Claude login binary environment")
+    func noArgumentLaunchIgnoresScriptedClaudeLoginBinaryEnvironment() throws {
+        let options = try PDTBarLaunchOptionParser.parse(
+            arguments: [],
+            environment: [
+                "PDTBAR_CLAUDE_BIN": "/tmp/pdtbar-tests-handoff-script",
+                "PDTBAR_CLAUDE_LOGIN_BIN": "/tmp/pdtbar-tests-login-script",
+            ]
+        )
+
+        #expect(options.mode == .claudeFirst)
+        #expect(options.claudeLoginBinaryOverride == nil)
+    }
+
+    @Test("Explicit scripted login handoff option carries debug binary")
+    func explicitScriptedLoginHandoffOptionCarriesDebugBinary() throws {
+        let options = try PDTBarLaunchOptionParser.parse(
+            arguments: ["--scripted-claude-login-bin", "/tmp/pdtbar-tests-login-script"],
+            environment: [:]
+        )
+
+        #expect(options.mode == .claudeFirst)
+        #expect(options.claudeLoginBinaryOverride == "/tmp/pdtbar-tests-login-script")
     }
 
     @Test("Fixture launch requires explicit flag and may use snapshot directory")

@@ -18,7 +18,7 @@ No-argument `pdtbar` launch is the user path. It uses isolated app support when 
 pdtbar --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/manual-snapshot
 ```
 
-On product launch the app enters `probingClaude` before visible login UI. Scripted smoke files can drive this state in isolated test runs; otherwise the probe checks whether the existing signed-in Claude CLI user can reach the configured PDT MCP server through `claude mcp list`. It must not open surprise prompts or fall back to fixtures.
+On product launch the app enters `probingClaude` before visible login UI. Scripted smoke files can drive this state in isolated test runs; otherwise the probe checks whether the existing signed-in Claude CLI user can reach the configured PDT MCP server through `claude mcp list`. It must not open surprise prompts or fall back to fixtures. Product Claude calls scrub inherited old scripted handoff env before using any configured Claude binary; scripted login binaries are supported only through the explicit smoke/debug launch option documented in [`smoke-checks.md`](smoke-checks.md).
 
 ## Setup states
 
@@ -28,7 +28,7 @@ On product launch the app enters `probingClaude` before visible login UI. Script
 - Missing Claude CLI or failed login: show the matching CodexBar-style login failure (`Claude CLI not found`, `Claude login timed out`, `Claude login failed`, or `Could not start claude auth login`) plus retryable `Log in with Claude`.
 - Probe/fetch failure: keep setup or the previous good pulse visible; show retry copy in the menu.
 
-`Log in with Claude` is user-initiated. It runs `claude auth login` through the same PTY-style flow CodexBar uses for Claude Code auth, then waits for CLI login success. Browser OAuth, generic providers, Codex login, API keys, tokens, raw MCP JSON, and mcporter are not product login paths.
+`Log in with Claude` is user-initiated. It runs `claude auth login` through the same PTY-style flow CodexBar uses for Claude Code auth, then waits for CLI login success. `PDTBAR_CLAUDE_BIN` may point at a configured Claude executable, but old scripted handoff env is removed from the product launch environment. Browser OAuth, generic providers, Codex login, API keys, tokens, raw MCP JSON, and mcporter are not product login paths.
 After a successful login, PDTBar re-runs Claude/PDT readiness before deciding whether to fetch, show signed-out setup, show missing PDT MCP setup, or show probe failure. A failed login shows the matching retryable login failure state.
 
 ## First fetch and returning launch

@@ -26,6 +26,17 @@ public protocol ClaudeLocalCommandRunning: Sendable {
     ) throws -> ClaudeLocalProcessResult
 }
 
+public enum ClaudeLocalEnvironment {
+    public static func removingScriptedHandoffHook(_ environment: [String: String]) -> [String: String] {
+        guard environment.keys.contains(where: { $0.hasPrefix("PDTBAR_CLAUDE_HANDOFF_") }) else {
+            return environment
+        }
+        var sanitized = environment
+        sanitized.removeValue(forKey: "PDTBAR_CLAUDE_BIN")
+        return sanitized
+    }
+}
+
 public struct ClaudeLocalConnectionConfiguration: Sendable {
     public var claudePath: String
     public var model: String
@@ -677,9 +688,18 @@ public final class ClaudeLocalLoginCancellation: @unchecked Sendable {
 
 public struct ClaudeLocalLoginRunner: Sendable {
     public var environment: [String: String]
+    public var binary: String
 
-    public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
+    public static func productBinary(environment: [String: String]) -> String {
+        environment["PDTBAR_CLAUDE_BIN"]?.nilIfEmpty ?? "claude"
+    }
+
+    public init(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        binary: String? = nil
+    ) {
         self.environment = environment
+        self.binary = binary?.nilIfEmpty ?? Self.productBinary(environment: environment)
     }
 
     public func run(
@@ -692,6 +712,7 @@ public struct ClaudeLocalLoginRunner: Sendable {
                 continuation.resume(returning: Self.runBlocking(
                     timeout: timeout,
                     environment: environment,
+                    binary: binary,
                     cancellation: cancellation,
                     onPhaseChange: onPhaseChange
                 ))
@@ -702,6 +723,7 @@ public struct ClaudeLocalLoginRunner: Sendable {
     private static func runBlocking(
         timeout: TimeInterval,
         environment: [String: String],
+        binary: String,
         cancellation: ClaudeLocalLoginCancellation,
         onPhaseChange: @escaping @Sendable (ClaudeLocalLoginPhase) -> Void
     ) -> ClaudeLocalLoginOutcome {
@@ -710,6 +732,7 @@ public struct ClaudeLocalLoginRunner: Sendable {
             let runResult = try runPTY(
                 timeout: timeout,
                 environment: environment,
+                binary: binary,
                 cancellation: cancellation,
                 onPhaseChange: onPhaseChange
             )
@@ -737,6 +760,7 @@ public struct ClaudeLocalLoginRunner: Sendable {
     private static func runPTY(
         timeout: TimeInterval,
         environment: [String: String],
+        binary: String,
         cancellation: ClaudeLocalLoginCancellation,
         onPhaseChange: @escaping @Sendable (ClaudeLocalLoginPhase) -> Void
     ) throws -> TTYCommandRunner.Result {
@@ -783,7 +807,7 @@ public struct ClaudeLocalLoginRunner: Sendable {
         options.settleAfterStop = 0.35
         options.debugLogPath = environment["PDTBAR_CLAUDE_LOGIN_DEBUG_LOG"]?.nilIfEmpty
         return try TTYCommandRunner().run(
-            binary: environment["PDTBAR_CLAUDE_BIN"]?.nilIfEmpty ?? "claude",
+            binary: binary,
             send: "",
             options: options,
             isCancelled: { cancellation.isCancelled },

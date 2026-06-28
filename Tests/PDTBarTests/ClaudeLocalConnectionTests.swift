@@ -28,6 +28,15 @@ struct ClaudeLocalConnectionTests {
         #expect(runner.requests.isEmpty)
     }
 
+    @Test("Environment configuration preserves configured Claude binary")
+    func environmentConfigurationPreservesConfiguredClaudeBinary() throws {
+        let configured = ClaudeLocalConnectionConfiguration(environment: [
+            "PDTBAR_CLAUDE_BIN": "/usr/local/bin/claude-wrapper",
+        ])
+
+        #expect(configured.claudePath == "/usr/local/bin/claude-wrapper")
+    }
+
     @Test("Missing PDT MCP blocks readiness and read-tool availability")
     func missingPDTMCPBlocksReadinessAndAvailability() throws {
         let runner = RecordingClaudeCommandRunner(results: [

@@ -207,6 +207,8 @@ let noArgumentLaunch = try PDTBarLaunchOptionParser.parse(
     environment: [
         "PDTBAR_APP_SUPPORT_DIR": "/tmp/pdtbar-checks-app-support",
         "PDTBAR_FIXTURE": fixture.path,
+        "PDTBAR_CLAUDE_BIN": "/tmp/pdtbar-checks-env-handoff-script",
+        "PDTBAR_CLAUDE_LOGIN_BIN": "/tmp/pdtbar-checks-env-login-script",
     ]
 )
 try check(
@@ -220,6 +222,18 @@ try check(
 try check(
     noArgumentLaunch.appSupportDirectory == URL(fileURLWithPath: "/tmp/pdtbar-checks-app-support"),
     "no-argument launch should allow isolated real app state"
+)
+try check(
+    noArgumentLaunch.claudeLoginBinaryOverride == nil,
+    "no-argument launch should ignore inherited scripted Claude login binary hooks"
+)
+let explicitScriptedLoginLaunch = try PDTBarLaunchOptionParser.parse(
+    arguments: ["--scripted-claude-login-bin", "/tmp/pdtbar-checks-login-script"],
+    environment: [:]
+)
+try check(
+    explicitScriptedLoginLaunch.claudeLoginBinaryOverride == "/tmp/pdtbar-checks-login-script",
+    "scripted Claude login binary should require an explicit launch option"
 )
 let fixtureLaunch = try PDTBarLaunchOptionParser.parse(arguments: ["--fixture", fixture.path], environment: [:])
 try check(
