@@ -409,7 +409,7 @@ public struct AttentionItem: Codable, Equatable {
         self.supportingDataSlotIDs = supportingDataSlotIDs
         self.explanation = explanation ?? Self.legacyExplanation(
             title: title,
-            severity: severity,
+            severity: self.severity,
             score: score,
             currentWeight: currentWeight,
             threshold: threshold,
