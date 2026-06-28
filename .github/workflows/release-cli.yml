@@ -1,0 +1,135 @@
+name: Release CLI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag/version to package for manual artifact builds; manual runs do not publish."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-cli:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            runs-on: macos-15
+            asset-platform: macos
+            asset-arch: arm64
+            build-arch: arm64
+          - name: macos-x86_64
+            runs-on: macos-15-intel
+            asset-platform: macos
+            asset-arch: x86_64
+            build-arch: x86_64
+    runs-on: ${{ matrix.runs-on }}
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Select Xcode 26.1.1 (if present) or fallback to default
+        run: |
+          set -euo pipefail
+          for candidate in /Applications/Xcode_26.1.1.app /Applications/Xcode_26.1.app /Applications/Xcode.app; do
+            if [[ -d "$candidate" ]]; then
+              sudo xcode-select -s "${candidate}/Contents/Developer"
+              echo "DEVELOPER_DIR=${candidate}/Contents/Developer" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+          /usr/bin/xcodebuild -version
+
+      - name: Runner info
+        run: |
+          set -euo pipefail
+          uname -a
+          uname -m
+          swift --version
+
+      - name: Validate release tag
+        if: github.event_name == 'release' || inputs.tag != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$RELEASE_TAG" ]]; then
+            echo "Missing release tag." >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9A-Za-z._-]+$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+      - name: Build pdtbar (release)
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift build -c release --product pdtbar --arch "${{ matrix.build-arch }}"
+          echo "bin_dir=$(swift build -c release --product pdtbar --arch "${{ matrix.build-arch }}" --show-bin-path)" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test pdtbar
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN_DIR="${{ steps.build.outputs.bin_dir }}"
+          BIN="$BIN_DIR/pdtbar"
+          echo "BIN=$BIN"
+          file "$BIN"
+          lipo -archs "$BIN" | tr ' ' '\n' | grep -Fx "${{ matrix.asset-arch }}"
+          swift run pdtbar-smoke packaged-app --app "$BIN" --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir ".build/pdtbar-smoke-artifacts/release-${{ matrix.name }}"
+
+      - name: Package
+        id: pkg
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REF_NAME="${RELEASE_TAG}"
+          if [[ -z "$REF_NAME" ]]; then
+            echo "Missing release tag." >&2
+            exit 1
+          fi
+          SAFE_REF_NAME="${REF_NAME//\//-}"
+
+          BIN_DIR="${{ steps.build.outputs.bin_dir }}"
+          OUT_DIR="$(mktemp -d)"
+          install -m 0755 "$BIN_DIR/pdtbar" "$OUT_DIR/pdtbar"
+          printf '%s\n' "${SAFE_REF_NAME#v}" > "$OUT_DIR/VERSION"
+
+          ASSET="pdtbar-${SAFE_REF_NAME}-${{ matrix.asset-platform }}-${{ matrix.asset-arch }}.tar.gz"
+          (cd "$OUT_DIR" && tar czf "$ASSET" pdtbar VERSION)
+          shasum -a 256 "$OUT_DIR/$ASSET" > "$OUT_DIR/$ASSET.sha256"
+
+          echo "out_dir=$OUT_DIR" >> "$GITHUB_OUTPUT"
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release assets
+        if: github.event_name == 'release'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          OUT_DIR="${{ steps.pkg.outputs.out_dir }}"
+          ASSET="${{ steps.pkg.outputs.asset }}"
+          gh release upload "$TAG" "$OUT_DIR/$ASSET" "$OUT_DIR/$ASSET.sha256" --clobber
+
+      - name: Upload workflow artifact (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: pdtbar-${{ matrix.name }}
+          path: |
+            ${{ steps.pkg.outputs.out_dir }}/${{ steps.pkg.outputs.asset }}
+            ${{ steps.pkg.outputs.out_dir }}/${{ steps.pkg.outputs.asset }}.sha256
