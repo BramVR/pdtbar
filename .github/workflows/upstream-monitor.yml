@@ -1,0 +1,189 @@
+name: Monitor Upstream Changes
+
+on:
+  schedule:
+    - cron: '0 9 * * 1,4'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Which upstream to check'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - codexbar
+          - repobar
+
+jobs:
+  check-upstreams:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Add upstream remotes
+        run: |
+          git remote add codexbar https://github.com/steipete/CodexBar.git || true
+          git remote add repobar https://github.com/steipete/RepoBar.git || true
+          git fetch codexbar
+          git fetch repobar
+
+      - name: Check for new commits
+        id: check
+        env:
+          TARGET: ${{ inputs.target || 'all' }}
+        run: |
+          set -euo pipefail
+
+          remote_default_branch() {
+            local remote="$1"
+            local branch=""
+            branch=$(git symbolic-ref -q --short "refs/remotes/${remote}/HEAD" 2>/dev/null | sed "s#^${remote}/##" || true)
+            if [ -z "$branch" ]; then
+              branch=$(git remote show "$remote" 2>/dev/null | awk '/HEAD branch/ {print $NF; exit}' || true)
+            fi
+            if [ -n "$branch" ] && git rev-parse --verify -q "${remote}/${branch}" >/dev/null; then
+              echo "$branch"
+              return 0
+            fi
+            for candidate in main master; do
+              if git rev-parse --verify -q "${remote}/${candidate}" >/dev/null; then
+                echo "$candidate"
+                return 0
+              fi
+            done
+            echo "Could not resolve default branch for ${remote}" >&2
+            exit 1
+          }
+
+          count_recent() {
+            local remote="$1"
+            local ref="$2"
+            if [[ "$TARGET" != "all" && "$TARGET" != "$remote" ]]; then
+              echo 0
+              return
+            fi
+            git log --oneline "$ref" --since="7 days ago" 2>/dev/null | wc -l | tr -d ' '
+          }
+
+          summarize_recent() {
+            local remote="$1"
+            local ref="$2"
+            if [[ "$TARGET" != "all" && "$TARGET" != "$remote" ]]; then
+              echo "Skipped"
+              return
+            fi
+            git log --oneline "$ref" --since="7 days ago" 2>/dev/null | head -10 || echo "No commits"
+          }
+
+          CODEXBAR_BRANCH=$(remote_default_branch codexbar)
+          REPOBAR_BRANCH=$(remote_default_branch repobar)
+          CODEXBAR_REF="codexbar/${CODEXBAR_BRANCH}"
+          REPOBAR_REF="repobar/${REPOBAR_BRANCH}"
+          echo "codexbar_ref=$CODEXBAR_REF" >> "$GITHUB_OUTPUT"
+          echo "repobar_ref=$REPOBAR_REF" >> "$GITHUB_OUTPUT"
+
+          CODEXBAR_NEW=$(count_recent codexbar "$CODEXBAR_REF")
+          REPOBAR_NEW=$(count_recent repobar "$REPOBAR_REF")
+          echo "codexbar_commits=$CODEXBAR_NEW" >> "$GITHUB_OUTPUT"
+          echo "repobar_commits=$REPOBAR_NEW" >> "$GITHUB_OUTPUT"
+
+          echo "codexbar_summary<<EOF" >> "$GITHUB_OUTPUT"
+          summarize_recent codexbar "$CODEXBAR_REF" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+          echo "repobar_summary<<EOF" >> "$GITHUB_OUTPUT"
+          summarize_recent repobar "$REPOBAR_REF" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update issue
+        if: steps.check.outputs.codexbar_commits > 0 || steps.check.outputs.repobar_commits > 0
+        uses: actions/github-script@v9.0.0
+        with:
+          script: |
+            const codexbarCommits = '${{ steps.check.outputs.codexbar_commits }}';
+            const repobarCommits = '${{ steps.check.outputs.repobar_commits }}';
+            const codexbarRef = '${{ steps.check.outputs.codexbar_ref }}';
+            const repobarRef = '${{ steps.check.outputs.repobar_ref }}';
+            const codexbarBranch = codexbarRef.replace('codexbar/', '');
+            const repobarBranch = repobarRef.replace('repobar/', '');
+            const codexbarSummary = `${{ steps.check.outputs.codexbar_summary }}`;
+            const repobarSummary = `${{ steps.check.outputs.repobar_summary }}`;
+
+            const body = `## Upstream Changes Detected
+
+            **steipete/CodexBar:** ${codexbarCommits} recent commits
+            **steipete/RepoBar:** ${repobarCommits} recent commits
+            **Source refs:** ${codexbarRef}, ${repobarRef}
+
+            ### steipete/CodexBar Recent Commits
+            \`\`\`
+            ${codexbarSummary}
+            \`\`\`
+
+            ### steipete/RepoBar Recent Commits
+            \`\`\`
+            ${repobarSummary}
+            \`\`\`
+
+            ### Review Actions
+
+            Compare the upstream changes with PDTBar's selective reuse notes before adopting anything.
+
+            ### Links
+            - [CodexBar commits](https://github.com/steipete/CodexBar/commits/${codexbarBranch})
+            - [RepoBar commits](https://github.com/steipete/RepoBar/commits/${repobarBranch})
+
+            ---
+            *Auto-generated by upstream-monitor workflow*
+            *Last checked: ${new Date().toISOString()}*`;
+
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'upstream-sync',
+              state: 'open'
+            });
+
+            if (issues.data.length > 0) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issues.data[0].number,
+                body: body
+              });
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issues.data[0].number,
+                body: `Updated with latest changes (${codexbarCommits} CodexBar, ${repobarCommits} RepoBar)`
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'Upstream Changes Available for Review',
+                body: body,
+                labels: ['upstream-sync', 'needs-review']
+              });
+            }
+
+      - name: No changes detected
+        if: steps.check.outputs.codexbar_commits == 0 && steps.check.outputs.repobar_commits == 0
+        run: |
+          echo "No new upstream changes detected"
+          echo "steipete/CodexBar: no recent commits"
+          echo "steipete/RepoBar: no recent commits"
