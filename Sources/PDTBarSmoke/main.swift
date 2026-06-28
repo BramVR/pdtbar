@@ -4695,12 +4695,19 @@ private struct McporterTool {
 private enum McporterSetupError: Error {
     case defaultMissing(URL)
     case defaultPackageMissing(URL)
+    case defaultPackageUnreadable(URL)
+    case defaultPackageMalformed(URL)
     case defaultVersionMismatch(expected: String, actual: String, packageJSON: URL)
     case explicitPathMissing(URL)
 
     var status: String {
         switch self {
-        case .defaultMissing, .defaultPackageMissing, .defaultVersionMismatch, .explicitPathMissing:
+        case .defaultMissing,
+             .defaultPackageMissing,
+             .defaultPackageUnreadable,
+             .defaultPackageMalformed,
+             .defaultVersionMismatch,
+             .explicitPathMissing:
             SmokeStatus.failed
         }
     }
@@ -4711,6 +4718,10 @@ private enum McporterSetupError: Error {
             "pinned mcporter is not installed at \(artifactPath(expected)); run npm ci, then rerun live-pdt or pass --mcporter <trusted-local-path>"
         case .defaultPackageMissing(let packageJSON):
             "pinned mcporter executable exists, but \(artifactPath(packageJSON)) is missing; run npm ci to restore mcporter@\(pinnedMcporterVersion)"
+        case .defaultPackageUnreadable(let packageJSON):
+            "pinned mcporter metadata at \(artifactPath(packageJSON)) is unreadable; run npm ci to restore mcporter@\(pinnedMcporterVersion)"
+        case .defaultPackageMalformed(let packageJSON):
+            "pinned mcporter metadata at \(artifactPath(packageJSON)) is malformed or missing a version; run npm ci to restore mcporter@\(pinnedMcporterVersion)"
         case .defaultVersionMismatch(let expected, let actual, let packageJSON):
             "pinned mcporter version mismatch in \(artifactPath(packageJSON)); expected \(expected), found \(actual); run npm ci"
         case .explicitPathMissing(let executable):
@@ -4722,14 +4733,21 @@ private enum McporterSetupError: Error {
         switch self {
         case .defaultMissing(let expected), .explicitPathMissing(let expected):
             [artifactPath(expected)]
-        case .defaultPackageMissing(let packageJSON), .defaultVersionMismatch(_, _, let packageJSON):
+        case .defaultPackageMissing(let packageJSON),
+             .defaultPackageUnreadable(let packageJSON),
+             .defaultPackageMalformed(let packageJSON),
+             .defaultVersionMismatch(_, _, let packageJSON):
             [artifactPath(packageJSON)]
         }
     }
 }
 
 private func resolveMcporterTool(options: SmokeOptions, environment: [String: String]) throws -> McporterTool {
-    if let explicit = options.mcporter ?? environment["PDTBAR_MCPORTER_BIN"].flatMap({ URL(fileURLWithPath: $0) }) {
+    let environmentMcporterPath = environment["PDTBAR_MCPORTER_BIN"]?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let explicitEnvironmentMcporter = environmentMcporterPath
+        .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+    if let explicit = options.mcporter ?? explicitEnvironmentMcporter {
         guard FileManager.default.isExecutableFile(atPath: explicit.path) else {
             throw McporterSetupError.explicitPathMissing(explicit)
         }
@@ -4744,11 +4762,16 @@ private func resolveMcporterTool(options: SmokeOptions, environment: [String: St
         throw McporterSetupError.defaultMissing(executable)
     }
     let packageJSON = packageRoot.appending(path: "node_modules/mcporter/package.json")
-    guard let data = try? Data(contentsOf: packageJSON),
-          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+    guard FileManager.default.fileExists(atPath: packageJSON.path) else {
+        throw McporterSetupError.defaultPackageMissing(packageJSON)
+    }
+    guard let data = try? Data(contentsOf: packageJSON) else {
+        throw McporterSetupError.defaultPackageUnreadable(packageJSON)
+    }
+    guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let version = object["version"] as? String
     else {
-        throw McporterSetupError.defaultPackageMissing(packageJSON)
+        throw McporterSetupError.defaultPackageMalformed(packageJSON)
     }
     guard version == pinnedMcporterVersion else {
         throw McporterSetupError.defaultVersionMismatch(

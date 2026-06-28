@@ -1239,13 +1239,19 @@ try check(
 )
 let smokeSource = try String(contentsOf: packageRoot.appending(path: "Sources/PDTBarSmoke/main.swift"), encoding: .utf8)
 try check(
+    smokeSource.contains("private let pinnedMcporterVersion = \"\(pinnedMcporterVersion)\""),
+    "pdtbar-smoke pinnedMcporterVersion should match package.json and package-lock"
+)
+try check(
     !smokeSource.contains(#""npx", "-y", "mcporter""#),
     "live PDT smoke should not invoke unpinned npx mcporter"
 )
 try check(
     smokeSource.contains("node_modules/.bin/mcporter")
         && smokeSource.contains("pinned mcporter version mismatch")
-        && smokeSource.contains("case .defaultMissing, .defaultPackageMissing")
+        && smokeSource.contains("defaultPackageUnreadable")
+        && smokeSource.contains("defaultPackageMalformed")
+        && smokeSource.contains("trimmingCharacters(in: .whitespacesAndNewlines)")
         && smokeSource.contains("run npm ci"),
     "live PDT smoke should use an actionable pinned mcporter setup gate"
 )
