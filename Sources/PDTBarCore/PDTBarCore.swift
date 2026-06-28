@@ -5189,10 +5189,12 @@ public enum PressureEngine {
                   let signal = priceHistorySignals[holding.quoteId],
                   signal.absoluteDecimalMove >= moverThreshold
             else { return nil }
+            var emittedSignal = signal
+            emittedSignal.windowEnd = snapshot.asOf
 
             return bigMoverItem(
                 holding: holding,
-                signal: signal,
+                signal: emittedSignal,
                 beforeWeight: nil,
                 sourceSlotIDs: ["bigMovers.prices"]
             )

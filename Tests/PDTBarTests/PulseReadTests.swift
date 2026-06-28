@@ -319,8 +319,11 @@ struct PulseReadTests {
         let bigMover = try #require(run.model.rankedAttentionItems.first { $0.facet == "bigMovers" })
 
         try readStore.markRead(bigMover.readFingerprint)
-        _ = try PressureRunner.cachedPulse(snapshotStore: snapshotStore, pulseReadStore: readStore)
+        let cached = try #require(try PressureRunner.cachedPulse(snapshotStore: snapshotStore, pulseReadStore: readStore))
 
+        #expect(cached.model.rankedAttentionItems.allSatisfy { $0.facet != "bigMovers" })
+        #expect(cached.descriptor.statusBadge == nil)
+        #expect(cached.descriptor.statusTitle.contains("All caught up"))
         #expect(try readStore.load().contains(bigMover.readFingerprint))
     }
 
