@@ -34,8 +34,11 @@ swift test
 
 `make check` is the default deterministic handoff gate. It delegates to
 `Scripts/check.sh`, which checks script syntax, builds the Swift package, runs
-`pdtbar-checks`, and runs the sharded Swift test runner. It does not run live
-Claude/PDT, Keychain, 1Password, Accessibility, or packaged-app flows.
+`pdtbar-checks`, and runs the sharded Swift test runner. `pdtbar-checks` is now
+kept to command-style fixture/connector and tooling-contract proof; core model,
+parser, runner, normalization, and rendering regressions live in
+`Tests/PDTBarTests` and run under `swift test`. It does not run live Claude/PDT,
+Keychain, 1Password, Accessibility, or packaged-app flows.
 
 `Scripts/test.sh` runs Swift Testing suites through the PDTBar sharder. Useful knobs:
 
@@ -94,6 +97,9 @@ must use the packaged app path above.
 ## Smoke Gate
 
 ```bash
+swift build
+swift test
+swift run pdtbar-checks
 swift run pdtbar-smoke scripted-pdt-connector
 swift run pdtbar-smoke scripted-login-handoff
 swift run pdtbar-smoke scripted-setup-retry
@@ -101,8 +107,13 @@ swift run pdtbar-smoke scripted-pulse-mark-read
 swift run pdtbar-smoke copy-holding-identifier-action
 swift run pdtbar-smoke scripted-first-fetch
 swift run pdtbar-smoke scripted-returning-launch
-swift run pdtbar-smoke real-claude-flow-ax
 ```
+
+Use the commands above as the local deterministic smoke gate. `make check`
+invokes the sharded Swift test runner through `Scripts/test.sh`, which bounds
+suite groups around `swift test`. Run `swift run pdtbar-smoke
+real-claude-flow-ax` separately when an Accessibility-backed UI matrix is
+needed.
 
 First-run packaged regression gate:
 
