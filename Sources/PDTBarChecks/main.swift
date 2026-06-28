@@ -1202,6 +1202,60 @@ for visibleText in userFacingDescriptors.flatMap(visibleMenuText) {
     }
 }
 
+let pinnedMcporterVersion = "0.12.2"
+let packageManifestURL = packageRoot.appending(path: "package.json")
+let packageLockURL = packageRoot.appending(path: "package-lock.json")
+let packageManifest = try require(
+    JSONSerialization.jsonObject(with: try Data(contentsOf: packageManifestURL)) as? [String: Any],
+    "package.json should decode for mcporter pin checks"
+)
+let devDependencies = try require(
+    packageManifest["devDependencies"] as? [String: String],
+    "package.json should declare devDependencies"
+)
+try check(
+    devDependencies["mcporter"] == pinnedMcporterVersion,
+    "live PDT smoke should pin mcporter in package.json"
+)
+let packageLock = try require(
+    JSONSerialization.jsonObject(with: try Data(contentsOf: packageLockURL)) as? [String: Any],
+    "package-lock.json should decode for mcporter pin checks"
+)
+let lockedPackages = try require(
+    packageLock["packages"] as? [String: Any],
+    "package-lock.json should include packages map"
+)
+let lockedMcporter = try require(
+    lockedPackages["node_modules/mcporter"] as? [String: Any],
+    "package-lock.json should lock node_modules/mcporter"
+)
+try check(
+    lockedMcporter["version"] as? String == pinnedMcporterVersion,
+    "package-lock.json should lock mcporter to the pinned version"
+)
+try check(
+    (lockedMcporter["integrity"] as? String)?.hasPrefix("sha512-") == true,
+    "package-lock.json should include mcporter registry integrity"
+)
+let smokeSource = try String(contentsOf: packageRoot.appending(path: "Sources/PDTBarSmoke/main.swift"), encoding: .utf8)
+try check(
+    !smokeSource.contains(#""npx", "-y", "mcporter""#),
+    "live PDT smoke should not invoke unpinned npx mcporter"
+)
+try check(
+    smokeSource.contains("node_modules/.bin/mcporter")
+        && smokeSource.contains("pinned mcporter version mismatch")
+        && smokeSource.contains("case .defaultMissing, .defaultPackageMissing")
+        && smokeSource.contains("run npm ci"),
+    "live PDT smoke should use an actionable pinned mcporter setup gate"
+)
+let smokeDocs = try String(contentsOf: packageRoot.appending(path: "docs/smoke-checks.md"), encoding: .utf8)
+try check(
+    smokeDocs.contains("./node_modules/.bin/mcporter list <pdt-server> --schema --json")
+        && !smokeDocs.contains("npx -y mcporter"),
+    "smoke docs should show the pinned mcporter command path"
+)
+
 let concentrationFixture = packageRoot.appending(path: "docs/pdt/fixtures/concentration-pressure.json")
 let snapshotDirectory = FileManager.default.temporaryDirectory
     .appending(path: "pdtbar-checks-\(UUID().uuidString)")
@@ -1550,6 +1604,10 @@ do {
 } catch let error as PDTLiveDataSourceError {
     try check(error.shouldSkipLiveSmoke, "exit-zero live PDT auth payload should be classified as a skip")
 }
+try check(
+    PDTLiveUnavailableClassifier.shouldSkip("[mcporter] Unknown MCP server 'pdt'."),
+    "mcporter missing-server errors should skip optional live PDT smoke"
+)
 var degradedDetailResponses = scriptedConnectorResponses
 degradedDetailResponses.removeValue(
     forKey: "pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9101"
