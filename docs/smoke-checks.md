@@ -103,11 +103,12 @@ live Claude credentials. It launches the logged-out menu, verifies the
 fake Claude CLI is not called before the user-initiated `Log in with Claude`
 menu action, then proves the explicit smoke/debug login binary invokes `claude
 auth login`, shows `Signing in with Claude` while login is in flight, re-runs
-readiness, and starts the first fetch from scripted PDT data. Failure renders
-`Claude login failed` with a retryable login action. The proof artifact contains
-selector/click booleans, readiness probe counts, snapshot status, and redacted
-state only; no credentials, account identifiers, or raw portfolio payloads are
-written.
+readiness, renders `Fetching portfolio`, and starts the first fetch from
+scripted PDT data. It fails if a successful handoff returns to the signed-out
+setup menu. Failure renders `Claude login failed` with a retryable login action.
+The proof artifact contains selector/click booleans, readiness probe counts,
+snapshot status, and redacted state only; no credentials, account identifiers,
+or raw portfolio payloads are written.
 
 Scripted setup retry e2e:
 

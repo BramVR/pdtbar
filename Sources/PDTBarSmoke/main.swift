@@ -668,6 +668,29 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         statusIdentifier: "pdtbar.status",
         timeout: options.timeout
     )
+    let fetchingSurface = MenuBarSurfaceRenderer.render(descriptor: ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio))
+    let fetchingTargets = requiredSetupMenuTargets(in: fetchingSurface)
+    let fetchingIDs = Set(fetchingTargets.map(\.accessibilityIdentifier))
+    let fetchingStatus = waitForAccessibilityElement(
+        in: successAppElement,
+        identifier: fetchingSurface.status.accessibilityIdentifier,
+        timeout: options.timeout
+    )
+    let fetchingMenu = fetchingStatus.map {
+        openStatusMenu(
+            $0,
+            appElement: successAppElement,
+            expectedMenuIdentifiers: fetchingIDs,
+            timeout: options.timeout
+        )
+    } ?? OpenMenuResult(
+        snapshot: nil,
+        successfulAttempt: nil,
+        attempts: ["status item missing: \(fetchingSurface.status.accessibilityIdentifier)"]
+    )
+    let successFetchingMenuVisible = fetchingIDs.isSubset(of: fetchingMenu.snapshot?.identifiers ?? [])
+        && (fetchingMenu.snapshot?.texts.contains("Fetching portfolio") ?? false)
+    pressEscape()
     let successFirstFetchSnapshot = successAppSupport.appending(path: "pdtbar/state/latest-portfolio-snapshot.json")
     let successFirstFetchSnapshotWritten = waitForSnapshotAsOf(
         successFirstFetchSnapshot,
@@ -796,6 +819,10 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         successReadinessRechecked: successReadinessRechecked,
         successReadinessProbeCount: successReadinessProbeCount,
         successFetchingVisible: successFetchingVisible,
+        successFetchingMenuVisible: successFetchingMenuVisible,
+        successFetchingMenuOpenAttempt: fetchingMenu.successfulAttempt ?? fetchingMenu.attempts.joined(separator: "; "),
+        successFetchingObservedIdentifiers: fetchingMenu.snapshot?.identifiers.sorted() ?? [],
+        successFetchingObservedTexts: fetchingMenu.snapshot?.texts.sorted() ?? [],
         successFirstFetchSnapshotWritten: successFirstFetchSnapshotWritten,
         successFirstFetchAsOf: successFirstFetchAsOf,
         failureIdleBeforeClick: failureWasIdleBeforeClick,
@@ -826,6 +853,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
           successCompleted,
           successReadinessRechecked,
           successReadinessProbeCount == 2,
+          successFetchingMenuVisible,
           successFirstFetchSnapshotWritten,
           successFirstFetchAsOf == "2026-03-29",
           failureWasIdleBeforeClick,
@@ -2778,6 +2806,10 @@ private struct ScriptedLoginHandoffProof: Codable {
     var successReadinessRechecked: Bool
     var successReadinessProbeCount: Int
     var successFetchingVisible: Bool
+    var successFetchingMenuVisible: Bool
+    var successFetchingMenuOpenAttempt: String?
+    var successFetchingObservedIdentifiers: [String]
+    var successFetchingObservedTexts: [String]
     var successFirstFetchSnapshotWritten: Bool
     var successFirstFetchAsOf: String?
     var failureIdleBeforeClick: Bool
