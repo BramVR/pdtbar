@@ -6167,13 +6167,9 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             "date_from": dayString(snapshotAsOf, addingDays: -370),
             "date_to": incomeDateRange["date_to"] ?? snapshotAsOf,
         ]
-        let calendarEnvelope: LiveCalendarEventsEnvelope = try callDecodedWithRetry(
-            "pdt-list-calendar-events",
-            phase: .income,
-            arguments: incomeDateRange
-        )
+        let paginatedCalendarEvents = try liveCalendarEvents(arguments: incomeDateRange)
         let dividends = try liveDividends(arguments: dividendDateRange)
-        let calendarEvents = calendarEnvelope.data.filter { $0.type != "no-events-today" }
+        let calendarEvents = paginatedCalendarEvents.filter { $0.type != "no-events-today" }
         let quoteIDsBySymbolID = try incomeQuoteIDsBySymbolID(for: calendarEvents, holdings: holdings)
         let normalized = PDTOptionalDetailNormalizer.normalizeIncomeEvents(
             calendarEvents: calendarEvents.map(\.optionalDetailInput),
@@ -6184,6 +6180,28 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             events: normalized.events,
             dividendRowCount: normalized.dividendRowCount
         )
+    }
+
+    private func liveCalendarEvents(arguments baseArguments: [String: String]) throws -> [LiveCalendarEvent] {
+        var page = 1
+        var events: [LiveCalendarEvent] = []
+        while true {
+            let arguments = baseArguments.merging([
+                "page": String(page),
+                "per_page": "250",
+            ]) { _, new in new }
+            let envelope: LiveCalendarEventsEnvelope = try callDecodedWithRetry(
+                "pdt-list-calendar-events",
+                phase: .income,
+                arguments: arguments
+            )
+            events.append(contentsOf: envelope.data)
+            let lastPage = envelope.meta?.lastPage ?? page
+            guard page < lastPage else {
+                return events
+            }
+            page += 1
+        }
     }
 
     private func incomeQuoteIDsBySymbolID(
@@ -6491,11 +6509,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         let xRayHoldings = options.includeXRayHoldings ? try liveXRayHoldings() : []
         let calendarEvents: [LiveCalendarEvent]
         if options.includeIncomeEvents {
-            let calendarEnvelope: LiveCalendarEventsEnvelope = try decodeLiveTool(
-                "pdt-list-calendar-events",
-                data: toolClient.callReadTool("pdt-list-calendar-events", arguments: incomeDateRange)
-            )
-            calendarEvents = calendarEnvelope.data
+            calendarEvents = try liveCalendarEvents(arguments: incomeDateRange)
         } else {
             calendarEvents = []
         }
@@ -6609,6 +6623,27 @@ public struct PDTLiveDataSource: PortfolioDataSource {
                 return holdings
             }
             offset += limit
+        }
+    }
+
+    private func liveCalendarEvents(arguments baseArguments: [String: String]) throws -> [LiveCalendarEvent] {
+        var page = 1
+        var events: [LiveCalendarEvent] = []
+        while true {
+            let arguments = baseArguments.merging([
+                "page": String(page),
+                "per_page": "250",
+            ]) { _, new in new }
+            let envelope: LiveCalendarEventsEnvelope = try decodeLiveTool(
+                "pdt-list-calendar-events",
+                data: toolClient.callReadTool("pdt-list-calendar-events", arguments: arguments)
+            )
+            events.append(contentsOf: envelope.data)
+            let lastPage = envelope.meta?.lastPage ?? page
+            guard page < lastPage else {
+                return events
+            }
+            page += 1
         }
     }
 
@@ -7322,6 +7357,7 @@ private struct LiveDistribution: Decodable {
 
 private struct LiveCalendarEventsEnvelope: Decodable {
     var data: [LiveCalendarEvent]
+    var meta: LivePaginationMeta?
 }
 
 private struct LiveCalendarEvent: Decodable {

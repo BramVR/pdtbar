@@ -161,6 +161,47 @@ struct BaseHoldingNormalizationTests {
         #expect(connector.calls.filter { $0 == "pdt-list-symbol-prices" }.count == 1)
     }
 
+    @Test("Live connector paginates income calendar events")
+    func liveConnectorPaginatesIncomeCalendarEvents() throws {
+        let connector = ScriptedPDTMCPConnector(responses: [
+            "pdt-get-portfolio-holdings": Data(baseHoldingsJSON.utf8),
+            "pdt-list-calendar-events?date_from=2026-06-26&date_to=2026-07-26&page=1&per_page=250": Data("""
+            {
+              "data": [
+                { "date": "2026-06-26", "type": "no-events-today", "isEstimated": false, "symbolId": null, "symbolName": null },
+                { "date": "2026-06-29", "type": "payment-dividend", "isEstimated": false, "symbolId": 5001, "symbolName": "Open Public Co" }
+              ],
+              "meta": { "last_page": 2 }
+            }
+            """.utf8),
+            "pdt-list-calendar-events?date_from=2026-06-26&date_to=2026-07-26&page=2&per_page=250": Data("""
+            {
+              "data": [
+                { "date": "2026-07-02", "type": "ex-dividend", "isEstimated": false, "symbolId": 5001, "symbolName": "Open Public Co" }
+              ],
+              "meta": { "last_page": 2 }
+            }
+            """.utf8),
+            "pdt-get-symbol-quote?id=1001": Data(#"{"id":1001,"code":"PUBC","symbolId":5001}"#.utf8),
+        ])
+
+        let snapshot = try PDTMCPConnectorDataSource(
+            connector: connector,
+            liveOptions: PDTLiveDataSourceOptions(
+                includeDistributions: false,
+                includeXRayHoldings: false,
+                includeIncomeEvents: true,
+                includeDividends: false,
+                includeIncomeQuoteLookups: true,
+                includePriceSeries: false
+            )
+        ).snapshot(asOf: "2026-06-26")
+
+        #expect(snapshot.incomeEvents.map(\.kind) == ["payment-dividend", "ex-dividend"])
+        #expect(snapshot.incomeEvents.map(\.quoteId) == [1001, 1001])
+        #expect(connector.calls.filter { $0 == "pdt-list-calendar-events" }.count == 2)
+    }
+
     @Test("Optional symbol lookup absence is cached per live snapshot")
     func optionalSymbolLookupAbsenceIsCachedPerLiveSnapshot() throws {
         let connector = ScriptedPDTMCPConnector(responses: [

@@ -200,7 +200,7 @@ struct BackgroundDetailRefreshTests {
         }
 
         try assertPriorOptionalDetailPreservedWhenRemovingResponse(
-            "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28",
+            "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=1&per_page=250",
             prefix: "pdtbar-detail-refresh-prior-income-test"
         ) { committed in
             #expect(committed.xRayHoldings == [XRayHoldingSummary(weight: 0.25), XRayHoldingSummary(weight: 0.15)])
@@ -509,11 +509,12 @@ private func detailRefreshResponses(
           "hasMore": false
         }
         """),
-        "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28": try mcpContent("""
+        "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=1&per_page=250": try mcpContent("""
         {
           "data": [
             { "date": "2026-03-30", "type": "ex-dividend", "isEstimated": false, "symbolId": \(calendarSymbolID.map(String.init) ?? "null"), "symbolName": "\(calendarSymbolName)" }
-          ]
+          ],
+          "meta": { "last_page": 1 }
         }
         """),
         "pdt-list-dividends?date_from=2025-03-24&date_to=2026-04-28&page=1&per_page=250": try mcpResult("""
