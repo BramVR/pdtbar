@@ -5139,84 +5139,224 @@ public enum PressureEngine {
             }
     }
 
-    private static func bigMoverItems(from snapshot: PortfolioSnapshot, priorSnapshot: PortfolioSnapshot?) -> [AttentionItem] {
-        guard let priorSnapshot else { return [] }
+    private struct BigMoverSignal {
+        var beforeDecimal: Decimal
+        var afterDecimal: Decimal
+        var absoluteDecimalMove: Decimal
+        var moveSize: Double
+        var currency: String?
+        var windowStart: String
+        var windowEnd: String
 
-        let priorHoldings = priorSnapshot.openHoldings.reduce(into: [Int: NormalizedHolding]()) { holdings, holding in
-            holdings[holding.quoteId] = holdings[holding.quoteId] ?? holding
+        func hasSameValues(as other: BigMoverSignal) -> Bool {
+            beforeDecimal == other.beforeDecimal && afterDecimal == other.afterDecimal
         }
+    }
+
+    private enum PriorBigMoverSignal {
+        case triggered(BigMoverSignal)
+        case belowThreshold
+        case unavailable
+    }
+
+    private static func bigMoverItems(from snapshot: PortfolioSnapshot, priorSnapshot: PortfolioSnapshot?) -> [AttentionItem] {
+        let priorHoldings = priorSnapshot?.openHoldings.reduce(into: [Int: NormalizedHolding]()) { holdings, holding in
+            holdings[holding.quoteId] = holdings[holding.quoteId] ?? holding
+        } ?? [:]
+        let priceHistorySignals = bigMoverSignals(from: snapshot.priceSeries)
         let moverThreshold = Decimal(string: String(bigMoverThreshold)) ?? 0
         return snapshot.openHoldings.compactMap { holding -> AttentionItem? in
-            guard let priorHolding = priorHoldings[holding.quoteId],
-                  let priorPrice = priorHolding.price,
-                  let price = holding.price,
-                  let beforeDecimal = posixDecimal(priorPrice.value),
-                  let afterDecimal = posixDecimal(price.value),
-                  beforeDecimal != 0
+            var canUsePriceHistory = priorHoldings[holding.quoteId] == nil
+            if let priorHolding = priorHoldings[holding.quoteId] {
+                switch priorSnapshotSignal(
+                   holding: holding,
+                   priorHolding: priorHolding,
+                   priorSnapshot: priorSnapshot,
+                   currentAsOf: snapshot.asOf,
+                   threshold: moverThreshold
+                ) {
+                case .triggered(let signal):
+                    var emittedSignal = signal
+                    if let historySignal = priceHistorySignals[holding.quoteId],
+                       historySignal.hasSameValues(as: signal)
+                    {
+                        emittedSignal.windowStart = historySignal.windowStart
+                        emittedSignal.windowEnd = historySignal.windowEnd
+                    }
+                    return bigMoverItem(
+                        holding: holding,
+                        signal: emittedSignal,
+                        beforeWeight: priorHolding.weight,
+                        sourceSlotIDs: ["bigMovers.priorSnapshot", "bigMovers.prices"]
+                    )
+                case .belowThreshold:
+                    return nil
+                case .unavailable:
+                    canUsePriceHistory = true
+                }
+            }
+
+            guard canUsePriceHistory,
+                  let signal = priceHistorySignals[holding.quoteId],
+                  signal.absoluteDecimalMove >= moverThreshold
             else { return nil }
 
-            let decimalMove = (afterDecimal - beforeDecimal) / beforeDecimal
-            let absoluteDecimalMove = decimalMove < 0 ? -decimalMove : decimalMove
-            guard absoluteDecimalMove >= moverThreshold else { return nil }
-
-            let moveSize = rounded(Double(truncating: decimalMove as NSDecimalNumber), places: 4)
-
-            let beforeValue = Double(truncating: beforeDecimal as NSDecimalNumber)
-            let afterValue = Double(truncating: afterDecimal as NSDecimalNumber)
-            let score = rounded(min(1.0, abs(moveSize) / 0.20), places: 2)
-            return AttentionItem(
-                id: "bigMovers.move.\(holding.quoteId)",
-                facet: "bigMovers",
-                rank: 0,
-                title: "\(holding.name) moved \(signedPercent(moveSize))",
-                detail: "\(holding.name) moved \(signedPercent(moveSize)) from \(price.currency) \(decimalString(String(beforeValue), places: 2)) to \(price.currency) \(decimalString(String(afterValue), places: 2)) while portfolio weight changed \(percent(priorHolding.weight)) -> \(percent(holding.weight)).",
-                severity: abs(moveSize) >= 0.20 ? "high" : "medium",
-                score: score,
-                holdingIdentity: HoldingIdentity(name: holding.name, quoteId: holding.quoteId),
-                beforeValue: beforeValue,
-                afterValue: afterValue,
-                moveSize: moveSize,
-                beforeWeight: priorHolding.weight,
-                afterWeight: holding.weight,
-                valueCurrency: price.currency,
-                windowStart: priorSnapshot.asOf,
-                windowEnd: snapshot.asOf,
-                supportingDataSlotIDs: ["bigMovers.priorSnapshot", "bigMovers.prices"],
-                explanation: AttentionExplanation(
-                    trigger: AttentionExplanationFact(
-                        key: "trigger",
-                        label: "Trigger",
-                        value: "Price move crossed recent-window line"
-                    ),
-                    severity: explanationSeverity(
-                        severity: abs(moveSize) >= 0.20 ? "high" : "medium",
-                        score: score
-                    ),
-                    threshold: AttentionExplanationFact(
-                        key: "threshold",
-                        label: "Threshold",
-                        value: percent(bigMoverThreshold),
-                        numericValue: bigMoverThreshold,
-                        unit: "fraction"
-                    ),
-                    currentValue: AttentionExplanationFact(
-                        key: "currentValue",
-                        label: "Current",
-                        value: "\(price.currency) \(decimalString(String(afterValue), places: 2))",
-                        numericValue: afterValue,
-                        unit: price.currency
-                    ),
-                    priorValue: AttentionExplanationFact(
-                        key: "priorValue",
-                        label: "Prior",
-                        value: "\(price.currency) \(decimalString(String(beforeValue), places: 2))",
-                        numericValue: beforeValue,
-                        unit: price.currency
-                    ),
-                    supportingSourceSlots: explanationSourceSlots(["bigMovers.priorSnapshot", "bigMovers.prices"])
-                )
+            return bigMoverItem(
+                holding: holding,
+                signal: signal,
+                beforeWeight: nil,
+                sourceSlotIDs: ["bigMovers.prices"]
             )
         }
+    }
+
+    private static func priorSnapshotSignal(
+        holding: NormalizedHolding,
+        priorHolding: NormalizedHolding,
+        priorSnapshot: PortfolioSnapshot?,
+        currentAsOf: String,
+        threshold: Decimal
+    ) -> PriorBigMoverSignal {
+        guard let priorSnapshot,
+              let priorPrice = priorHolding.price,
+              let price = holding.price,
+              let beforeDecimal = posixDecimal(priorPrice.value),
+              let afterDecimal = posixDecimal(price.value),
+              beforeDecimal != 0
+        else { return .unavailable }
+
+        let decimalMove = (afterDecimal - beforeDecimal) / beforeDecimal
+        let absoluteDecimalMove = decimalMove < 0 ? -decimalMove : decimalMove
+        guard absoluteDecimalMove >= threshold else { return .belowThreshold }
+
+        return .triggered(BigMoverSignal(
+            beforeDecimal: beforeDecimal,
+            afterDecimal: afterDecimal,
+            absoluteDecimalMove: absoluteDecimalMove,
+            moveSize: rounded(Double(truncating: decimalMove as NSDecimalNumber), places: 4),
+            currency: price.currency,
+            windowStart: priorSnapshot.asOf,
+            windowEnd: currentAsOf
+        ))
+    }
+
+    private static func bigMoverSignals(from priceSeries: [PricePoint]) -> [Int: BigMoverSignal] {
+        Dictionary(
+            uniqueKeysWithValues: Dictionary(grouping: priceSeries, by: \.quoteId)
+                .compactMap { quoteId, points -> (Int, BigMoverSignal)? in
+                    guard let signal = bigMoverSignal(points: points) else {
+                        return nil
+                    }
+                    return (quoteId, signal)
+                }
+        )
+    }
+
+    private static func bigMoverSignal(points: [PricePoint]) -> BigMoverSignal? {
+        guard points.count >= 2 else { return nil }
+        let datedPoints: [(point: PricePoint, date: Date, close: Decimal)] = points.compactMap { point in
+            guard let date = dayDate(from: point.date),
+                  let close = posixDecimal(point.closeAdjusted),
+                  close > 0
+            else {
+                return nil
+            }
+            return (point, date, close)
+        }
+        guard datedPoints.count == points.count else { return nil }
+
+        let sorted = datedPoints.sorted {
+            if $0.date != $1.date {
+                return $0.date < $1.date
+            }
+            return $0.close < $1.close
+        }
+        guard let first = sorted.first,
+              let last = sorted.last,
+              first.date < last.date
+        else {
+            return nil
+        }
+
+        let change = (last.close - first.close) / first.close
+        let absoluteChange = change < 0 ? -change : change
+        return BigMoverSignal(
+            beforeDecimal: first.close,
+            afterDecimal: last.close,
+            absoluteDecimalMove: absoluteChange,
+            moveSize: rounded(Double(truncating: change as NSDecimalNumber), places: 4),
+            currency: last.point.closeCurrency ?? first.point.closeCurrency,
+            windowStart: first.point.date,
+            windowEnd: last.point.date
+        )
+    }
+
+    private static func bigMoverItem(
+        holding: NormalizedHolding,
+        signal: BigMoverSignal,
+        beforeWeight: Double?,
+        sourceSlotIDs: [String]
+    ) -> AttentionItem? {
+        let currency = signal.currency ?? holding.price?.currency ?? holding.worth.currency
+        let beforeValue = Double(truncating: signal.beforeDecimal as NSDecimalNumber)
+        let afterValue = Double(truncating: signal.afterDecimal as NSDecimalNumber)
+        let score = rounded(min(1.0, abs(signal.moveSize) / 0.20), places: 2)
+        let valueCopy = "from \(currency) \(decimalString(String(beforeValue), places: 2)) to \(currency) \(decimalString(String(afterValue), places: 2))"
+        let detailSuffix = beforeWeight.map {
+            " while portfolio weight changed \(percent($0)) -> \(percent(holding.weight))."
+        } ?? " over price history window."
+        return AttentionItem(
+            id: "bigMovers.move.\(holding.quoteId)",
+            facet: "bigMovers",
+            rank: 0,
+            title: "\(holding.name) moved \(signedPercent(signal.moveSize))",
+            detail: "\(holding.name) moved \(signedPercent(signal.moveSize)) \(valueCopy)\(detailSuffix)",
+            severity: abs(signal.moveSize) >= 0.20 ? "high" : "medium",
+            score: score,
+            holdingIdentity: HoldingIdentity(name: holding.name, quoteId: holding.quoteId),
+            beforeValue: beforeValue,
+            afterValue: afterValue,
+            moveSize: signal.moveSize,
+            beforeWeight: beforeWeight,
+            afterWeight: holding.weight,
+            valueCurrency: currency,
+            windowStart: signal.windowStart,
+            windowEnd: signal.windowEnd,
+            supportingDataSlotIDs: sourceSlotIDs,
+            explanation: AttentionExplanation(
+                trigger: AttentionExplanationFact(
+                    key: "trigger",
+                    label: "Trigger",
+                    value: "Price move crossed recent-window line"
+                ),
+                severity: explanationSeverity(
+                    severity: abs(signal.moveSize) >= 0.20 ? "high" : "medium",
+                    score: score
+                ),
+                threshold: AttentionExplanationFact(
+                    key: "threshold",
+                    label: "Threshold",
+                    value: percent(bigMoverThreshold),
+                    numericValue: bigMoverThreshold,
+                    unit: "fraction"
+                ),
+                currentValue: AttentionExplanationFact(
+                    key: "currentValue",
+                    label: "Current",
+                    value: "\(currency) \(decimalString(String(afterValue), places: 2))",
+                    numericValue: afterValue,
+                    unit: currency
+                ),
+                priorValue: AttentionExplanationFact(
+                    key: "priorValue",
+                    label: "Prior",
+                    value: "\(currency) \(decimalString(String(beforeValue), places: 2))",
+                    numericValue: beforeValue,
+                    unit: currency
+                ),
+                supportingSourceSlots: explanationSourceSlots(sourceSlotIDs)
+            )
+        )
     }
 
     private static func incomeItems(from snapshot: PortfolioSnapshot) -> [AttentionItem] {
@@ -7105,6 +7245,7 @@ public struct PricePoint: Codable, Equatable {
     public var quoteId: Int
     public var date: String
     public var closeAdjusted: String
+    public var closeCurrency: String?
 }
 
 public struct PDTFixtureDataSource: PortfolioDataSource, PortfolioPriorSnapshotDataSource {
@@ -7432,10 +7573,11 @@ private struct LivePricesEnvelope: Decodable {
 private struct LivePrice: Decodable {
     var date: String
     var closeAdjusted: String
+    var closeCurrency: String?
     var symbolQuoteId: Int
 
     var optionalDetailInput: PDTPriceInput {
-        PDTPriceInput(date: date, closeAdjusted: closeAdjusted, symbolQuoteId: symbolQuoteId)
+        PDTPriceInput(date: date, closeAdjusted: closeAdjusted, symbolQuoteId: symbolQuoteId, closeCurrency: closeCurrency)
     }
 }
 
@@ -7614,10 +7756,11 @@ private struct PricesEnvelope: Decodable {
 private struct FixturePrice: Decodable {
     var date: String
     var closeAdjusted: String
+    var closeCurrency: String?
     var symbolQuoteId: Int
 
     var optionalDetailInput: PDTPriceInput {
-        PDTPriceInput(date: date, closeAdjusted: closeAdjusted, symbolQuoteId: symbolQuoteId)
+        PDTPriceInput(date: date, closeAdjusted: closeAdjusted, symbolQuoteId: symbolQuoteId, closeCurrency: closeCurrency)
     }
 }
 

@@ -61,11 +61,13 @@ public struct PDTDividendInput: Equatable {
 public struct PDTPriceInput: Equatable {
     public var date: String
     public var closeAdjusted: String
+    public var closeCurrency: String?
     public var symbolQuoteId: Int
 
-    public init(date: String, closeAdjusted: String, symbolQuoteId: Int) {
+    public init(date: String, closeAdjusted: String, symbolQuoteId: Int, closeCurrency: String? = nil) {
         self.date = date
         self.closeAdjusted = closeAdjusted
+        self.closeCurrency = closeCurrency
         self.symbolQuoteId = symbolQuoteId
     }
 }
@@ -133,7 +135,8 @@ public enum PDTOptionalDetailNormalizer {
                 PricePoint(
                     quoteId: $0.symbolQuoteId,
                     date: $0.date,
-                    closeAdjusted: $0.closeAdjusted
+                    closeAdjusted: $0.closeAdjusted,
+                    closeCurrency: $0.closeCurrency
                 )
             }
         )

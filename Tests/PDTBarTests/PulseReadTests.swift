@@ -319,8 +319,11 @@ struct PulseReadTests {
         let bigMover = try #require(run.model.rankedAttentionItems.first { $0.facet == "bigMovers" })
 
         try readStore.markRead(bigMover.readFingerprint)
-        _ = try PressureRunner.cachedPulse(snapshotStore: snapshotStore, pulseReadStore: readStore)
+        let cached = try #require(try PressureRunner.cachedPulse(snapshotStore: snapshotStore, pulseReadStore: readStore))
 
+        #expect(cached.model.rankedAttentionItems.allSatisfy { $0.facet != "bigMovers" })
+        #expect(cached.descriptor.statusBadge == nil)
+        #expect(cached.descriptor.statusTitle.contains("All caught up"))
         #expect(try readStore.load().contains(bigMover.readFingerprint))
     }
 
@@ -424,7 +427,7 @@ struct PulseReadTests {
         #expect(income.readFingerprint.contains("amount:EUR:78.00"))
         #expect(income.readFingerprint.contains("change-bp:1818"))
         #expect(bigMover.readFingerprint.contains("quote:9001"))
-        #expect(bigMover.readFingerprint.contains("window:2026-06-15..2026-06-22"))
+        #expect(bigMover.readFingerprint.contains("window:2026-06-15..2026-06-19"))
         #expect(bigMover.readFingerprint.contains("move-bucket-bp:1200"))
     }
 
