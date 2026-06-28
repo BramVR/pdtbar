@@ -207,13 +207,120 @@ public struct AttentionExplanation: Codable, Equatable {
     }
 }
 
+public enum AttentionFacet: Equatable, Sendable, Codable, ExpressibleByStringLiteral {
+    case allocation
+    case income
+    case bigMovers
+    case unknown
+
+    public init(legacyValue: String) {
+        switch legacyValue {
+        case "allocation":
+            self = .allocation
+        case "income":
+            self = .income
+        case "bigMovers":
+            self = .bigMovers
+        default:
+            self = .unknown
+        }
+    }
+
+    public init(stringLiteral value: String) {
+        self.init(legacyValue: value)
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .allocation:
+            return "allocation"
+        case .income:
+            return "income"
+        case .bigMovers:
+            return "bigMovers"
+        case .unknown:
+            return "unknown"
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.init(legacyValue: try container.decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+public func == (lhs: AttentionFacet, rhs: String) -> Bool {
+    lhs.rawValue == rhs
+}
+
+public func == (lhs: String, rhs: AttentionFacet) -> Bool {
+    lhs == rhs.rawValue
+}
+
+public enum AttentionSeverity: Equatable, Sendable, Codable, ExpressibleByStringLiteral {
+    case low
+    case medium
+    case high
+
+    public init(legacyValue: String) {
+        switch legacyValue {
+        case "high":
+            self = .high
+        case "medium":
+            self = .medium
+        case "low":
+            self = .low
+        default:
+            self = .low
+        }
+    }
+
+    public init(stringLiteral value: String) {
+        self.init(legacyValue: value)
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .low:
+            return "low"
+        case .medium:
+            return "medium"
+        case .high:
+            return "high"
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.init(legacyValue: try container.decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+public func == (lhs: AttentionSeverity, rhs: String) -> Bool {
+    lhs.rawValue == rhs
+}
+
+public func == (lhs: String, rhs: AttentionSeverity) -> Bool {
+    lhs == rhs.rawValue
+}
+
 public struct AttentionItem: Codable, Equatable {
     public var id: String
-    public var facet: String
+    public var facet: AttentionFacet
     public var rank: Int
     public var title: String
     public var detail: String
-    public var severity: String
+    public var severity: AttentionSeverity
     public var score: Double
     public var holdingIdentity: HoldingIdentity?
     public var currentWeight: Double?
@@ -235,11 +342,11 @@ public struct AttentionItem: Codable, Equatable {
 
     public init(
         id: String,
-        facet: String,
+        facet: AttentionFacet,
         rank: Int,
         title: String,
         detail: String = "",
-        severity: String,
+        severity: AttentionSeverity,
         score: Double,
         holdingIdentity: HoldingIdentity? = nil,
         currentWeight: Double? = nil,
@@ -304,11 +411,11 @@ public struct AttentionItem: Codable, Equatable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
-        facet = try container.decode(String.self, forKey: .facet)
+        facet = try container.decode(AttentionFacet.self, forKey: .facet)
         rank = try container.decode(Int.self, forKey: .rank)
         title = try container.decode(String.self, forKey: .title)
         detail = try container.decodeIfPresent(String.self, forKey: .detail) ?? ""
-        severity = try container.decode(String.self, forKey: .severity)
+        severity = try container.decode(AttentionSeverity.self, forKey: .severity)
         score = try container.decode(Double.self, forKey: .score)
         holdingIdentity = try container.decodeIfPresent(HoldingIdentity.self, forKey: .holdingIdentity)
         currentWeight = try container.decodeIfPresent(Double.self, forKey: .currentWeight)
@@ -348,7 +455,7 @@ public struct AttentionItem: Codable, Equatable {
 
     private static func legacyExplanation(
         title: String,
-        severity: String,
+        severity: AttentionSeverity,
         score: Double,
         currentWeight: Double?,
         threshold: Double?,
@@ -365,7 +472,7 @@ public struct AttentionItem: Codable, Equatable {
     ) -> AttentionExplanation {
         var explanation = AttentionExplanation.legacy(
             trigger: title,
-            severity: severity,
+            severity: severity.rawValue,
             score: score,
             supportingDataSlotIDs: supportingDataSlotIDs
         )
@@ -451,15 +558,15 @@ public extension AttentionItem {
 
     var readFingerprint: String {
         switch facet {
-        case "allocation":
+        case .allocation:
             return [
                 "pulse:v1:allocation",
                 readFingerprintIdentity,
                 "threshold-bp:\(fingerprintBasisPoints(threshold))",
-                "severity:\(fingerprintToken(severity))",
+                "severity:\(fingerprintToken(severity.rawValue))",
                 "weight-bucket-bp:\(bucketBasisPoints(currentWeight, bucketSize: 100))",
             ].joined(separator: ":")
-        case "income":
+        case .income:
             return [
                 "pulse:v1:income",
                 readFingerprintIdentity,
@@ -467,19 +574,19 @@ public extension AttentionItem {
                 "amount:\(moneyFingerprint(amount))",
                 "change-bp:\(fingerprintBasisPoints(changePercent))",
             ].joined(separator: ":")
-        case "bigMovers":
+        case .bigMovers:
             return [
                 "pulse:v1:bigMovers",
                 readFingerprintIdentity,
                 "window:\(windowStart ?? "unknown")..\(windowEnd ?? "unknown")",
                 "move-bucket-bp:\(bucketBasisPoints(moveSize, bucketSize: 100))",
             ].joined(separator: ":")
-        default:
+        case .unknown:
             return [
                 "pulse:v1",
-                fingerprintToken(facet),
+                fingerprintToken(facet.rawValue),
                 readFingerprintIdentity,
-                "severity:\(fingerprintToken(severity))",
+                "severity:\(fingerprintToken(severity.rawValue))",
                 "score-bp:\(fingerprintBasisPoints(score))",
             ].joined(separator: ":")
         }
@@ -487,17 +594,17 @@ public extension AttentionItem {
 
     var staleReadPruningPrefix: String? {
         switch facet {
-        case "income":
+        case .income:
             return ["pulse:v1:income", readFingerprintIdentity].joined(separator: ":") + ":"
-        case "bigMovers":
+        case .bigMovers:
             return ["pulse:v1:bigMovers", readFingerprintIdentity].joined(separator: ":") + ":"
-        default:
+        case .allocation, .unknown:
             return nil
         }
     }
 
     var concentrationReadFingerprintPrefix: String? {
-        guard facet == "allocation" else {
+        guard facet == .allocation else {
             return nil
         }
         return [
@@ -4132,7 +4239,7 @@ public enum MenuDescriptorRenderer {
     ) -> [MenuRow] {
         holdings.map { holding in
             let attention = model.rankedAttentionItems.first { item in
-                item.facet == "allocation" && item.holdingIdentity?.quoteId == holding.quoteId
+                item.facet == .allocation && item.holdingIdentity?.quoteId == holding.quoteId
             }
             let drillDownDetail = attention?.explanation.currentValue?.value
             return MenuRow(
@@ -4833,16 +4940,16 @@ public enum PressureEngine {
         if lhs.score != rhs.score {
             return lhs.score > rhs.score
         }
-        if lhs.facet == "allocation",
-           rhs.facet == "allocation",
+        if lhs.facet == .allocation,
+           rhs.facet == .allocation,
            let lhsWeight = lhs.currentWeight,
            let rhsWeight = rhs.currentWeight,
            lhsWeight != rhsWeight
         {
             return lhsWeight > rhsWeight
         }
-        if lhs.facet == "allocation",
-           rhs.facet == "allocation",
+        if lhs.facet == .allocation,
+           rhs.facet == .allocation,
            let lhsName = lhs.holdingIdentity?.name,
            let rhsName = rhs.holdingIdentity?.name,
            lhsName != rhsName
@@ -4897,7 +5004,7 @@ public enum PressureEngine {
                 let score = concentrationScore(weight: holding.weight, threshold: concentrationThreshold)
                 return AttentionItem(
                     id: "allocation.concentration.\(holding.quoteId)",
-                    facet: "allocation",
+                    facet: .allocation,
                     rank: offset + 1,
                     title: "\(holding.name) concentration",
                     detail: percent(holding.weight),
@@ -4947,7 +5054,7 @@ public enum PressureEngine {
                 let title = "\(distributionLabel(sector.name)) sector concentration"
                 return AttentionItem(
                     id: "allocation.sector.\(stableIDToken(sector.name))",
-                    facet: "allocation",
+                    facet: .allocation,
                     rank: offset + 1,
                     title: title,
                     detail: percent(weight),
@@ -4996,7 +5103,7 @@ public enum PressureEngine {
         return [
             AttentionItem(
                 id: "allocation.cashDrag",
-                facet: "allocation",
+                facet: .allocation,
                 rank: 1,
                 title: "Cash drag",
                 detail: "\(percent(cash.weight)); \(display(cash.value))",
@@ -5053,7 +5160,7 @@ public enum PressureEngine {
         return [
             AttentionItem(
                 id: "allocation.concentrationDrift.top\(current.rankCount)",
-                facet: "allocation",
+                facet: .allocation,
                 rank: 1,
                 title: "Top \(current.rankCount) concentration drift",
                 detail: "\(percent(prior.weight)) -> \(percent(current.weight))",
@@ -5307,7 +5414,7 @@ public enum PressureEngine {
         } ?? " over price history window."
         return AttentionItem(
             id: "bigMovers.move.\(holding.quoteId)",
-            facet: "bigMovers",
+            facet: .bigMovers,
             rank: 0,
             title: "\(holding.name) moved \(signedPercent(signal.moveSize))",
             detail: "\(holding.name) moved \(signedPercent(signal.moveSize)) \(valueCopy)\(detailSuffix)",
@@ -5382,11 +5489,11 @@ public enum PressureEngine {
                 }
                 return AttentionItem(
                     id: incomeItemID(for: event),
-                    facet: "income",
+                    facet: .income,
                     rank: offset + 1,
                     title: "\(event.symbolName) ex-dividend",
                     detail: incomeCopy(for: event),
-                    severity: "low",
+                    severity: .low,
                     score: 0.45,
                     holdingIdentity: identity,
                     eventDate: event.date,
@@ -5401,7 +5508,7 @@ public enum PressureEngine {
                             label: "Trigger",
                             value: "Ex-dividend date in income window"
                         ),
-                        severity: explanationSeverity(severity: "low", score: 0.45),
+                        severity: explanationSeverity(severity: .low, score: 0.45),
                         threshold: AttentionExplanationFact(
                             key: "threshold",
                             label: "Threshold",
@@ -5450,11 +5557,11 @@ public enum PressureEngine {
         return "\(base); latest recorded dividend \(display(amount)), \(direction) \(percent(abs(changePercent))) from prior \(display(priorAmount))."
     }
 
-    private static func explanationSeverity(severity: String, score: Double) -> AttentionExplanationFact {
+    private static func explanationSeverity(severity: AttentionSeverity, score: Double) -> AttentionExplanationFact {
         AttentionExplanationFact(
             key: "severity",
             label: "Severity",
-            value: severity,
+            value: severity.rawValue,
             numericValue: score
         )
     }
