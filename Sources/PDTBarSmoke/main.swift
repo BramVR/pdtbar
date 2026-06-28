@@ -671,11 +671,22 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
     let fetchingSurface = MenuBarSurfaceRenderer.render(descriptor: ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio))
     let fetchingTargets = requiredSetupMenuTargets(in: fetchingSurface)
     let fetchingIDs = Set(fetchingTargets.map(\.accessibilityIdentifier))
-    let fetchingMenu = openStatusMenu(
-        successStatus,
-        appElement: successAppElement,
-        expectedMenuIdentifiers: fetchingIDs,
+    let fetchingStatus = waitForAccessibilityElement(
+        in: successAppElement,
+        identifier: fetchingSurface.status.accessibilityIdentifier,
         timeout: options.timeout
+    )
+    let fetchingMenu = fetchingStatus.map {
+        openStatusMenu(
+            $0,
+            appElement: successAppElement,
+            expectedMenuIdentifiers: fetchingIDs,
+            timeout: options.timeout
+        )
+    } ?? OpenMenuResult(
+        snapshot: nil,
+        successfulAttempt: nil,
+        attempts: ["status item missing: \(fetchingSurface.status.accessibilityIdentifier)"]
     )
     let successFetchingMenuVisible = fetchingIDs.isSubset(of: fetchingMenu.snapshot?.identifiers ?? [])
         && (fetchingMenu.snapshot?.texts.contains("Fetching portfolio") ?? false)
@@ -809,7 +820,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         successReadinessProbeCount: successReadinessProbeCount,
         successFetchingVisible: successFetchingVisible,
         successFetchingMenuVisible: successFetchingMenuVisible,
-        successFetchingMenuOpenAttempt: fetchingMenu.successfulAttempt,
+        successFetchingMenuOpenAttempt: fetchingMenu.successfulAttempt ?? fetchingMenu.attempts.joined(separator: "; "),
         successFetchingObservedIdentifiers: fetchingMenu.snapshot?.identifiers.sorted() ?? [],
         successFetchingObservedTexts: fetchingMenu.snapshot?.texts.sorted() ?? [],
         successFirstFetchSnapshotWritten: successFirstFetchSnapshotWritten,
