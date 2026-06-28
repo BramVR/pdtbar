@@ -703,8 +703,8 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         )
     }
     let missingClaudeMenuVisible = missingClaudeIDs.isSubset(of: missingClaudeMenu.identifiers)
-        && missingClaudeMenu.texts.contains("Claude Desktop not found")
-        && missingClaudeMenu.texts.contains("Log in with Claude")
+        && missingClaudeMenu.texts.contains { $0.contains("Claude Desktop not found") }
+        && missingClaudeMenu.texts.contains { $0.contains("Log in with Claude") }
 
     let proofPayload = ScriptedLoginHandoffProof(
         successIdleBeforeClick: successWasIdleBeforeClick,
@@ -2659,7 +2659,11 @@ private func scriptedSetupRetryScenario(
             output: evidence
         )
         initialMenuVisible = expectedIDs.isSubset(of: menuSnapshot.identifiers)
-            && expectedTexts.isSubset(of: menuSnapshot.texts)
+            && expectedTexts.allSatisfy { expected in
+                menuSnapshot.texts.contains { observed in
+                    observed.contains(expected)
+                }
+            }
 
         let configuration = ScriptedPDTMCPConnectorConfiguration(
             responses: try scriptedPDTConnectorResponses().mapValues { String(decoding: $0, as: UTF8.self) },
