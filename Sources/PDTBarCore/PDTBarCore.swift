@@ -5286,9 +5286,7 @@ public enum PressureEngine {
         beforeWeight: Double?,
         sourceSlotIDs: [String]
     ) -> AttentionItem? {
-        guard let price = holding.price else { return nil }
-
-        let currency = signal.currency ?? price.currency
+        let currency = signal.currency ?? holding.price?.currency ?? holding.worth.currency
         let beforeValue = Double(truncating: signal.beforeDecimal as NSDecimalNumber)
         let afterValue = Double(truncating: signal.afterDecimal as NSDecimalNumber)
         let score = rounded(min(1.0, abs(signal.moveSize) / 0.20), places: 2)

@@ -54,6 +54,27 @@ struct BigMoverPressureTests {
         #expect(item.explanation.priorValue?.value == "USD 100.00")
     }
 
+    @Test("Cold-start price history emits without current holding price")
+    func coldStartPriceHistoryEmitsWithoutCurrentHoldingPrice() throws {
+        var snapshot = try snapshot("big-mover")
+        snapshot.openHoldings[0].price = nil
+        snapshot.priceSeries = try priceSeries("""
+        [
+          { "quoteId": 9001, "date": "2026-06-15", "closeAdjusted": "100.00", "closeCurrency": "USD" },
+          { "quoteId": 9001, "date": "2026-06-19", "closeAdjusted": "112.00", "closeCurrency": "USD" }
+        ]
+        """)
+
+        let item = try #require(
+            PressureEngine.buildModel(from: snapshot).rankedAttentionItems.first { $0.id == "bigMovers.move.9001" }
+        )
+
+        #expect(item.valueCurrency == "USD")
+        #expect(item.beforeValue == 100.00)
+        #expect(item.afterValue == 112.00)
+        #expect(item.supportingDataSlotIDs == ["bigMovers.prices"])
+    }
+
     @Test("Same-day price history tie break uses numeric close")
     func sameDayPriceHistoryTieBreakUsesNumericClose() throws {
         var snapshot = try snapshot("big-mover")
