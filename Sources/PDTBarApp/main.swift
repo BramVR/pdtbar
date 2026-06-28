@@ -12,6 +12,10 @@ private struct PortfolioFetchOutcome: @unchecked Sendable {
     var shouldStartBackgroundRefresh = false
 }
 
+private struct CachedPulseLoadOutcome: @unchecked Sendable {
+    var pulse: PulseLifecycleResult?
+}
+
 private struct FirstFetchConnectorConfiguration: @unchecked Sendable {
     var connector: any PDTMCPConnector
     var asOf: String?
@@ -30,6 +34,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var portfolioFetchStartedAt: Date?
     private var portfolioFetchProgressTimer: Timer?
     private var activeSnapshotDirectory: URL?
+    private var cachedPulseLoadFinished = false
+    private var pendingReadyProbeAfterCachedPulseLoad: (result: ClaudeReadinessProbeResult, attemptID: Int)?
     private let claudeLoginAttemptGate = ClaudeLoginAttemptGate()
     private let menuActionDispatcher = MenuActionDispatcher()
     private let menuItemViewWidth: CGFloat = 400
@@ -57,8 +63,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         switch options.mode {
         case .claudeFirst:
             activeSnapshotDirectory = firstFetchStateDirectory()
-            let cachedPulse = loadCachedPulse()
-            handleLaunchUpdate(launchRuntime.launch(cachedPulse: cachedPulse))
+            cachedPulseLoadFinished = false
+            pendingReadyProbeAfterCachedPulseLoad = nil
+            let launchUpdate = launchRuntime.launch(cachedPulse: nil)
+            installMenuBarItem(launchUpdate.descriptor)
+            startCachedPulseLoad()
+            startClaudeReadinessProbe(attemptID: launchRuntime.readinessAttemptID)
         case let .fixture(fixture):
             let dataSource = PDTFixtureDataSource(fixture: fixture)
             let snapshotDirectory = try fixtureSnapshotDirectory()
@@ -73,6 +83,31 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func startCachedPulseLoad() {
+        let directory = currentSnapshotDirectory()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let outcome = CachedPulseLoadOutcome(
+                pulse: try? PressureRunner.cachedPulse(
+                    snapshotStore: SnapshotStore(directory: directory),
+                    pulseReadStore: PulseReadStore(directory: directory)
+                )
+            )
+            DispatchQueue.main.async { [weak self] in
+                guard let self else {
+                    return
+                }
+                self.cachedPulseLoadFinished = true
+                if let update = self.launchRuntime.completeCachedPulseLoad(outcome.pulse) {
+                    self.handleLaunchUpdate(update)
+                }
+                if let pending = self.pendingReadyProbeAfterCachedPulseLoad {
+                    self.pendingReadyProbeAfterCachedPulseLoad = nil
+                    self.finishClaudeReadinessProbe(pending.result, attemptID: pending.attemptID)
+                }
+            }
+        }
+    }
+
     private func startClaudeReadinessProbe(attemptID: Int) {
         let probe = ScriptedClaudeReadinessProbe(
             appSupportDirectory: appSupportDirectory(),
@@ -84,13 +119,21 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else {
                     return
                 }
-                self.handleLaunchUpdate(self.launchRuntime.completeReadinessProbe(
-                    result,
-                    attemptID: attemptID,
-                    allowsBackgroundDetailRefresh: self.returningLaunchBackgroundDetailRefreshEnabled()
-                ))
+                self.finishClaudeReadinessProbe(result, attemptID: attemptID)
             }
         }
+    }
+
+    private func finishClaudeReadinessProbe(_ result: ClaudeReadinessProbeResult, attemptID: Int) {
+        if result == .ready, !cachedPulseLoadFinished {
+            pendingReadyProbeAfterCachedPulseLoad = (result, attemptID)
+            return
+        }
+        handleLaunchUpdate(launchRuntime.completeReadinessProbe(
+            result,
+            attemptID: attemptID,
+            allowsBackgroundDetailRefresh: returningLaunchBackgroundDetailRefreshEnabled()
+        ))
     }
 
     private func returningLaunchBackgroundDetailRefreshEnabled() -> Bool {
@@ -279,6 +322,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func loginWithClaude(_ sender: NSMenuItem) {
+        pendingReadyProbeAfterCachedPulseLoad = nil
         let attempt = claudeLoginAttemptGate.begin()
         handleLaunchUpdate(launchRuntime.beginLoginHandoff())
         loginHandoff.startLogin { [weak self] result in
@@ -380,14 +424,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func currentSnapshotDirectory() -> URL {
         activeSnapshotDirectory ?? firstFetchStateDirectory()
-    }
-
-    private func loadCachedPulse() -> PulseLifecycleResult? {
-        let directory = currentSnapshotDirectory()
-        return try? PressureRunner.cachedPulse(
-            snapshotStore: SnapshotStore(directory: directory),
-            pulseReadStore: PulseReadStore(directory: directory)
-        )
     }
 
     private func pulseApplyingCurrentReadState(_ pulse: PulseLifecycleResult) -> PulseLifecycleResult {
