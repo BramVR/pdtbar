@@ -48,6 +48,17 @@ struct BaseHoldingNormalizationTests {
                     copyableIdentifier: "ZERO"
                 ),
                 PDTBaseHoldingInput(
+                    name: "Negative Worth",
+                    quoteId: 1005,
+                    currentPriceDate: "2026-06-24T21:59:00+00:00",
+                    currentPriceLocal: Money(value: "2.00", currency: "EUR"),
+                    currentWorth: Money(value: "-10.00", currency: "EUR"),
+                    currentWorthLocal: Money(value: "-10.00", currency: "EUR"),
+                    portfolioWeight: 0.05,
+                    closedAt: nil,
+                    copyableIdentifier: "NEGV"
+                ),
+                PDTBaseHoldingInput(
                     name: "Invalid Money",
                     quoteId: 1004,
                     currentPriceDate: "2026-06-23T21:59:00+00:00",
@@ -112,6 +123,42 @@ struct BaseHoldingNormalizationTests {
 
         #expect(snapshot.openHoldings.map(\.quoteId) == [1001])
         #expect(snapshot.totalValue == Money(value: "500.00", currency: "EUR"))
+    }
+
+    @Test("Filtered live holdings do not trigger quote lookup or price history")
+    func filteredLiveHoldingsDoNotTriggerQuoteLookupOrPriceHistory() throws {
+        let connector = ScriptedPDTMCPConnector(responses: [
+            "pdt-get-portfolio-holdings": Data(filteredLiveHoldingsJSON.utf8),
+            "pdt-get-symbol-quote?id=1001": Data(#"{"id":1001,"code":"PUBC","symbolId":5001}"#.utf8),
+            "pdt-list-symbol-prices?date_from=2026-06-19&date_to=2026-06-26&symbol_quote_id=1001": Data("""
+            {
+              "data": [
+                { "date": "2026-06-25", "closeAdjusted": "9.75", "symbolQuoteId": 1001 },
+                { "date": "2026-06-26", "closeAdjusted": "10.25", "symbolQuoteId": 1001 }
+              ]
+            }
+            """.utf8),
+        ])
+        let snapshot = try PDTMCPConnectorDataSource(
+            connector: connector,
+            liveOptions: PDTLiveDataSourceOptions(
+                includeDistributions: false,
+                includeXRayHoldings: false,
+                includeIncomeEvents: false,
+                includeDividends: false,
+                includeIncomeQuoteLookups: true,
+                includePriceSeries: true
+            )
+        ).snapshot(asOf: "2026-06-26")
+
+        #expect(snapshot.openHoldings.map(\.quoteId) == [1001])
+        #expect(snapshot.priceSeries.map(\.quoteId) == [1001, 1001])
+        let model = PressureEngine.buildModel(from: snapshot)
+        #expect(model.facetSnapshots.allocation.openHoldingCount == 1)
+        #expect(model.facetSnapshots.allocation.topHoldings.map(\.quoteId) == [1001])
+        #expect(model.rankedAttentionItems.isEmpty)
+        #expect(connector.calls.filter { $0 == "pdt-get-symbol-quote" }.count == 1)
+        #expect(connector.calls.filter { $0 == "pdt-list-symbol-prices" }.count == 1)
     }
 
     @Test("Optional symbol lookup absence is cached per live snapshot")
@@ -246,6 +293,16 @@ private let baseHoldingsJSON = """
       "currentWorthLocal": { "value": "bad", "currency": "EUR" },
       "portfolioWeight": 0.05,
       "closedAt": null
+    },
+    {
+      "symbolName": "Negative Worth",
+      "symbolQuoteId": 1005,
+      "currentPriceDate": "2026-06-24T21:59:00+00:00",
+      "currentPriceLocal": { "value": "2.00", "currency": "EUR" },
+      "currentWorth": { "value": "-10.00", "currency": "EUR" },
+      "currentWorthLocal": { "value": "-10.00", "currency": "EUR" },
+      "portfolioWeight": 0.05,
+      "closedAt": null
     }
   ]
 }
@@ -273,6 +330,54 @@ private let twoOpenHoldingsJSON = """
       "currentWorthLocal": { "value": "250.00", "currency": "EUR" },
       "portfolioWeight": 0.125,
       "closedAt": null
+    }
+  ]
+}
+"""
+
+private let filteredLiveHoldingsJSON = """
+{
+  "holdings": [
+    {
+      "symbolName": "Open Public Co",
+      "symbolQuoteId": 1001,
+      "currentPriceDate": "2026-06-26T21:59:00+00:00",
+      "currentPriceLocal": { "value": "10.25", "currency": "EUR" },
+      "currentWorth": { "value": "500.00", "currency": "EUR" },
+      "currentWorthLocal": { "value": "500.00", "currency": "EUR" },
+      "portfolioWeight": 0.10,
+      "isin": "NL0010273215",
+      "closedAt": null
+    },
+    {
+      "symbolName": "Zero Worth",
+      "symbolQuoteId": 1003,
+      "currentPriceDate": "2026-06-24T21:59:00+00:00",
+      "currentPriceLocal": { "value": "2.00", "currency": "EUR" },
+      "currentWorth": { "value": "0.00", "currency": "EUR" },
+      "currentWorthLocal": { "value": "0.00", "currency": "EUR" },
+      "portfolioWeight": 0.45,
+      "closedAt": null
+    },
+    {
+      "symbolName": "Negative Worth",
+      "symbolQuoteId": 1005,
+      "currentPriceDate": "2026-06-24T21:59:00+00:00",
+      "currentPriceLocal": { "value": "2.00", "currency": "EUR" },
+      "currentWorth": { "value": "-10.00", "currency": "EUR" },
+      "currentWorthLocal": { "value": "-10.00", "currency": "EUR" },
+      "portfolioWeight": 0.50,
+      "closedAt": null
+    },
+    {
+      "symbolName": "Closed Co",
+      "symbolQuoteId": 1002,
+      "currentPriceDate": "2026-06-25T21:59:00+00:00",
+      "currentPriceLocal": { "value": "1.00", "currency": "EUR" },
+      "currentWorth": { "value": "0.00", "currency": "EUR" },
+      "currentWorthLocal": { "value": "0.00", "currency": "EUR" },
+      "portfolioWeight": 0.40,
+      "closedAt": "2026-06-01T00:00:00+00:00"
     }
   ]
 }

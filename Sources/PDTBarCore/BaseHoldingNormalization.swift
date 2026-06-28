@@ -138,8 +138,8 @@ public enum PDTBaseHoldingNormalizer {
     private static func normalizedHolding(_ holding: PDTBaseHoldingInput) -> NormalizedHolding? {
         guard holding.closedAt == nil,
               let worth = validMoney(holding.currentWorthLocal),
-              !worth.isZero,
-              holding.currentWorth.map({ validMoney($0) != nil && !$0.isZero }) ?? true
+              worth.isPositive,
+              holding.currentWorth.map({ validMoney($0) != nil && $0.isPositive }) ?? true
         else {
             return nil
         }
@@ -189,10 +189,10 @@ public enum PDTBaseHoldingNormalizer {
 }
 
 private extension Money {
-    var isZero: Bool {
+    var isPositive: Bool {
         guard let amount = Decimal(string: value, locale: Locale(identifier: "en_US_POSIX")) else {
             return false
         }
-        return amount == 0
+        return amount > 0
     }
 }
