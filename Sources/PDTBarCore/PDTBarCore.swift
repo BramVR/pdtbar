@@ -4097,20 +4097,24 @@ public enum MenuDescriptorRenderer {
         model: PortfolioPulseModel
     ) -> MenuRow {
         let overview = allocation.portfolioOverview
+        let holdingRows = allocationHoldingRows(
+            for: allocation.topHoldings,
+            openHoldingCount: allocation.openHoldingCount,
+            model: model
+        )
         return MenuRow(
             id: "allocation.portfolio.details",
             role: .portfolioOverviewDetails,
             title: "Detailed info",
-            detail: "Full allocation list",
-            children: portfolioOverviewChildren(for: overview) + allocationHoldingRows(
-                for: allocation.topHoldings,
-                model: model
-            )
+            detail: allocation.openHoldingCount > PortfolioOverview.topHoldingLimit
+                ? "Top \(PortfolioOverview.topHoldingLimit) of \(allocation.openHoldingCount) holdings"
+                : "Full allocation list",
+            children: portfolioOverviewChildren(for: overview) + holdingRows
         )
     }
 
     private static func portfolioOverviewBarChart(for overview: PortfolioOverviewSummary) -> MenuRowBarChart? {
-        let bars = overview.topHoldings.map { holding in
+        let bars = overview.topHoldings.prefix(PortfolioOverview.topHoldingLimit).map { holding in
             MenuRowBarChart.Bar(
                 id: "allocation.portfolio.chart.\(holding.quoteId)",
                 label: holdingChartLabel(holding),
@@ -4128,9 +4132,10 @@ public enum MenuDescriptorRenderer {
 
     private static func allocationHoldingRows(
         for holdings: [HoldingSummary],
+        openHoldingCount: Int,
         model: PortfolioPulseModel
     ) -> [MenuRow] {
-        holdings.map { holding in
+        let cappedRows = holdings.prefix(PortfolioOverview.topHoldingLimit).map { holding in
             let attention = model.rankedAttentionItems.first { item in
                 item.facet == "allocation" && item.holdingIdentity?.quoteId == holding.quoteId
             }
@@ -4143,6 +4148,17 @@ public enum MenuDescriptorRenderer {
                 children: allocationChildren(for: holding, attention: attention)
             )
         }
+        let hiddenHoldingCount = max(0, openHoldingCount - cappedRows.count)
+        guard hiddenHoldingCount > 0 else {
+            return Array(cappedRows)
+        }
+        return Array(cappedRows) + [
+            MenuRow(
+                id: "allocation.portfolio.holdings.remainder",
+                title: "\(hiddenHoldingCount) more holdings",
+                detail: "Open PDT for the full allocation list"
+            ),
+        ]
     }
 
     private static func allocationPressureRows(for allocation: AllocationSnapshot) -> [MenuRow] {

@@ -48,6 +48,7 @@ swift run pdtbar-smoke scripted-pdt-connector
 swift run pdtbar-smoke scripted-login-handoff
 swift run pdtbar-smoke scripted-setup-retry
 swift run pdtbar-smoke scripted-pulse-mark-read
+swift run pdtbar-smoke large-portfolio-descriptor
 swift run pdtbar-smoke copy-holding-identifier-action
 swift run pdtbar-smoke scripted-first-fetch
 swift run pdtbar-smoke scripted-returning-launch
@@ -136,6 +137,19 @@ descriptor `Mark as read` action payload, persists the local fingerprint, proves
 the same fingerprint is hidden across a cached reload, and proves changed
 material data resurfaces as unread. Proof artifacts contain only fixture names,
 selectors/status booleans, and redacted state.
+
+Large portfolio descriptor proof:
+
+```bash
+swift run pdtbar-smoke large-portfolio-descriptor
+```
+
+This uses a synthetic 250-holding portfolio only. It verifies descriptor and
+menu-surface rendering keep allocation chart bars and detailed holding rows
+capped at the top 5, show a remainder affordance, and still report the full
+open-holding count in Pulse and Allocation. The agreed responsiveness threshold
+is descriptor plus surface render time <= 250 ms; the proof artifact records
+duration, threshold, row counts, and redaction status only.
 
 Copy holding identifier action proof:
 

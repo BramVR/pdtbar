@@ -792,12 +792,13 @@ try check(
         && portfolioAllocationRow.role == MenuRowRole.portfolioOverviewChart
         && portfolioAllocationRow.detail == nil
         && portfolioAllocationRow.barChart?.bars.map(\.label)
-            == ["Nova", "Orbit", "Helix", "Atlas", "Axis", "Caldera", "Meridian", "Zephyr", "Cash"]
+            == ["Nova", "Orbit", "Helix", "Atlas", "Axis"]
         && portfolioAllocationRow.barChart?.bars.map(\.axisLabel)
-            == ["N", "O", "H", "A", "A", "C", "M", "Z", "C"]
+            == ["N", "O", "H", "A", "A"]
         && portfolioDetailsRow.id == "allocation.portfolio.details"
-        && portfolioDetailsRow.role == MenuRowRole.portfolioOverviewDetails,
-    "allocation section should render whole-portfolio allocation chart before detailed info"
+        && portfolioDetailsRow.role == MenuRowRole.portfolioOverviewDetails
+        && portfolioDetailsRow.detail == "Top 5 of 9 holdings",
+    "allocation section should render bounded portfolio allocation chart before detailed info"
 )
 try check(
     portfolioDetailsRow.children.prefix(5).map { $0.id } == [
@@ -812,6 +813,11 @@ try check(
 try check(
     portfolioDetailsRow.children.dropFirst(5).first?.id == "allocation.9001",
     "portfolio detailed info submenu should expose individual holding drill-down rows"
+)
+try check(
+    portfolioDetailsRow.children.first { $0.id == "allocation.portfolio.holdings.remainder" }?.title
+        == "4 more holdings",
+    "portfolio detailed info submenu should expose a remainder affordance when holdings are capped"
 )
 try check(
     portfolioDetailsRow.children.dropFirst(5).first?
@@ -2380,8 +2386,10 @@ let allocationDrillDownRow = detailedAllocationRows.first {
 }
 try check(
     detailedAllocationRows.filter { $0.role == .allocationHolding || $0.role == .allocationDrillDown }.count
-        == concentrationRun.model.facetSnapshots.allocation.openHoldingCount,
-    "detailed allocation drill-down should list every open holding"
+        == PortfolioOverview.topHoldingLimit
+        && detailedAllocationRows.first { $0.id == "allocation.portfolio.holdings.remainder" }?.title
+            == "\(concentrationRun.model.facetSnapshots.allocation.openHoldingCount - PortfolioOverview.topHoldingLimit) more holdings",
+    "detailed allocation drill-down should list a bounded top set plus remainder"
 )
 try check(
     allocationDrillDownRow?.detail == "24.2%",

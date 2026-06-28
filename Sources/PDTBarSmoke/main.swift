@@ -47,6 +47,8 @@ do {
         report = try scriptedSetupRetrySmoke(arguments: Array(arguments.dropFirst()))
     case "scripted-pulse-mark-read":
         report = try scriptedPulseMarkReadSmoke(arguments: Array(arguments.dropFirst()))
+    case "large-portfolio-descriptor":
+        report = try largePortfolioDescriptorSmoke(arguments: Array(arguments.dropFirst()))
     case "logged-out-launch":
         report = try loggedOutLaunchSmoke(arguments: Array(arguments.dropFirst()))
     case "ready-launch":
@@ -83,6 +85,7 @@ do {
       pdtbar-smoke scripted-login-handoff [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-setup-retry [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-pulse-mark-read [--artifacts <dir>]
+      pdtbar-smoke large-portfolio-descriptor [--artifacts <dir>]
       pdtbar-smoke logged-out-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke ready-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke real-claude-flow-ax [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
@@ -1430,6 +1433,86 @@ private func scriptedPulseMarkReadSmoke(arguments: [String]) throws -> SmokeRepo
     )
 }
 
+private func largePortfolioDescriptorSmoke(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let proof = artifacts.appending(path: "pdtbar-large-portfolio-descriptor-proof.json")
+    let holdingCount = 250
+    let thresholdMilliseconds = 250.0
+    let model = PressureEngine.buildModel(from: syntheticLargePortfolioSnapshot(openHoldingCount: holdingCount))
+
+    let descriptorStart = Date()
+    let descriptor = MenuDescriptorRenderer.render(model: model)
+    let descriptorMilliseconds = Date().timeIntervalSince(descriptorStart) * 1000.0
+    let surfaceStart = Date()
+    let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
+    let surfaceMilliseconds = Date().timeIntervalSince(surfaceStart) * 1000.0
+    let totalMilliseconds = descriptorMilliseconds + surfaceMilliseconds
+
+    let quietHoldingCount = descriptor.sections
+        .first { $0.id == "pulse" }?
+        .rows
+        .first { $0.id == "pulse.quiet" }?
+        .children
+        .first { $0.id == "pulse.quiet.holdings" }?
+        .detail
+    let allocationRows = descriptor.sections.first { $0.id == "allocation" }?.rows ?? []
+    let chartBarCount = allocationRows.first { $0.id == "allocation.portfolio" }?.barChart?.bars.count ?? 0
+    let detailsRow = allocationRows.first { $0.id == "allocation.portfolio.details" }
+    let detailHoldingRowCount = detailsRow?.children.filter {
+        $0.role == .allocationHolding || $0.role == .allocationDrillDown
+    }.count ?? 0
+    let remainderTitle = detailsRow?.children.first { $0.id == "allocation.portfolio.holdings.remainder" }?.title
+    let descriptorRowCount = menuProofRows(descriptor: descriptor).count
+    let surfaceRowCount = surface.sections.reduce(0) { total, section in
+        total + section.rows.reduce(0) { $0 + menuSurfaceRowCount($1) }
+    }
+    let boundedRows = chartBarCount == PortfolioOverview.topHoldingLimit
+        && detailHoldingRowCount == PortfolioOverview.topHoldingLimit
+        && remainderTitle == "\(holdingCount - PortfolioOverview.topHoldingLimit) more holdings"
+    let countsAccurate = model.portfolioGlance.openHoldingCount == holdingCount
+        && model.facetSnapshots.allocation.openHoldingCount == holdingCount
+        && model.facetSnapshots.allocation.portfolioOverview.openHoldingCount == holdingCount
+        && quietHoldingCount == "\(holdingCount)"
+    let withinThreshold = totalMilliseconds <= thresholdMilliseconds
+    let proofPayload = LargePortfolioDescriptorProof(
+        syntheticOpenHoldingCount: holdingCount,
+        pulseOpenHoldingCount: model.portfolioGlance.openHoldingCount,
+        allocationOpenHoldingCount: model.facetSnapshots.allocation.openHoldingCount,
+        portfolioOverviewOpenHoldingCount: model.facetSnapshots.allocation.portfolioOverview.openHoldingCount,
+        chartBarCount: chartBarCount,
+        detailHoldingRowCount: detailHoldingRowCount,
+        remainderTitle: remainderTitle,
+        descriptorRowCount: descriptorRowCount,
+        surfaceRowCount: surfaceRowCount,
+        descriptorRenderMilliseconds: roundedSmokeValue(descriptorMilliseconds, places: 2),
+        surfaceRenderMilliseconds: roundedSmokeValue(surfaceMilliseconds, places: 2),
+        totalRenderMilliseconds: roundedSmokeValue(totalMilliseconds, places: 2),
+        responsivenessThresholdMilliseconds: thresholdMilliseconds,
+        boundedRows: boundedRows,
+        countsAccurate: countsAccurate,
+        withinResponsivenessThreshold: withinThreshold,
+        rawPortfolioPayloadsRedacted: true
+    )
+    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+
+    guard boundedRows && countsAccurate && withinThreshold else {
+        return SmokeReport(
+            name: "large-portfolio-descriptor",
+            status: SmokeStatus.failed,
+            detail: "synthetic \(holdingCount)-holding descriptor/menu surface exceeded bounded rows or \(Int(thresholdMilliseconds)) ms responsiveness threshold",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+    return SmokeReport(
+        name: "large-portfolio-descriptor",
+        status: SmokeStatus.passed,
+        detail: "rendered synthetic \(holdingCount)-holding descriptor/menu surface in \(proofPayload.totalRenderMilliseconds) ms; threshold <= \(Int(thresholdMilliseconds)) ms; allocation rows capped at top \(PortfolioOverview.topHoldingLimit) plus remainder",
+        artifacts: [artifactPath(proof)]
+    )
+}
+
 private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
     let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
@@ -2733,6 +2816,26 @@ private struct ScriptedPulseMarkReadProof: Codable {
     var changedDataResurfaced: Bool
     var caughtUpStatusTitle: String
     var changedStatusBadge: String?
+    var rawPortfolioPayloadsRedacted: Bool
+}
+
+private struct LargePortfolioDescriptorProof: Codable {
+    var syntheticOpenHoldingCount: Int
+    var pulseOpenHoldingCount: Int
+    var allocationOpenHoldingCount: Int
+    var portfolioOverviewOpenHoldingCount: Int
+    var chartBarCount: Int
+    var detailHoldingRowCount: Int
+    var remainderTitle: String?
+    var descriptorRowCount: Int
+    var surfaceRowCount: Int
+    var descriptorRenderMilliseconds: Double
+    var surfaceRenderMilliseconds: Double
+    var totalRenderMilliseconds: Double
+    var responsivenessThresholdMilliseconds: Double
+    var boundedRows: Bool
+    var countsAccurate: Bool
+    var withinResponsivenessThreshold: Bool
     var rawPortfolioPayloadsRedacted: Bool
 }
 
@@ -5213,6 +5316,33 @@ private func menuProofRows(row: MenuRow, depth: Int) -> [MenuProofRow] {
     let title = row.detail.map { "\(row.title) - \($0)" } ?? row.title
     return [MenuProofRow(text: title, isSection: false, isChild: depth > 0)]
         + row.children.flatMap { menuProofRows(row: $0, depth: depth + 1) }
+}
+
+private func menuSurfaceRowCount(_ row: MenuBarRowSurface) -> Int {
+    1 + row.children.reduce(0) { $0 + menuSurfaceRowCount($1) }
+}
+
+private func syntheticLargePortfolioSnapshot(openHoldingCount: Int) -> PortfolioSnapshot {
+    PortfolioSnapshot(
+        asOf: "2026-06-22",
+        totalValue: Money(value: String(format: "%.2f", Double(openHoldingCount) * 1000.0), currency: "EUR"),
+        openHoldings: (1...openHoldingCount).map { index in
+            NormalizedHolding(
+                name: "Synthetic Holding \(index)",
+                quoteId: 10000 + index,
+                weight: 1.0 / Double(openHoldingCount),
+                worth: Money(value: "1000.00", currency: "EUR"),
+                price: Money(value: "100.00", currency: "EUR"),
+                priceAsOf: "2026-06-22",
+                copyableIdentifier: "SYN\(index)"
+            )
+        },
+        sectors: [],
+        assetTypes: [],
+        incomeEvents: [],
+        dividendRowCount: 0,
+        priceSeries: []
+    )
 }
 
 private func proofText(_ value: String, limit: Int) -> String {

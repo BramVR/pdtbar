@@ -210,10 +210,6 @@ struct PortfolioOverviewTests {
             "allocation.portfolio.chart.9003",
             "allocation.portfolio.chart.9009",
             "allocation.portfolio.chart.9011",
-            "allocation.portfolio.chart.9005",
-            "allocation.portfolio.chart.9004",
-            "allocation.portfolio.chart.9012",
-            "allocation.portfolio.chart.9010",
         ])
         #expect(chart.bars.map(\.label) == [
             "Nova",
@@ -221,22 +217,14 @@ struct PortfolioOverviewTests {
             "Helix",
             "Atlas",
             "Axis",
-            "Caldera",
-            "Meridian",
-            "Zephyr",
-            "Cash",
         ])
-        #expect(chart.bars.map(\.axisLabel) == ["N", "O", "H", "A", "A", "C", "M", "Z", "C"])
+        #expect(chart.bars.map(\.axisLabel) == ["N", "O", "H", "A", "A"])
         #expect(chart.bars.map(\.weight) == [
             0.1171875,
             0.1171875,
             0.11328125,
             0.10742188,
             0.10742188,
-            0.10552734,
-            0.10160156,
-            0.09570313,
-            0.03701172,
         ])
         #expect(chart.bars.map(\.percentageLabel) == [
             "11.7%",
@@ -244,10 +232,6 @@ struct PortfolioOverviewTests {
             "11.3%",
             "10.7%",
             "10.7%",
-            "10.6%",
-            "10.2%",
-            "9.6%",
-            "3.7%",
         ])
         #expect(chart.bars.first?.detail == "Nova Lithography 11.7%; EUR 6,000.00")
 
@@ -259,17 +243,63 @@ struct PortfolioOverviewTests {
         #expect(novaRow.children.map(\.id).contains("allocation.9001.price"))
         #expect(novaRow.children.first { $0.id == "allocation.9001.isin" }?.detail == "NL0000000001")
 
-        let cashRow = try #require(detailsRow.children.first { $0.id == "allocation.9010" })
-        #expect(cashRow.children.contains { $0.id == "allocation.9010.isin" } == false)
+        let remainderRow = try #require(detailsRow.children.first { $0.id == "allocation.portfolio.holdings.remainder" })
+        #expect(remainderRow.title == "4 more holdings")
 
         let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
         let surfaceOverviewRow = try #require(surface.sections.first { $0.id == "allocation" }?.rows.first)
         #expect(surfaceOverviewRow.barChart == chart)
     }
+
+    @Test("Large portfolio allocation details stay bounded while counts stay accurate")
+    func largePortfolioAllocationDetailsStayBoundedWhileCountsStayAccurate() throws {
+        let model = PressureEngine.buildModel(from: largePortfolioSnapshot(openHoldingCount: 250))
+        let descriptor = MenuDescriptorRenderer.render(model: model)
+        let quietRow = try #require(descriptor.sections.first { $0.id == "pulse" }?.rows.first { $0.id == "pulse.quiet" })
+        let quietHoldingCount = try #require(quietRow.children.first { $0.id == "pulse.quiet.holdings" })
+        let detailsRow = try #require(
+            descriptor.sections
+                .first { $0.id == "allocation" }?
+                .rows
+                .first { $0.id == "allocation.portfolio.details" }
+        )
+        let holdingRows = detailsRow.children.filter { $0.role == .allocationHolding || $0.role == .allocationDrillDown }
+        let remainderRow = try #require(detailsRow.children.first { $0.id == "allocation.portfolio.holdings.remainder" })
+
+        #expect(model.portfolioGlance.openHoldingCount == 250)
+        #expect(model.facetSnapshots.allocation.openHoldingCount == 250)
+        #expect(model.facetSnapshots.allocation.portfolioOverview.openHoldingCount == 250)
+        #expect(quietHoldingCount.detail == "250")
+        #expect(holdingRows.count == PortfolioOverview.topHoldingLimit)
+        #expect(remainderRow.title == "245 more holdings")
+        #expect(remainderRow.detail == "Open PDT for the full allocation list")
+    }
 }
 
 private func quietSnapshot() throws -> PortfolioSnapshot {
     try PDTFixtureDataSource.snapshot(from: packageRoot.appending(path: "docs/pdt/fixtures/quiet-no-pressure.json"))
+}
+
+private func largePortfolioSnapshot(openHoldingCount: Int) -> PortfolioSnapshot {
+    PortfolioSnapshot(
+        asOf: "2026-06-22",
+        totalValue: Money(value: String(format: "%.2f", Double(openHoldingCount) * 1000), currency: "EUR"),
+        openHoldings: (1...openHoldingCount).map { index in
+            NormalizedHolding(
+                name: "Synthetic Holding \(index)",
+                quoteId: 10000 + index,
+                weight: 1.0 / Double(openHoldingCount),
+                worth: Money(value: "1000.00", currency: "EUR"),
+                price: Money(value: "100.00", currency: "EUR"),
+                priceAsOf: "2026-06-22"
+            )
+        },
+        sectors: [],
+        assetTypes: [],
+        incomeEvents: [],
+        dividendRowCount: 0,
+        priceSeries: []
+    )
 }
 
 private let packageRoot = URL(fileURLWithPath: #filePath)
