@@ -6616,7 +6616,7 @@ private final class PDTPriceHistoryWorkTracker: @unchecked Sendable {
     private var timedOutQuoteIDs: Set<Int> = []
 
     init(quoteIDs: [Int]) {
-        pendingQuoteIDs = quoteIDs
+        pendingQuoteIDs = quoteIDs.reversed()
     }
 
     func nextQuoteID() -> Int? {
@@ -6624,10 +6624,9 @@ private final class PDTPriceHistoryWorkTracker: @unchecked Sendable {
         defer {
             lock.unlock()
         }
-        guard !pendingQuoteIDs.isEmpty else {
+        guard let quoteID = pendingQuoteIDs.popLast() else {
             return nil
         }
-        let quoteID = pendingQuoteIDs.removeFirst()
         runningQuoteIDs.insert(quoteID)
         return quoteID
     }
