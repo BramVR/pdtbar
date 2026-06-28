@@ -53,6 +53,12 @@ Use `make start` or `./Scripts/compile_and_run.sh` for manual UX testing. Both
 package and launch `PDTBar.app`; do not use raw `.build/debug/pdtbar` as the
 first-run product path.
 
+Packaging smoke:
+
+```bash
+swift run pdtbar-smoke app-bundle-packaging
+```
+
 ## License
 
 License pending. Reused MIT-licensed code or direct copies must keep attribution; see [`docs/reuse-notes.md`](docs/reuse-notes.md).
