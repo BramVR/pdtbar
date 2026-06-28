@@ -47,7 +47,7 @@ Pressure is **change over time**, so the engine must remember prior state. This 
 
 The two hardest moments are day one and a calm day. Handle them deliberately:
 
-- **Cold start (no prior snapshot):** "what changed" signals can't fire yet, so lean on the **absolute-threshold** signals that need no history — concentration too high or ex-dividend within N days. Deferred facets can add cash-too-high later. The bar must be useful on the *first* run, not after a day of data. Take the first snapshot on connect.
+- **Cold start (no prior snapshot):** lean on signals that need no local history — concentration too high, ex-dividend within N days, and big movers derived from PDT price history. Deferred facets can add cash-too-high later. The bar must be useful on the *first* run, not after a day of data. Take the first snapshot on connect.
 - **Quiet day (nothing crosses a threshold):** show a real **"all quiet"** state with glanceable context (value, open holdings, top allocation, freshness) still present and the drill-down still reachable. A holding that was already above the concentration line in the prior snapshot is quiet unless it freshly crosses from below. Silence is a designed state, not an empty screen.
 - **Caught up (current attention was marked read):** hide those Pulse rows, badge fill, and attention highlighting while keeping Allocation/Income/Big movers drill-down facts visible. If the same material fingerprint remains, it stays read; if the material bucket changes, it can surface again.
 
