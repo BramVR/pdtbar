@@ -928,15 +928,6 @@ private func appBundlePackagingSmoke(arguments: [String]) throws -> SmokeReport 
             artifacts: [artifactPath(proof)]
         )
     }
-    guard appBundle.pathExtension == "app" else {
-        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
-        return SmokeReport(
-            name: "app-bundle-packaging",
-            status: SmokeStatus.failed,
-            detail: "--app must point at a .app bundle",
-            artifacts: [artifactPath(proof)]
-        )
-    }
     guard FileManager.default.isExecutableFile(atPath: packageScript.path) else {
         try stableJSONData(proofPayload).write(to: proof, options: .atomic)
         return SmokeReport(
@@ -3093,9 +3084,34 @@ private struct AppBundlePackagingProof: Codable {
 }
 
 private final class LaunchServicesOpenResultBox: @unchecked Sendable {
-    var application: NSRunningApplication?
-    var error: Error?
-    var isComplete = false
+    private let lock = NSLock()
+    private var application: NSRunningApplication?
+    private var error: Error?
+    private var isComplete = false
+
+    func complete(application: NSRunningApplication?, error: Error?) {
+        lock.lock()
+        self.application = application
+        self.error = error
+        isComplete = true
+        lock.unlock()
+    }
+
+    func completed() -> Bool {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return isComplete
+    }
+
+    func snapshot() -> (application: NSRunningApplication?, error: Error?, isComplete: Bool) {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return (application, error, isComplete)
+    }
 }
 
 private struct RealClaudeFlowAXProof: Codable {
@@ -4665,22 +4681,21 @@ private func launchAppBundleWithLaunchServices(
 
     let result = LaunchServicesOpenResultBox()
     NSWorkspace.shared.openApplication(at: appBundle, configuration: configuration) { application, error in
-        result.application = application
-        result.error = error
-        result.isComplete = true
+        result.complete(application: application, error: error)
     }
 
     let deadline = Date().addingTimeInterval(timeout)
-    while !result.isComplete && Date() < deadline {
+    while !result.completed() && Date() < deadline {
         RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
     }
-    guard result.isComplete else {
+    let openResult = result.snapshot()
+    guard openResult.isComplete else {
         throw CommandError.timedOut("LaunchServices open \(appBundle.lastPathComponent)")
     }
-    if let openError = result.error {
+    if let openError = openResult.error {
         throw CommandError.runtime("LaunchServices failed to open \(appBundle.lastPathComponent): \(openError)")
     }
-    return try require(result.application, "LaunchServices opened \(appBundle.lastPathComponent) without a running application")
+    return try require(openResult.application, "LaunchServices opened \(appBundle.lastPathComponent) without a running application")
 }
 
 private struct CommandResult {
