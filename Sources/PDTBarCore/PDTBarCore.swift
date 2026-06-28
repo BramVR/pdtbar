@@ -324,11 +324,11 @@ public func != (lhs: AttentionSeverity, rhs: String) -> Bool {
 
 public struct AttentionItem: Codable, Equatable {
     public var id: String
-    public var facet: AttentionFacet
+    public var facet: String
     public var rank: Int
     public var title: String
     public var detail: String
-    public var severity: AttentionSeverity
+    public var severity: String
     public var score: Double
     public var holdingIdentity: HoldingIdentity?
     public var currentWeight: Double?
@@ -348,13 +348,23 @@ public struct AttentionItem: Codable, Equatable {
     public var supportingDataSlotIDs: [String]
     public var explanation: AttentionExplanation
 
+    public var typedFacet: AttentionFacet {
+        get { AttentionFacet(legacyValue: facet) }
+        set { facet = newValue.rawValue }
+    }
+
+    public var typedSeverity: AttentionSeverity {
+        get { AttentionSeverity(legacyValue: severity) }
+        set { severity = newValue.rawValue }
+    }
+
     public init(
         id: String,
-        facet: AttentionFacet,
+        facet: String,
         rank: Int,
         title: String,
         detail: String = "",
-        severity: AttentionSeverity,
+        severity: String,
         score: Double,
         holdingIdentity: HoldingIdentity? = nil,
         currentWeight: Double? = nil,
@@ -375,11 +385,11 @@ public struct AttentionItem: Codable, Equatable {
         explanation: AttentionExplanation? = nil
     ) {
         self.id = id
-        self.facet = facet
+        self.facet = AttentionFacet(legacyValue: facet).rawValue
         self.rank = rank
         self.title = title
         self.detail = detail
-        self.severity = severity
+        self.severity = AttentionSeverity(legacyValue: severity).rawValue
         self.score = score
         self.holdingIdentity = holdingIdentity
         self.currentWeight = currentWeight
@@ -419,11 +429,11 @@ public struct AttentionItem: Codable, Equatable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
-        facet = try container.decode(AttentionFacet.self, forKey: .facet)
+        facet = AttentionFacet(legacyValue: try container.decode(String.self, forKey: .facet)).rawValue
         rank = try container.decode(Int.self, forKey: .rank)
         title = try container.decode(String.self, forKey: .title)
         detail = try container.decodeIfPresent(String.self, forKey: .detail) ?? ""
-        severity = try container.decode(AttentionSeverity.self, forKey: .severity)
+        severity = AttentionSeverity(legacyValue: try container.decode(String.self, forKey: .severity)).rawValue
         score = try container.decode(Double.self, forKey: .score)
         holdingIdentity = try container.decodeIfPresent(HoldingIdentity.self, forKey: .holdingIdentity)
         currentWeight = try container.decodeIfPresent(Double.self, forKey: .currentWeight)
@@ -463,7 +473,7 @@ public struct AttentionItem: Codable, Equatable {
 
     private static func legacyExplanation(
         title: String,
-        severity: AttentionSeverity,
+        severity: String,
         score: Double,
         currentWeight: Double?,
         threshold: Double?,
@@ -480,7 +490,7 @@ public struct AttentionItem: Codable, Equatable {
     ) -> AttentionExplanation {
         var explanation = AttentionExplanation.legacy(
             trigger: title,
-            severity: severity.rawValue,
+            severity: severity,
             score: score,
             supportingDataSlotIDs: supportingDataSlotIDs
         )
@@ -565,13 +575,13 @@ public extension AttentionItem {
     }
 
     var readFingerprint: String {
-        switch facet {
+        switch typedFacet {
         case .allocation:
             return [
                 "pulse:v1:allocation",
                 readFingerprintIdentity,
                 "threshold-bp:\(fingerprintBasisPoints(threshold))",
-                "severity:\(fingerprintToken(severity.rawValue))",
+                "severity:\(fingerprintToken(severity))",
                 "weight-bucket-bp:\(bucketBasisPoints(currentWeight, bucketSize: 100))",
             ].joined(separator: ":")
         case .income:
@@ -592,16 +602,16 @@ public extension AttentionItem {
         case .unknown:
             return [
                 "pulse:v1",
-                fingerprintToken(facet.rawValue),
+                fingerprintToken(typedFacet.rawValue),
                 readFingerprintIdentity,
-                "severity:\(fingerprintToken(severity.rawValue))",
+                "severity:\(fingerprintToken(severity))",
                 "score-bp:\(fingerprintBasisPoints(score))",
             ].joined(separator: ":")
         }
     }
 
     var staleReadPruningPrefix: String? {
-        switch facet {
+        switch typedFacet {
         case .income:
             return ["pulse:v1:income", readFingerprintIdentity].joined(separator: ":") + ":"
         case .bigMovers:
@@ -612,7 +622,7 @@ public extension AttentionItem {
     }
 
     var concentrationReadFingerprintPrefix: String? {
-        guard facet == .allocation else {
+        guard typedFacet == .allocation else {
             return nil
         }
         return [
@@ -4247,7 +4257,7 @@ public enum MenuDescriptorRenderer {
     ) -> [MenuRow] {
         holdings.map { holding in
             let attention = model.rankedAttentionItems.first { item in
-                item.facet == .allocation && item.holdingIdentity?.quoteId == holding.quoteId
+                item.typedFacet == .allocation && item.holdingIdentity?.quoteId == holding.quoteId
             }
             let drillDownDetail = attention?.explanation.currentValue?.value
             return MenuRow(
@@ -4948,16 +4958,16 @@ public enum PressureEngine {
         if lhs.score != rhs.score {
             return lhs.score > rhs.score
         }
-        if lhs.facet == .allocation,
-           rhs.facet == .allocation,
+        if lhs.typedFacet == .allocation,
+           rhs.typedFacet == .allocation,
            let lhsWeight = lhs.currentWeight,
            let rhsWeight = rhs.currentWeight,
            lhsWeight != rhsWeight
         {
             return lhsWeight > rhsWeight
         }
-        if lhs.facet == .allocation,
-           rhs.facet == .allocation,
+        if lhs.typedFacet == .allocation,
+           rhs.typedFacet == .allocation,
            let lhsName = lhs.holdingIdentity?.name,
            let rhsName = rhs.holdingIdentity?.name,
            lhsName != rhsName
@@ -5012,7 +5022,7 @@ public enum PressureEngine {
                 let score = concentrationScore(weight: holding.weight, threshold: concentrationThreshold)
                 return AttentionItem(
                     id: "allocation.concentration.\(holding.quoteId)",
-                    facet: .allocation,
+                    facet: "allocation",
                     rank: offset + 1,
                     title: "\(holding.name) concentration",
                     detail: percent(holding.weight),
@@ -5062,7 +5072,7 @@ public enum PressureEngine {
                 let title = "\(distributionLabel(sector.name)) sector concentration"
                 return AttentionItem(
                     id: "allocation.sector.\(stableIDToken(sector.name))",
-                    facet: .allocation,
+                    facet: "allocation",
                     rank: offset + 1,
                     title: title,
                     detail: percent(weight),
@@ -5111,7 +5121,7 @@ public enum PressureEngine {
         return [
             AttentionItem(
                 id: "allocation.cashDrag",
-                facet: .allocation,
+                facet: "allocation",
                 rank: 1,
                 title: "Cash drag",
                 detail: "\(percent(cash.weight)); \(display(cash.value))",
@@ -5168,7 +5178,7 @@ public enum PressureEngine {
         return [
             AttentionItem(
                 id: "allocation.concentrationDrift.top\(current.rankCount)",
-                facet: .allocation,
+                facet: "allocation",
                 rank: 1,
                 title: "Top \(current.rankCount) concentration drift",
                 detail: "\(percent(prior.weight)) -> \(percent(current.weight))",
@@ -5422,7 +5432,7 @@ public enum PressureEngine {
         } ?? " over price history window."
         return AttentionItem(
             id: "bigMovers.move.\(holding.quoteId)",
-            facet: .bigMovers,
+            facet: "bigMovers",
             rank: 0,
             title: "\(holding.name) moved \(signedPercent(signal.moveSize))",
             detail: "\(holding.name) moved \(signedPercent(signal.moveSize)) \(valueCopy)\(detailSuffix)",
@@ -5497,11 +5507,11 @@ public enum PressureEngine {
                 }
                 return AttentionItem(
                     id: incomeItemID(for: event),
-                    facet: .income,
+                    facet: "income",
                     rank: offset + 1,
                     title: "\(event.symbolName) ex-dividend",
                     detail: incomeCopy(for: event),
-                    severity: .low,
+                    severity: "low",
                     score: 0.45,
                     holdingIdentity: identity,
                     eventDate: event.date,

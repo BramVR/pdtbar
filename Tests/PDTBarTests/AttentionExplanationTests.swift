@@ -138,8 +138,13 @@ struct AttentionExplanationTests {
         }
         """)
 
-        #expect(item.facet == .unknown)
-        #expect(item.severity == .low)
+        let facetString: String = item.facet
+        let severityString: String = item.severity
+
+        #expect(facetString == "unknown")
+        #expect(severityString == "low")
+        #expect(item.typedFacet == .unknown)
+        #expect(item.typedSeverity == .low)
         #expect(item.readFingerprint.contains("pulse:v1:unknown"))
 
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(item)) as? [String: Any]
