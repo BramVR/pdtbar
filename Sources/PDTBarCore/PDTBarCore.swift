@@ -1668,6 +1668,31 @@ public enum DataHealthDetailFillInput: Equatable {
     case failed
 }
 
+public enum PriorSnapshotHealthStatus: String, Codable, Equatable, Sendable {
+    case unknown
+    case missing
+    case available
+    case corrupt
+    case unreadable
+}
+
+private extension PriorSnapshotLoadStatus {
+    var healthStatus: PriorSnapshotHealthStatus? {
+        switch self {
+        case .notRequested:
+            return nil
+        case .missing:
+            return .missing
+        case .loaded:
+            return .available
+        case .failed(.decode):
+            return .corrupt
+        case .failed(.io):
+            return .unreadable
+        }
+    }
+}
+
 public struct DataHealthInput: Equatable {
     public var claudeReadiness: DataHealthSourceStatus
     public var pdtMCPReadiness: DataHealthSourceStatus
@@ -1676,6 +1701,7 @@ public struct DataHealthInput: Equatable {
     public var pulseSource: PulseLifecycleSource?
     public var lastSuccessfulCompleteFetchAsOf: String?
     public var cachedPulseAvailable: Bool
+    public var priorSnapshotStatus: PriorSnapshotHealthStatus?
     public var detailFill: DataHealthDetailFillInput
     public var freshness: FreshnessSnapshot
     public var readState: PulseReadState?
@@ -1689,6 +1715,7 @@ public struct DataHealthInput: Equatable {
         pulseSource: PulseLifecycleSource?,
         lastSuccessfulCompleteFetchAsOf: String?,
         cachedPulseAvailable: Bool,
+        priorSnapshotStatus: PriorSnapshotHealthStatus? = nil,
         detailFill: DataHealthDetailFillInput,
         freshness: FreshnessSnapshot,
         readState: PulseReadState?,
@@ -1701,6 +1728,7 @@ public struct DataHealthInput: Equatable {
         self.pulseSource = pulseSource
         self.lastSuccessfulCompleteFetchAsOf = lastSuccessfulCompleteFetchAsOf
         self.cachedPulseAvailable = cachedPulseAvailable
+        self.priorSnapshotStatus = priorSnapshotStatus
         self.detailFill = detailFill
         self.freshness = freshness
         self.readState = readState
@@ -1712,7 +1740,8 @@ public struct DataHealthInput: Equatable {
         pulseSource: PulseLifecycleSource? = nil,
         readState: PulseReadState? = nil,
         detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil,
-        diagnostic: PDTDetailRefreshFailureDiagnostic? = nil
+        diagnostic: PDTDetailRefreshFailureDiagnostic? = nil,
+        priorSnapshotLoadStatus: PriorSnapshotLoadStatus = .notRequested
     ) -> DataHealthInput {
         DataHealthInput(
             claudeReadiness: .ready,
@@ -1722,6 +1751,7 @@ public struct DataHealthInput: Equatable {
             pulseSource: pulseSource,
             lastSuccessfulCompleteFetchAsOf: freshness.latestCompleteDetailFillAsOf,
             cachedPulseAvailable: pulseSource != nil,
+            priorSnapshotStatus: priorSnapshotLoadStatus.healthStatus,
             detailFill: detailFillInput(outcome: detailRefreshOutcome, freshness: freshness),
             freshness: freshness,
             readState: readState,
@@ -1762,6 +1792,7 @@ public struct DataHealthCacheSnapshot: Codable, Equatable {
     public var pulseSource: PulseLifecycleSource?
     public var cachedPulseAvailable: Bool
     public var lastSuccessfulCompleteFetchAsOf: String?
+    public var priorSnapshotStatus: PriorSnapshotHealthStatus?
     public var summary: String
 }
 
@@ -1836,6 +1867,7 @@ public enum DataHealth {
             pulseSource: input.pulseSource,
             cachedPulseAvailable: input.cachedPulseAvailable,
             lastSuccessfulCompleteFetchAsOf: input.lastSuccessfulCompleteFetchAsOf,
+            priorSnapshotStatus: input.priorSnapshotStatus,
             summary: cacheSummary(
                 cachedPulseAvailable: input.cachedPulseAvailable,
                 lastSuccessfulCompleteFetchAsOf: input.lastSuccessfulCompleteFetchAsOf
@@ -5583,6 +5615,59 @@ public enum PulseLifecycleSource: String, Codable, Equatable {
     case refreshedSnapshot
 }
 
+public enum PriorSnapshotLoadFailureKind: String, Codable, Equatable, Sendable {
+    case decode
+    case io
+}
+
+public enum PriorSnapshotLoadStatus: Codable, Equatable, Sendable {
+    case notRequested
+    case missing
+    case loaded
+    case failed(PriorSnapshotLoadFailureKind)
+}
+
+public enum PriorSnapshotLoadResult: Codable, Equatable {
+    case missing
+    case loaded(PortfolioSnapshot)
+    case failed(PriorSnapshotLoadFailureKind)
+
+    public var snapshot: PortfolioSnapshot? {
+        guard case .loaded(let snapshot) = self else {
+            return nil
+        }
+        return snapshot
+    }
+
+    public var status: PriorSnapshotLoadStatus {
+        switch self {
+        case .missing:
+            return .missing
+        case .loaded:
+            return .loaded
+        case .failed(let kind):
+            return .failed(kind)
+        }
+    }
+}
+
+public struct PriorSnapshotLoadError: Error, Equatable, Sendable, CustomStringConvertible {
+    public var kind: PriorSnapshotLoadFailureKind
+
+    public init(kind: PriorSnapshotLoadFailureKind) {
+        self.kind = kind
+    }
+
+    public var description: String {
+        switch kind {
+        case .decode:
+            return "Prior snapshot could not be decoded"
+        case .io:
+            return "Prior snapshot could not be read"
+        }
+    }
+}
+
 public struct PulseLifecycleResult: Codable, Equatable {
     public var unfilteredModel: PortfolioPulseModel
     public var model: PortfolioPulseModel
@@ -5590,6 +5675,7 @@ public struct PulseLifecycleResult: Codable, Equatable {
     public var descriptor: MenuDescriptor
     public var readState: PulseReadState?
     public var source: PulseLifecycleSource
+    public var priorSnapshotLoadStatus: PriorSnapshotLoadStatus?
 
     public init(
         unfilteredModel: PortfolioPulseModel,
@@ -5597,7 +5683,8 @@ public struct PulseLifecycleResult: Codable, Equatable {
         snapshotCommit: SnapshotCommit,
         descriptor: MenuDescriptor,
         readState: PulseReadState? = nil,
-        source: PulseLifecycleSource
+        source: PulseLifecycleSource,
+        priorSnapshotLoadStatus: PriorSnapshotLoadStatus = .notRequested
     ) {
         self.unfilteredModel = unfilteredModel
         self.model = model
@@ -5605,6 +5692,7 @@ public struct PulseLifecycleResult: Codable, Equatable {
         self.descriptor = descriptor
         self.readState = readState
         self.source = source
+        self.priorSnapshotLoadStatus = priorSnapshotLoadStatus
     }
 
     public func applyingReadState(_ readState: PulseReadState?) -> PulseLifecycleResult {
@@ -5622,7 +5710,8 @@ public struct PulseLifecycleResult: Codable, Equatable {
             snapshotCommit: snapshotCommit,
             descriptor: MenuDescriptorRenderer.render(model: model),
             readState: readState,
-            source: source
+            source: source,
+            priorSnapshotLoadStatus: priorSnapshotLoadStatus ?? .notRequested
         )
     }
 }
@@ -6122,7 +6211,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         }
 
         let snapshotAsOf = asOf ?? currentDayString()
-        let originalPriorSnapshot = try? snapshotStore.loadPriorSnapshot()
+        let originalPriorSnapshotLoad = try snapshotStore.loadPriorSnapshotResult()
+        let originalPriorSnapshot = originalPriorSnapshotLoad.snapshot
         var diagnostics: [PDTDetailRefreshFailureDiagnostic] = []
         var snapshot: PortfolioSnapshot
         do {
@@ -6201,7 +6291,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             snapshotStore: snapshotStore,
             pulseReadStore: pulseReadStore,
             detailRefreshOutcome: outcome,
-            detailRefreshDiagnostic: diagnostics.last
+            detailRefreshDiagnostic: diagnostics.last,
+            priorSnapshotLoadStatus: originalPriorSnapshotLoad.status
         )
         if let lastDiagnostic = diagnostics.last {
             try snapshotStore.saveLastDetailRefreshDiagnostic(lastDiagnostic)
@@ -6831,7 +6922,11 @@ public enum PressureRunner {
         snapshotStore: SnapshotStore,
         pulseReadStore: PulseReadStore? = nil
     ) throws -> PulseLifecycleResult? {
-        guard let snapshot = try snapshotStore.loadPriorSnapshot() else {
+        let snapshotLoad = try snapshotStore.loadPriorSnapshotResult()
+        guard case .loaded(let snapshot) = snapshotLoad else {
+            if case .failed(let kind) = snapshotLoad {
+                throw PriorSnapshotLoadError(kind: kind)
+            }
             return nil
         }
         let commit = SnapshotCommit(
@@ -6846,7 +6941,8 @@ public enum PressureRunner {
             pulseReadStore: pulseReadStore,
             source: .cachedSnapshot,
             resetsReappearedReadState: false,
-            detailRefreshDiagnostic: cachedDetailRefreshDiagnostic(for: snapshot, snapshotStore: snapshotStore)
+            detailRefreshDiagnostic: cachedDetailRefreshDiagnostic(for: snapshot, snapshotStore: snapshotStore),
+            priorSnapshotLoadStatus: snapshotLoad.status
         )
     }
 
@@ -6890,12 +6986,8 @@ public enum PressureRunner {
         pulseReadStore: PulseReadStore? = nil
     ) throws -> PressureRunResult {
         var snapshot = try dataSource.snapshot(asOf: asOf)
-        let priorSnapshot: PortfolioSnapshot?
-        do {
-            priorSnapshot = try snapshotStore.loadPriorSnapshot()
-        } catch {
-            priorSnapshot = nil
-        }
+        let priorSnapshotLoad = try snapshotStore.loadPriorSnapshotResult()
+        let priorSnapshot = priorSnapshotLoad.snapshot
         if hasOptionalDetailSlice(snapshot) {
             snapshot.latestCompleteDetailFillAsOf = snapshot.asOf
             snapshot.latestDetailFillOutcome = .completed
@@ -6914,7 +7006,8 @@ public enum PressureRunner {
             pulseReadStore: pulseReadStore,
             source: .fetchedSnapshot,
             loadedReadState: loadedReadState,
-            resetsReappearedReadState: true
+            resetsReappearedReadState: true,
+            priorSnapshotLoadStatus: priorSnapshotLoad.status
         )
     }
 
@@ -6933,7 +7026,8 @@ public enum PressureRunner {
         snapshotStore: SnapshotStore,
         pulseReadStore: PulseReadStore? = nil,
         detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil,
-        detailRefreshDiagnostic: PDTDetailRefreshFailureDiagnostic? = nil
+        detailRefreshDiagnostic: PDTDetailRefreshFailureDiagnostic? = nil,
+        priorSnapshotLoadStatus: PriorSnapshotLoadStatus = .notRequested
     ) throws -> PulseLifecycleResult {
         let loadedReadState = displayReadState(from: pulseReadStore)
         var committedSnapshot = snapshot
@@ -6953,7 +7047,8 @@ public enum PressureRunner {
             loadedReadState: loadedReadState,
             resetsReappearedReadState: true,
             detailRefreshOutcome: detailRefreshOutcome,
-            detailRefreshDiagnostic: detailRefreshDiagnostic
+            detailRefreshDiagnostic: detailRefreshDiagnostic,
+            priorSnapshotLoadStatus: priorSnapshotLoadStatus
         )
     }
 
@@ -6990,7 +7085,8 @@ public enum PressureRunner {
         loadedReadState: PulseReadState? = nil,
         resetsReappearedReadState: Bool,
         detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil,
-        detailRefreshDiagnostic: PDTDetailRefreshFailureDiagnostic? = nil
+        detailRefreshDiagnostic: PDTDetailRefreshFailureDiagnostic? = nil,
+        priorSnapshotLoadStatus: PriorSnapshotLoadStatus = .notRequested
     ) throws -> PulseLifecycleResult {
         let displayReadState = loadedReadState ?? displayReadState(from: pulseReadStore)
         let effectiveDetailRefreshOutcome = detailRefreshOutcome ?? snapshot.latestDetailFillOutcome
@@ -7006,7 +7102,8 @@ public enum PressureRunner {
                 pulseSource: source,
                 readState: displayReadState,
                 detailRefreshOutcome: effectiveDetailRefreshOutcome,
-                diagnostic: detailRefreshDiagnostic
+                diagnostic: detailRefreshDiagnostic,
+                priorSnapshotLoadStatus: priorSnapshotLoadStatus
             )
         )
         let readState = resetsReappearedReadState
@@ -7023,7 +7120,8 @@ public enum PressureRunner {
                 pulseSource: source,
                 readState: readState,
                 detailRefreshOutcome: effectiveDetailRefreshOutcome,
-                diagnostic: detailRefreshDiagnostic
+                diagnostic: detailRefreshDiagnostic,
+                priorSnapshotLoadStatus: priorSnapshotLoadStatus
             )
         )
         return PulseLifecycleResult(
@@ -7032,7 +7130,8 @@ public enum PressureRunner {
             snapshotCommit: snapshotCommit,
             descriptor: MenuDescriptorRenderer.render(model: model),
             readState: readState,
-            source: source
+            source: source,
+            priorSnapshotLoadStatus: priorSnapshotLoadStatus
         )
     }
 
@@ -7096,12 +7195,37 @@ public struct SnapshotStore: Sendable {
     }
 
     public func loadPriorSnapshot() throws -> PortfolioSnapshot? {
+        switch try loadPriorSnapshotResult() {
+        case .missing:
+            return nil
+        case .loaded(let snapshot):
+            return snapshot
+        case .failed(let kind):
+            throw PriorSnapshotLoadError(kind: kind)
+        }
+    }
+
+    public func loadPriorSnapshotResult() throws -> PriorSnapshotLoadResult {
         let target = currentSnapshotPath
         guard FileManager.default.fileExists(atPath: target.path) else {
-            return nil
+            return .missing
         }
-        try OwnerOnlyLocalStore.protectExistingFile(target)
-        return try JSONDecoder().decode(PortfolioSnapshot.self, from: Data(contentsOf: target))
+        do {
+            try OwnerOnlyLocalStore.protectExistingFile(target)
+        } catch {
+            return .failed(.io)
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: target)
+        } catch {
+            return .failed(.io)
+        }
+        do {
+            return .loaded(try JSONDecoder().decode(PortfolioSnapshot.self, from: data))
+        } catch {
+            return .failed(.decode)
+        }
     }
 
     public func commitCurrentSnapshot(_ snapshot: PortfolioSnapshot) throws -> SnapshotCommit {

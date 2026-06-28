@@ -111,6 +111,27 @@ struct BackgroundDetailRefreshTests {
         #expect(try store.loadLastDetailRefreshDiagnostic() == nil)
     }
 
+    @Test("Corrupt prior snapshot is surfaced during background refresh")
+    func corruptPriorSnapshotIsSurfacedDuringBackgroundRefresh() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-corrupt-prior-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        try Data("{".utf8).write(to: store.currentSnapshotPath)
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: ScriptedPDTMCPConnector(responses: try detailRefreshResponses()),
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        #expect(result.outcome == .completed)
+        #expect(result.pulse.priorSnapshotLoadStatus == .failed(.decode))
+        #expect(result.model.facetSnapshots.dataHealth.cache.priorSnapshotStatus == .corrupt)
+        #expect(result.model.portfolioGlance.priorSnapshotAsOf == nil)
+    }
+
     @Test("New refresh clears stale diagnostic before setup failure")
     func newRefreshClearsStaleDiagnosticBeforeSetupFailure() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-stale-diagnostic-test")
