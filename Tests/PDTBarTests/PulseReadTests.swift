@@ -427,7 +427,7 @@ struct PulseReadTests {
         #expect(income.readFingerprint.contains("amount:EUR:78.00"))
         #expect(income.readFingerprint.contains("change-bp:1818"))
         #expect(bigMover.readFingerprint.contains("quote:9001"))
-        #expect(bigMover.readFingerprint.contains("window:2026-06-15..2026-06-22"))
+        #expect(bigMover.readFingerprint.contains("window:2026-06-15..2026-06-19"))
         #expect(bigMover.readFingerprint.contains("move-bucket-bp:1200"))
     }
 

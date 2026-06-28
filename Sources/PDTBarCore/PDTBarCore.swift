@@ -5147,6 +5147,10 @@ public enum PressureEngine {
         var currency: String?
         var windowStart: String
         var windowEnd: String
+
+        func hasSameValues(as other: BigMoverSignal) -> Bool {
+            beforeDecimal == other.beforeDecimal && afterDecimal == other.afterDecimal
+        }
     }
 
     private enum PriorBigMoverSignal {
@@ -5172,9 +5176,16 @@ public enum PressureEngine {
                    threshold: moverThreshold
                 ) {
                 case .triggered(let signal):
+                    var emittedSignal = signal
+                    if let historySignal = priceHistorySignals[holding.quoteId],
+                       historySignal.hasSameValues(as: signal)
+                    {
+                        emittedSignal.windowStart = historySignal.windowStart
+                        emittedSignal.windowEnd = historySignal.windowEnd
+                    }
                     return bigMoverItem(
                         holding: holding,
-                        signal: signal,
+                        signal: emittedSignal,
                         beforeWeight: priorHolding.weight,
                         sourceSlotIDs: ["bigMovers.priorSnapshot", "bigMovers.prices"]
                     )
@@ -5189,12 +5200,10 @@ public enum PressureEngine {
                   let signal = priceHistorySignals[holding.quoteId],
                   signal.absoluteDecimalMove >= moverThreshold
             else { return nil }
-            var emittedSignal = signal
-            emittedSignal.windowEnd = snapshot.asOf
 
             return bigMoverItem(
                 holding: holding,
-                signal: emittedSignal,
+                signal: signal,
                 beforeWeight: nil,
                 sourceSlotIDs: ["bigMovers.prices"]
             )
