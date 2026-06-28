@@ -5149,6 +5149,12 @@ public enum PressureEngine {
         var windowEnd: String
     }
 
+    private enum PriorBigMoverSignal {
+        case triggered(BigMoverSignal)
+        case belowThreshold
+        case unavailable
+    }
+
     private static func bigMoverItems(from snapshot: PortfolioSnapshot, priorSnapshot: PortfolioSnapshot?) -> [AttentionItem] {
         let priorHoldings = priorSnapshot?.openHoldings.reduce(into: [Int: NormalizedHolding]()) { holdings, holding in
             holdings[holding.quoteId] = holdings[holding.quoteId] ?? holding
@@ -5156,24 +5162,30 @@ public enum PressureEngine {
         let priceHistorySignals = bigMoverSignals(from: snapshot.priceSeries)
         let moverThreshold = Decimal(string: String(bigMoverThreshold)) ?? 0
         return snapshot.openHoldings.compactMap { holding -> AttentionItem? in
-            if let priorHolding = priorHoldings[holding.quoteId],
-               let signal = priorSnapshotSignal(
+            var canUsePriceHistory = priorHoldings[holding.quoteId] == nil
+            if let priorHolding = priorHoldings[holding.quoteId] {
+                switch priorSnapshotSignal(
                    holding: holding,
                    priorHolding: priorHolding,
                    priorSnapshot: priorSnapshot,
                    currentAsOf: snapshot.asOf,
                    threshold: moverThreshold
-               )
-            {
-                return bigMoverItem(
-                    holding: holding,
-                    signal: signal,
-                    beforeWeight: priorHolding.weight,
-                    sourceSlotIDs: ["bigMovers.priorSnapshot", "bigMovers.prices"]
-                )
+                ) {
+                case .triggered(let signal):
+                    return bigMoverItem(
+                        holding: holding,
+                        signal: signal,
+                        beforeWeight: priorHolding.weight,
+                        sourceSlotIDs: ["bigMovers.priorSnapshot", "bigMovers.prices"]
+                    )
+                case .belowThreshold:
+                    return nil
+                case .unavailable:
+                    canUsePriceHistory = true
+                }
             }
 
-            guard priorHoldings[holding.quoteId] == nil,
+            guard canUsePriceHistory,
                   let signal = priceHistorySignals[holding.quoteId],
                   signal.absoluteDecimalMove >= moverThreshold
             else { return nil }
@@ -5193,20 +5205,20 @@ public enum PressureEngine {
         priorSnapshot: PortfolioSnapshot?,
         currentAsOf: String,
         threshold: Decimal
-    ) -> BigMoverSignal? {
+    ) -> PriorBigMoverSignal {
         guard let priorSnapshot,
               let priorPrice = priorHolding.price,
               let price = holding.price,
               let beforeDecimal = posixDecimal(priorPrice.value),
               let afterDecimal = posixDecimal(price.value),
               beforeDecimal != 0
-        else { return nil }
+        else { return .unavailable }
 
         let decimalMove = (afterDecimal - beforeDecimal) / beforeDecimal
         let absoluteDecimalMove = decimalMove < 0 ? -decimalMove : decimalMove
-        guard absoluteDecimalMove >= threshold else { return nil }
+        guard absoluteDecimalMove >= threshold else { return .belowThreshold }
 
-        return BigMoverSignal(
+        return .triggered(BigMoverSignal(
             beforeDecimal: beforeDecimal,
             afterDecimal: afterDecimal,
             absoluteDecimalMove: absoluteDecimalMove,
@@ -5214,7 +5226,7 @@ public enum PressureEngine {
             currency: price.currency,
             windowStart: priorSnapshot.asOf,
             windowEnd: currentAsOf
-        )
+        ))
     }
 
     private static func bigMoverSignals(from priceSeries: [PricePoint]) -> [Int: BigMoverSignal] {

@@ -120,6 +120,23 @@ struct BigMoverPressureTests {
         #expect(item.supportingDataSlotIDs == ["bigMovers.prices"])
     }
 
+    @Test("Prior snapshot with unusable price uses price history pressure")
+    func priorSnapshotWithUnusablePriceUsesPriceHistoryPressure() throws {
+        let fixture = packageRoot.appending(path: "docs/pdt/fixtures/big-mover.json")
+        let snapshot = try PDTFixtureDataSource.snapshot(from: fixture)
+        var prior = try PDTFixtureDataSource.priorSnapshot(from: fixture)
+        prior.openHoldings[0].price = nil
+
+        let item = try #require(
+            PressureEngine.buildModel(from: snapshot, priorSnapshot: prior)
+                .rankedAttentionItems
+                .first { $0.id == "bigMovers.move.9001" }
+        )
+
+        #expect(item.beforeWeight == nil)
+        #expect(item.supportingDataSlotIDs == ["bigMovers.prices"])
+    }
+
     @Test("All-quiet fixture remains quiet")
     func allQuietFixtureRemainsQuiet() throws {
         let model = try model("quiet-no-pressure")
