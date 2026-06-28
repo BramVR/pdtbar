@@ -96,8 +96,9 @@ Normalization the seam owns (all pure logic, no UI):
   not `total*` fields, because sold history should not change current holding rows.
   Average buy price prefers `unrealisedBoughtPriceAverageLocal`; fallback is
   `unrealisedBoughtPriceTotalLocal / unrealisedBoughtShares` when both parse cleanly.
-- **Closed positions are included** in `holdings` with `currentWorth = 0` and
-  `closedAt` set — filter them out for current allocation/movers.
+- **Inactive current positions are included** in `holdings` with
+  `currentWorthLocal <= 0`, sometimes without `closedAt` — filter zero/negative
+  worth rows out before joins, quote lookups, price history, and pressure.
 - **Cash is a holding** (`symbolName: "Cash"`, `symbolQuoteId` present) as well as
   `summary.cash`.
 - **X-ray holdings are weight-only in the normalized snapshot** for the status
