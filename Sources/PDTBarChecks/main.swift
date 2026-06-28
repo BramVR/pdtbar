@@ -787,6 +787,7 @@ let portfolioDetailsRow = try require(
     quietAllocationRows.dropFirst().first,
     "allocation section should place detailed info below the portfolio allocation chart"
 )
+let expectedPortfolioDetails = "Top \(PortfolioOverview.topHoldingLimit) of 9 holdings"
 try check(
     portfolioAllocationRow.id == "allocation.portfolio"
         && portfolioAllocationRow.role == MenuRowRole.portfolioOverviewChart
@@ -797,7 +798,7 @@ try check(
             == ["N", "O", "H", "A", "A"]
         && portfolioDetailsRow.id == "allocation.portfolio.details"
         && portfolioDetailsRow.role == MenuRowRole.portfolioOverviewDetails
-        && portfolioDetailsRow.detail == "Top 5 of 9 holdings",
+        && portfolioDetailsRow.detail == expectedPortfolioDetails,
     "allocation section should render bounded portfolio allocation chart before detailed info"
 )
 try check(

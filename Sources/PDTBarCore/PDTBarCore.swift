@@ -4099,18 +4099,36 @@ public enum MenuDescriptorRenderer {
         let overview = allocation.portfolioOverview
         let holdingRows = allocationHoldingRows(
             for: allocation.topHoldings,
-            openHoldingCount: allocation.openHoldingCount,
+            renderableHoldingCount: allocation.topHoldings.count,
             model: model
         )
+        let renderableHoldingCount = allocation.topHoldings.count
         return MenuRow(
             id: "allocation.portfolio.details",
             role: .portfolioOverviewDetails,
             title: "Detailed info",
-            detail: allocation.openHoldingCount > PortfolioOverview.topHoldingLimit
-                ? "Top \(PortfolioOverview.topHoldingLimit) of \(allocation.openHoldingCount) holdings"
-                : "Full allocation list",
+            detail: portfolioOverviewDetailsDetail(
+                renderableHoldingCount: renderableHoldingCount,
+                openHoldingCount: allocation.openHoldingCount
+            ),
             children: portfolioOverviewChildren(for: overview) + holdingRows
         )
+    }
+
+    private static func portfolioOverviewDetailsDetail(
+        renderableHoldingCount: Int,
+        openHoldingCount: Int
+    ) -> String {
+        if openHoldingCount > renderableHoldingCount {
+            if renderableHoldingCount > PortfolioOverview.topHoldingLimit {
+                return "Top \(PortfolioOverview.topHoldingLimit) of \(renderableHoldingCount) renderable; \(openHoldingCount) open"
+            }
+            return "\(renderableHoldingCount) renderable of \(openHoldingCount) open holdings"
+        }
+        if renderableHoldingCount > PortfolioOverview.topHoldingLimit {
+            return "Top \(PortfolioOverview.topHoldingLimit) of \(renderableHoldingCount) holdings"
+        }
+        return "Full allocation list"
     }
 
     private static func portfolioOverviewBarChart(for overview: PortfolioOverviewSummary) -> MenuRowBarChart? {
@@ -4132,7 +4150,7 @@ public enum MenuDescriptorRenderer {
 
     private static func allocationHoldingRows(
         for holdings: [HoldingSummary],
-        openHoldingCount: Int,
+        renderableHoldingCount: Int,
         model: PortfolioPulseModel
     ) -> [MenuRow] {
         let cappedRows = holdings.prefix(PortfolioOverview.topHoldingLimit).map { holding in
@@ -4148,7 +4166,7 @@ public enum MenuDescriptorRenderer {
                 children: allocationChildren(for: holding, attention: attention)
             )
         }
-        let hiddenHoldingCount = max(0, openHoldingCount - cappedRows.count)
+        let hiddenHoldingCount = max(0, renderableHoldingCount - cappedRows.count)
         guard hiddenHoldingCount > 0 else {
             return Array(cappedRows)
         }

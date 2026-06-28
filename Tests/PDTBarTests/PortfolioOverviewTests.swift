@@ -274,6 +274,61 @@ struct PortfolioOverviewTests {
         #expect(remainderRow.title == "245 more holdings")
         #expect(remainderRow.detail == "Open PDT for the full allocation list")
     }
+
+    @Test("Allocation remainder uses renderable holdings, not full open count")
+    func allocationRemainderUsesRenderableHoldingsNotFullOpenCount() throws {
+        var model = PressureEngine.buildModel(from: try quietSnapshot())
+        let renderableHoldings = Array(model.facetSnapshots.allocation.topHoldings.prefix(3))
+        model.portfolioGlance.openHoldingCount = 250
+        model.facetSnapshots.allocation = AllocationSnapshot(
+            totalValue: model.facetSnapshots.allocation.totalValue,
+            openHoldingCount: 250,
+            topHoldings: renderableHoldings,
+            sectorBreakdown: model.facetSnapshots.allocation.sectorBreakdown,
+            assetTypeBreakdown: model.facetSnapshots.allocation.assetTypeBreakdown
+        )
+
+        let descriptor = MenuDescriptorRenderer.render(model: model)
+        let quietRow = try #require(descriptor.sections.first { $0.id == "pulse" }?.rows.first { $0.id == "pulse.quiet" })
+        let quietHoldingCount = try #require(quietRow.children.first { $0.id == "pulse.quiet.holdings" })
+        let detailsRow = try #require(
+            descriptor.sections
+                .first { $0.id == "allocation" }?
+                .rows
+                .first { $0.id == "allocation.portfolio.details" }
+        )
+        let holdingRows = detailsRow.children.filter { $0.role == .allocationHolding || $0.role == .allocationDrillDown }
+
+        #expect(model.facetSnapshots.allocation.openHoldingCount == 250)
+        #expect(quietHoldingCount.detail == "250")
+        #expect(detailsRow.detail == "3 renderable of 250 open holdings")
+        #expect(holdingRows.count == 3)
+        #expect(detailsRow.children.contains { $0.id == "allocation.portfolio.holdings.remainder" } == false)
+    }
+
+    @Test("Allocation top-set copy includes open count when renderable holdings are partial")
+    func allocationTopSetCopyIncludesOpenCountWhenRenderableHoldingsArePartial() throws {
+        var model = PressureEngine.buildModel(from: try quietSnapshot())
+        model.portfolioGlance.openHoldingCount = 250
+        model.facetSnapshots.allocation.openHoldingCount = 250
+
+        let descriptor = MenuDescriptorRenderer.render(model: model)
+        let quietRow = try #require(descriptor.sections.first { $0.id == "pulse" }?.rows.first { $0.id == "pulse.quiet" })
+        let quietHoldingCount = try #require(quietRow.children.first { $0.id == "pulse.quiet.holdings" })
+        let detailsRow = try #require(
+            descriptor.sections
+                .first { $0.id == "allocation" }?
+                .rows
+                .first { $0.id == "allocation.portfolio.details" }
+        )
+        let holdingRows = detailsRow.children.filter { $0.role == .allocationHolding || $0.role == .allocationDrillDown }
+        let remainderRow = try #require(detailsRow.children.first { $0.id == "allocation.portfolio.holdings.remainder" })
+
+        #expect(quietHoldingCount.detail == "250")
+        #expect(detailsRow.detail == "Top 5 of 9 renderable; 250 open")
+        #expect(holdingRows.count == PortfolioOverview.topHoldingLimit)
+        #expect(remainderRow.title == "4 more holdings")
+    }
 }
 
 private func quietSnapshot() throws -> PortfolioSnapshot {
