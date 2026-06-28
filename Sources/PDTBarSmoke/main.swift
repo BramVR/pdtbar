@@ -4659,7 +4659,9 @@ private func launchAppBundleWithLaunchServices(
     configuration.activates = false
     configuration.allowsRunningApplicationSubstitution = false
     configuration.createsNewApplicationInstance = true
-    configuration.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+    var launchEnvironment = ProcessInfo.processInfo.environment
+    launchEnvironment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
+    configuration.environment = launchEnvironment.merging(environment) { _, new in new }
 
     let result = LaunchServicesOpenResultBox()
     NSWorkspace.shared.openApplication(at: appBundle, configuration: configuration) { application, error in
