@@ -339,14 +339,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         return FirstFetchConnectorConfiguration(
             connector: ClaudeLocalConnection(environment: environment),
             asOf: nil,
-            liveOptions: PDTLiveDataSourceOptions(
-                includeDistributions: false,
-                includeXRayHoldings: false,
-                includeIncomeEvents: false,
-                includeDividends: false,
-                includeIncomeQuoteLookups: false,
-                includePriceSeries: false
-            ),
+            liveOptions: .firstFetch,
             shouldStartBackgroundRefresh: true
         )
     }

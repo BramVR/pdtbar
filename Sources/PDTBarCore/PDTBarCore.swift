@@ -6031,6 +6031,7 @@ public enum PDTDetailRefreshFailureCategory: String, Codable, Equatable, Sendabl
     case missingScriptedResponse
     case decode
     case unavailable
+    case timeout
     case exit
 }
 
@@ -6058,15 +6059,18 @@ public struct PDTDetailRefreshFailureDiagnostic: Codable, Equatable, Sendable {
 
 public struct PDTBackgroundDetailRefreshOptions: Equatable, Sendable {
     public var priceHistoryConcurrencyLimit: Int
+    public var priceHistoryTimeoutSeconds: Double
     public var optionalRetryCount: Int
     public var retryBackoffSeconds: Double
 
     public init(
         priceHistoryConcurrencyLimit: Int = 4,
+        priceHistoryTimeoutSeconds: Double = 20,
         optionalRetryCount: Int = 1,
         retryBackoffSeconds: Double = 0.35
     ) {
         self.priceHistoryConcurrencyLimit = max(1, priceHistoryConcurrencyLimit)
+        self.priceHistoryTimeoutSeconds = max(0.01, priceHistoryTimeoutSeconds)
         self.optionalRetryCount = max(0, optionalRetryCount)
         self.retryBackoffSeconds = max(0, retryBackoffSeconds)
     }
@@ -6401,52 +6405,90 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             "date_from": dayString(snapshotAsOf, addingDays: -7),
             "date_to": snapshotAsOf,
         ]
-        let semaphore = DispatchSemaphore(value: options.priceHistoryConcurrencyLimit)
         let group = DispatchGroup()
         let queue = DispatchQueue(label: "PDTBarCore.background-detail.price-history", attributes: .concurrent)
         let totalCount = holdings.count
         let quoteIDs = holdings.map(\.quoteId)
         let accumulator = PDTPriceHistoryAccumulator()
+        let workTracker = PDTPriceHistoryWorkTracker(quoteIDs: quoteIDs)
+        let workerCount = min(options.priceHistoryConcurrencyLimit, quoteIDs.count)
+        let deadline = Date().addingTimeInterval(options.priceHistoryTimeoutSeconds)
 
-        for quoteID in quoteIDs {
-            semaphore.wait()
+        for _ in 0 ..< workerCount {
             group.enter()
             queue.async { [self] in
                 defer {
-                    let progressValue = accumulator.markCompleted()
-                    progress(BackgroundDetailRefreshProgress(
-                        phase: .priceHistory,
-                        completedUnitCount: progressValue,
-                        totalUnitCount: totalCount
-                    ))
-                    semaphore.signal()
                     group.leave()
                 }
-                let arguments = priceDateRange.merging([
-                    "symbol_quote_id": String(quoteID),
-                ]) { _, new in new }
-                do {
-                    let prices: LivePricesEnvelope = try callDecodedWithRetry(
-                        "pdt-list-symbol-prices",
-                        phase: .priceHistory,
-                        arguments: arguments
-                    )
-                    let nextPoints = PDTOptionalDetailNormalizer.normalizePriceSeries(
-                        prices.data.map(\.optionalDetailInput)
-                    )
-                    accumulator.append(points: nextPoints)
-                } catch {
-                    let diagnostic = diagnostic(
-                        for: error,
-                        tool: "pdt-list-symbol-prices",
-                        phase: .priceHistory,
-                        arguments: arguments
-                    )
-                    accumulator.append(diagnostic: diagnostic, failedQuoteID: quoteID)
+                while Date() < deadline, let quoteID = workTracker.nextQuoteID() {
+                    let arguments = priceDateRange.merging([
+                        "symbol_quote_id": String(quoteID),
+                    ]) { _, new in new }
+                    do {
+                        let prices: LivePricesEnvelope = try callDecodedWithRetry(
+                            "pdt-list-symbol-prices",
+                            phase: .priceHistory,
+                            arguments: arguments
+                        )
+                        let nextPoints = PDTOptionalDetailNormalizer.normalizePriceSeries(
+                            prices.data.map(\.optionalDetailInput)
+                        )
+                        if workTracker.complete(quoteID, record: {
+                            accumulator.append(points: nextPoints)
+                        }) {
+                            let progressValue = accumulator.markCompleted()
+                            progress(BackgroundDetailRefreshProgress(
+                                phase: .priceHistory,
+                                completedUnitCount: progressValue,
+                                totalUnitCount: totalCount
+                            ))
+                        }
+                    } catch {
+                        let diagnostic = diagnostic(
+                            for: error,
+                            tool: "pdt-list-symbol-prices",
+                            phase: .priceHistory,
+                            arguments: arguments
+                        )
+                        if workTracker.complete(quoteID, record: {
+                            accumulator.append(diagnostic: diagnostic, failedQuoteID: quoteID)
+                        }) {
+                            let progressValue = accumulator.markCompleted()
+                            progress(BackgroundDetailRefreshProgress(
+                                phase: .priceHistory,
+                                completedUnitCount: progressValue,
+                                totalUnitCount: totalCount
+                            ))
+                        }
+                    }
                 }
             }
         }
-        group.wait()
+        let timedOut = group.wait(timeout: .now() + options.priceHistoryTimeoutSeconds) == .timedOut
+            || Date() >= deadline
+        if timedOut {
+            for quoteID in workTracker.markTimedOut() {
+                let arguments = priceDateRange.merging([
+                    "symbol_quote_id": String(quoteID),
+                ]) { _, new in new }
+                accumulator.append(
+                    diagnostic: PDTDetailRefreshFailureDiagnostic(
+                        toolName: "pdt-list-symbol-prices",
+                        phase: .priceHistory,
+                        attemptCount: 1,
+                        category: .timeout,
+                        argumentShape: arguments.keys.sorted()
+                    ),
+                    failedQuoteID: quoteID
+                )
+                let progressValue = accumulator.markCompleted()
+                progress(BackgroundDetailRefreshProgress(
+                    phase: .priceHistory,
+                    completedUnitCount: progressValue,
+                    totalUnitCount: totalCount
+                ))
+            }
+        }
         return accumulator.result()
     }
 
@@ -6566,6 +6608,64 @@ private final class PDTPriceHistoryAccumulator: @unchecked Sendable {
     }
 }
 
+private final class PDTPriceHistoryWorkTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pendingQuoteIDs: [Int]
+    private var runningQuoteIDs: Set<Int> = []
+    private var finishedQuoteIDs: Set<Int> = []
+    private var timedOutQuoteIDs: Set<Int> = []
+
+    init(quoteIDs: [Int]) {
+        pendingQuoteIDs = quoteIDs
+    }
+
+    func nextQuoteID() -> Int? {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        guard !pendingQuoteIDs.isEmpty else {
+            return nil
+        }
+        let quoteID = pendingQuoteIDs.removeFirst()
+        runningQuoteIDs.insert(quoteID)
+        return quoteID
+    }
+
+    func complete(_ quoteID: Int, record: () -> Void) -> Bool {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        runningQuoteIDs.remove(quoteID)
+        guard !timedOutQuoteIDs.contains(quoteID), finishedQuoteIDs.insert(quoteID).inserted else {
+            return false
+        }
+        record()
+        return true
+    }
+
+    func markTimedOut() -> [Int] {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        let unfinished = Set(pendingQuoteIDs)
+            .union(runningQuoteIDs)
+            .subtracting(finishedQuoteIDs)
+            .subtracting(timedOutQuoteIDs)
+        pendingQuoteIDs.removeAll()
+        runningQuoteIDs.subtract(unfinished)
+        timedOutQuoteIDs.formUnion(unfinished)
+        return unfinished.sorted()
+    }
+}
+
+public enum PDTIncomeQuoteLookupScope: Equatable, Sendable {
+    case allOpenHoldings
+    case calendarSymbolIDs
+}
+
 public struct PDTLiveDataSourceOptions: Equatable, Sendable {
     public var includeDistributions: Bool
     public var includeXRayHoldings: Bool
@@ -6573,6 +6673,7 @@ public struct PDTLiveDataSourceOptions: Equatable, Sendable {
     public var includeDividends: Bool
     public var includeIncomeQuoteLookups: Bool
     public var includePriceSeries: Bool
+    public var incomeQuoteLookupScope: PDTIncomeQuoteLookupScope
 
     public init(
         includeDistributions: Bool = true,
@@ -6580,7 +6681,8 @@ public struct PDTLiveDataSourceOptions: Equatable, Sendable {
         includeIncomeEvents: Bool = true,
         includeDividends: Bool = true,
         includeIncomeQuoteLookups: Bool = true,
-        includePriceSeries: Bool = true
+        includePriceSeries: Bool = true,
+        incomeQuoteLookupScope: PDTIncomeQuoteLookupScope = .allOpenHoldings
     ) {
         self.includeDistributions = includeDistributions
         self.includeXRayHoldings = includeXRayHoldings
@@ -6588,6 +6690,19 @@ public struct PDTLiveDataSourceOptions: Equatable, Sendable {
         self.includeDividends = includeDividends
         self.includeIncomeQuoteLookups = includeIncomeQuoteLookups
         self.includePriceSeries = includePriceSeries
+        self.incomeQuoteLookupScope = incomeQuoteLookupScope
+    }
+
+    public static var firstFetch: PDTLiveDataSourceOptions {
+        PDTLiveDataSourceOptions(
+            includeDistributions: false,
+            includeXRayHoldings: false,
+            includeIncomeEvents: false,
+            includeDividends: false,
+            includeIncomeQuoteLookups: false,
+            includePriceSeries: false,
+            incomeQuoteLookupScope: .calendarSymbolIDs
+        )
     }
 
     public var requiredReadTools: [String] {
@@ -6660,8 +6775,9 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             currency: "EUR"
         )
         var openHoldings = baseNormalization.openHoldings
+        let neededCalendarSymbolIDs = Set(calendarEvents.filter { $0.type != "no-events-today" }.compactMap(\.symbolId))
         let quoteMetadata = options.includeIncomeQuoteLookups
-            ? try liveSymbolQuoteMetadata(for: openHoldings)
+            ? try liveSymbolQuoteMetadata(for: openHoldings, neededCalendarSymbolIDs: neededCalendarSymbolIDs)
             : SymbolQuoteMetadata()
         openHoldings = openHoldings.map {
             var holding = $0
@@ -6695,19 +6811,41 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         )
     }
 
-    private func liveSymbolQuoteMetadata(for holdings: [NormalizedHolding]) throws -> SymbolQuoteMetadata {
+    private func liveSymbolQuoteMetadata(
+        for holdings: [NormalizedHolding],
+        neededCalendarSymbolIDs: Set<Int>
+    ) throws -> SymbolQuoteMetadata {
         var metadata = SymbolQuoteMetadata()
+        var remainingCalendarSymbolIDs = neededCalendarSymbolIDs
         var attemptedSymbolIDs = Set<Int>()
         var isinsBySymbolID: [Int: String] = [:]
         var symbolLookupUnavailable = false
-        for holding in holdings {
+        let lookupHoldings: [NormalizedHolding]
+        switch options.incomeQuoteLookupScope {
+        case .allOpenHoldings:
+            lookupHoldings = holdings
+        case .calendarSymbolIDs:
+            guard !remainingCalendarSymbolIDs.isEmpty else {
+                return metadata
+            }
+            lookupHoldings = Array(holdings.reversed())
+        }
+        for holding in lookupHoldings {
             let quote: LiveSymbolQuoteEnvelope = try decodeLiveTool(
                 "pdt-get-symbol-quote",
                 data: toolClient.callReadTool("pdt-get-symbol-quote", arguments: ["id": String(holding.quoteId)])
             )
+            if options.incomeQuoteLookupScope == .calendarSymbolIDs {
+                guard remainingCalendarSymbolIDs.remove(quote.symbolId) != nil else {
+                    continue
+                }
+            }
             metadata.quoteIDsBySymbolID[quote.symbolId] = quote.id
             if let code = safePublicIdentifier(quote.code) {
                 metadata.codesByQuoteID[quote.id] = code
+            }
+            if options.incomeQuoteLookupScope == .calendarSymbolIDs, remainingCalendarSymbolIDs.isEmpty {
+                break
             }
             guard holding.isin == nil, !symbolLookupUnavailable else {
                 continue

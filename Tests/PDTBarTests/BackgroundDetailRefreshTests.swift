@@ -289,6 +289,38 @@ struct BackgroundDetailRefreshTests {
         #expect(connector.maxActivePriceCalls == 2)
     }
 
+    @Test("Price-history refresh returns after bounded timeout")
+    func priceHistoryRefreshReturnsAfterBoundedTimeout() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-timeout-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let connector = SlowPriceHistoryPDTConnector(
+            responses: try detailRefreshResponses(includingThirdHolding: true),
+            priceDelaySeconds: 1.0
+        )
+
+        let startedAt = Date()
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(
+                priceHistoryConcurrencyLimit: 2,
+                priceHistoryTimeoutSeconds: 0.05,
+                retryBackoffSeconds: 0
+            )
+        ).refresh()
+        let elapsedSeconds = Date().timeIntervalSince(startedAt)
+
+        #expect(result.outcome == .degraded)
+        #expect(elapsedSeconds < 0.5)
+        #expect(connector.maxActivePriceCalls <= 2)
+        #expect(result.diagnostics.contains {
+            $0.phase == .priceHistory && $0.category == .timeout
+        })
+    }
+
     @Test("Required base holdings retries a missing Claude tool call")
     func requiredBaseHoldingsRetriesMissingClaudeToolCall() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-base-retry-test")
@@ -390,6 +422,50 @@ private final class ConcurrencyTrackingPDTConnector: PDTMCPConnector, @unchecked
             maxActivePriceCalls = max(maxActivePriceCalls, activePriceCalls)
             lock.unlock()
             Thread.sleep(forTimeInterval: 0.03)
+        }
+        defer {
+            if isPriceCall {
+                lock.lock()
+                activePriceCalls -= 1
+                lock.unlock()
+            }
+        }
+        let suffix = arguments
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "&")
+        let key = suffix.isEmpty ? name : "\(name)?\(suffix)"
+        guard let response = responses[key] ?? responses[name] else {
+            throw PDTMCPConnectorError.missingScriptedResponse(key)
+        }
+        return response
+    }
+}
+
+private final class SlowPriceHistoryPDTConnector: PDTMCPConnector, @unchecked Sendable {
+    let responses: [String: Data]
+    let priceDelaySeconds: TimeInterval
+    private let lock = NSLock()
+    private var activePriceCalls = 0
+    private(set) var maxActivePriceCalls = 0
+
+    init(responses: [String: Data], priceDelaySeconds: TimeInterval) {
+        self.responses = responses
+        self.priceDelaySeconds = priceDelaySeconds
+    }
+
+    func availableReadTools() throws -> Set<String> {
+        Set(PDTReadTools.requiredV1)
+    }
+
+    func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
+        let isPriceCall = name == "pdt-list-symbol-prices"
+        if isPriceCall {
+            lock.lock()
+            activePriceCalls += 1
+            maxActivePriceCalls = max(maxActivePriceCalls, activePriceCalls)
+            lock.unlock()
+            Thread.sleep(forTimeInterval: priceDelaySeconds)
         }
         defer {
             if isPriceCall {
