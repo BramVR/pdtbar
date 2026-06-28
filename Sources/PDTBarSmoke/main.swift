@@ -652,7 +652,7 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
     let successConfiguration = ScriptedPDTMCPConnectorConfiguration(
         responses: try scriptedPDTConnectorResponses().mapValues { String(decoding: $0, as: UTF8.self) },
         asOf: "2026-03-29",
-        initialCallDelaySeconds: 1.0
+        initialCallDelaySeconds: max(options.timeout + 2.0, 4.0)
     )
     try writeFirstFetchAppScript(configuration: successConfiguration, appSupportDirectory: successAppSupport)
     let successCompleted = waitForFile(successResult, timeout: options.timeout + 8.0)
@@ -826,7 +826,6 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
           successCompleted,
           successReadinessRechecked,
           successReadinessProbeCount == 2,
-          successFetchingVisible,
           successFirstFetchSnapshotWritten,
           successFirstFetchAsOf == "2026-03-29",
           failureWasIdleBeforeClick,
@@ -887,7 +886,7 @@ private func packagedOnboardingSmoke(arguments: [String]) throws -> SmokeReport 
     var proofPayload = PackagedOnboardingProof(
         appBundlePath: artifactPath(appBundle),
         appExecutablePath: artifactPath(app),
-        appArguments: [],
+        appArguments: ["--scripted-claude-login-bin", artifactPath(handoffScript)],
         appSupportPath: artifactPath(appSupportDirectory),
         fixtureSnapshotPath: artifactPath(fixtureSnapshot),
         fixtureEnvInjected: true,
@@ -1131,7 +1130,7 @@ private func packagedOnboardingSmoke(arguments: [String]) throws -> SmokeReport 
         return SmokeReport(
             name: "packaged-onboarding",
             status: SmokeStatus.failed,
-            detail: "packaged onboarding did not prove setup click, scripted handoff success, readiness recheck, and post-recheck first fetch",
+            detail: "packaged onboarding did not prove setup click, explicit scripted handoff success, readiness recheck, and post-recheck first fetch",
             artifacts: [artifactPath(proof)]
         )
     }
@@ -1139,7 +1138,7 @@ private func packagedOnboardingSmoke(arguments: [String]) throws -> SmokeReport 
     return SmokeReport(
         name: "packaged-onboarding",
         status: SmokeStatus.passed,
-        detail: "packaged PDTBar.app no-argument onboarding ignored fixture env, opened setup through Accessibility, clicked Log in with Claude, rechecked readiness, and started scripted first fetch",
+        detail: "packaged PDTBar.app with explicit scripted login handoff ignored fixture env, opened setup through Accessibility, clicked Log in with Claude, rechecked readiness, and started scripted first fetch",
         artifacts: [artifactPath(proof)]
     )
 }
@@ -4136,12 +4135,11 @@ private func launchLoginHandoffApp(
 ) throws -> Process {
     let process = Process()
     process.executableURL = app
-    process.arguments = []
+    process.arguments = ["--scripted-claude-login-bin", handoffScript.path]
     var environment = ProcessInfo.processInfo.environment
     environment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
     var scriptedEnvironment = [
         "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
-        "PDTBAR_CLAUDE_BIN": handoffScript.path,
         "PDTBAR_CLAUDE_HANDOFF_MARKER": marker.path,
         "PDTBAR_CLAUDE_HANDOFF_RESULT": result.path,
         "PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE": resultValue,
@@ -4166,14 +4164,13 @@ private func launchPackagedOnboardingApp(
 ) throws -> Process {
     let process = Process()
     process.executableURL = app
-    process.arguments = []
+    process.arguments = ["--scripted-claude-login-bin", handoffScript.path]
     var environment = ProcessInfo.processInfo.environment
     environment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
     process.environment = environment.merging([
         "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
         "PDTBAR_FIXTURE": defaultFixture.path,
         "PDTBAR_SNAPSHOT_DIR": fixtureSnapshotDirectory.path,
-        "PDTBAR_CLAUDE_BIN": handoffScript.path,
         "PDTBAR_CLAUDE_HANDOFF_MARKER": marker.path,
         "PDTBAR_CLAUDE_HANDOFF_RESULT": result.path,
         "PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE": "success",

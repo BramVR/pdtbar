@@ -2493,15 +2493,18 @@ public struct PDTBarLaunchOptions: Equatable {
     public var mode: PDTBarLaunchMode
     public var snapshotDirectory: URL?
     public var appSupportDirectory: URL?
+    public var claudeLoginBinaryOverride: String?
 
     public init(
         mode: PDTBarLaunchMode,
         snapshotDirectory: URL? = nil,
-        appSupportDirectory: URL? = nil
+        appSupportDirectory: URL? = nil,
+        claudeLoginBinaryOverride: String? = nil
     ) {
         self.mode = mode
         self.snapshotDirectory = snapshotDirectory
         self.appSupportDirectory = appSupportDirectory
+        self.claudeLoginBinaryOverride = claudeLoginBinaryOverride
     }
 }
 
@@ -2517,6 +2520,7 @@ public enum PDTBarLaunchOptionParser {
         var fixture: URL?
         var snapshotDirectory: URL?
         var appSupportDirectory: URL?
+        var claudeLoginBinaryOverride: String?
         var index = 0
         while index < arguments.count {
             switch arguments[index] {
@@ -2528,6 +2532,9 @@ public enum PDTBarLaunchOptionParser {
                 index += 2
             case "--app-support-dir" where index + 1 < arguments.count:
                 appSupportDirectory = URL(fileURLWithPath: arguments[index + 1])
+                index += 2
+            case "--scripted-claude-login-bin" where index + 1 < arguments.count:
+                claudeLoginBinaryOverride = arguments[index + 1]
                 index += 2
             default:
                 throw PDTBarLaunchOptionError.usage
@@ -2543,14 +2550,19 @@ public enum PDTBarLaunchOptionParser {
             return PDTBarLaunchOptions(
                 mode: .fixture(fixture),
                 snapshotDirectory: configuredSnapshotDirectory,
-                appSupportDirectory: appSupportDirectory
+                appSupportDirectory: appSupportDirectory,
+                claudeLoginBinaryOverride: claudeLoginBinaryOverride
             )
         }
 
         guard snapshotDirectory == nil else {
             throw PDTBarLaunchOptionError.usage
         }
-        return PDTBarLaunchOptions(mode: .claudeFirst, appSupportDirectory: appSupportDirectory)
+        return PDTBarLaunchOptions(
+            mode: .claudeFirst,
+            appSupportDirectory: appSupportDirectory,
+            claudeLoginBinaryOverride: claudeLoginBinaryOverride
+        )
     }
 }
 

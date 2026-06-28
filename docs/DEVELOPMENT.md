@@ -81,6 +81,9 @@ swift build --product pdtbar
 packages `PDTBar.app`, and launches the packaged app. `./Scripts/compile_and_run.sh`
 is the explicit one-shot equivalent. `make stop` stops the packaged app and may
 also clean up old raw SwiftPM debug/release processes from historical runs.
+Normal product login uses the built-in Claude CLI handoff and scrubs inherited
+old scripted handoff env. Deterministic login smokes use the explicit
+`--scripted-claude-login-bin` app launch option through `pdtbar-smoke`.
 
 Historical workaround only: launching raw `.build/debug/pdtbar`, keeping it
 alive in a foreground shell, `tmux`, or `nohup`, and checking truncated process

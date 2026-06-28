@@ -13,6 +13,7 @@ read_when:
 - Product launch is no-argument `pdtbar`; fixture mode is explicit `--fixture`.
 - Claude is the only setup/login path. PDTBar uses the existing signed-in Claude CLI user and the configured PDT MCP server.
 - Scripted smokes use isolated app-support and snapshot directories. They may inject fixture env vars only as sentinels to prove the no-argument path does not enter fixture mode.
+- Scripted login handoff fakes use `pdtbar --scripted-claude-login-bin <path>` from smoke/debug tooling only. Product Claude calls scrub inherited old `PDTBAR_CLAUDE_HANDOFF_*` env before using a configured Claude binary.
 - Manual Claude reachability proof uses normal `claude -p`; `claude --bare` is refused because it does not prove the signed-in Claude CLI MCP setup.
 - Live `mcporter` smoke is optional research/dev proof, not the product runtime path.
 - Missing macOS Accessibility/Screen Recording permission, Claude CLI, sign-in, model access, or PDT MCP setup should skip with a setup-required detail unless the smoke is specifically testing that failure.
@@ -100,12 +101,13 @@ swift run pdtbar-smoke scripted-login-handoff
 This uses isolated app-support directories, a scripted fake Claude CLI, and no
 live Claude credentials. It launches the logged-out menu, verifies the
 fake Claude CLI is not called before the user-initiated `Log in with Claude`
-menu action, then proves success invokes `claude auth login`, shows `Signing in
-with Claude` while login is in flight, re-runs readiness, and starts the first
-fetch from scripted PDT data. Failure renders `Claude login failed` with a
-retryable login action. The proof artifact contains selector/click booleans,
-readiness probe counts, snapshot status, and redacted state only; no
-credentials, account identifiers, or raw portfolio payloads are written.
+menu action, then proves the explicit smoke/debug login binary invokes `claude
+auth login`, shows `Signing in with Claude` while login is in flight, re-runs
+readiness, and starts the first fetch from scripted PDT data. Failure renders
+`Claude login failed` with a retryable login action. The proof artifact contains
+selector/click booleans, readiness probe counts, snapshot status, and redacted
+state only; no credentials, account identifiers, or raw portfolio payloads are
+written.
 
 Scripted setup retry e2e:
 
@@ -163,8 +165,9 @@ if `--bare` is supplied to the smoke, it refuses the run because bare mode does
 not prove the signed-in Claude CLI setup. Use `--model <alias>` or
 `PDTBAR_CLAUDE_MODEL=<alias>` when the local Claude default model is
 unavailable; the current manual path defaults to the public `opus` alias. Pass
-`--claude <path>` or `PDTBAR_CLAUDE_BIN=<path>` for a scripted fake command in
-tests.
+`--claude <path>` or `PDTBAR_CLAUDE_BIN=<path>` for this manual reachability smoke
+only; product launch removes old scripted handoff env before honoring a
+configured Claude binary.
 
 Missing Claude CLI, sign-in, model access, or PDT MCP setup exits successfully
 with `skipped` and setup-required detail. Passing proof writes
@@ -258,10 +261,11 @@ and writes only selector/status proof under `.build/pdtbar-smoke-artifacts/`.
 No live Claude credentials or portfolio payloads are used.
 
 The packaged onboarding smoke is the first-run onboarding regression gate. It
-requires a packaged `PDTBar.app`, launches the no-argument bundle executable with
-fresh isolated app-support state, injects fixture env only as a sentinel, opens
-the setup menu through Accessibility, clicks `Log in with Claude`, uses a
-scripted successful `claude auth login`, and verifies readiness is rechecked
+requires a packaged `PDTBar.app`, launches the bundle executable with fresh
+isolated app-support state and an explicit scripted login handoff option,
+injects fixture env only as a sentinel, opens the setup menu through
+Accessibility, clicks `Log in with Claude`, uses a scripted successful
+`claude auth login`, and verifies readiness is rechecked
 before the scripted first fetch starts. Missing Accessibility exits
 successfully with `skipped` after proving packaged launch liveness and fixture
 isolation. Proof artifacts contain app/support/sentinel paths, selectors, setup

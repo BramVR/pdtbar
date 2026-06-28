@@ -22,6 +22,7 @@ private struct FirstFetchConnectorConfiguration: @unchecked Sendable {
 @MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let options: PDTBarLaunchOptions
+    private let environment: [String: String]
     private let loginHandoff: ClaudeLoginHandoff
     private let launchRuntime = PDTLaunchRuntime()
     private var statusItem: NSStatusItem?
@@ -35,8 +36,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     init(options: PDTBarLaunchOptions) {
         self.options = options
+        let environment = ClaudeLocalEnvironment.removingScriptedHandoffHook(ProcessInfo.processInfo.environment)
+        self.environment = environment
         self.loginHandoff = ClaudeCLILoginHandoff(
-            environment: ProcessInfo.processInfo.environment
+            environment: environment,
+            binaryOverride: options.claudeLoginBinaryOverride
         )
     }
 
@@ -72,7 +76,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startClaudeReadinessProbe(attemptID: Int) {
         let probe = ScriptedClaudeReadinessProbe(
             appSupportDirectory: appSupportDirectory(),
-            environment: ProcessInfo.processInfo.environment
+            environment: environment
         )
         DispatchQueue.global(qos: .userInitiated).async {
             let result = probe.check()
@@ -206,7 +210,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         activeSnapshotDirectory = stateDirectory
         let snapshotStore = SnapshotStore(directory: stateDirectory)
         let pulseReadStore = PulseReadStore(directory: stateDirectory)
-        let environment = ProcessInfo.processInfo.environment
         let refreshConfiguration: FirstFetchConnectorConfiguration
         do {
             refreshConfiguration = try backgroundRefreshConnectorConfiguration(environment: environment)
@@ -334,7 +337,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         }
         return FirstFetchConnectorConfiguration(
-            connector: ClaudeLocalConnection(environment: ProcessInfo.processInfo.environment),
+            connector: ClaudeLocalConnection(environment: environment),
             asOf: nil,
             liveOptions: PDTLiveDataSourceOptions(
                 includeDistributions: false,
@@ -368,7 +371,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func scriptedBackgroundRefreshEnabled() -> Bool {
-        ProcessInfo.processInfo.environment["PDTBAR_SCRIPTED_BACKGROUND_REFRESH"] == "1"
+        environment["PDTBAR_SCRIPTED_BACKGROUND_REFRESH"] == "1"
     }
 
     private func firstFetchStateDirectory() -> URL {
@@ -903,11 +906,18 @@ private enum ClaudeLoginHandoffError: Error, CustomStringConvertible {
 
 private final class ClaudeCLILoginHandoff: ClaudeLoginHandoff, @unchecked Sendable {
     private let environment: [String: String]
+    private let loginBinary: String
     private let lock = NSLock()
     private var activeCancellation: ClaudeLocalLoginCancellation?
 
-    init(environment: [String: String]) {
+    init(environment: [String: String], binaryOverride: String? = nil) {
         self.environment = environment
+        let trimmedBinaryOverride = binaryOverride?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmedBinaryOverride, !trimmedBinaryOverride.isEmpty {
+            self.loginBinary = trimmedBinaryOverride
+        } else {
+            self.loginBinary = ClaudeLocalLoginRunner.productBinary(environment: environment)
+        }
     }
 
     func startLogin(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
@@ -916,9 +926,11 @@ private final class ClaudeCLILoginHandoff: ClaudeLoginHandoff, @unchecked Sendab
         activeCancellation?.cancel()
         activeCancellation = cancellation
         lock.unlock()
-
-        Task.detached(priority: .userInitiated) { [environment, cancellation, weak self] in
-            let result = await ClaudeLocalLoginRunner(environment: environment).run(
+        Task.detached(priority: .userInitiated) { [environment, cancellation, loginBinary, weak self] in
+            let result = await ClaudeLocalLoginRunner(
+                environment: environment,
+                binary: loginBinary
+            ).run(
                 timeout: 120,
                 cancellation: cancellation,
                 onPhaseChange: { _ in }
