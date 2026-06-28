@@ -262,6 +262,10 @@ public func == (lhs: String, rhs: AttentionFacet) -> Bool {
     lhs == rhs.rawValue
 }
 
+public func != (lhs: AttentionFacet, rhs: String) -> Bool {
+    !(lhs == rhs)
+}
+
 public enum AttentionSeverity: Equatable, Sendable, Codable, ExpressibleByStringLiteral {
     case low
     case medium
@@ -312,6 +316,10 @@ public func == (lhs: AttentionSeverity, rhs: String) -> Bool {
 
 public func == (lhs: String, rhs: AttentionSeverity) -> Bool {
     lhs == rhs.rawValue
+}
+
+public func != (lhs: AttentionSeverity, rhs: String) -> Bool {
+    !(lhs == rhs)
 }
 
 public struct AttentionItem: Codable, Equatable {
