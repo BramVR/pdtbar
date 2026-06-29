@@ -4,12 +4,42 @@ import PDTBarCore
 
 @Suite("Background detail refresh")
 struct BackgroundDetailRefreshTests {
-    @Test("Background refresh joins income calendar events to holding quotes")
-    func backgroundRefreshJoinsIncomeCalendarEventsToHoldingQuotes() throws {
+    @Test("Default price-history budget covers Claude CLI batches")
+    func defaultPriceHistoryBudgetCoversClaudeCLIBatches() {
+        let defaults = PDTBackgroundDetailRefreshOptions()
+
+        #expect(defaults.effectivePriceHistoryTimeoutSeconds(holdingCount: 19) >= 240)
+        #expect(defaults.effectivePriceHistoryTimeoutSeconds(holdingCount: 50) >= 390)
+        #expect(PDTBackgroundDetailRefreshOptions(
+            priceHistoryTimeoutSeconds: 0.05
+        ).effectivePriceHistoryTimeoutSeconds(holdingCount: 50) == 0.05)
+    }
+
+    @Test("Background refresh reuses cached income quote mapping")
+    func backgroundRefreshReusesCachedIncomeQuoteMapping() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-income-join-test")
         defer {
             try? FileManager.default.removeItem(at: store.directory)
         }
+        _ = try store.commitCurrentSnapshot(PortfolioSnapshot(
+            asOf: "2026-03-28",
+            totalValue: Money(value: "0.00", currency: "EUR"),
+            openHoldings: [],
+            sectors: [],
+            assetTypes: [],
+            incomeEvents: [
+                IncomeEventSummary(
+                    date: "2026-03-29",
+                    kind: "ex-dividend",
+                    symbolName: "Scripted Adapter B",
+                    estimated: false,
+                    symbolId: 5102,
+                    quoteId: 9102
+                ),
+            ],
+            dividendRowCount: 0,
+            priceSeries: []
+        ))
 
         let connector = ScriptedPDTMCPConnector(
             responses: try detailRefreshResponses(calendarSymbolID: 5102, calendarSymbolName: "Scripted Adapter B")
@@ -31,7 +61,7 @@ struct BackgroundDetailRefreshTests {
         #expect(event.symbolId == 5102)
         #expect(event.quoteId == 9102)
         #expect(event.amount == Money(value: "6.00", currency: "EUR"))
-        #expect(connector.calls.filter { $0 == "pdt-get-symbol-quote" }.count == 1)
+        #expect(connector.calls.filter { $0 == "pdt-get-symbol-quote" }.isEmpty)
 
         let holdingRow = try #require(
             result.descriptor.sections
@@ -42,6 +72,97 @@ struct BackgroundDetailRefreshTests {
                 .first { $0.id == "allocation.9102" }
         )
         #expect(holdingRow.children.first { $0.id == "allocation.9102.nextIncome" }?.detail == "Ex-dividend date on 2026-03-30; confirmed; EUR 6.00")
+    }
+
+    @Test("Background refresh maps income by current holding name")
+    func backgroundRefreshMapsIncomeByCurrentHoldingName() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-income-name-map-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let connector = ScriptedPDTMCPConnector(
+            responses: try detailRefreshResponses(calendarSymbolID: 5102, calendarSymbolName: "Scripted Adapter B")
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        let event = try #require(result.model.facetSnapshots.income.upcomingEvents.first)
+        #expect(event.symbolId == 5102)
+        #expect(event.quoteId == 9102)
+        #expect(event.amount == Money(value: "6.00", currency: "EUR"))
+        #expect(connector.calls.filter { $0 == "pdt-get-symbol-quote" }.isEmpty)
+    }
+
+    @Test("Background refresh falls back to symbol quote when income name differs")
+    func backgroundRefreshFallsBackToSymbolQuoteWhenIncomeNameDiffers() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-income-symbol-fallback-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let connector = ScriptedPDTMCPConnector(
+            responses: try detailRefreshResponses(calendarSymbolID: 5102, calendarSymbolName: "ADPB")
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        let event = try #require(result.model.facetSnapshots.income.upcomingEvents.first)
+        #expect(event.symbolId == 5102)
+        #expect(event.quoteId == 9102)
+        #expect(event.amount == Money(value: "6.00", currency: "EUR"))
+        #expect(connector.calls.contains("pdt-get-symbol-quote"))
+    }
+
+    @Test("Background refresh ignores stale cached income quote mapping")
+    func backgroundRefreshIgnoresStaleCachedIncomeQuoteMapping() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-income-stale-cache-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        _ = try store.commitCurrentSnapshot(PortfolioSnapshot(
+            asOf: "2026-03-28",
+            totalValue: Money(value: "0.00", currency: "EUR"),
+            openHoldings: [],
+            sectors: [],
+            assetTypes: [],
+            incomeEvents: [
+                IncomeEventSummary(
+                    date: "2026-03-29",
+                    kind: "ex-dividend",
+                    symbolName: "Old Adapter B",
+                    estimated: false,
+                    symbolId: 5102,
+                    quoteId: 9999
+                ),
+            ],
+            dividendRowCount: 0,
+            priceSeries: []
+        ))
+        let connector = ScriptedPDTMCPConnector(
+            responses: try detailRefreshResponses(calendarSymbolID: 5102, calendarSymbolName: "ADPB")
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        let event = try #require(result.model.facetSnapshots.income.upcomingEvents.first)
+        #expect(event.symbolId == 5102)
+        #expect(event.quoteId == 9102)
+        #expect(event.amount == Money(value: "6.00", currency: "EUR"))
+        #expect(connector.calls.contains("pdt-get-symbol-quote"))
     }
 
     @Test("Price-history failure keeps completed detail phases and continues other holdings")
@@ -284,8 +405,42 @@ struct BackgroundDetailRefreshTests {
         #expect(progress.map(\.phase).contains(.xRay))
         #expect(progress.map(\.phase).contains(.income))
         #expect(progress.contains {
+            $0.phase == .baseHoldings && $0.detail == "Checking PDT tools"
+        })
+        #expect(progress.contains {
+            $0.phase == .baseHoldings && $0.detail == "Calling pdt-get-portfolio-holdings"
+        })
+        #expect(progress.contains {
+            $0.phase == .priceHistory && $0.detail == "Calling pdt-list-symbol-prices"
+        })
+        #expect(!progress.contains {
+            $0.phase == .priceHistory && $0.detail != nil && ($0.completedUnitCount == nil || $0.totalUnitCount == nil)
+        })
+        #expect(progress.contains {
             $0.phase == .priceHistory && $0.completedUnitCount == 2 && $0.totalUnitCount == 2
         })
+    }
+
+    @Test("Tool discovery progress is forwarded before first read call")
+    func toolDiscoveryProgressIsForwardedBeforeFirstReadCall() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-tool-discovery-progress-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let recorder = DetailProgressRecorder()
+        let connector = ProgressReportingPDTConnector(responses: try detailRefreshResponses())
+
+        _ = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh { recorder.append($0) }
+
+        let details = recorder.values.compactMap(\.detail)
+        let discoveryIndex = try #require(details.firstIndex(of: "Waiting on Claude for PDT tool discovery"))
+        let holdingsIndex = try #require(details.firstIndex(of: "Calling pdt-get-portfolio-holdings"))
+        #expect(discoveryIndex < holdingsIndex)
     }
 
     @Test("Price-history refresh honors bounded concurrency")
@@ -531,6 +686,38 @@ private final class OneShotFailingPDTConnector: PDTMCPConnector, @unchecked Send
         }
         lock.unlock()
 
+        let suffix = arguments
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "&")
+        let key = suffix.isEmpty ? name : "\(name)?\(suffix)"
+        guard let response = responses[key] ?? responses[name] else {
+            throw PDTMCPConnectorError.missingScriptedResponse(key)
+        }
+        return response
+    }
+}
+
+private final class ProgressReportingPDTConnector: PDTMCPConnector, PDTMCPConnectorProgressReporting, @unchecked Sendable {
+    let responses: [String: Data]
+
+    init(responses: [String: Data]) {
+        self.responses = responses
+    }
+
+    func availableReadTools() throws -> Set<String> {
+        Set(PDTReadTools.requiredV1)
+    }
+
+    func availableReadTools(
+        required: Set<String>,
+        progress: @escaping @Sendable (String) -> Void
+    ) throws -> Set<String> {
+        progress("Waiting on Claude for PDT tool discovery")
+        return required
+    }
+
+    func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
         let suffix = arguments
             .sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }

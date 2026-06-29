@@ -30,7 +30,9 @@ public struct ClaudeToolResultParser: Sendable {
         currentSessionResultFiles: Set<URL>
     ) throws -> Data {
         let values = try streamValues(from: output)
-        let matchingToolUseIDs = Set(values.flatMap { toolUseIDs(for: toolName, in: $0) })
+        let matchingToolUseIDs = Set(values.flatMap {
+            toolUseIDs(for: toolName, in: $0)
+        })
         guard !matchingToolUseIDs.isEmpty else {
             throw ClaudeToolResultParserError.missingToolCall(toolName)
         }
@@ -93,17 +95,30 @@ public struct ClaudeToolResultParser: Sendable {
         return values
     }
 
-    private func toolUseIDs(for toolName: String, in value: ClaudeStreamJSONValue) -> [String] {
+    private func toolUseIDs(
+        for toolName: String,
+        in value: ClaudeStreamJSONValue
+    ) -> [String] {
         let current: [String]
         if value.string(for: "type") == "tool_use",
-           value.string(for: "name") == toolName,
+           let calledToolName = value.string(for: "name"),
+           toolNameMatches(calledToolName, allowedToolName: toolName),
            let id = value.string(for: "id")
         {
             current = [id]
         } else {
             current = []
         }
-        return current + value.children.flatMap { toolUseIDs(for: toolName, in: $0) }
+        return current + value.children.flatMap {
+            toolUseIDs(for: toolName, in: $0)
+        }
+    }
+
+    private func toolNameMatches(
+        _ calledToolName: String,
+        allowedToolName: String
+    ) -> Bool {
+        calledToolName == allowedToolName
     }
 
     private func toolResults(

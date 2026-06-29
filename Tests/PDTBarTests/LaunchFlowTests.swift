@@ -223,21 +223,49 @@ struct ClaudeLaunchFlowTests {
             cachedPulse: cachedPulse,
             progress: BackgroundDetailRefreshProgress(
                 phase: .priceHistory,
+                detail: "Calling pdt-list-symbol-prices",
                 completedUnitCount: 12,
                 totalUnitCount: 19
-            )
+            ),
+            cachedSnapshotAsOf: "2026-03-28"
         )
+        let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
 
         #expect(descriptor.statusTitle == cachedPulse.statusTitle)
         #expect(descriptor.sections.first?.id == "portfolioFetch")
         #expect(rowTitles(in: descriptor).contains("Filling details"))
+        #expect(rowTitles(in: descriptor).contains("Cached data visible"))
         #expect(rowTitles(in: descriptor).contains("Step 5/5: Price history"))
+        #expect(!rowTitles(in: descriptor).contains("Calling pdt-list-symbol-prices"))
+        #expect(descriptor.sections.first?.rows.first { $0.id == "portfolioFetch.backgroundProgress.phase" }?.detail == "Calling pdt-list-symbol-prices")
         #expect(rowTitles(in: descriptor).contains("12/19 price histories checked"))
+        #expect(descriptor.sections.first?.rows.first?.detail == "Last snapshot 2026-03-28")
+        #expect(surface.status.toolTip == "PDTBar Syncing portfolio - Calling pdt-list-symbol-prices")
+        #expect(surface.status.accessibilityLabel == "PDTBar Syncing portfolio - Calling pdt-list-symbol-prices")
         #expect(!rowTitles(in: descriptor).contains("Details fill failed"))
         #expect(!rowTitles(in: descriptor).contains("Fill details again"))
         #expect(actionRow("actions.refreshNow", in: descriptor)?.title == "Refreshing now")
         #expect(actionRow("actions.refreshNow", in: descriptor)?.role == .fetchStatus)
         #expect(actionRow("actions.openPDT", in: descriptor)?.role == .openPDT)
+    }
+
+    @Test("Background detail progress renders tool discovery substep")
+    func backgroundDetailProgressRendersToolDiscoverySubstep() throws {
+        let cachedPulse = try quietFixtureDescriptor()
+        let descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+            cachedPulse: cachedPulse,
+            progress: BackgroundDetailRefreshProgress(
+                phase: .baseHoldings,
+                detail: "Checking PDT tools"
+            ),
+            cachedSnapshotAsOf: "2026-03-28"
+        )
+
+        #expect(rowTitles(in: descriptor).contains("Cached data visible"))
+        #expect(!rowTitles(in: descriptor).contains("Checking PDT tools"))
+        #expect(descriptor.sections.first?.rows.first { $0.id == "portfolioFetch.backgroundProgress.phase" }?.detail == "Checking PDT tools")
+        #expect(descriptor.sections.first?.rows.first?.detail == "Last snapshot 2026-03-28")
+        #expect(MenuBarSurfaceRenderer.render(descriptor: descriptor).status.toolTip == "PDTBar Syncing portfolio - Checking PDT tools")
     }
 
     @Test("Background degraded completion keeps pulse rows and exposes retry")
