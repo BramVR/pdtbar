@@ -19,6 +19,19 @@ struct BigMoverPressureTests {
         #expect(item.explanation.supportingSourceSlots.map(\.id) == ["bigMovers.prices"])
     }
 
+    @Test("Big-mover summary renders holding name instead of raw quote id")
+    func bigMoverSummaryRendersHoldingNameInsteadOfRawQuoteID() throws {
+        let descriptor = MenuDescriptorRenderer.render(model: try model("big-mover"))
+        let row = try #require(
+            descriptor.sections
+                .first { $0.id == "bigMovers" }?
+                .rows
+                .first { $0.id == "bigMovers.summary" }
+        )
+
+        #expect(row.title == "Nova Lithography")
+    }
+
     @Test("Cold-start price history thresholds on exact move before rounding")
     func coldStartPriceHistoryThresholdsOnExactMoveBeforeRounding() throws {
         var snapshot = try snapshot("big-mover")
