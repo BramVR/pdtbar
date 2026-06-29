@@ -151,6 +151,11 @@ struct ClaudeLocalConnectionTests {
         #expect(progress.values.contains("Finding PDT read tools"))
         #expect(!progress.values.contains("Waiting on Claude for PDT tool discovery"))
         #expect(runner.requests.contains { $0.arguments.contains("ToolSearch") })
+        let toolSearchArguments = runner.requests.last?.arguments.joined(separator: " ") ?? ""
+        #expect(toolSearchArguments.contains("--disallowedTools"))
+        #expect(toolSearchArguments.contains("Bash"))
+        #expect(toolSearchArguments.contains("Read"))
+        #expect(toolSearchArguments.contains("WebSearch"))
     }
 
     @Test("Concrete read-tool calls reject different tool names")
@@ -190,6 +195,9 @@ struct ClaudeLocalConnectionTests {
         #expect(readRequest.arguments.joined(separator: " ").contains("--allowedTools mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-get-portfolio-holdings"))
         #expect(readRequest.arguments.joined(separator: " ").contains("Call the PDT read tool named pdt-get-portfolio-holdings"))
         #expect(readRequest.arguments.joined(separator: " ").contains("mcp__*__pdt-update-*"))
+        #expect(readRequest.arguments.joined(separator: " ").contains("Bash"))
+        #expect(readRequest.arguments.joined(separator: " ").contains("Read"))
+        #expect(readRequest.arguments.joined(separator: " ").contains("WebSearch"))
     }
 
     @Test("Non-read PDT tools are refused before Claude is invoked")

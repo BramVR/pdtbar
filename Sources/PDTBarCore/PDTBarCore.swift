@@ -6652,10 +6652,11 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         let paginatedCalendarEvents = try liveCalendarEvents(arguments: incomeDateRange, progress: progress)
         let dividends = try liveDividends(arguments: dividendDateRange, progress: progress)
         let calendarEvents = paginatedCalendarEvents.filter { $0.type != "no-events-today" }
-        let quoteIDsBySymbolID = incomeQuoteIDsBySymbolID(
+        let quoteIDsBySymbolID = try incomeQuoteIDsBySymbolID(
             for: calendarEvents,
             holdings: holdings,
-            priorSnapshot: priorSnapshot
+            priorSnapshot: priorSnapshot,
+            progress: progress
         )
         let normalized = PDTOptionalDetailNormalizer.normalizeIncomeEvents(
             calendarEvents: calendarEvents.map(\.optionalDetailInput),
@@ -6698,8 +6699,9 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
     private func incomeQuoteIDsBySymbolID(
         for calendarEvents: [LiveCalendarEvent],
         holdings: [NormalizedHolding],
-        priorSnapshot: PortfolioSnapshot?
-    ) -> [Int: Int] {
+        priorSnapshot: PortfolioSnapshot?,
+        progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
+    ) throws -> [Int: Int] {
         let neededSymbolIDs = Set(calendarEvents.compactMap(\.symbolId))
         guard !neededSymbolIDs.isEmpty else {
             return [:]
@@ -6720,18 +6722,36 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             }
             result[symbolId] = quoteId
         }
-        guard let priorSnapshot else {
+        if let priorSnapshot {
+            priorSnapshot.incomeEvents.forEach { event in
+                guard let symbolId = event.symbolId,
+                      neededSymbolIDs.contains(symbolId),
+                      quoteIDsBySymbolID[symbolId] == nil,
+                      let quoteId = event.quoteId
+                else {
+                    return
+                }
+                quoteIDsBySymbolID[symbolId] = quoteId
+            }
+        }
+        var unresolvedSymbolIDs = neededSymbolIDs.subtracting(quoteIDsBySymbolID.keys)
+        guard !unresolvedSymbolIDs.isEmpty else {
             return quoteIDsBySymbolID
         }
-        priorSnapshot.incomeEvents.forEach { event in
-            guard let symbolId = event.symbolId,
-                  neededSymbolIDs.contains(symbolId),
-                  quoteIDsBySymbolID[symbolId] == nil,
-                  let quoteId = event.quoteId
-            else {
-                return
+        for holding in holdings {
+            guard !unresolvedSymbolIDs.isEmpty else {
+                break
             }
-            quoteIDsBySymbolID[symbolId] = quoteId
+            let quote: LiveSymbolQuoteEnvelope = try callDecodedWithRetry(
+                "pdt-get-symbol-quote",
+                phase: .income,
+                arguments: ["id": String(holding.quoteId)],
+                progress: progress
+            )
+            guard unresolvedSymbolIDs.remove(quote.symbolId) != nil else {
+                continue
+            }
+            quoteIDsBySymbolID[quote.symbolId] = quote.id
         }
         return quoteIDsBySymbolID
     }

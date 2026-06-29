@@ -98,6 +98,30 @@ struct BackgroundDetailRefreshTests {
         #expect(connector.calls.filter { $0 == "pdt-get-symbol-quote" }.isEmpty)
     }
 
+    @Test("Background refresh falls back to symbol quote when income name differs")
+    func backgroundRefreshFallsBackToSymbolQuoteWhenIncomeNameDiffers() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-income-symbol-fallback-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let connector = ScriptedPDTMCPConnector(
+            responses: try detailRefreshResponses(calendarSymbolID: 5102, calendarSymbolName: "ADPB")
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        let event = try #require(result.model.facetSnapshots.income.upcomingEvents.first)
+        #expect(event.symbolId == 5102)
+        #expect(event.quoteId == 9102)
+        #expect(event.amount == Money(value: "6.00", currency: "EUR"))
+        #expect(connector.calls.contains("pdt-get-symbol-quote"))
+    }
+
     @Test("Price-history failure keeps completed detail phases and continues other holdings")
     func priceHistoryFailureKeepsCompletedPhasesAndContinuesOtherHoldings() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-test")
