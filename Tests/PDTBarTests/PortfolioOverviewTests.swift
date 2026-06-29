@@ -1,6 +1,8 @@
 import Foundation
+import AppKit
 import Testing
 import PDTBarCore
+import PDTBarAppSupport
 
 @Suite("Portfolio overview")
 struct PortfolioOverviewTests {
@@ -266,10 +268,104 @@ struct PortfolioOverviewTests {
         let surfaceOverviewRow = try #require(surface.sections.first { $0.id == "allocation" }?.rows.first)
         #expect(surfaceOverviewRow.barChart == chart)
     }
+
+    @Test("Portfolio allocation chart includes every positive holding in a many-holding portfolio")
+    func portfolioAllocationChartIncludesEveryPositiveHoldingInManyHoldingPortfolio() throws {
+        let snapshot = try manyPositiveHoldingsSnapshot()
+        let descriptor = MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: snapshot))
+        let allocationRows = try #require(descriptor.sections.first { $0.id == "allocation" }?.rows)
+        let chart = try #require(allocationRows.first?.barChart)
+
+        #expect(chart.bars.count == 20)
+        #expect(chart.bars.map(\.id) == snapshot.openHoldings
+            .sorted { $0.weight == $1.weight ? $0.name < $1.name : $0.weight > $1.weight }
+            .map { "allocation.portfolio.chart.\($0.quoteId)" })
+        #expect(chart.bars.allSatisfy { $0.weight > 0 })
+        #expect(chart.bars.last?.percentageLabel == "0.1%")
+    }
+
+    @Test("Portfolio allocation layout keeps twenty labels aligned and tiny positive bars visible")
+    func portfolioAllocationLayoutKeepsTwentyLabelsAlignedAndTinyPositiveBarsVisible() {
+        let weights = [
+            0.18, 0.15, 0.12, 0.10, 0.08,
+            0.07, 0.06, 0.05, 0.04, 0.03,
+            0.025, 0.020, 0.015, 0.010, 0.008,
+            0.006, 0.004, 0.002, 0.0015, 0.001,
+        ]
+        let bounds = NSRect(
+            x: 0,
+            y: 0,
+            width: 280,
+            height: PortfolioAllocationChartLayout.chartHeight
+        )
+        let layout = PortfolioAllocationChartLayout(bounds: bounds, weights: weights)
+
+        #expect(PortfolioAllocationChartLayout.contentWidth(viewportWidth: 280, barCount: weights.count) == 280)
+        #expect(PortfolioAllocationChartLayout.barCornerRadius == 2)
+        #expect(layout.totalSlotCount == 30)
+        #expect(layout.leadingSlotCount == 5)
+
+        for index in weights.indices {
+            let barRect = layout.barRect(at: index)
+            let labelRect = layout.labelRect(at: index, axisHeight: 16)
+
+            #expect(abs(barRect.midX - labelRect.midX) < 0.001)
+            #expect(barRect.height >= PortfolioAllocationChartLayout.minimumPositiveBarHeight)
+            #expect(barRect.width >= 6)
+            #expect(barRect.width < 10)
+        }
+    }
+
+    @Test("Portfolio allocation layout centers sparse charts and scrolls dense charts")
+    func portfolioAllocationLayoutCentersSparseChartsAndScrollsDenseCharts() {
+        let twoBarLayout = PortfolioAllocationChartLayout(
+            bounds: NSRect(x: 0, y: 0, width: 280, height: PortfolioAllocationChartLayout.chartHeight),
+            weights: [0.60, 0.40]
+        )
+        #expect(PortfolioAllocationChartLayout.contentWidth(viewportWidth: 280, barCount: 2) == 280)
+        #expect(twoBarLayout.totalSlotCount == 30)
+        #expect(twoBarLayout.leadingSlotCount == 14)
+        #expect(twoBarLayout.barRect(at: 0).midX < twoBarLayout.barRect(at: 1).midX)
+
+        let manyWeights = Array(repeating: 0.02, count: 45)
+        let denseContentWidth = PortfolioAllocationChartLayout.contentWidth(
+            viewportWidth: 280,
+            barCount: manyWeights.count
+        )
+        let denseLayout = PortfolioAllocationChartLayout(
+            bounds: NSRect(x: 0, y: 0, width: denseContentWidth, height: PortfolioAllocationChartLayout.chartHeight),
+            weights: manyWeights
+        )
+        #expect(denseContentWidth == 420)
+        #expect(denseLayout.totalSlotCount == 45)
+        #expect(denseLayout.leadingSlotCount == 0)
+        #expect(denseLayout.barRect(at: 0).midX < denseLayout.barRect(at: 44).midX)
+    }
 }
 
 private func quietSnapshot() throws -> PortfolioSnapshot {
     try PDTFixtureDataSource.snapshot(from: packageRoot.appending(path: "docs/pdt/fixtures/quiet-no-pressure.json"))
+}
+
+private func manyPositiveHoldingsSnapshot() throws -> PortfolioSnapshot {
+    var snapshot = try quietSnapshot()
+    let seedHoldings = try #require(!snapshot.openHoldings.isEmpty ? snapshot.openHoldings : nil)
+    let weights = [
+        0.18, 0.15, 0.12, 0.10, 0.08,
+        0.07, 0.06, 0.05, 0.04, 0.03,
+        0.025, 0.020, 0.015, 0.010, 0.008,
+        0.006, 0.004, 0.002, 0.0015, 0.001,
+    ]
+    snapshot.openHoldings = weights.enumerated().map { index, weight in
+        var holding = seedHoldings[index % seedHoldings.count]
+        holding.name = String(format: "Synthetic Holding %02d", index + 1)
+        holding.quoteId = 9100 + index
+        holding.weight = weight
+        holding.worth = Money(value: String(format: "%.2f", weight * 100_000), currency: "EUR")
+        holding.copyableIdentifier = "synthetic-holding-\(index + 1)"
+        return holding
+    }
+    return snapshot
 }
 
 private let packageRoot = URL(fileURLWithPath: #filePath)

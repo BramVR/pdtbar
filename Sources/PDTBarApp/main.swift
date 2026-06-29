@@ -633,17 +633,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         chartAxisView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(chartAxisView)
 
-        let chartScrollView = NSScrollView()
-        chartScrollView.borderType = .noBorder
-        chartScrollView.drawsBackground = false
-        chartScrollView.hasVerticalScroller = false
-        chartScrollView.hasHorizontalScroller = barChart.bars.count > PortfolioAllocationVerticalBarChartView.visibleSlotCount
-        chartScrollView.autohidesScrollers = barChart.bars.count <= PortfolioAllocationVerticalBarChartView.visibleSlotCount
-        chartScrollView.horizontalScrollElasticity = .allowed
-        chartScrollView.scrollerStyle = .overlay
-        chartScrollView.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(chartScrollView)
-
         let chartView = PortfolioAllocationVerticalBarChartView(bars: barChart.bars)
         let chartAxisWidth = PortfolioAllocationYAxisView.axisWidth
         let chartAxisGap = PortfolioAllocationYAxisView.axisGap
@@ -652,34 +641,71 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             viewportWidth: chartViewportWidth,
             barCount: barChart.bars.count
         )
-        chartView.frame = NSRect(
-            x: 0,
-            y: 0,
-            width: chartContentWidth,
-            height: PortfolioAllocationVerticalBarChartView.chartHeight
-        )
-        chartView.autoresizingMask = [.height]
-        chartScrollView.documentView = chartView
-
-        let xAxisScrollView = NSScrollView()
-        xAxisScrollView.borderType = .noBorder
-        xAxisScrollView.drawsBackground = false
-        xAxisScrollView.hasVerticalScroller = false
-        xAxisScrollView.hasHorizontalScroller = false
-        xAxisScrollView.horizontalScrollElasticity = .none
-        xAxisScrollView.scrollerStyle = .overlay
-        xAxisScrollView.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(xAxisScrollView)
-
         let xAxisView = PortfolioAllocationXAxisView(bars: barChart.bars)
-        xAxisView.frame = NSRect(
-            x: 0,
-            y: 0,
-            width: chartContentWidth,
-            height: PortfolioAllocationXAxisView.axisHeight
-        )
-        xAxisView.autoresizingMask = [.height]
-        xAxisScrollView.documentView = xAxisView
+
+        let usesHorizontalScroll = barChart.bars.count > PortfolioAllocationChartLayout.visibleSlotCount
+        let chartHostView: NSView
+        let xAxisHostView: NSView
+        let selectedTextTrailingAnchor: NSLayoutXAxisAnchor
+        var chartHostConstraints: [NSLayoutConstraint] = []
+        if usesHorizontalScroll {
+            let chartScrollView = NSScrollView()
+            chartScrollView.borderType = .noBorder
+            chartScrollView.drawsBackground = false
+            chartScrollView.hasVerticalScroller = false
+            chartScrollView.hasHorizontalScroller = true
+            chartScrollView.autohidesScrollers = false
+            chartScrollView.horizontalScrollElasticity = .allowed
+            chartScrollView.scrollerStyle = .overlay
+            chartScrollView.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(chartScrollView)
+
+            chartView.frame = NSRect(
+                x: 0,
+                y: 0,
+                width: chartContentWidth,
+                height: PortfolioAllocationChartLayout.chartHeight
+            )
+            chartView.autoresizingMask = [.height]
+            chartScrollView.documentView = chartView
+
+            let xAxisScrollView = NSScrollView()
+            xAxisScrollView.borderType = .noBorder
+            xAxisScrollView.drawsBackground = false
+            xAxisScrollView.hasVerticalScroller = false
+            xAxisScrollView.hasHorizontalScroller = false
+            xAxisScrollView.horizontalScrollElasticity = .none
+            xAxisScrollView.scrollerStyle = .overlay
+            xAxisScrollView.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(xAxisScrollView)
+
+            xAxisView.frame = NSRect(
+                x: 0,
+                y: 0,
+                width: chartContentWidth,
+                height: PortfolioAllocationXAxisView.axisHeight
+            )
+            xAxisView.autoresizingMask = [.height]
+            xAxisScrollView.documentView = xAxisView
+            container.mirrorHorizontalScroll(from: chartScrollView, to: xAxisScrollView)
+
+            chartHostView = chartScrollView
+            xAxisHostView = xAxisScrollView
+            selectedTextTrailingAnchor = chartScrollView.trailingAnchor
+        } else {
+            chartView.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(chartView)
+            xAxisView.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(xAxisView)
+
+            chartHostView = chartView
+            xAxisHostView = xAxisView
+            selectedTextTrailingAnchor = chartView.trailingAnchor
+            chartHostConstraints += [
+                chartView.widthAnchor.constraint(greaterThanOrEqualToConstant: chartContentWidth),
+                xAxisView.widthAnchor.constraint(equalTo: chartView.widthAnchor),
+            ]
+        }
 
         let selectedAccent = NSBox()
         selectedAccent.boxType = .custom
@@ -719,8 +745,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         chartView.onSelectionChanged = applySelection
         applySelection(chartView.selectedBar)
 
-        container.mirrorHorizontalScroll(from: chartScrollView, to: xAxisScrollView)
-
         var constraints = [
             titleField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
             titleField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -28),
@@ -728,25 +752,25 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
             chartAxisView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
             chartAxisView.widthAnchor.constraint(equalToConstant: chartAxisWidth),
-            chartAxisView.heightAnchor.constraint(equalToConstant: PortfolioAllocationVerticalBarChartView.chartHeight),
+            chartAxisView.heightAnchor.constraint(equalToConstant: PortfolioAllocationChartLayout.chartHeight),
 
-            chartScrollView.leadingAnchor.constraint(equalTo: chartAxisView.trailingAnchor, constant: chartAxisGap),
-            chartScrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -28),
-            chartScrollView.heightAnchor.constraint(equalToConstant: PortfolioAllocationVerticalBarChartView.chartHeight),
+            chartHostView.leadingAnchor.constraint(equalTo: chartAxisView.trailingAnchor, constant: chartAxisGap),
+            chartHostView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -28),
+            chartHostView.heightAnchor.constraint(equalToConstant: PortfolioAllocationChartLayout.chartHeight),
 
-            xAxisScrollView.leadingAnchor.constraint(equalTo: chartScrollView.leadingAnchor),
-            xAxisScrollView.trailingAnchor.constraint(equalTo: chartScrollView.trailingAnchor),
-            xAxisScrollView.topAnchor.constraint(equalTo: chartScrollView.bottomAnchor, constant: -1),
-            xAxisScrollView.heightAnchor.constraint(equalToConstant: PortfolioAllocationXAxisView.axisHeight),
+            xAxisHostView.leadingAnchor.constraint(equalTo: chartHostView.leadingAnchor),
+            xAxisHostView.trailingAnchor.constraint(equalTo: chartHostView.trailingAnchor),
+            xAxisHostView.topAnchor.constraint(equalTo: chartHostView.bottomAnchor, constant: -1),
+            xAxisHostView.heightAnchor.constraint(equalToConstant: PortfolioAllocationXAxisView.axisHeight),
 
             selectedAccent.leadingAnchor.constraint(equalTo: chartAxisView.leadingAnchor),
-            selectedAccent.topAnchor.constraint(equalTo: xAxisScrollView.bottomAnchor, constant: 8),
+            selectedAccent.topAnchor.constraint(equalTo: xAxisHostView.bottomAnchor, constant: 8),
             selectedAccent.widthAnchor.constraint(equalToConstant: 2),
             selectedAccent.heightAnchor.constraint(equalToConstant: 30),
 
             selectedTitleField.leadingAnchor.constraint(equalTo: selectedAccent.trailingAnchor, constant: 8),
-            selectedTitleField.trailingAnchor.constraint(equalTo: chartScrollView.trailingAnchor),
-            selectedTitleField.topAnchor.constraint(equalTo: xAxisScrollView.bottomAnchor, constant: 5),
+            selectedTitleField.trailingAnchor.constraint(equalTo: selectedTextTrailingAnchor),
+            selectedTitleField.topAnchor.constraint(equalTo: xAxisHostView.bottomAnchor, constant: 5),
 
             selectedDetailField.leadingAnchor.constraint(equalTo: selectedTitleField.leadingAnchor),
             selectedDetailField.trailingAnchor.constraint(equalTo: selectedTitleField.trailingAnchor),
@@ -757,8 +781,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let chartTopAnchor = detailField?.bottomAnchor ?? titleField.bottomAnchor
         constraints += [
             chartAxisView.topAnchor.constraint(equalTo: chartTopAnchor, constant: 9),
-            chartScrollView.topAnchor.constraint(equalTo: chartTopAnchor, constant: 9),
+            chartHostView.topAnchor.constraint(equalTo: chartTopAnchor, constant: 9),
         ]
+        constraints += chartHostConstraints
         if let detailField {
             constraints += [
                 detailField.leadingAnchor.constraint(equalTo: titleField.leadingAnchor),
@@ -1088,15 +1113,15 @@ private final class PortfolioAllocationChartRowView: NSView {
 
 private final class PortfolioAllocationVerticalBarChartView: NSView {
     static let barColor = NSColor(calibratedRed: 0.28, green: 0.68, blue: 0.73, alpha: 0.92)
-    static let visibleSlotCount = 30
-    static let chartHeight: CGFloat = 114
 
     private let bars: [MenuRowBarChart.Bar]
+    private let selectionView = NSBox()
+    private var barViews: [NSBox] = []
     private var trackingArea: NSTrackingArea?
     private var selectedIndex: Int? {
         didSet {
             guard selectedIndex != oldValue else { return }
-            self.needsDisplay = true
+            self.layoutBarViews()
             self.onSelectionChanged?(self.selectedBar)
         }
     }
@@ -1117,12 +1142,11 @@ private final class PortfolioAllocationVerticalBarChartView: NSView {
         self.selectedIndex = bars.isEmpty ? nil : 0
         super.init(frame: .zero)
         self.wantsLayer = true
+        configureBarSubviews()
     }
 
     static func contentWidth(viewportWidth: CGFloat, barCount: Int) -> CGFloat {
-        let visibleWidth = max(viewportWidth, 1)
-        let slotCount = max(barCount, Self.visibleSlotCount)
-        return visibleWidth * CGFloat(slotCount) / CGFloat(Self.visibleSlotCount)
+        PortfolioAllocationChartLayout.contentWidth(viewportWidth: viewportWidth, barCount: barCount)
     }
 
     @available(*, unavailable)
@@ -1162,122 +1186,97 @@ private final class PortfolioAllocationVerticalBarChartView: NSView {
         self.updateSelection(with: event)
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        guard !self.bars.isEmpty, self.bounds.width > 1, self.bounds.height > 1 else { return }
+    override func layout() {
+        super.layout()
+        layoutBarViews()
+    }
 
-        let plotRect = Self.plotRect(in: self.bounds)
-        let totalSlotCount = self.totalSlotCount
-        let leadingSlotCount = self.leadingSlotCount
-        let slotWidth = plotRect.width / CGFloat(totalSlotCount)
-        let barHalfWidth = Self.barHalfWidth(slotWidth: slotWidth)
-        let barWidth = barHalfWidth * 2
-        let scaleMaxWeight = Self.scaleMaxWeight(for: self.bars)
+    private func configureBarSubviews() {
+        selectionView.boxType = .custom
+        selectionView.borderWidth = 0
+        selectionView.cornerRadius = 0
+        selectionView.fillColor = NSColor.labelColor.withAlphaComponent(0.10)
+        addSubview(selectionView)
+
+        barViews = bars.map { _ in
+            let barView = NSBox()
+            barView.boxType = .custom
+            barView.borderWidth = 0
+            barView.fillColor = Self.barColor
+            addSubview(barView)
+            return barView
+        }
+    }
+
+    private func layoutBarViews() {
+        guard !self.bars.isEmpty, self.bounds.width > 1, self.bounds.height > 1 else {
+            selectionView.isHidden = true
+            barViews.forEach { $0.isHidden = true }
+            return
+        }
+        let layout = PortfolioAllocationChartLayout(
+            bounds: self.bounds,
+            weights: self.bars.map(\.weight)
+        )
 
         if let selectedIndex {
-            let centerX = plotRect.minX + slotWidth * (CGFloat(leadingSlotCount + selectedIndex) + 0.5)
-            let bandRect = NSRect(
-                x: centerX - barHalfWidth,
-                y: plotRect.minY,
-                width: barWidth,
-                height: plotRect.height
+            let barRect = layout.barRect(at: selectedIndex)
+            selectionView.frame = NSRect(
+                x: barRect.minX,
+                y: layout.plotRect.minY,
+                width: barRect.width,
+                height: layout.plotRect.height
             )
-            NSColor.labelColor.withAlphaComponent(0.10).setFill()
-            bandRect.fill()
+            selectionView.isHidden = false
+        } else {
+            selectionView.isHidden = true
         }
 
-        for (index, bar) in self.bars.enumerated() {
-            let weight = Self.clampedWeight(bar.weight)
-            let barHeight = max(weight > 0 ? 3 : 0, plotRect.height * weight / scaleMaxWeight)
-            let centerX = plotRect.minX + slotWidth * (CGFloat(leadingSlotCount + index) + 0.5)
-            let barRect = NSRect(
-                x: centerX - barWidth / 2,
-                y: plotRect.maxY - barHeight,
-                width: barWidth,
-                height: barHeight
-            )
-            Self.barColor.setFill()
-            NSBezierPath(roundedRect: barRect, xRadius: 3, yRadius: 3).fill()
+        for index in self.bars.indices {
+            let barRect = layout.barRect(at: index)
+            let barView = barViews[index]
+            barView.frame = barRect
+            barView.cornerRadius = PortfolioAllocationChartLayout.barCornerRadius
+            barView.isHidden = barRect.height <= 0
         }
-
     }
 
     private func updateSelection(with event: NSEvent) {
         let location = self.convert(event.locationInWindow, from: nil)
-        guard self.bounds.contains(location), !self.bars.isEmpty else { return }
-        let plotWidth = max(self.bounds.width, 1)
-        let slotWidth = plotWidth / CGFloat(self.totalSlotCount)
-        let rawSlot = Int(floor(location.x / slotWidth))
-        let index = rawSlot - self.leadingSlotCount
-        guard self.bars.indices.contains(index) else { return }
+        let layout = PortfolioAllocationChartLayout(
+            bounds: self.bounds,
+            weights: self.bars.map(\.weight)
+        )
+        guard let index = layout.index(at: location) else { return }
         self.selectedIndex = index
     }
 
     private static func clampedWeight(_ weight: Double) -> CGFloat {
-        guard weight.isFinite, weight > 0 else { return 0 }
-        return CGFloat(min(weight, 1))
+        PortfolioAllocationChartLayout.clampedWeight(weight)
     }
 
     static func totalSlotCount(for barCount: Int) -> Int {
-        max(barCount, Self.visibleSlotCount)
+        PortfolioAllocationChartLayout.totalSlotCount(for: barCount)
     }
 
     static func leadingSlotCount(for barCount: Int) -> Int {
-        max((Self.visibleSlotCount - barCount) / 2, 0)
+        PortfolioAllocationChartLayout.leadingSlotCount(for: barCount)
     }
 
     static func plotRect(in bounds: NSRect) -> NSRect {
-        let topInset: CGFloat = 16
-        let bottomInset: CGFloat = 6
-        return NSRect(
-            x: 0,
-            y: topInset,
-            width: bounds.width,
-            height: max(1, bounds.height - topInset - bottomInset)
-        )
+        PortfolioAllocationChartLayout.plotRect(in: bounds)
     }
 
     static func scaleMaxWeight(for bars: [MenuRowBarChart.Bar]) -> CGFloat {
-        max(bars.map { Self.clampedWeight($0.weight) }.max() ?? 0, 0.01)
+        PortfolioAllocationChartLayout.scaleMaxWeight(for: bars.map(\.weight))
     }
 
     static func tickValues(for bars: [MenuRowBarChart.Bar]) -> [CGFloat] {
-        let scaleMax = Self.scaleMaxWeight(for: bars)
-        let step = Self.tickStep(for: scaleMax)
-        var values: [CGFloat] = []
-        var tick: CGFloat = 0
-        while tick <= scaleMax + 0.000001 {
-            values.append(tick)
-            tick += step
-        }
-        return values
+        PortfolioAllocationChartLayout.tickValues(for: bars.map(\.weight))
     }
 
     static func tickStep(for maxWeight: CGFloat) -> CGFloat {
-        switch maxWeight {
-        case ...0.05:
-            return 0.01
-        case ...0.15:
-            return 0.05
-        case ...0.30:
-            return 0.10
-        case ...0.60:
-            return 0.25
-        default:
-            return 0.25
-        }
-    }
-
-    private static func barHalfWidth(slotWidth: CGFloat) -> CGFloat {
-        slotWidth * 0.25 + 2
-    }
-
-    private var totalSlotCount: Int {
-        Self.totalSlotCount(for: self.bars.count)
-    }
-
-    private var leadingSlotCount: Int {
-        Self.leadingSlotCount(for: self.bars.count)
+        PortfolioAllocationChartLayout.tickStep(for: maxWeight)
     }
 }
 
@@ -1305,9 +1304,10 @@ private final class PortfolioAllocationXAxisView: NSView {
         super.draw(dirtyRect)
         guard !self.bars.isEmpty, self.bounds.width > 1, self.bounds.height > 1 else { return }
 
-        let totalSlotCount = PortfolioAllocationVerticalBarChartView.totalSlotCount(for: self.bars.count)
-        let leadingSlotCount = PortfolioAllocationVerticalBarChartView.leadingSlotCount(for: self.bars.count)
-        let slotWidth = self.bounds.width / CGFloat(totalSlotCount)
+        let layout = PortfolioAllocationChartLayout(
+            bounds: self.bounds,
+            weights: self.bars.map(\.weight)
+        )
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         paragraph.lineBreakMode = .byTruncatingTail
@@ -1318,14 +1318,7 @@ private final class PortfolioAllocationXAxisView: NSView {
         ]
 
         for index in self.bars.indices {
-            let centerX = self.bounds.minX + slotWidth * (CGFloat(leadingSlotCount + index) + 0.5)
-            let labelWidth = max(slotWidth, 10)
-            let labelRect = NSRect(
-                x: centerX - labelWidth / 2,
-                y: 0,
-                width: labelWidth,
-                height: Self.axisHeight
-            )
+            let labelRect = layout.labelRect(at: index, axisHeight: Self.axisHeight)
             let label = self.bars[index].axisLabel ?? String(self.bars[index].label.prefix(1)).uppercased()
             NSString(string: label).draw(in: labelRect, withAttributes: attrs)
         }
