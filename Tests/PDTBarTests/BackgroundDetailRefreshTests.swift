@@ -4,12 +4,31 @@ import PDTBarCore
 
 @Suite("Background detail refresh")
 struct BackgroundDetailRefreshTests {
-    @Test("Background refresh joins income calendar events to holding quotes")
-    func backgroundRefreshJoinsIncomeCalendarEventsToHoldingQuotes() throws {
+    @Test("Background refresh reuses cached income quote mapping")
+    func backgroundRefreshReusesCachedIncomeQuoteMapping() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-income-join-test")
         defer {
             try? FileManager.default.removeItem(at: store.directory)
         }
+        _ = try store.commitCurrentSnapshot(PortfolioSnapshot(
+            asOf: "2026-03-28",
+            totalValue: Money(value: "0.00", currency: "EUR"),
+            openHoldings: [],
+            sectors: [],
+            assetTypes: [],
+            incomeEvents: [
+                IncomeEventSummary(
+                    date: "2026-03-29",
+                    kind: "ex-dividend",
+                    symbolName: "Scripted Adapter B",
+                    estimated: false,
+                    symbolId: 5102,
+                    quoteId: 9102
+                ),
+            ],
+            dividendRowCount: 0,
+            priceSeries: []
+        ))
 
         let connector = ScriptedPDTMCPConnector(
             responses: try detailRefreshResponses(calendarSymbolID: 5102, calendarSymbolName: "Scripted Adapter B")
@@ -31,7 +50,7 @@ struct BackgroundDetailRefreshTests {
         #expect(event.symbolId == 5102)
         #expect(event.quoteId == 9102)
         #expect(event.amount == Money(value: "6.00", currency: "EUR"))
-        #expect(connector.calls.filter { $0 == "pdt-get-symbol-quote" }.count == 1)
+        #expect(connector.calls.filter { $0 == "pdt-get-symbol-quote" }.isEmpty)
 
         let holdingRow = try #require(
             result.descriptor.sections

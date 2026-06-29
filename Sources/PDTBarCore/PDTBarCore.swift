@@ -6483,7 +6483,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
 
         do {
             progress(BackgroundDetailRefreshProgress(phase: .income))
-            let income = try incomeEvents(asOf: snapshotAsOf, holdings: snapshot.openHoldings, progress: progress)
+            let income = try incomeEvents(asOf: snapshotAsOf, priorSnapshot: originalPriorSnapshot, progress: progress)
             snapshot.incomeEvents = income.events
             snapshot.dividendRowCount = income.dividendRowCount
             _ = try snapshotStore.commitCurrentSnapshot(snapshot)
@@ -6624,7 +6624,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
 
     private func incomeEvents(
         asOf snapshotAsOf: String,
-        holdings: [NormalizedHolding],
+        priorSnapshot: PortfolioSnapshot?,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) throws -> (events: [IncomeEventSummary], dividendRowCount: Int) {
         let incomeDateRange = [
@@ -6638,10 +6638,9 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         let paginatedCalendarEvents = try liveCalendarEvents(arguments: incomeDateRange, progress: progress)
         let dividends = try liveDividends(arguments: dividendDateRange, progress: progress)
         let calendarEvents = paginatedCalendarEvents.filter { $0.type != "no-events-today" }
-        let quoteIDsBySymbolID = try incomeQuoteIDsBySymbolID(
+        let quoteIDsBySymbolID = incomeQuoteIDsBySymbolID(
             for: calendarEvents,
-            holdings: holdings,
-            progress: progress
+            priorSnapshot: priorSnapshot
         )
         let normalized = PDTOptionalDetailNormalizer.normalizeIncomeEvents(
             calendarEvents: calendarEvents.map(\.optionalDetailInput),
@@ -6683,31 +6682,21 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
 
     private func incomeQuoteIDsBySymbolID(
         for calendarEvents: [LiveCalendarEvent],
-        holdings: [NormalizedHolding],
-        progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
-    ) throws -> [Int: Int] {
-        var neededSymbolIDs = Set(calendarEvents.compactMap(\.symbolId))
-        guard !neededSymbolIDs.isEmpty else {
+        priorSnapshot: PortfolioSnapshot?
+    ) -> [Int: Int] {
+        let neededSymbolIDs = Set(calendarEvents.compactMap(\.symbolId))
+        guard !neededSymbolIDs.isEmpty, let priorSnapshot else {
             return [:]
         }
-        var quoteIDsBySymbolID: [Int: Int] = [:]
-        for holding in holdings.reversed() {
-            progress(BackgroundDetailRefreshProgress(phase: .income, detail: "Calling pdt-get-symbol-quote"))
-            let quote: LiveSymbolQuoteEnvelope = try callDecodedWithRetry(
-                "pdt-get-symbol-quote",
-                phase: .income,
-                arguments: ["id": String(holding.quoteId)],
-                progress: progress
-            )
-            guard neededSymbolIDs.remove(quote.symbolId) != nil else {
-                continue
+        return priorSnapshot.incomeEvents.reduce(into: [:]) { result, event in
+            guard let symbolId = event.symbolId,
+                  neededSymbolIDs.contains(symbolId),
+                  let quoteId = event.quoteId
+            else {
+                return
             }
-            quoteIDsBySymbolID[quote.symbolId] = quote.id
-            if neededSymbolIDs.isEmpty {
-                break
-            }
+            result[symbolId] = quoteId
         }
-        return quoteIDsBySymbolID
     }
 
     private func liveDividends(
