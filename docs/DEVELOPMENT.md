@@ -114,6 +114,8 @@ swift run pdtbar-smoke packaged-onboarding --app PDTBar.app
 Optional local/live checks:
 
 ```bash
+npm ci
+./node_modules/.bin/mcporter list <pdt-server> --schema --json > /tmp/pdt-schema.json
 swift run pdtbar-smoke manual-claude-pdt --model opus
 swift run pdtbar-smoke live-pdt
 swift run pdtbar-smoke logged-out-launch

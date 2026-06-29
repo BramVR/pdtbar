@@ -213,12 +213,19 @@ paths, selectors, status text, as-of dates, and booleans only.
 Read-only live PDT pulse smoke:
 
 ```bash
-npx -y mcporter list <pdt-server> --schema --json > /tmp/pdt-schema.json
+npm ci
+./node_modules/.bin/mcporter list <pdt-server> --schema --json > /tmp/pdt-schema.json
 PDTBAR_LIVE_PDT_SERVER=<pdt-server> PDTBAR_LIVE_PDT_SCHEMA_JSON=/tmp/pdt-schema.json swift run pdtbar-smoke live-pdt
 ```
 
 Default behavior is a clean skip. The live smoke requires a configured/authenticated
-mcporter PDT server via `--server <pdt-server>` or `PDTBAR_LIVE_PDT_SERVER`. When
+mcporter PDT server via `--server <pdt-server>` or `PDTBAR_LIVE_PDT_SERVER`, plus
+the pinned repo-local `./node_modules/.bin/mcporter` installed from
+`package-lock.json`. Run `npm ci` after checkout or lockfile changes. To use a
+manually audited local binary instead, pass `--mcporter <path>` or
+`PDTBAR_MCPORTER_BIN=<path>`; unversioned `npx mcporter` is not accepted for the
+live smoke. Missing or mismatched pinned mcporter setup fails once a server is
+explicitly configured, with an actionable `npm ci` setup message. When
 `PDTBAR_LIVE_PDT_SCHEMA_JSON` is set, the gate first confirms the expected read
 tools are present in the schema. It then calls only read tools through the live
 `PortfolioDataSource`, runs the same `PressureRunner` path used by fixture e2e,

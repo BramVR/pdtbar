@@ -20,6 +20,7 @@ private enum SmokeStatus {
 
 private let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
 private let defaultFixture = packageRoot.appending(path: "docs/pdt/fixtures/quiet-no-pressure.json")
+private let pinnedMcporterVersion = "0.12.2"
 
 do {
     let arguments = Array(CommandLine.arguments.dropFirst())
@@ -75,7 +76,7 @@ do {
     FileHandle.standardError.write(Data("""
     usage:
       pdtbar-smoke manual-claude-pdt [--claude <path>] [--model <alias>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke live-pdt [--server <mcporter-server>] [--artifacts <dir>] [--timeout <seconds>]
+      pdtbar-smoke live-pdt [--server <mcporter-server>] [--mcporter <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-pdt-connector [--artifacts <dir>]
       pdtbar-smoke copy-holding-identifier-action
       pdtbar-smoke scripted-first-fetch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
@@ -2153,6 +2154,17 @@ private func livePDTSmoke(arguments: [String]) throws -> SmokeReport {
             artifacts: []
         )
     }
+    let mcporter: McporterTool
+    do {
+        mcporter = try resolveMcporterTool(options: options, environment: environment)
+    } catch let error as McporterSetupError {
+        return SmokeReport(
+            name: "live-pdt",
+            status: error.status,
+            detail: error.detail,
+            artifacts: error.artifacts
+        )
+    }
 
     let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-live-pdt-smoke")
     defer {
@@ -2167,6 +2179,7 @@ private func livePDTSmoke(arguments: [String]) throws -> SmokeReport {
         result = try PressureRunner.run(
             dataSource: PDTLiveDataSource(
                 toolClient: PDTLiveMcporterClient(
+                    mcporter: mcporter,
                     server: server,
                     timeout: liveTimeout
                 )
@@ -2214,6 +2227,7 @@ private func livePDTSmoke(arguments: [String]) throws -> SmokeReport {
 
     let surface = MenuBarSurfaceRenderer.render(descriptor: result.descriptor)
     let proofPayload = LivePDTPulseProof(
+        mcporterSource: mcporter.sourceDescription,
         snapshotWritten: result.snapshotCommit.written,
         statusAccessibilityIdentifier: surface.status.accessibilityIdentifier,
         sectionIDs: surface.sections.map(\.id),
@@ -2687,6 +2701,7 @@ private struct AccessibilityEvidence: Codable {
 }
 
 private struct LivePDTPulseProof: Codable {
+    var mcporterSource: String
     var snapshotWritten: Bool
     var statusAccessibilityIdentifier: String
     var sectionIDs: [String]
@@ -4279,6 +4294,7 @@ private func fixtureStatusTitle(for fixture: URL) throws -> String {
 private struct SmokeOptions {
     var app: URL?
     var claude: URL?
+    var mcporter: URL?
     var fixture: URL?
     var peekaboo: URL?
     var artifacts: URL?
@@ -4299,6 +4315,9 @@ private struct SmokeOptions {
                 index += 2
             case "--claude" where index + 1 < arguments.count:
                 claude = URL(fileURLWithPath: arguments[index + 1])
+                index += 2
+            case "--mcporter" where index + 1 < arguments.count:
+                mcporter = URL(fileURLWithPath: arguments[index + 1])
                 index += 2
             case "--fixture" where index + 1 < arguments.count:
                 fixture = URL(fileURLWithPath: arguments[index + 1])
@@ -4646,6 +4665,7 @@ private func mcpResult(_ json: String) throws -> Data {
 }
 
 private struct PDTLiveMcporterClient: PDTLiveToolClient {
+    var mcporter: McporterTool
     var server: String
     var timeout: TimeInterval
 
@@ -4655,9 +4675,9 @@ private struct PDTLiveMcporterClient: PDTLiveToolClient {
             .sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }
         return try run(
-            URL(fileURLWithPath: "/usr/bin/env"),
+            mcporter.executable,
             arguments: [
-                "npx", "-y", "mcporter", "call",
+                "call",
                 "--no-oauth",
                 "--timeout", String(Int(timeout * 1000)),
                 selector,
@@ -4665,6 +4685,105 @@ private struct PDTLiveMcporterClient: PDTLiveToolClient {
             timeout: timeout + 1.0
         ).stdout
     }
+}
+
+private struct McporterTool {
+    var executable: URL
+    var sourceDescription: String
+}
+
+private enum McporterSetupError: Error {
+    case defaultMissing(URL)
+    case defaultPackageMissing(URL)
+    case defaultPackageUnreadable(URL)
+    case defaultPackageMalformed(URL)
+    case defaultVersionMismatch(expected: String, actual: String, packageJSON: URL)
+    case explicitPathMissing(URL)
+
+    var status: String {
+        switch self {
+        case .defaultMissing,
+             .defaultPackageMissing,
+             .defaultPackageUnreadable,
+             .defaultPackageMalformed,
+             .defaultVersionMismatch,
+             .explicitPathMissing:
+            SmokeStatus.failed
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .defaultMissing(let expected):
+            "pinned mcporter is not installed at \(artifactPath(expected)); run npm ci, then rerun live-pdt or pass --mcporter <trusted-local-path>"
+        case .defaultPackageMissing(let packageJSON):
+            "pinned mcporter executable exists, but \(artifactPath(packageJSON)) is missing; run npm ci to restore mcporter@\(pinnedMcporterVersion)"
+        case .defaultPackageUnreadable(let packageJSON):
+            "pinned mcporter metadata at \(artifactPath(packageJSON)) is unreadable; run npm ci to restore mcporter@\(pinnedMcporterVersion)"
+        case .defaultPackageMalformed(let packageJSON):
+            "pinned mcporter metadata at \(artifactPath(packageJSON)) is malformed or missing a version; run npm ci to restore mcporter@\(pinnedMcporterVersion)"
+        case .defaultVersionMismatch(let expected, let actual, let packageJSON):
+            "pinned mcporter version mismatch in \(artifactPath(packageJSON)); expected \(expected), found \(actual); run npm ci"
+        case .explicitPathMissing(let executable):
+            "trusted mcporter path is not executable at \(artifactPath(executable)); pass --mcporter <trusted-local-path> or run npm ci for the pinned repo-local tool"
+        }
+    }
+
+    var artifacts: [String] {
+        switch self {
+        case .defaultMissing(let expected), .explicitPathMissing(let expected):
+            [artifactPath(expected)]
+        case .defaultPackageMissing(let packageJSON),
+             .defaultPackageUnreadable(let packageJSON),
+             .defaultPackageMalformed(let packageJSON),
+             .defaultVersionMismatch(_, _, let packageJSON):
+            [artifactPath(packageJSON)]
+        }
+    }
+}
+
+private func resolveMcporterTool(options: SmokeOptions, environment: [String: String]) throws -> McporterTool {
+    let environmentMcporterPath = environment["PDTBAR_MCPORTER_BIN"]?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let explicitEnvironmentMcporter = environmentMcporterPath
+        .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+    if let explicit = options.mcporter ?? explicitEnvironmentMcporter {
+        guard FileManager.default.isExecutableFile(atPath: explicit.path) else {
+            throw McporterSetupError.explicitPathMissing(explicit)
+        }
+        return McporterTool(
+            executable: explicit,
+            sourceDescription: "trusted local path \(artifactPath(explicit))"
+        )
+    }
+
+    let executable = packageRoot.appending(path: "node_modules/.bin/mcporter")
+    guard FileManager.default.isExecutableFile(atPath: executable.path) else {
+        throw McporterSetupError.defaultMissing(executable)
+    }
+    let packageJSON = packageRoot.appending(path: "node_modules/mcporter/package.json")
+    guard FileManager.default.fileExists(atPath: packageJSON.path) else {
+        throw McporterSetupError.defaultPackageMissing(packageJSON)
+    }
+    guard let data = try? Data(contentsOf: packageJSON) else {
+        throw McporterSetupError.defaultPackageUnreadable(packageJSON)
+    }
+    guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let version = object["version"] as? String
+    else {
+        throw McporterSetupError.defaultPackageMalformed(packageJSON)
+    }
+    guard version == pinnedMcporterVersion else {
+        throw McporterSetupError.defaultVersionMismatch(
+            expected: pinnedMcporterVersion,
+            actual: version,
+            packageJSON: packageJSON
+        )
+    }
+    return McporterTool(
+        executable: executable,
+        sourceDescription: "package-lock mcporter@\(pinnedMcporterVersion) \(artifactPath(executable))"
+    )
 }
 
 private func discoverLivePDTServer(options: SmokeOptions) throws -> String? {

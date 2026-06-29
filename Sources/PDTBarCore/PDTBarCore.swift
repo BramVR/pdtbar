@@ -5973,6 +5973,7 @@ public enum PDTLiveUnavailableClassifier {
         "could not connect",
         "econnrefused",
         "server not found",
+        "unknown mcp server",
         "server unavailable",
     ]
 
