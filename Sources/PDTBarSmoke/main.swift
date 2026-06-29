@@ -54,6 +54,8 @@ do {
         report = try readyLaunchSmoke(arguments: Array(arguments.dropFirst()))
     case "real-claude-flow-ax":
         report = try realClaudeFlowAXSmoke(arguments: Array(arguments.dropFirst()))
+    case "app-bundle-packaging":
+        report = try appBundlePackagingSmoke(arguments: Array(arguments.dropFirst()))
     case "packaged-onboarding":
         report = try packagedOnboardingSmoke(arguments: Array(arguments.dropFirst()))
     case "packaged-app":
@@ -87,6 +89,7 @@ do {
       pdtbar-smoke logged-out-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke ready-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke real-claude-flow-ax [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
+      pdtbar-smoke app-bundle-packaging [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke packaged-onboarding [--app <path-to-PDTBar.app>] [--app-support-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
       pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]
       pdtbar-smoke peekaboo [--peekaboo <path>] [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>]
@@ -877,6 +880,197 @@ private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeRepor
         name: "scripted-login-handoff",
         status: SmokeStatus.passed,
         detail: "Log in with Claude invoked scripted claude auth login only after menu click, superseded an in-flight auth retry, rechecked readiness once, started first fetch, and rendered failed-login state on login failure",
+        artifacts: [artifactPath(proof)]
+    )
+}
+
+private func appBundlePackagingSmoke(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
+    let appBundle = packageRoot.appending(path: "PDTBar.app")
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let proof = artifacts.appending(path: "pdtbar-app-bundle-packaging-proof.json")
+    let packageScript = packageRoot.appending(path: "Scripts/package_app.sh")
+    let packageCommand = [artifactPath(packageScript), "debug"]
+
+    var proofPayload = AppBundlePackagingProof(
+        appBundlePath: artifactPath(appBundle),
+        appExecutablePath: "",
+        packageCommand: packageCommand,
+        bundleIdentifier: nil,
+        bundleExecutable: nil,
+        packageType: nil,
+        menuBarAccessory: false,
+        codesignVerified: false,
+        codesignSignature: nil,
+        launchedViaLaunchServices: false,
+        launchedProcessIdentifier: nil,
+        launchedBundleIdentifier: nil,
+        launchedExecutablePath: nil,
+        bundleProcessMatched: false,
+        appSupportPath: "",
+        accessibilityChecked: AXIsProcessTrusted(),
+        statusIdentifier: "pdtbar.status",
+        expectedMenuIdentifiers: [],
+        observedStatusText: [],
+        observedMenuIdentifiers: [],
+        menuBarSurfaceVisible: false,
+        fixtureModeUsed: false,
+        rawClaudeCredentialsUsed: false,
+        rawPortfolioPayloadsRedacted: true
+    )
+
+    guard options.app == nil else {
+        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+        return SmokeReport(
+            name: "app-bundle-packaging",
+            status: SmokeStatus.failed,
+            detail: "app-bundle-packaging always builds and verifies the root PDTBar.app; do not pass --app",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+    guard FileManager.default.isExecutableFile(atPath: packageScript.path) else {
+        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+        return SmokeReport(
+            name: "app-bundle-packaging",
+            status: SmokeStatus.failed,
+            detail: "package script missing at \(artifactPath(packageScript))",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+
+    _ = try run(packageScript, arguments: ["debug"], timeout: max(options.timeout * 20.0, 30.0))
+
+    let info = try bundleInfoPlist(appBundle)
+    proofPayload.bundleIdentifier = info["CFBundleIdentifier"] as? String
+    proofPayload.bundleExecutable = info["CFBundleExecutable"] as? String
+    proofPayload.packageType = info["CFBundlePackageType"] as? String
+    proofPayload.menuBarAccessory = info["LSUIElement"] as? Bool == true
+
+    guard let executable = appBundleExecutable(in: appBundle),
+          FileManager.default.isExecutableFile(atPath: executable.path)
+    else {
+        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+        return SmokeReport(
+            name: "app-bundle-packaging",
+            status: SmokeStatus.failed,
+            detail: "packaged app executable missing after package script",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+    proofPayload.appExecutablePath = artifactPath(executable)
+
+    guard proofPayload.bundleIdentifier?.isEmpty == false,
+          proofPayload.bundleExecutable == executable.lastPathComponent,
+          proofPayload.packageType == "APPL",
+          proofPayload.menuBarAccessory
+    else {
+        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+        return SmokeReport(
+            name: "app-bundle-packaging",
+            status: SmokeStatus.failed,
+            detail: "Info.plist does not include expected bundle identifier, executable, APPL package type, and LSUIElement menu-bar accessory metadata",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+
+    let signature = try verifyCodeSignature(appBundle, timeout: max(options.timeout * 5.0, 10.0))
+    proofPayload.codesignVerified = true
+    proofPayload.codesignSignature = signature
+
+    let appSupportDirectory = try options.isolatedAppSupportDirectory(prefix: "app-bundle-packaging-app-support")
+    proofPayload.appSupportPath = artifactPath(appSupportDirectory)
+    try writeReadinessScript(result: "missingClaudeLogin", appSupportDirectory: appSupportDirectory)
+
+    let runningApp = try launchAppBundleWithLaunchServices(
+        appBundle,
+        environment: [
+            "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
+            "PDTBAR_DISABLE_REAL_CLAUDE": "1",
+        ],
+        timeout: max(options.timeout, 2.0)
+    )
+    proofPayload.launchedViaLaunchServices = true
+    proofPayload.launchedProcessIdentifier = runningApp.processIdentifier
+    proofPayload.launchedBundleIdentifier = runningApp.bundleIdentifier
+    proofPayload.launchedExecutablePath = runningApp.executableURL.map(artifactPath)
+    proofPayload.bundleProcessMatched = runningApp.executableURL?.standardizedFileURL == executable.standardizedFileURL
+    defer {
+        runningApp.terminate()
+    }
+
+    guard proofPayload.bundleProcessMatched else {
+        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+        return SmokeReport(
+            name: "app-bundle-packaging",
+            status: SmokeStatus.failed,
+            detail: "LaunchServices did not start the packaged PDTBar.app executable",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+
+    let loginSurface = MenuBarSurfaceRenderer.render(descriptor: ClaudeSetupMenuDescriptor.missingClaudeLogin())
+    let expectedTargets = requiredSetupMenuTargets(in: loginSurface)
+    let expectedMenuIdentifiers = Set(expectedTargets.map(\.accessibilityIdentifier))
+    proofPayload.statusIdentifier = loginSurface.status.accessibilityIdentifier
+    proofPayload.expectedMenuIdentifiers = expectedMenuIdentifiers.sorted()
+
+    guard proofPayload.accessibilityChecked else {
+        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+        return SmokeReport(
+            name: "app-bundle-packaging",
+            status: SmokeStatus.skipped,
+            detail: "PDTBar.app was built, signed, and launched through LaunchServices; macOS Accessibility permission missing for menu-bar surface inspection",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+
+    let appElement = AXUIElementCreateApplication(runningApp.processIdentifier)
+    guard let statusElement = waitForAccessibilityElement(
+        in: appElement,
+        identifier: loginSurface.status.accessibilityIdentifier,
+        timeout: options.timeout
+    ) else {
+        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+        return SmokeReport(
+            name: "app-bundle-packaging",
+            status: SmokeStatus.failed,
+            detail: "packaged app launched, but Accessibility could not find status item \(loginSurface.status.accessibilityIdentifier)",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+
+    let openedMenu = openStatusMenu(
+        statusElement,
+        appElement: appElement,
+        expectedMenuIdentifiers: expectedMenuIdentifiers,
+        timeout: options.timeout
+    )
+    let menuSnapshot = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
+        expectedMenuIdentifiers,
+        in: appElement,
+        timeout: options.timeout
+    )
+    proofPayload.observedStatusText = accessibilityTexts(in: statusElement).sorted()
+    proofPayload.observedMenuIdentifiers = menuSnapshot.identifiers.sorted()
+    proofPayload.menuBarSurfaceVisible = expectedMenuIdentifiers.isSubset(of: menuSnapshot.identifiers)
+        && menuSnapshot.texts.contains("Log in with Claude")
+        && menuSnapshot.texts.contains { $0.contains("Not connected") }
+    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+
+    guard proofPayload.menuBarSurfaceVisible else {
+        return SmokeReport(
+            name: "app-bundle-packaging",
+            status: SmokeStatus.failed,
+            detail: "packaged app launched through LaunchServices, but setup menu-bar surface was not visible after \(openedMenu.attempts.joined(separator: ", "))",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+
+    return SmokeReport(
+        name: "app-bundle-packaging",
+        status: SmokeStatus.passed,
+        detail: "PDTBar.app was packaged, signed, launched through LaunchServices, matched the bundle executable, and exposed the setup menu-bar surface",
         artifacts: [artifactPath(proof)]
     )
 }
@@ -2877,6 +3071,64 @@ private struct PackagedOnboardingProof: Codable {
     var rawPortfolioPayloadsRedacted: Bool
 }
 
+private struct AppBundlePackagingProof: Codable {
+    var appBundlePath: String
+    var appExecutablePath: String
+    var packageCommand: [String]
+    var bundleIdentifier: String?
+    var bundleExecutable: String?
+    var packageType: String?
+    var menuBarAccessory: Bool
+    var codesignVerified: Bool
+    var codesignSignature: String?
+    var launchedViaLaunchServices: Bool
+    var launchedProcessIdentifier: Int32?
+    var launchedBundleIdentifier: String?
+    var launchedExecutablePath: String?
+    var bundleProcessMatched: Bool
+    var appSupportPath: String
+    var accessibilityChecked: Bool
+    var statusIdentifier: String
+    var expectedMenuIdentifiers: [String]
+    var observedStatusText: [String]
+    var observedMenuIdentifiers: [String]
+    var menuBarSurfaceVisible: Bool
+    var fixtureModeUsed: Bool
+    var rawClaudeCredentialsUsed: Bool
+    var rawPortfolioPayloadsRedacted: Bool
+}
+
+private final class LaunchServicesOpenResultBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var application: NSRunningApplication?
+    private var error: Error?
+    private var isComplete = false
+
+    func complete(application: NSRunningApplication?, error: Error?) {
+        lock.lock()
+        self.application = application
+        self.error = error
+        isComplete = true
+        lock.unlock()
+    }
+
+    func completed() -> Bool {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return isComplete
+    }
+
+    func snapshot() -> (application: NSRunningApplication?, error: Error?, isComplete: Bool) {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return (application, error, isComplete)
+    }
+}
+
 private struct RealClaudeFlowAXProof: Codable {
     var appArguments: [String]
     var fixtureModeUsed: Bool
@@ -4403,6 +4655,66 @@ private func appBundleExecutable(in candidate: URL) -> URL? {
     return candidate
         .appending(path: "Contents/MacOS")
         .appending(path: bundleExecutable)
+}
+
+private func bundleInfoPlist(_ appBundle: URL) throws -> [String: Any] {
+    let infoPlist = appBundle.appending(path: "Contents/Info.plist")
+    guard let data = try? Data(contentsOf: infoPlist),
+          let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+    else {
+        throw CommandError.runtime("Info.plist missing or unreadable at \(artifactPath(infoPlist))")
+    }
+    return info
+}
+
+private func verifyCodeSignature(_ appBundle: URL, timeout: TimeInterval) throws -> String {
+    _ = try run(
+        URL(fileURLWithPath: "/usr/bin/codesign"),
+        arguments: ["--verify", "--deep", "--strict", "--verbose=2", appBundle.path],
+        timeout: timeout
+    )
+    let details = try run(
+        URL(fileURLWithPath: "/usr/bin/codesign"),
+        arguments: ["-dv", appBundle.path],
+        timeout: timeout
+    )
+    let text = String(data: details.stderr, encoding: .utf8) ?? ""
+    return text
+        .split(separator: "\n")
+        .first { $0.hasPrefix("Signature=") }
+        .map(String.init) ?? "Signature=unknown"
+}
+
+private func launchAppBundleWithLaunchServices(
+    _ appBundle: URL,
+    environment: [String: String],
+    timeout: TimeInterval
+) throws -> NSRunningApplication {
+    let configuration = NSWorkspace.OpenConfiguration()
+    configuration.activates = false
+    configuration.allowsRunningApplicationSubstitution = false
+    configuration.createsNewApplicationInstance = true
+    var launchEnvironment = ProcessInfo.processInfo.environment
+    launchEnvironment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
+    configuration.environment = launchEnvironment.merging(environment) { _, new in new }
+
+    let result = LaunchServicesOpenResultBox()
+    NSWorkspace.shared.openApplication(at: appBundle, configuration: configuration) { application, error in
+        result.complete(application: application, error: error)
+    }
+
+    let deadline = Date().addingTimeInterval(timeout)
+    while !result.completed() && Date() < deadline {
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+    }
+    let openResult = result.snapshot()
+    guard openResult.isComplete else {
+        throw CommandError.timedOut("LaunchServices open \(appBundle.lastPathComponent)")
+    }
+    if let openError = openResult.error {
+        throw CommandError.runtime("LaunchServices failed to open \(appBundle.lastPathComponent): \(openError)")
+    }
+    return try require(openResult.application, "LaunchServices opened \(appBundle.lastPathComponent) without a running application")
 }
 
 private struct CommandResult {

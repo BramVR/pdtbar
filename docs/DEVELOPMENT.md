@@ -75,6 +75,7 @@ swift build --product pdtbar
 ./Scripts/package_app.sh
 ./Scripts/launch.sh
 ./Scripts/compile_and_run.sh
+swift run pdtbar-smoke app-bundle-packaging
 ```
 
 `make start` is the normal manual UX launch. It stops existing PDTBar processes,
@@ -108,6 +109,7 @@ First-run packaged regression gate:
 ```bash
 swift build --product pdtbar
 ./Scripts/package_app.sh
+swift run pdtbar-smoke app-bundle-packaging
 swift run pdtbar-smoke packaged-onboarding --app PDTBar.app
 ```
 
@@ -137,6 +139,7 @@ make test
 make check
 swift build --product pdtbar
 ./Scripts/package_app.sh
+swift run pdtbar-smoke app-bundle-packaging
 swift run pdtbar-smoke packaged-onboarding --app PDTBar.app
 ```
 

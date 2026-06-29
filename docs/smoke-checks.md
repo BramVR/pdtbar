@@ -69,6 +69,7 @@ make test
 make check
 swift build --product pdtbar
 ./Scripts/package_app.sh
+swift run pdtbar-smoke app-bundle-packaging
 swift run pdtbar-smoke packaged-onboarding --app PDTBar.app
 ```
 
@@ -246,6 +247,7 @@ Local/release packaged-app smoke:
 ```bash
 swift build --product pdtbar
 ./Scripts/package_app.sh
+swift run pdtbar-smoke app-bundle-packaging
 swift run pdtbar-smoke logged-out-launch
 swift run pdtbar-smoke ready-launch
 swift run pdtbar-smoke packaged-onboarding --app PDTBar.app --peekaboo /opt/homebrew/bin/peekaboo
@@ -267,6 +269,16 @@ Claude/PDT-ready path skips the logged-out menu, completes the first fetch,
 writes isolated first-fetch state, renders the first pulse, avoids fixture state,
 and writes only selector/status proof under `.build/pdtbar-smoke-artifacts/`.
 No live Claude credentials or portfolio payloads are used.
+
+The app-bundle packaging smoke builds `PDTBar.app` through
+`Scripts/package_app.sh`, verifies `Info.plist` bundle identifier/executable/
+`LSUIElement` metadata, verifies the local code signature, launches the bundle
+through LaunchServices with isolated app support, checks the running process
+matches `Contents/MacOS/PDTBar`, and opens the setup menu-bar surface when
+Accessibility is granted. Missing Accessibility exits successfully with
+`skipped` after packaging, signing, and LaunchServices launch proof. Its JSON
+artifact contains only bundle paths, signature posture, process metadata,
+selectors, and redacted status text.
 
 The packaged onboarding smoke is the first-run onboarding regression gate. It
 requires a packaged `PDTBar.app`, launches the bundle executable with fresh
