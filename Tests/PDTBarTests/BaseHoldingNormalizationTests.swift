@@ -125,6 +125,150 @@ struct BaseHoldingNormalizationTests {
         #expect(snapshot.totalValue == Money(value: "500.00", currency: "EUR"))
     }
 
+    @Test("Live wrapped setup error is classified as unavailable")
+    func liveWrappedSetupErrorIsClassifiedAsUnavailable() throws {
+        let connector = ScriptedPDTMCPConnector(responses: [
+            "pdt-get-portfolio-holdings": try mcpTextContent(
+                "PDT MCP setup required before reading holdings",
+                isError: true
+            ),
+        ])
+
+        do {
+            _ = try PDTMCPConnectorDataSource(
+                connector: connector,
+                liveOptions: PDTLiveDataSourceOptions(
+                    includeDistributions: false,
+                    includeXRayHoldings: false,
+                    includeIncomeEvents: false,
+                    includeDividends: false,
+                    includeIncomeQuoteLookups: false,
+                    includePriceSeries: false
+                )
+            ).snapshot(asOf: "2026-06-26")
+            Issue.record("Expected wrapped setup error to be classified as unavailable")
+        } catch PDTLiveDataSourceError.unavailableToolResult(let tool) {
+            #expect(tool == "pdt-get-portfolio-holdings")
+        }
+    }
+
+    @Test("Live wrapped result auth error is classified as unavailable")
+    func liveWrappedResultAuthErrorIsClassifiedAsUnavailable() throws {
+        let connector = ScriptedPDTMCPConnector(responses: [
+            "pdt-get-portfolio-holdings": try mcpResultObject(["error": "authentication required"]),
+        ])
+
+        do {
+            _ = try PDTMCPConnectorDataSource(
+                connector: connector,
+                liveOptions: PDTLiveDataSourceOptions(
+                    includeDistributions: false,
+                    includeXRayHoldings: false,
+                    includeIncomeEvents: false,
+                    includeDividends: false,
+                    includeIncomeQuoteLookups: false,
+                    includePriceSeries: false
+                )
+            ).snapshot(asOf: "2026-06-26")
+            Issue.record("Expected wrapped result auth error to be classified as unavailable")
+        } catch PDTLiveDataSourceError.unavailableToolResult(let tool) {
+            #expect(tool == "pdt-get-portfolio-holdings")
+        }
+    }
+
+    @Test("Live plain wrapped text auth error is classified as unavailable")
+    func livePlainWrappedTextAuthErrorIsClassifiedAsUnavailable() throws {
+        let connector = ScriptedPDTMCPConnector(responses: [
+            "pdt-get-portfolio-holdings": try mcpTextContent("authentication required"),
+        ])
+
+        do {
+            _ = try PDTMCPConnectorDataSource(
+                connector: connector,
+                liveOptions: PDTLiveDataSourceOptions(
+                    includeDistributions: false,
+                    includeXRayHoldings: false,
+                    includeIncomeEvents: false,
+                    includeDividends: false,
+                    includeIncomeQuoteLookups: false,
+                    includePriceSeries: false
+                )
+            ).snapshot(asOf: "2026-06-26")
+            Issue.record("Expected wrapped text auth error to be classified as unavailable")
+        } catch PDTLiveDataSourceError.unavailableToolResult(let tool) {
+            #expect(tool == "pdt-get-portfolio-holdings")
+        }
+    }
+
+    @Test("Live connector decodes large wrapped MCP holdings payload")
+    func liveConnectorDecodesLargeWrappedMCPHoldingsPayload() throws {
+        let connector = ScriptedPDTMCPConnector(responses: [
+            "pdt-get-portfolio-holdings": try mcpTextContent(largeWrappedHoldingsJSON()),
+        ])
+
+        let snapshot = try PDTMCPConnectorDataSource(
+            connector: connector,
+            liveOptions: PDTLiveDataSourceOptions(
+                includeDistributions: false,
+                includeXRayHoldings: false,
+                includeIncomeEvents: false,
+                includeDividends: false,
+                includeIncomeQuoteLookups: false,
+                includePriceSeries: false
+            )
+        ).snapshot(asOf: "2026-06-26")
+
+        #expect(snapshot.openHoldings.map(\.quoteId) == [1001])
+        #expect(snapshot.totalValue == Money(value: "500.00", currency: "EUR"))
+    }
+
+    @Test("Live wrapped MCP content ignores non-text items before JSON text")
+    func liveWrappedMCPContentIgnoresNonTextItemsBeforeJSONText() throws {
+        let connector = ScriptedPDTMCPConnector(responses: [
+            "pdt-get-portfolio-holdings": try mcpContentItems([
+                ["type": "image", "text": "authentication required"],
+                ["type": "text", "text": baseHoldingsJSON],
+            ]),
+        ])
+
+        let snapshot = try PDTMCPConnectorDataSource(
+            connector: connector,
+            liveOptions: PDTLiveDataSourceOptions(
+                includeDistributions: false,
+                includeXRayHoldings: false,
+                includeIncomeEvents: false,
+                includeDividends: false,
+                includeIncomeQuoteLookups: false,
+                includePriceSeries: false
+            )
+        ).snapshot(asOf: "2026-06-26")
+
+        #expect(snapshot.openHoldings.map(\.quoteId) == [1001])
+        #expect(snapshot.totalValue == Money(value: "500.00", currency: "EUR"))
+    }
+
+    @Test("Live connector decodes object data-wrapped MCP holdings payload")
+    func liveConnectorDecodesObjectDataWrappedMCPHoldingsPayload() throws {
+        let connector = ScriptedPDTMCPConnector(responses: [
+            "pdt-get-portfolio-holdings": try mcpDataObject(baseHoldingsJSON),
+        ])
+
+        let snapshot = try PDTMCPConnectorDataSource(
+            connector: connector,
+            liveOptions: PDTLiveDataSourceOptions(
+                includeDistributions: false,
+                includeXRayHoldings: false,
+                includeIncomeEvents: false,
+                includeDividends: false,
+                includeIncomeQuoteLookups: false,
+                includePriceSeries: false
+            )
+        ).snapshot(asOf: "2026-06-26")
+
+        #expect(snapshot.openHoldings.map(\.quoteId) == [1001])
+        #expect(snapshot.totalValue == Money(value: "500.00", currency: "EUR"))
+    }
+
     @Test("Filtered live holdings do not trigger quote lookup or price history")
     func filteredLiveHoldingsDoNotTriggerQuoteLookupOrPriceHistory() throws {
         let connector = ScriptedPDTMCPConnector(responses: [
@@ -290,6 +434,68 @@ private let packageRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
     .deletingLastPathComponent()
+
+private func mcpTextContent(_ text: String, isError: Bool = false) throws -> Data {
+    try JSONSerialization.data(
+        withJSONObject: [
+            "isError": isError,
+            "content": [
+                [
+                    "type": "text",
+                    "text": text,
+                ],
+            ],
+        ],
+        options: [.sortedKeys]
+    )
+}
+
+private func mcpDataObject(_ json: String) throws -> Data {
+    let object = try JSONSerialization.jsonObject(with: Data(json.utf8))
+    return try JSONSerialization.data(
+        withJSONObject: ["data": object],
+        options: [.sortedKeys]
+    )
+}
+
+private func mcpContentItems(_ content: [[String: Any]]) throws -> Data {
+    try JSONSerialization.data(
+        withJSONObject: [
+            "isError": false,
+            "content": content,
+        ],
+        options: [.sortedKeys]
+    )
+}
+
+private func mcpResultObject(_ object: [String: Any]) throws -> Data {
+    try JSONSerialization.data(
+        withJSONObject: ["result": object],
+        options: [.sortedKeys]
+    )
+}
+
+private func largeWrappedHoldingsJSON() -> String {
+    """
+    {
+      "metadata": {
+        "padding": "\(String(repeating: "x", count: 220_000))"
+      },
+      "holdings": [
+        {
+          "symbolName": "Open Public Co",
+          "symbolQuoteId": 1001,
+          "currentPriceDate": "2026-06-26T21:59:00+00:00",
+          "currentPriceLocal": { "value": "10.25", "currency": "EUR" },
+          "currentWorth": { "value": "500.00", "currency": "EUR" },
+          "currentWorthLocal": { "value": "500.00", "currency": "EUR" },
+          "portfolioWeight": 0.25,
+          "closedAt": null
+        }
+      ]
+    }
+    """
+}
 
 private let baseHoldingsJSON = """
 {
