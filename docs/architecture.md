@@ -51,7 +51,11 @@ readiness, required read tools, read-only policy, cache/source, detail-fill,
 freshness, read-state, and redacted diagnostics. Menu descriptors render this
 state; AppKit does not derive health facts.
 
-Fixture mode uses the same engine/render path but is explicit developer tooling.
+Live and fixture PDT decoders both feed PDT-shaped DTO inputs into
+`PDTSnapshotNormalizer`, so holding filtering, symbol quote joins, dividend
+correction handling, optional facets, price history, and fixture/live parity
+stay in one core normalization path. Fixture mode uses the same engine/render
+path but is explicit developer tooling.
 
 ## Boundaries
 

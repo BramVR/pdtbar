@@ -6477,20 +6477,12 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             phase: .baseHoldings,
             arguments: [:]
         )
-        let normalization = PDTBaseHoldingNormalizer.normalize(
-            holdingsEnvelope.holdings.map(\.baseHoldingInput),
-            currency: "EUR"
-        )
-        return PortfolioSnapshot(
-            asOf: snapshotAsOf,
-            totalValue: normalization.totalValue,
-            openHoldings: normalization.openHoldings,
-            sectors: [],
-            assetTypes: [],
-            xRayHoldings: nil,
-            incomeEvents: [],
-            dividendRowCount: 0,
-            priceSeries: []
+        return PDTSnapshotNormalizer.normalize(
+            PDTSnapshotNormalizationInput(
+                asOf: snapshotAsOf,
+                currency: "EUR",
+                holdings: holdingsEnvelope.holdings.map(\.baseHoldingInput)
+            )
         )
     }
 
@@ -7014,44 +7006,33 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         }
         let dividends = options.includeDividends ? try liveDividends(arguments: dividendDateRange) : []
 
-        let baseNormalization = PDTBaseHoldingNormalizer.normalize(
-            holdingsEnvelope.holdings.map(\.baseHoldingInput),
-            currency: "EUR"
+        let holdingInputs = holdingsEnvelope.holdings.map(\.baseHoldingInput)
+        let baseSnapshot = PDTSnapshotNormalizer.normalize(
+            PDTSnapshotNormalizationInput(
+                asOf: snapshotAsOf,
+                currency: "EUR",
+                holdings: holdingInputs
+            )
         )
-        var openHoldings = baseNormalization.openHoldings
         let neededCalendarSymbolIDs = Set(calendarEvents.filter { $0.type != "no-events-today" }.compactMap(\.symbolId))
         let quoteMetadata = options.includeIncomeQuoteLookups
-            ? try liveSymbolQuoteMetadata(for: openHoldings, neededCalendarSymbolIDs: neededCalendarSymbolIDs)
+            ? try liveSymbolQuoteMetadata(for: baseSnapshot.openHoldings, neededCalendarSymbolIDs: neededCalendarSymbolIDs)
             : SymbolQuoteMetadata()
-        openHoldings = openHoldings.map {
-            var holding = $0
-            holding.copyableIdentifier = quoteMetadata.codesByQuoteID[holding.quoteId]
-            holding.isin = quoteMetadata.isinsByQuoteID[holding.quoteId] ?? holding.isin
-            return holding
-        }
-        let quoteIDsBySymbolID = quoteMetadata.quoteIDsBySymbolID
         let priceSeries = options.includePriceSeries
-            ? try livePriceRows(for: openHoldings, asOf: snapshotAsOf)
+            ? try livePriceRows(for: baseSnapshot.openHoldings, asOf: snapshotAsOf)
             : []
-        let optionalDetails = PDTOptionalDetailNormalizer.normalize(
-            distributions: distributionsEnvelope?.optionalDetailInput,
-            xRayHoldings: xRayHoldings,
-            calendarEvents: calendarEvents.map(\.optionalDetailInput),
-            dividends: dividends.map(\.optionalDetailInput),
-            quoteIDsBySymbolID: quoteIDsBySymbolID,
-            priceRows: priceSeries
-        )
-
-        return PortfolioSnapshot(
-            asOf: snapshotAsOf,
-            totalValue: baseNormalization.totalValue,
-            openHoldings: openHoldings,
-            sectors: optionalDetails.sectors,
-            assetTypes: optionalDetails.assetTypes,
-            xRayHoldings: optionalDetails.xRayHoldings,
-            incomeEvents: optionalDetails.incomeEvents,
-            dividendRowCount: optionalDetails.dividendRowCount,
-            priceSeries: optionalDetails.priceSeries
+        return PDTSnapshotNormalizer.normalize(
+            PDTSnapshotNormalizationInput(
+                asOf: snapshotAsOf,
+                currency: "EUR",
+                holdings: holdingInputs,
+                symbolQuotes: quoteMetadata.snapshotNormalizationInputs,
+                distributions: distributionsEnvelope?.optionalDetailInput,
+                xRayHoldings: xRayHoldings,
+                calendarEvents: calendarEvents.map(\.optionalDetailInput),
+                dividends: dividends.map(\.optionalDetailInput),
+                priceRows: priceSeries
+            )
         )
     }
 
@@ -7704,42 +7685,21 @@ public struct PDTFixtureDataSource: PortfolioDataSource, PortfolioPriorSnapshotD
         holdings rawHoldings: [FixtureHolding],
         asOf: String
     ) -> PortfolioSnapshot {
-        let quoteCodesByQuoteID = payload.symbolQuotes.reduce(into: [Int: String]()) { codesByQuoteID, quote in
-            if let code = PDTBaseHoldingNormalizer.safePublicIdentifier(quote.code) {
-                codesByQuoteID[quote.id] = code
-            }
-        }
-        let normalization = PDTBaseHoldingNormalizer.normalize(
-            rawHoldings.map { $0.baseHoldingInput(copyableIdentifier: quoteCodesByQuoteID[$0.symbolQuoteId]) },
-            currency: payload.meta.portfolioCurrency,
-            reportedTotalValue: payload.meta.portfolioCurrentWorthEUR.map {
-                Money(value: $0, currency: payload.meta.portfolioCurrency)
-            }
-        )
-        let holdings = normalization.openHoldings
-
-        let quoteIDsBySymbolID = payload.symbolQuotes.reduce(into: [Int: Int]()) { idsBySymbolID, quote in
-            idsBySymbolID[quote.symbolId] = quote.id
-        }
-        let optionalDetails = PDTOptionalDetailNormalizer.normalize(
-            distributions: payload.getPortfolioDistributions?.optionalDetailInput,
-            xRayHoldings: payload.listXRayHoldings?.items.map(\.optionalDetailInput),
-            calendarEvents: payload.listCalendarEvents?.data.map(\.optionalDetailInput) ?? [],
-            dividends: payload.listDividends?.data.map(\.optionalDetailInput) ?? [],
-            quoteIDsBySymbolID: quoteIDsBySymbolID,
-            priceRows: payload.listSymbolPrices?.data.map(\.optionalDetailInput) ?? []
-        )
-
-        return PortfolioSnapshot(
-            asOf: asOf,
-            totalValue: normalization.totalValue,
-            openHoldings: holdings,
-            sectors: optionalDetails.sectors,
-            assetTypes: optionalDetails.assetTypes,
-            xRayHoldings: optionalDetails.xRayHoldings,
-            incomeEvents: optionalDetails.incomeEvents,
-            dividendRowCount: optionalDetails.dividendRowCount,
-            priceSeries: optionalDetails.priceSeries
+        PDTSnapshotNormalizer.normalize(
+            PDTSnapshotNormalizationInput(
+                asOf: asOf,
+                currency: payload.meta.portfolioCurrency,
+                holdings: rawHoldings.map { $0.baseHoldingInput(copyableIdentifier: nil) },
+                reportedTotalValue: payload.meta.portfolioCurrentWorthEUR.map {
+                    Money(value: $0, currency: payload.meta.portfolioCurrency)
+                },
+                symbolQuotes: payload.symbolQuotes.map(\.snapshotNormalizationInput),
+                distributions: payload.getPortfolioDistributions?.optionalDetailInput,
+                xRayHoldings: payload.listXRayHoldings?.items.map(\.optionalDetailInput),
+                calendarEvents: payload.listCalendarEvents?.data.map(\.optionalDetailInput) ?? [],
+                dividends: payload.listDividends?.data.map(\.optionalDetailInput) ?? [],
+                priceRows: payload.listSymbolPrices?.data.map(\.optionalDetailInput) ?? []
+            )
         )
     }
 }
@@ -7981,6 +7941,19 @@ private struct SymbolQuoteMetadata {
     var isinsByQuoteID: [Int: String] = [:]
 }
 
+private extension SymbolQuoteMetadata {
+    var snapshotNormalizationInputs: [PDTSymbolQuoteNormalizationInput] {
+        quoteIDsBySymbolID.map { symbolId, quoteId in
+            PDTSymbolQuoteNormalizationInput(
+                quoteId: quoteId,
+                symbolId: symbolId,
+                copyableIdentifier: codesByQuoteID[quoteId],
+                isin: isinsByQuoteID[quoteId]
+            )
+        }
+    }
+}
+
 private struct LivePricesEnvelope: Decodable {
     var data: [LivePrice]
 }
@@ -8158,6 +8131,16 @@ private struct SymbolQuoteEnvelope: Decodable {
     var id: Int
     var code: String?
     var symbolId: Int
+}
+
+private extension SymbolQuoteEnvelope {
+    var snapshotNormalizationInput: PDTSymbolQuoteNormalizationInput {
+        PDTSymbolQuoteNormalizationInput(
+            quoteId: id,
+            symbolId: symbolId,
+            copyableIdentifier: code
+        )
+    }
 }
 
 private func safePublicIdentifier(_ raw: String?) -> String? {
