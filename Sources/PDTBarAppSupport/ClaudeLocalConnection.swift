@@ -84,7 +84,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     private let toolResultParser: ClaudeToolResultParser
     private let discoveredToolNamesLock = NSLock()
     private var discoveredToolNames: [String: String] = [:]
-    private var inferredReadToolNames: Set<String> = []
+    private var candidateReadToolNames: Set<String> = []
 
     public convenience init(environment: [String: String]) {
         self.init(configuration: ClaudeLocalConnectionConfiguration(environment: environment))
@@ -150,22 +150,27 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             throw PDTMCPConnectorError.setupUnavailable("Claude PDT MCP server is not connected")
         }
         let requiredReadTools = PDTReadTools.requiredV1.filter { required.contains($0) }
+        let observedToolNames = observedToolNamesFromClaudeHistory(readToolNames: requiredReadTools)
+        if !observedToolNames.isEmpty {
+            progress("Using cached PDT MCP tools")
+            mergeDiscoveredToolNames(observedToolNames)
+        }
         let inferredToolNames = Self.inferredToolNames(
             fromMCPListOutput: result.combinedOutput,
             readToolNames: requiredReadTools
         )
         if !inferredToolNames.isEmpty {
             progress("Using connected PDT MCP tools")
-            mergeDiscoveredToolNames(inferredToolNames, source: .inferred)
+            mergeDiscoveredToolNames(inferredToolNames, source: .candidate)
         }
-        let snapshot = discoveredToolNamesSnapshot()
+        let snapshot = discoveredToolNamesSnapshot(includeCandidates: false)
         if requiredReadTools.contains(where: { snapshot[$0] == nil }) {
             progress("Waiting on Claude for PDT tool discovery")
         }
-        let resolved = try resolvedToolNames(for: requiredReadTools, progress: progress)
+        let resolved = try resolvedToolNames(for: requiredReadTools, progress: progress, includeCandidates: false)
         var available = Set(resolved.keys)
         for tool in requiredReadTools where !available.contains(tool) {
-            if (try? resolvedToolName(for: tool, progress: progress)) != nil {
+            if (try? resolvedToolName(for: tool, progress: progress, includeCandidates: false)) != nil {
                 available.insert(tool)
             }
         }
@@ -298,10 +303,22 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         for readToolName: String,
         progress: @escaping @Sendable (String) -> Void
     ) throws -> String {
-        if let cached = discoveredToolNameFromCache(for: readToolName) {
+        try resolvedToolName(for: readToolName, progress: progress, includeCandidates: true)
+    }
+
+    private func resolvedToolName(
+        for readToolName: String,
+        progress: @escaping @Sendable (String) -> Void,
+        includeCandidates: Bool
+    ) throws -> String {
+        if let cached = discoveredToolNameFromCache(for: readToolName, includeCandidates: includeCandidates) {
             return cached
         }
-        if let resolved = try resolvedToolNames(for: [readToolName], progress: progress)[readToolName] {
+        if let resolved = try resolvedToolNames(
+            for: [readToolName],
+            progress: progress,
+            includeCandidates: includeCandidates
+        )[readToolName] {
             return resolved
         }
         throw PDTMCPConnectorError.setupUnavailable("Claude could not find \(readToolName)")
@@ -315,7 +332,15 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         for readToolNames: [String],
         progress: @escaping @Sendable (String) -> Void
     ) throws -> [String: String] {
-        let cached = discoveredToolNamesSnapshot()
+        try resolvedToolNames(for: readToolNames, progress: progress, includeCandidates: true)
+    }
+
+    private func resolvedToolNames(
+        for readToolNames: [String],
+        progress: @escaping @Sendable (String) -> Void,
+        includeCandidates: Bool
+    ) throws -> [String: String] {
+        let cached = discoveredToolNamesSnapshot(includeCandidates: includeCandidates)
         let unresolved = readToolNames.filter { cached[$0] == nil }
         guard !unresolved.isEmpty else {
             return cached.filter { readToolNames.contains($0.key) }
@@ -339,14 +364,19 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
                 continue
             }
             mergeDiscoveredToolNames(discoveredToolNames(for: unresolved, in: result.stdout))
-            if unresolved.allSatisfy({ discoveredToolNameFromCache(for: $0) != nil }) {
+            if unresolved.allSatisfy({
+                discoveredToolNameFromCache(for: $0, includeCandidates: includeCandidates) != nil
+            }) {
                 break
             }
         } while attempts < configuration.toolCallRetryPolicy.maxAttempts
-        for readToolName in unresolved where discoveredToolNameFromCache(for: readToolName) == nil {
-            try resolveToolNameIndividually(readToolName, progress: progress)
+        for readToolName in unresolved where discoveredToolNameFromCache(
+            for: readToolName,
+            includeCandidates: includeCandidates
+        ) == nil {
+            try resolveToolNameIndividually(readToolName, progress: progress, includeCandidates: includeCandidates)
         }
-        let finalSnapshot = discoveredToolNamesSnapshot()
+        let finalSnapshot = discoveredToolNamesSnapshot(includeCandidates: includeCandidates)
         let missing = unresolved.filter { finalSnapshot[$0] == nil }
         guard lastResultExitCode == 0 || missing.isEmpty else {
             throw PDTMCPConnectorError.setupUnavailable("Claude could not find \(toolList)")
@@ -362,6 +392,14 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         _ readToolName: String,
         progress: @escaping @Sendable (String) -> Void
     ) throws {
+        try resolveToolNameIndividually(readToolName, progress: progress, includeCandidates: true)
+    }
+
+    private func resolveToolNameIndividually(
+        _ readToolName: String,
+        progress: @escaping @Sendable (String) -> Void,
+        includeCandidates: Bool
+    ) throws {
         var attempts = 0
         repeat {
             attempts += 1
@@ -374,16 +412,26 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
                 continue
             }
             mergeDiscoveredToolNames(discoveredToolNames(for: [readToolName], in: result.stdout))
-            if discoveredToolNameFromCache(for: readToolName) != nil {
+            if discoveredToolNameFromCache(for: readToolName, includeCandidates: includeCandidates) != nil {
                 break
             }
         } while attempts < configuration.toolCallRetryPolicy.maxAttempts
     }
 
     private func discoveredToolNameFromCache(for readToolName: String) -> String? {
+        discoveredToolNameFromCache(for: readToolName, includeCandidates: true)
+    }
+
+    private func discoveredToolNameFromCache(
+        for readToolName: String,
+        includeCandidates: Bool
+    ) -> String? {
         discoveredToolNamesLock.lock()
         defer {
             discoveredToolNamesLock.unlock()
+        }
+        guard includeCandidates || !candidateReadToolNames.contains(readToolName) else {
+            return nil
         }
         return discoveredToolNames[readToolName]
     }
@@ -393,32 +441,73 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         defer {
             discoveredToolNamesLock.unlock()
         }
-        return inferredReadToolNames.contains(readToolName)
+        return candidateReadToolNames.contains(readToolName)
             && discoveredToolNames[readToolName] == toolName
     }
 
     private func removeInferredToolName(readToolName: String, toolName: String) {
         discoveredToolNamesLock.lock()
-        if inferredReadToolNames.contains(readToolName),
+        if candidateReadToolNames.contains(readToolName),
            discoveredToolNames[readToolName] == toolName
         {
             discoveredToolNames.removeValue(forKey: readToolName)
-            inferredReadToolNames.remove(readToolName)
+            candidateReadToolNames.remove(readToolName)
         }
         discoveredToolNamesLock.unlock()
     }
 
-    private func discoveredToolNamesSnapshot() -> [String: String] {
+    private func discoveredToolNamesSnapshot(includeCandidates: Bool = true) -> [String: String] {
         discoveredToolNamesLock.lock()
         defer {
             discoveredToolNamesLock.unlock()
         }
-        return discoveredToolNames
+        guard !includeCandidates else {
+            return discoveredToolNames
+        }
+        return discoveredToolNames.filter { !candidateReadToolNames.contains($0.key) }
+    }
+
+    private func observedToolNamesFromClaudeHistory(readToolNames: [String]) -> [String: String] {
+        var observed: [String: String] = [:]
+        for file in recentClaudeTranscriptFiles(limit: 128) {
+            let missing = readToolNames.filter { observed[$0] == nil }
+            guard !missing.isEmpty else {
+                break
+            }
+            guard let output = try? String(contentsOf: file, encoding: .utf8) else {
+                continue
+            }
+            observed.merge(discoveredToolNames(for: missing, in: output)) { current, _ in current }
+        }
+        return observed
+    }
+
+    private func recentClaudeTranscriptFiles(limit: Int) -> [URL] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: configuration.claudeProjectsDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        var files: [(url: URL, date: Date)] = []
+        for case let file as URL in enumerator where file.pathExtension == "jsonl" {
+            guard let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey]),
+                  values.isRegularFile == true
+            else {
+                continue
+            }
+            files.append((file, values.contentModificationDate ?? .distantPast))
+        }
+        return files
+            .sorted { $0.date > $1.date }
+            .prefix(limit)
+            .map(\.url)
     }
 
     private enum ToolNameSource {
         case discovered
-        case inferred
+        case candidate
     }
 
     private func mergeDiscoveredToolNames(
@@ -430,11 +519,11 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             switch source {
             case .discovered:
                 discoveredToolNames[readToolName] = toolName
-                inferredReadToolNames.remove(readToolName)
-            case .inferred:
+                candidateReadToolNames.remove(readToolName)
+            case .candidate:
                 if discoveredToolNames[readToolName] == nil {
                     discoveredToolNames[readToolName] = toolName
-                    inferredReadToolNames.insert(readToolName)
+                    candidateReadToolNames.insert(readToolName)
                 }
             }
         }
