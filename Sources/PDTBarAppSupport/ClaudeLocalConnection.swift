@@ -261,8 +261,11 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         if let discovered = discoveredToolNameFromCache(for: readToolName) {
             return discovered
         }
-        let prefix = pdtToolPrefixes().first ?? Self.defaultPDTToolPrefix
-        return "\(prefix)\(readToolName)"
+        _ = try verifiedReadTools([readToolName], progress: { _ in })
+        if let discovered = discoveredToolNameFromCache(for: readToolName) {
+            return discovered
+        }
+        throw PDTMCPConnectorError.setupUnavailable("Claude could not find \(readToolName)")
     }
 
     private func verifiedReadTools(
