@@ -13,16 +13,17 @@ struct ClaudeLocalConnectionTests {
         #expect(!ClaudeLocalConnection.pdtServerIsConnected(in: "Some Other MCP connected"))
     }
 
-    @Test("MCP list parsing derives Claude PDT tool prefixes")
-    func mcpListParsingDerivesClaudePDTToolPrefixes() {
-        let output = "claude.ai Portfolio Dividend Tracker (PDT): https://mcp.portfoliodividendtracker.com - ✔ Connected"
+    @Test("MCP list parsing derives PDT tool prefixes")
+    func mcpListParsingDerivesPDTToolPrefixes() {
+        let output = """
+        claude.ai Portfolio Dividend Tracker (PDT): https://mcp.portfoliodividendtracker.com - ✔ Connected
+        claude.ai Gmail: https://gmailmcp.googleapis.com/mcp/v1 - ✔ Connected
+        claude.ai Google Drive: https://drivemcp.googleapis.com/mcp/v1 - ! Needs authentication
+        """
 
-        #expect(ClaudeLocalConnection.pdtToolPrefixes(fromMCPListOutput: output) == [
-            "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__",
-        ])
-        #expect(ClaudeLocalConnection.pdtToolPrefixes(fromMCPListOutput: "pdt (portfoliodividendtracker.com) connected") == [
-            "mcp__pdt__",
-        ])
+        let prefixes = ClaudeLocalConnection.pdtToolPrefixes(fromMCPListOutput: output)
+
+        #expect(prefixes == ["mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__"])
     }
 
     @Test("Missing Claude classifies readiness and availability as setup unavailable")
@@ -67,11 +68,10 @@ struct ClaudeLocalConnectionTests {
         }
     }
 
-    @Test("Connected PDT server reports ToolSearch verified required read tools")
-    func connectedPDTServerReportsToolSearchVerifiedRequiredReadTools() throws {
+    @Test("Connected PDT server reports requested read tools without ToolSearch")
+    func connectedPDTServerReportsRequestedReadToolsWithoutToolSearch() throws {
         let runner = RecordingClaudeCommandRunner(results: [
             .init(stdout: "Portfolio Dividend Tracker connected", stderr: "", exitCode: 0),
-            .init(stdout: "mcp__pdt__pdt-get-portfolio-holdings", stderr: "", exitCode: 0),
         ])
         let connection = ClaudeLocalConnection(
             configuration: configuration(retryCount: 0),
@@ -81,15 +81,14 @@ struct ClaudeLocalConnectionTests {
         let available = try connection.availableReadTools(required: ["pdt-get-portfolio-holdings"])
 
         #expect(available == ["pdt-get-portfolio-holdings"])
-        #expect(runner.requests.count == 2)
-        #expect(runner.requests.last?.arguments.contains("ToolSearch") == true)
+        #expect(runner.requests.count == 1)
+        #expect(!runner.requests.contains { $0.arguments.contains("ToolSearch") })
     }
 
-    @Test("MCP list availability verifies tools with ToolSearch")
-    func mcpListAvailabilityVerifiesToolsWithToolSearch() throws {
+    @Test("MCP list availability reports tools without ToolSearch")
+    func mcpListAvailabilityReportsToolsWithoutToolSearch() throws {
         let runner = RecordingClaudeCommandRunner(results: [
             .init(stdout: "claude.ai Portfolio Dividend Tracker (PDT): https://mcp.portfoliodividendtracker.com - ✔ Connected", stderr: "", exitCode: 0),
-            .init(stdout: "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-list-x-ray-holdings", stderr: "", exitCode: 0),
         ])
         let connection = ClaudeLocalConnection(
             configuration: configuration(retryCount: 0, claudeProjectsDirectory: temporaryClaudeProjectsDirectory()),
@@ -102,17 +101,15 @@ struct ClaudeLocalConnectionTests {
         }
 
         #expect(available == ["pdt-list-x-ray-holdings"])
-        #expect(progress.values == ["Checking Claude MCP servers", "Finding PDT read tools"])
-        #expect(runner.requests.count == 2)
-        #expect(runner.requests.last?.arguments.contains("ToolSearch") == true)
+        #expect(progress.values == ["Checking Claude MCP servers"])
+        #expect(runner.requests.count == 1)
+        #expect(!runner.requests.contains { $0.arguments.contains("ToolSearch") })
     }
 
-    @Test("Partial ToolSearch availability resolves missing tools individually")
-    func partialToolSearchAvailabilityResolvesMissingToolsIndividually() throws {
+    @Test("MCP list availability reports multiple requested required tools together")
+    func mcpListAvailabilityReportsMultipleRequestedRequiredToolsTogether() throws {
         let runner = RecordingClaudeCommandRunner(results: [
             .init(stdout: "Portfolio Dividend Tracker connected", stderr: "", exitCode: 0),
-            .init(stdout: "mcp__pdt__pdt-get-portfolio-holdings", stderr: "", exitCode: 0),
-            .init(stdout: "mcp__pdt__pdt-list-x-ray-holdings", stderr: "", exitCode: 0),
         ])
         let connection = ClaudeLocalConnection(
             configuration: configuration(retryCount: 0),
@@ -128,15 +125,14 @@ struct ClaudeLocalConnectionTests {
         }
 
         #expect(available == ["pdt-get-portfolio-holdings", "pdt-list-x-ray-holdings"])
-        #expect(runner.requests.count == 3)
-        #expect(progress.values.contains("Finding PDT read tools"))
-        #expect(progress.values.contains("Finding pdt-list-x-ray-holdings"))
+        #expect(runner.requests.count == 1)
+        #expect(progress.values == ["Checking Claude MCP servers"])
     }
 
-    @Test("Concrete read-tool calls avoid broad PDT allowlists")
-    func concreteReadToolCallsAvoidBroadPDTAllowlists() throws {
+    @Test("Read-tool calls use PDT-only deny policy")
+    func readToolCallsUsePDTOnlyDenyPolicy() throws {
         let runner = RecordingClaudeCommandRunner(results: [
-            .init(stdout: "mcp__pdt__pdt-list-x-ray-holdings", stderr: "", exitCode: 0),
+            .init(stdout: "pdt (portfoliodividendtracker.com) connected\nclaude.ai Gmail: https://gmailmcp.googleapis.com/mcp/v1 - ✔ Connected", stderr: "", exitCode: 0),
             .init(stdout: streamJSON(
                 toolName: "mcp__pdt__pdt-list-x-ray-holdings",
                 result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"items":[]}}"#
@@ -147,6 +143,7 @@ struct ClaudeLocalConnectionTests {
             commandRunner: runner
         )
 
+        _ = try connection.availableReadTools(required: ["pdt-list-x-ray-holdings"])
         _ = try connection.callReadTool("pdt-list-x-ray-holdings", arguments: [
             "limit": "1",
             "offset": "0",
@@ -154,8 +151,17 @@ struct ClaudeLocalConnectionTests {
 
         #expect(runner.requests.count == 2)
         let readArguments = runner.requests.last?.arguments.joined(separator: " ") ?? ""
-        #expect(readArguments.contains("--allowedTools mcp__pdt__pdt-list-x-ray-holdings"))
-        #expect(readArguments.contains("--allowedTools mcp__pdt__pdt-*") == false)
+        #expect(readArguments.contains("--allowedTools ToolSearch,mcp__pdt__pdt-list-x-ray-holdings"))
+        #expect(readArguments.contains("--disallowedTools"))
+        #expect(readArguments.contains("mcp__*__pdt-update-*"))
+        #expect(readArguments.contains("mcp__*__pdt-get-portfolio-holdings"))
+        #expect(readArguments.contains("mcp__*__pdt-get-symbol"))
+        #expect(readArguments.contains("AskUserQuestion"))
+        #expect(readArguments.contains("DesignSync"))
+        #expect(readArguments.contains("Edit"))
+        #expect(readArguments.contains("Bash"))
+        #expect(readArguments.contains("Read"))
+        #expect(readArguments.contains("WebSearch"))
     }
 
     @Test("Availability reports PDT server check progress")
@@ -175,20 +181,16 @@ struct ClaudeLocalConnectionTests {
         }
 
         #expect(progress.values.contains("Checking Claude MCP servers"))
-        #expect(progress.values.contains("Finding PDT read tools"))
-        #expect(!progress.values.contains("Waiting on Claude for PDT tool discovery"))
-        #expect(runner.requests.contains { $0.arguments.contains("ToolSearch") })
+        #expect(!progress.values.contains("Finding PDT read tools"))
+        #expect(!runner.requests.contains { $0.arguments.contains("ToolSearch") })
         let toolSearchArguments = runner.requests.last?.arguments.joined(separator: " ") ?? ""
-        #expect(toolSearchArguments.contains("--disallowedTools"))
-        #expect(toolSearchArguments.contains("Bash"))
-        #expect(toolSearchArguments.contains("Read"))
-        #expect(toolSearchArguments.contains("WebSearch"))
+        #expect(toolSearchArguments == "mcp list")
     }
 
     @Test("Concrete read-tool calls reject different tool names")
     func concreteReadToolCallsRejectDifferentToolNames() throws {
         let runner = RecordingClaudeCommandRunner(results: [
-            .init(stdout: "mcp__pdt__pdt-get-symbol", stderr: "", exitCode: 0),
+            .init(stdout: "pdt (portfoliodividendtracker.com) connected", stderr: "", exitCode: 0),
             .init(stdout: streamJSON(
                 toolName: "mcp__pdt__pdt-get-symbol-quote",
                 result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"symbol":{"id":5101}}}"#
@@ -199,15 +201,19 @@ struct ClaudeLocalConnectionTests {
             commandRunner: runner
         )
 
+        _ = try connection.availableReadTools(required: ["pdt-get-symbol"])
         #expect(throws: PDTMCPConnectorError.transientFailure("Claude did not call mcp__pdt__pdt-get-symbol")) {
             try connection.callReadTool("pdt-get-symbol", arguments: ["id": "5101"])
         }
+        let readArguments = runner.requests.last?.arguments.joined(separator: " ") ?? ""
+        #expect(readArguments.contains("--allowedTools ToolSearch,mcp__pdt__pdt-get-symbol"))
+        #expect(readArguments.contains("mcp__*__pdt-get-symbol-quote"))
     }
 
-    @Test("Read-tool calls use concrete allowlists, parser results, and retry classification")
+    @Test("Read-tool calls use deny policy, parser results, and retry classification")
     func readToolCallsUseSharedResolutionAndParser() throws {
         let runner = RecordingClaudeCommandRunner(results: [
-            .init(stdout: "mcp__pdt__pdt-get-portfolio-holdings", stderr: "", exitCode: 0),
+            .init(stdout: "pdt (portfoliodividendtracker.com) connected", stderr: "", exitCode: 0),
             .init(stdout: streamJSON(toolName: "mcp__pdt__pdt-get-portfolio-holdings", result: #"{"type":"tool_result","tool_use_id":"call_1","content":[{"type":"text","text":"Result pending"}]}"#), stderr: "", exitCode: 0),
             .init(stdout: streamJSON(toolName: "mcp__pdt__pdt-get-portfolio-holdings", result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"holdings":[{"symbolName":"Shared Public Co","portfolioWeight":0.21}]}}"#), stderr: "", exitCode: 0),
         ])
@@ -216,17 +222,46 @@ struct ClaudeLocalConnectionTests {
             commandRunner: runner
         )
 
+        _ = try connection.availableReadTools(required: ["pdt-get-portfolio-holdings"])
         let data = try connection.callReadTool("pdt-get-portfolio-holdings", arguments: [:])
 
         #expect(try firstHoldingName(in: data) == "Shared Public Co")
         #expect(runner.requests.count == 3)
         let readRequest = try #require(runner.requests.last)
-        #expect(readRequest.arguments.joined(separator: " ").contains("--allowedTools mcp__pdt__pdt-get-portfolio-holdings"))
-        #expect(readRequest.arguments.joined(separator: " ").contains("Call the PDT read tool named pdt-get-portfolio-holdings"))
+        #expect(readRequest.arguments.joined(separator: " ").contains("--allowedTools ToolSearch,mcp__pdt__pdt-get-portfolio-holdings"))
+        #expect(readRequest.arguments.joined(separator: " ").contains("Find and call the read-only PDT MCP tool named pdt-get-portfolio-holdings"))
         #expect(readRequest.arguments.joined(separator: " ").contains("mcp__*__pdt-update-*"))
+        #expect(readRequest.arguments.joined(separator: " ").contains("mcp__*__pdt-list-x-ray-holdings"))
+        #expect(readRequest.arguments.joined(separator: " ").contains("AskUserQuestion"))
+        #expect(readRequest.arguments.joined(separator: " ").contains("DesignSync"))
         #expect(readRequest.arguments.joined(separator: " ").contains("Bash"))
         #expect(readRequest.arguments.joined(separator: " ").contains("Read"))
         #expect(readRequest.arguments.joined(separator: " ").contains("WebSearch"))
+    }
+
+    @Test("Direct read-tool calls refresh MCP prefixes before invoking Claude")
+    func directReadToolCallsRefreshMCPPrefixesBeforeInvokingClaude() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: "pdt (portfoliodividendtracker.com) connected", stderr: "", exitCode: 0),
+            .init(stdout: streamJSON(
+                toolName: "mcp__pdt__pdt-list-x-ray-holdings",
+                result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"items":[]}}"#
+            ), stderr: "", exitCode: 0),
+        ])
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 0, claudeProjectsDirectory: temporaryClaudeProjectsDirectory()),
+            commandRunner: runner
+        )
+
+        _ = try connection.callReadTool("pdt-list-x-ray-holdings", arguments: [
+            "limit": "1",
+            "offset": "0",
+        ])
+
+        #expect(runner.requests.map { $0.arguments.first ?? "" } == ["mcp", "--model"])
+        let readArguments = runner.requests.last?.arguments.joined(separator: " ") ?? ""
+        #expect(readArguments.contains("--allowedTools ToolSearch,mcp__pdt__pdt-list-x-ray-holdings"))
+        #expect(readArguments.contains("mcp__*__pdt-get-portfolio-holdings"))
     }
 
     @Test("Non-read PDT tools are refused before Claude is invoked")

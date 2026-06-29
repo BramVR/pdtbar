@@ -31,7 +31,7 @@ public struct ClaudeToolResultParser: Sendable {
     ) throws -> Data {
         let values = try streamValues(from: output)
         let matchingToolUseIDs = Set(values.flatMap {
-            toolUseIDs(for: toolName, in: $0)
+            toolUseIDs(for: toolName, readToolName: readToolName, in: $0)
         })
         guard !matchingToolUseIDs.isEmpty else {
             throw ClaudeToolResultParserError.missingToolCall(toolName)
@@ -97,12 +97,13 @@ public struct ClaudeToolResultParser: Sendable {
 
     private func toolUseIDs(
         for toolName: String,
+        readToolName: String,
         in value: ClaudeStreamJSONValue
     ) -> [String] {
         let current: [String]
         if value.string(for: "type") == "tool_use",
            let calledToolName = value.string(for: "name"),
-           toolNameMatches(calledToolName, allowedToolName: toolName),
+           toolNameMatches(calledToolName, allowedToolName: toolName, readToolName: readToolName),
            let id = value.string(for: "id")
         {
             current = [id]
@@ -110,15 +111,26 @@ public struct ClaudeToolResultParser: Sendable {
             current = []
         }
         return current + value.children.flatMap {
-            toolUseIDs(for: toolName, in: $0)
+            toolUseIDs(for: toolName, readToolName: readToolName, in: $0)
         }
     }
 
     private func toolNameMatches(
         _ calledToolName: String,
-        allowedToolName: String
+        allowedToolName: String,
+        readToolName: String
     ) -> Bool {
-        calledToolName == allowedToolName
+        if calledToolName == allowedToolName {
+            return true
+        }
+        if allowedToolName == readToolName {
+            return calledToolName == readToolName || calledToolName.hasSuffix("__\(readToolName)")
+        }
+        guard allowedToolName.hasSuffix("*") else {
+            return false
+        }
+        let allowedPrefix = String(allowedToolName.dropLast())
+        return allowedPrefix.hasSuffix(readToolName) && calledToolName == allowedPrefix
     }
 
     private func toolResults(

@@ -81,6 +81,72 @@ struct ClaudeToolResultParserTests {
         }
     }
 
+    @Test("Requested-tool wildcard accepts only the exact read tool")
+    func requestedToolWildcardAcceptsOnlyExactReadTool() throws {
+        let exactOutput = streamJSON(
+            toolName: "mcp__pdt__pdt-get-symbol",
+            result: #"""
+            {"type":"tool_result","tool_use_id":"call_1","structuredContent":{"symbol":{"id":5101}}}
+            """#
+        )
+
+        _ = try ClaudeToolResultParser().resultData(
+            for: "mcp__pdt__pdt-get-symbol*",
+            readToolName: "pdt-get-symbol",
+            output: exactOutput,
+            currentSessionResultFiles: []
+        )
+
+        let output = streamJSON(
+            toolName: "mcp__pdt__pdt-get-symbol-quote",
+            result: #"""
+            {"type":"tool_result","tool_use_id":"call_1","structuredContent":{"symbol":{"id":5101}}}
+            """#
+        )
+
+        #expect(throws: ClaudeToolResultParserError.missingToolCall("mcp__pdt__pdt-get-symbol*")) {
+            _ = try ClaudeToolResultParser().resultData(
+                for: "mcp__pdt__pdt-get-symbol*",
+                readToolName: "pdt-get-symbol",
+                output: output,
+                currentSessionResultFiles: []
+            )
+        }
+    }
+
+    @Test("Logical read name accepts only exact MCP suffix")
+    func logicalReadNameAcceptsOnlyExactMCPSuffix() throws {
+        let exactOutput = streamJSON(
+            toolName: "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-get-symbol",
+            result: #"""
+            {"type":"tool_result","tool_use_id":"call_1","structuredContent":{"symbol":{"id":5101}}}
+            """#
+        )
+
+        _ = try ClaudeToolResultParser().resultData(
+            for: "pdt-get-symbol",
+            readToolName: "pdt-get-symbol",
+            output: exactOutput,
+            currentSessionResultFiles: []
+        )
+
+        let siblingOutput = streamJSON(
+            toolName: "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-get-symbol-quote",
+            result: #"""
+            {"type":"tool_result","tool_use_id":"call_1","structuredContent":{"symbol":{"id":5101}}}
+            """#
+        )
+
+        #expect(throws: ClaudeToolResultParserError.missingToolCall("pdt-get-symbol")) {
+            _ = try ClaudeToolResultParser().resultData(
+                for: "pdt-get-symbol",
+                readToolName: "pdt-get-symbol",
+                output: siblingOutput,
+                currentSessionResultFiles: []
+            )
+        }
+    }
+
     @Test("Saved file references are used before JSON text content")
     func savedFileReferencesAreUsedBeforeJSONTextContent() throws {
         let directory = try temporaryDirectory(named: "claude-parser-saved-reference")
