@@ -82,9 +82,6 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     private let configuration: ClaudeLocalConnectionConfiguration
     private let commandRunner: any ClaudeLocalCommandRunning
     private let toolResultParser: ClaudeToolResultParser
-    private let discoveredToolNamesLock = NSLock()
-    private var discoveredToolNames: [String: String] = [:]
-    private var candidateReadToolNames: Set<String> = []
 
     public convenience init(environment: [String: String]) {
         self.init(configuration: ClaudeLocalConnectionConfiguration(environment: environment))
@@ -150,31 +147,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             throw PDTMCPConnectorError.setupUnavailable("Claude PDT MCP server is not connected")
         }
         let requiredReadTools = PDTReadTools.requiredV1.filter { required.contains($0) }
-        let observedToolNames = observedToolNamesFromClaudeHistory(readToolNames: requiredReadTools)
-        if !observedToolNames.isEmpty {
-            progress("Using cached PDT MCP tools")
-            mergeDiscoveredToolNames(observedToolNames, source: .candidate)
-        }
-        let inferredToolNames = Self.inferredToolNames(
-            fromMCPListOutput: result.combinedOutput,
-            readToolNames: requiredReadTools
-        )
-        if !inferredToolNames.isEmpty {
-            progress("Using connected PDT MCP tools")
-            mergeDiscoveredToolNames(inferredToolNames, source: .candidate)
-        }
-        let snapshot = discoveredToolNamesSnapshot(includeCandidates: false)
-        if requiredReadTools.contains(where: { snapshot[$0] == nil }) {
-            progress("Waiting on Claude for PDT tool discovery")
-        }
-        let resolved = try resolvedToolNames(for: requiredReadTools, progress: progress, includeCandidates: false)
-        var available = Set(resolved.keys)
-        for tool in requiredReadTools where !available.contains(tool) {
-            if (try? resolvedToolName(for: tool, progress: progress, includeCandidates: false)) != nil {
-                available.insert(tool)
-            }
-        }
-        return available
+        return Set(requiredReadTools)
     }
 
     public func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
@@ -184,26 +157,14 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         guard commandRunner.executableExists(configuration.claudePath, environment: configuration.environment) else {
             throw PDTMCPConnectorError.setupUnavailable("Claude CLI is unavailable")
         }
-        var toolName = try resolvedToolName(for: name)
+        let toolName = try resolvedToolName(for: name)
         var attempts = 0
         var lastError: Error?
-        var retriedWithDiscoveredToolName = false
         repeat {
             attempts += 1
             do {
                 return try callReadToolOnce(name, resolvedToolName: toolName, arguments: arguments)
             } catch {
-                if !retriedWithDiscoveredToolName,
-                   toolNameIsInferred(readToolName: name, toolName: toolName),
-                   Self.errorIsMissingToolCall(error, toolName: toolName)
-                {
-                    retriedWithDiscoveredToolName = true
-                    removeInferredToolName(readToolName: name, toolName: toolName)
-                    toolName = try resolvedToolName(for: name)
-                    attempts = 0
-                    lastError = error
-                    continue
-                }
                 lastError = error
                 guard configuration.toolCallRetryPolicy.shouldRetry(error, afterAttempt: attempts) else {
                     throw error
@@ -229,63 +190,6 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             }
     }
 
-    private static func inferredToolNames(
-        fromMCPListOutput output: String,
-        readToolNames: [String]
-    ) -> [String: String] {
-        guard let prefix = connectedPDTToolPrefixes(in: output).first else {
-            return [:]
-        }
-        return readToolNames.reduce(into: [String: String]()) { inferred, readToolName in
-            inferred[readToolName] = "\(prefix)\(readToolName)"
-        }
-    }
-
-    private static func connectedPDTToolPrefixes(in output: String) -> [String] {
-        output.split(separator: "\n").compactMap { rawLine in
-            let line = String(rawLine)
-            guard pdtServerIsConnected(in: line),
-                  let separatorIndex = line.firstIndex(of: ":")
-            else {
-                return nil
-            }
-            let displayName = String(line[..<separatorIndex])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let slug = mcpToolSlug(for: displayName) else {
-                return nil
-            }
-            return "mcp__\(slug)__"
-        }
-    }
-
-    private static func mcpToolSlug(for displayName: String) -> String? {
-        var slug = ""
-        var previousWasSeparator = false
-        for scalar in displayName.unicodeScalars {
-            let value = scalar.value
-            let isDigit = value >= 48 && value <= 57
-            let isUppercaseLetter = value >= 65 && value <= 90
-            let isLowercaseLetter = value >= 97 && value <= 122
-            let isHyphen = value == 45
-            if isDigit || isUppercaseLetter || isLowercaseLetter || isHyphen {
-                slug.unicodeScalars.append(scalar)
-                previousWasSeparator = false
-            } else if !previousWasSeparator {
-                slug.append("_")
-                previousWasSeparator = true
-            }
-        }
-        let trimmed = slug.trimmingCharacters(in: CharacterSet(charactersIn: "_"))
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private static func errorIsMissingToolCall(_ error: Error, toolName: String) -> Bool {
-        guard case PDTMCPConnectorError.transientFailure(let message) = error else {
-            return false
-        }
-        return message == "Claude did not call \(toolName)"
-    }
-
     private func mcpList(timeout: TimeInterval) throws -> ClaudeLocalProcessResult {
         try commandRunner.run(
             executable: configuration.claudePath,
@@ -296,283 +200,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     }
 
     private func resolvedToolName(for readToolName: String) throws -> String {
-        try resolvedToolName(for: readToolName, progress: { _ in })
-    }
-
-    private func resolvedToolName(
-        for readToolName: String,
-        progress: @escaping @Sendable (String) -> Void
-    ) throws -> String {
-        try resolvedToolName(for: readToolName, progress: progress, includeCandidates: true)
-    }
-
-    private func resolvedToolName(
-        for readToolName: String,
-        progress: @escaping @Sendable (String) -> Void,
-        includeCandidates: Bool
-    ) throws -> String {
-        if let cached = discoveredToolNameFromCache(for: readToolName, includeCandidates: includeCandidates) {
-            return cached
-        }
-        if let resolved = try resolvedToolNames(
-            for: [readToolName],
-            progress: progress,
-            includeCandidates: includeCandidates
-        )[readToolName] {
-            return resolved
-        }
-        throw PDTMCPConnectorError.setupUnavailable("Claude could not find \(readToolName)")
-    }
-
-    private func resolvedToolNames(for readToolNames: [String]) throws -> [String: String] {
-        try resolvedToolNames(for: readToolNames, progress: { _ in })
-    }
-
-    private func resolvedToolNames(
-        for readToolNames: [String],
-        progress: @escaping @Sendable (String) -> Void
-    ) throws -> [String: String] {
-        try resolvedToolNames(for: readToolNames, progress: progress, includeCandidates: true)
-    }
-
-    private func resolvedToolNames(
-        for readToolNames: [String],
-        progress: @escaping @Sendable (String) -> Void,
-        includeCandidates: Bool
-    ) throws -> [String: String] {
-        let cached = discoveredToolNamesSnapshot(includeCandidates: includeCandidates)
-        let unresolved = readToolNames.filter { cached[$0] == nil }
-        guard !unresolved.isEmpty else {
-            return cached.filter { readToolNames.contains($0.key) }
-        }
-        let toolList = unresolved.joined(separator: ", ")
-        var attempts = 0
-        var lastResultExitCode: Int32 = 0
-        repeat {
-            attempts += 1
-            if unresolved.count == 1, let readToolName = unresolved.first {
-                progress(attempts == 1 ? "Finding \(readToolName)" : "Retrying \(readToolName)")
-            } else {
-                progress(attempts == 1 ? "Finding PDT read tools" : "Retrying PDT tool discovery")
-            }
-            let result = try runToolSearch(
-                readToolNames: unresolved,
-                prompt: "Use ToolSearch to find these PDT MCP read-only tools: \(toolList). Return only {\"status\":\"redacted-ok\"}."
-            )
-            lastResultExitCode = result.exitCode
-            guard result.exitCode == 0 else {
-                continue
-            }
-            mergeDiscoveredToolNames(discoveredToolNames(for: unresolved, in: result.stdout))
-            if unresolved.allSatisfy({
-                discoveredToolNameFromCache(for: $0, includeCandidates: includeCandidates) != nil
-            }) {
-                break
-            }
-        } while attempts < configuration.toolCallRetryPolicy.maxAttempts
-        for readToolName in unresolved where discoveredToolNameFromCache(
-            for: readToolName,
-            includeCandidates: includeCandidates
-        ) == nil {
-            try resolveToolNameIndividually(readToolName, progress: progress, includeCandidates: includeCandidates)
-        }
-        let finalSnapshot = discoveredToolNamesSnapshot(includeCandidates: includeCandidates)
-        let missing = unresolved.filter { finalSnapshot[$0] == nil }
-        guard lastResultExitCode == 0 || missing.isEmpty else {
-            throw PDTMCPConnectorError.setupUnavailable("Claude could not find \(toolList)")
-        }
-        return finalSnapshot.filter { readToolNames.contains($0.key) }
-    }
-
-    private func resolveToolNameIndividually(_ readToolName: String) throws {
-        try resolveToolNameIndividually(readToolName, progress: { _ in })
-    }
-
-    private func resolveToolNameIndividually(
-        _ readToolName: String,
-        progress: @escaping @Sendable (String) -> Void
-    ) throws {
-        try resolveToolNameIndividually(readToolName, progress: progress, includeCandidates: true)
-    }
-
-    private func resolveToolNameIndividually(
-        _ readToolName: String,
-        progress: @escaping @Sendable (String) -> Void,
-        includeCandidates: Bool
-    ) throws {
-        var attempts = 0
-        repeat {
-            attempts += 1
-            progress(attempts == 1 ? "Finding \(readToolName)" : "Retrying \(readToolName)")
-            let result = try runToolSearch(
-                readToolNames: [readToolName],
-                prompt: "Use ToolSearch to find exactly this PDT MCP read-only tool: \(readToolName). Return only {\"status\":\"redacted-ok\"}."
-            )
-            guard result.exitCode == 0 else {
-                continue
-            }
-            mergeDiscoveredToolNames(discoveredToolNames(for: [readToolName], in: result.stdout))
-            if discoveredToolNameFromCache(for: readToolName, includeCandidates: includeCandidates) != nil {
-                break
-            }
-        } while attempts < configuration.toolCallRetryPolicy.maxAttempts
-    }
-
-    private func discoveredToolNameFromCache(for readToolName: String) -> String? {
-        discoveredToolNameFromCache(for: readToolName, includeCandidates: true)
-    }
-
-    private func discoveredToolNameFromCache(
-        for readToolName: String,
-        includeCandidates: Bool
-    ) -> String? {
-        discoveredToolNamesLock.lock()
-        defer {
-            discoveredToolNamesLock.unlock()
-        }
-        guard includeCandidates || !candidateReadToolNames.contains(readToolName) else {
-            return nil
-        }
-        return discoveredToolNames[readToolName]
-    }
-
-    private func toolNameIsInferred(readToolName: String, toolName: String) -> Bool {
-        discoveredToolNamesLock.lock()
-        defer {
-            discoveredToolNamesLock.unlock()
-        }
-        return candidateReadToolNames.contains(readToolName)
-            && discoveredToolNames[readToolName] == toolName
-    }
-
-    private func removeInferredToolName(readToolName: String, toolName: String) {
-        discoveredToolNamesLock.lock()
-        if candidateReadToolNames.contains(readToolName),
-           discoveredToolNames[readToolName] == toolName
-        {
-            discoveredToolNames.removeValue(forKey: readToolName)
-            candidateReadToolNames.remove(readToolName)
-        }
-        discoveredToolNamesLock.unlock()
-    }
-
-    private func discoveredToolNamesSnapshot(includeCandidates: Bool = true) -> [String: String] {
-        discoveredToolNamesLock.lock()
-        defer {
-            discoveredToolNamesLock.unlock()
-        }
-        guard !includeCandidates else {
-            return discoveredToolNames
-        }
-        return discoveredToolNames.filter { !candidateReadToolNames.contains($0.key) }
-    }
-
-    private func observedToolNamesFromClaudeHistory(readToolNames: [String]) -> [String: String] {
-        var observed: [String: String] = [:]
-        for file in recentClaudeTranscriptFiles(limit: 128) {
-            let missing = readToolNames.filter { observed[$0] == nil }
-            guard !missing.isEmpty else {
-                break
-            }
-            guard let output = try? String(contentsOf: file, encoding: .utf8) else {
-                continue
-            }
-            observed.merge(discoveredToolNames(for: missing, in: output)) { current, _ in current }
-        }
-        return observed
-    }
-
-    private func recentClaudeTranscriptFiles(limit: Int) -> [URL] {
-        guard let enumerator = FileManager.default.enumerator(
-            at: configuration.claudeProjectsDirectory,
-            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return []
-        }
-        var files: [(url: URL, date: Date)] = []
-        for case let file as URL in enumerator where file.pathExtension == "jsonl" {
-            guard let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey]),
-                  values.isRegularFile == true
-            else {
-                continue
-            }
-            files.append((file, values.contentModificationDate ?? .distantPast))
-        }
-        return files
-            .sorted { $0.date > $1.date }
-            .prefix(limit)
-            .map(\.url)
-    }
-
-    private enum ToolNameSource {
-        case discovered
-        case candidate
-    }
-
-    private func mergeDiscoveredToolNames(
-        _ newToolNames: [String: String],
-        source: ToolNameSource = .discovered
-    ) {
-        discoveredToolNamesLock.lock()
-        for (readToolName, toolName) in newToolNames {
-            switch source {
-            case .discovered:
-                discoveredToolNames[readToolName] = toolName
-                candidateReadToolNames.remove(readToolName)
-            case .candidate:
-                if discoveredToolNames[readToolName] == nil {
-                    discoveredToolNames[readToolName] = toolName
-                    candidateReadToolNames.insert(readToolName)
-                }
-            }
-        }
-        discoveredToolNamesLock.unlock()
-    }
-
-    private func runToolSearch(readToolNames: [String], prompt: String) throws -> ClaudeLocalProcessResult {
-        let sessionID = UUID().uuidString
-        let result = try commandRunner.run(
-            executable: configuration.claudePath,
-            arguments: [
-                "--model", configuration.model,
-                "--allowedTools", "ToolSearch",
-                "--disallowedTools", toolSearchDisallowedTools().joined(separator: ","),
-                "--session-id", sessionID,
-                "-p", prompt,
-                "--output-format", "stream-json",
-                "--verbose",
-                "--no-session-persistence",
-            ],
-            timeout: min(configuration.toolTimeout, 60.0),
-            environment: configuration.environment
-        )
-        let currentSessionFiles = currentSessionToolResultFiles(readToolNames: readToolNames, sessionID: sessionID)
-        deleteClaudeToolResultFiles(pdtToolResultFiles(
-            referencedBy: result.stdout,
-            readToolNames: readToolNames,
-            currentSessionFiles: currentSessionFiles
-        ))
-        return result
-    }
-
-    private func discoveredToolNames(for readToolNames: [String], in output: String) -> [String: String] {
-        readToolNames.reduce(into: [String: String]()) { resolved, readToolName in
-            if let toolName = discoveredToolName(for: readToolName, in: output) {
-                resolved[readToolName] = toolName
-            }
-        }
-    }
-
-    private func discoveredToolName(for readToolName: String, in output: String) -> String? {
-        let pattern = #"mcp__[A-Za-z0-9_.-]+__\#(NSRegularExpression.escapedPattern(for: readToolName))(?![A-Za-z0-9_.-])"#
-        guard let expression = try? NSRegularExpression(pattern: pattern) else {
-            return nil
-        }
-        let range = NSRange(output.startIndex..<output.endIndex, in: output)
-        return expression.matches(in: output, range: range).compactMap { match in
-            Range(match.range, in: output).map { String(output[$0]) }
-        }.first
+        "mcp__*__\(readToolName)"
     }
 
     private func callReadToolOnce(
@@ -672,10 +300,6 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             "mcp__*__pdt-set-*",
             "mcp__*__pdt-update-*",
         ]
-    }
-
-    private func toolSearchDisallowedTools() -> [String] {
-        disallowedTools().filter { !$0.hasPrefix("mcp__") }
     }
 
     private func toolResultData(

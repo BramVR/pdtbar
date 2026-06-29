@@ -96,7 +96,8 @@ public struct ClaudeToolResultParser: Sendable {
     private func toolUseIDs(for toolName: String, in value: ClaudeStreamJSONValue) -> [String] {
         let current: [String]
         if value.string(for: "type") == "tool_use",
-           value.string(for: "name") == toolName,
+           let calledToolName = value.string(for: "name"),
+           toolNameMatches(calledToolName, allowedToolName: toolName),
            let id = value.string(for: "id")
         {
             current = [id]
@@ -104,6 +105,17 @@ public struct ClaudeToolResultParser: Sendable {
             current = []
         }
         return current + value.children.flatMap { toolUseIDs(for: toolName, in: $0) }
+    }
+
+    private func toolNameMatches(_ calledToolName: String, allowedToolName: String) -> Bool {
+        if calledToolName == allowedToolName {
+            return true
+        }
+        guard allowedToolName.hasPrefix("mcp__*__") else {
+            return false
+        }
+        return calledToolName.hasPrefix("mcp__")
+            && calledToolName.hasSuffix(String(allowedToolName.dropFirst("mcp__*__".count)))
     }
 
     private func toolResults(
