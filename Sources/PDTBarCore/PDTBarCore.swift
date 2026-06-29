@@ -3552,6 +3552,33 @@ public final class PDTLaunchRuntime {
         return beginReadinessProbe()
     }
 
+    public func completeCachedPulseLoad(_ pulse: PulseLifecycleResult?) -> PDTOnboardingUpdate? {
+        guard let pulse else {
+            return nil
+        }
+        if let currentPulse, currentPulse.source != .cachedSnapshot {
+            return nil
+        }
+        currentPulse = pulse
+        let descriptor: MenuDescriptor
+        if backgroundDetailRefreshInFlight {
+            descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+                cachedPulse: pulse.descriptor,
+                progress: BackgroundDetailRefreshProgress(phase: .baseHoldings)
+            )
+        } else {
+            descriptor = ClaudeLaunchFlow.descriptor(
+                for: state,
+                cachedPulse: pulse.descriptor
+            )
+        }
+        lastDescriptor = descriptor
+        return PDTOnboardingUpdate(
+            state: state,
+            descriptor: descriptor
+        )
+    }
+
     public func retryReadiness() -> PDTOnboardingUpdate? {
         guard !readinessProbeInFlight else {
             return nil
@@ -3564,8 +3591,10 @@ public final class PDTLaunchRuntime {
         attemptID: Int? = nil,
         allowsBackgroundDetailRefresh: Bool = true
     ) -> PDTOnboardingUpdate {
-        if let attemptID, attemptID != readinessAttemptID {
-            return currentUpdate()
+        if let attemptID {
+            guard readinessProbeInFlight, attemptID == readinessAttemptID else {
+                return currentUpdate()
+            }
         }
         readinessProbeInFlight = false
         let nextState = ClaudeLaunchFlow.state(afterReadinessProbe: result)
@@ -3583,7 +3612,8 @@ public final class PDTLaunchRuntime {
     }
 
     public func beginLoginHandoff() -> PDTOnboardingUpdate {
-        update(state: .openingClaude, effect: .startLoginHandoff)
+        readinessProbeInFlight = false
+        return update(state: .openingClaude, effect: .startLoginHandoff)
     }
 
     public func completeLoginHandoff(_ result: PDTOnboardingLoginResult) -> PDTOnboardingUpdate {

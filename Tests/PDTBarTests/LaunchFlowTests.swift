@@ -346,6 +346,84 @@ struct PDTOnboardingRunnerTests {
         #expect(rowTitles(in: ready.descriptor).contains("Step 1/5: Base holdings"))
     }
 
+    @Test("Launch runtime can install cached pulse after initial probing paint")
+    func launchRuntimeCanInstallCachedPulseAfterInitialProbingPaint() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        let launch = runtime.launch(cachedPulse: nil)
+        let cached = try #require(runtime.completeCachedPulseLoad(cachedPulse))
+        let ready = runtime.completeReadinessProbe(.ready)
+
+        #expect(launch.descriptor.statusTitle == "Checking Claude")
+        #expect(runtime.currentPulse?.source == .cachedSnapshot)
+        #expect(cached.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
+        #expect(rowTitles(in: cached.descriptor).contains("Checking Claude setup"))
+        #expect(ready.effect == .startBackgroundDetailRefresh)
+        #expect(rowTitles(in: ready.descriptor).contains("Filling details"))
+    }
+
+    @Test("Launch runtime first paint is independent of large cached snapshot decode")
+    func launchRuntimeFirstPaintIsIndependentOfLargeCachedSnapshotDecode() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-large-cached-launch-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let largeSnapshot = try largeCachedSnapshot(repeatingHoldings: 2_500)
+        let encodedSnapshot = try stableJSONData(largeSnapshot)
+        _ = try store.commitCurrentSnapshot(largeSnapshot)
+        let runtime = PDTLaunchRuntime()
+
+        let launch = runtime.launch(cachedPulse: nil)
+
+        #expect(encodedSnapshot.count > 1_000_000)
+        #expect(launch.descriptor.statusTitle == "Checking Claude")
+        #expect(rowTitles(in: launch.descriptor) == ["Checking Claude setup", "Log in with Claude"])
+        #expect(runtime.currentPulse == nil)
+
+        let cachedPulse = try #require(try PressureRunner.cachedPulse(
+            snapshotStore: store,
+            pulseReadStore: PulseReadStore(directory: store.directory)
+        ))
+        let cached = try #require(runtime.completeCachedPulseLoad(cachedPulse))
+
+        #expect(runtime.currentPulse?.source == .cachedSnapshot)
+        #expect(cached.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
+        #expect(rowTitles(in: cached.descriptor).contains("Checking Claude setup"))
+    }
+
+    @Test("Launch runtime ignores late cached pulse after fresh fetch publishes")
+    func launchRuntimeIgnoresLateCachedPulseAfterFreshFetchPublishes() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let fetchedPulse = try quietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launch(cachedPulse: nil)
+        _ = runtime.completeReadinessProbe(.ready)
+        let fetched = runtime.completeFirstFetch(.succeeded(fetchedPulse))
+        let lateCache = runtime.completeCachedPulseLoad(cachedPulse)
+
+        #expect(fetched.descriptor.statusTitle == fetchedPulse.descriptor.statusTitle)
+        #expect(lateCache == nil)
+        #expect(runtime.currentPulse?.source == .fetchedSnapshot)
+        #expect(runtime.currentPulse?.descriptor.statusTitle == fetchedPulse.descriptor.statusTitle)
+    }
+
+    @Test("Launch runtime ignores ready completion after login handoff starts")
+    func launchRuntimeIgnoresReadyCompletionAfterLoginHandoffStarts() {
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launch(cachedPulse: nil)
+        let attemptID = runtime.readinessAttemptID
+        let login = runtime.beginLoginHandoff()
+        let staleReady = runtime.completeReadinessProbe(.ready, attemptID: attemptID)
+
+        #expect(login.descriptor.statusTitle == "Signing in with Claude")
+        #expect(staleReady.descriptor.statusTitle == "Signing in with Claude")
+        #expect(staleReady.effect == .none)
+        #expect(!runtime.firstFetchInFlight)
+    }
+
     @Test("Launch runtime starts returning cached detail refresh and reports progress")
     func launchRuntimeStartsReturningCachedDetailRefreshAndReportsProgress() throws {
         let cachedPulse = try cachedQuietFixturePulse()
@@ -891,6 +969,20 @@ private func cachedQuietFixturePulse() throws -> PulseLifecycleResult {
         snapshotStore: snapshotStore,
         pulseReadStore: PulseReadStore(directory: snapshotStore.directory)
     ))
+}
+
+private func largeCachedSnapshot(repeatingHoldings count: Int) throws -> PortfolioSnapshot {
+    let fixture = packageRoot.appending(path: "docs/pdt/fixtures/quiet-no-pressure.json")
+    var snapshot = try PDTFixtureDataSource.snapshot(from: fixture)
+    let seedHoldings = try #require(!snapshot.openHoldings.isEmpty ? snapshot.openHoldings : nil)
+    snapshot.openHoldings = (0..<count).map { index in
+        var holding = seedHoldings[index % seedHoldings.count]
+        holding.name = "Synthetic cached holding \(index)"
+        holding.quoteId = 1_000_000 + index
+        holding.copyableIdentifier = "synthetic-cached-holding-\(index)"
+        return holding
+    }
+    return snapshot
 }
 
 private func rowTitles(in descriptor: MenuDescriptor) -> [String] {
