@@ -43,6 +43,7 @@ Normal deterministic gate:
 ```bash
 make check
 swift build
+swift test
 swift run pdtbar-checks
 swift run pdtbar-smoke scripted-pdt-connector
 swift run pdtbar-smoke scripted-login-handoff
@@ -51,14 +52,15 @@ swift run pdtbar-smoke scripted-pulse-mark-read
 swift run pdtbar-smoke copy-holding-identifier-action
 swift run pdtbar-smoke scripted-first-fetch
 swift run pdtbar-smoke scripted-returning-launch
-swift run pdtbar-smoke real-claude-flow-ax
-# Optional once Tests/ exists; currently exits with "no tests found".
-swift test
 ```
 
 `make check` is bounded to local deterministic checks: script syntax, Swift
-build, `pdtbar-checks`, and the sharded Swift test runner. Live Claude/PDT,
-Keychain, 1Password, Accessibility, and packaged-app checks stay opt-in.
+build, `pdtbar-checks`, and the sharded Swift test runner. The checks executable
+keeps command-style fixture/connector and tooling-contract proof; Swift tests
+own core model, parser, runner, normalization, and rendering regressions. Non-AX
+scripted smokes can be run directly with `swift run pdtbar-smoke <name>` when
+launch/setup/menu behavior is in scope. Live Claude/PDT, Keychain, 1Password,
+Accessibility (`real-claude-flow-ax`), and packaged-app checks stay opt-in.
 
 Expected handoff gate for changes that affect launch, setup, first fetch, menu
 behavior, or UI proof:
@@ -234,13 +236,12 @@ renders the pulse descriptor, and keeps the raw live snapshot in an unreported
 temporary directory that is removed after the render check.
 
 Missing server credentials or local PDT access must stay `skipped`, not failed,
-so CI can run `swift run pdtbar-smoke live-pdt` without secrets. CI should treat
-`status: "skipped"` as neutral and `status: "failed"` as red. Passing live proof
-is sanitized: the reported artifact contains selector IDs/counts only, never raw
-portfolio payloads, holding names, or values.
+so local runs can distinguish environment gaps from regressions. Passing live
+proof is sanitized: the reported artifact contains selector IDs/counts only,
+never raw portfolio payloads, holding names, or values.
 
 Live read calls default to a 60s timeout. Pass `--timeout <seconds>` to use a
-shorter local or CI bound.
+shorter local bound.
 
 Local/release packaged-app smoke:
 

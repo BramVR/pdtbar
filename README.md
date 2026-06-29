@@ -46,6 +46,8 @@ make start
 make stop
 make test
 make check
+swift test
+swift run pdtbar-checks
 ./Scripts/compile_and_run.sh
 ```
 
