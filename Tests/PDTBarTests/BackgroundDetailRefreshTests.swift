@@ -4,6 +4,17 @@ import PDTBarCore
 
 @Suite("Background detail refresh")
 struct BackgroundDetailRefreshTests {
+    @Test("Default price-history budget covers Claude CLI batches")
+    func defaultPriceHistoryBudgetCoversClaudeCLIBatches() {
+        let defaults = PDTBackgroundDetailRefreshOptions()
+
+        #expect(defaults.effectivePriceHistoryTimeoutSeconds(holdingCount: 19) >= 240)
+        #expect(defaults.effectivePriceHistoryTimeoutSeconds(holdingCount: 50) >= 390)
+        #expect(PDTBackgroundDetailRefreshOptions(
+            priceHistoryTimeoutSeconds: 0.05
+        ).effectivePriceHistoryTimeoutSeconds(holdingCount: 50) == 0.05)
+    }
+
     @Test("Background refresh reuses cached income quote mapping")
     func backgroundRefreshReusesCachedIncomeQuoteMapping() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-income-join-test")

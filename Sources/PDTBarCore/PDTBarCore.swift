@@ -6374,7 +6374,7 @@ public struct PDTBackgroundDetailRefreshOptions: Equatable, Sendable {
 
     public init(
         priceHistoryConcurrencyLimit: Int = 4,
-        priceHistoryTimeoutSeconds: Double = 20,
+        priceHistoryTimeoutSeconds: Double = 240,
         optionalRetryCount: Int = 1,
         retryBackoffSeconds: Double = 0.35
     ) {
@@ -6382,6 +6382,14 @@ public struct PDTBackgroundDetailRefreshOptions: Equatable, Sendable {
         self.priceHistoryTimeoutSeconds = max(0.01, priceHistoryTimeoutSeconds)
         self.optionalRetryCount = max(0, optionalRetryCount)
         self.retryBackoffSeconds = max(0, retryBackoffSeconds)
+    }
+
+    public func effectivePriceHistoryTimeoutSeconds(holdingCount: Int) -> Double {
+        guard priceHistoryTimeoutSeconds >= 240 else {
+            return priceHistoryTimeoutSeconds
+        }
+        let waveCount = Int(ceil(Double(max(0, holdingCount)) / Double(priceHistoryConcurrencyLimit)))
+        return max(priceHistoryTimeoutSeconds, Double(waveCount) * 30.0)
     }
 }
 
@@ -6742,7 +6750,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         let accumulator = PDTPriceHistoryAccumulator()
         let workTracker = PDTPriceHistoryWorkTracker(quoteIDs: quoteIDs)
         let workerCount = min(options.priceHistoryConcurrencyLimit, quoteIDs.count)
-        let deadline = Date().addingTimeInterval(options.priceHistoryTimeoutSeconds)
+        let timeoutSeconds = options.effectivePriceHistoryTimeoutSeconds(holdingCount: totalCount)
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
 
         for _ in 0 ..< workerCount {
             group.enter()
@@ -6802,7 +6811,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 }
             }
         }
-        let timedOut = group.wait(timeout: .now() + options.priceHistoryTimeoutSeconds) == .timedOut
+        let timedOut = group.wait(timeout: .now() + timeoutSeconds) == .timedOut
             || Date() >= deadline
         if timedOut {
             for quoteID in workTracker.markTimedOut() {
