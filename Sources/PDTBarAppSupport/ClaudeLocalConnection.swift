@@ -84,6 +84,8 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     private let toolResultParser: ClaudeToolResultParser
     private let pdtToolPrefixLock = NSLock()
     private var rememberedPDTToolPrefixes: [String] = []
+    private let discoveredToolNamesLock = NSLock()
+    private var discoveredToolNames: [String: String] = [:]
 
     public convenience init(environment: [String: String]) {
         self.init(configuration: ClaudeLocalConnectionConfiguration(environment: environment))
@@ -150,7 +152,8 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         }
         rememberPDTToolPrefixes(fromMCPListOutput: result.combinedOutput)
         let requiredReadTools = PDTReadTools.requiredV1.filter { required.contains($0) }
-        return Set(requiredReadTools)
+        progress("Finding PDT read tools")
+        return try verifiedReadTools(requiredReadTools)
     }
 
     public func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
@@ -256,8 +259,84 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     }
 
     private func resolvedToolName(for readToolName: String) throws -> String {
+        if let discovered = discoveredToolNameFromCache(for: readToolName) {
+            return discovered
+        }
         let prefix = pdtToolPrefixes().first ?? Self.defaultPDTToolPrefix
         return "\(prefix)\(readToolName)"
+    }
+
+    private func verifiedReadTools(_ readToolNames: [String]) throws -> Set<String> {
+        guard !readToolNames.isEmpty else {
+            return []
+        }
+        let toolList = readToolNames.joined(separator: ", ")
+        let result = try runToolSearch(
+            readToolNames: readToolNames,
+            prompt: "Use ToolSearch to find these PDT MCP read-only tools: \(toolList). Return only {\"status\":\"redacted-ok\"}."
+        )
+        guard result.exitCode == 0 else {
+            throw PDTMCPConnectorError.setupUnavailable("Claude could not find \(toolList)")
+        }
+        let discovered = discoveredToolNames(for: readToolNames, in: result.stdout)
+        mergeDiscoveredToolNames(discovered)
+        return Set(discovered.keys)
+    }
+
+    private func runToolSearch(readToolNames: [String], prompt: String) throws -> ClaudeLocalProcessResult {
+        let sessionID = UUID().uuidString
+        let result = try commandRunner.run(
+            executable: configuration.claudePath,
+            arguments: [
+                "--model", configuration.model,
+                "--allowedTools", "ToolSearch",
+                "--session-id", sessionID,
+                "-p", prompt,
+                "--output-format", "stream-json",
+                "--verbose",
+                "--no-session-persistence",
+            ],
+            timeout: min(configuration.toolTimeout, 60.0),
+            environment: configuration.environment
+        )
+        let currentSessionFiles = currentSessionToolResultFiles(readToolNames: readToolNames, sessionID: sessionID)
+        deleteClaudeToolResultFiles(pdtToolResultFiles(
+            referencedBy: result.stdout,
+            readToolNames: readToolNames,
+            currentSessionFiles: currentSessionFiles
+        ))
+        return result
+    }
+
+    private func discoveredToolNames(for readToolNames: [String], in output: String) -> [String: String] {
+        readToolNames.reduce(into: [String: String]()) { resolved, readToolName in
+            if let toolName = discoveredToolName(for: readToolName, in: output) {
+                resolved[readToolName] = toolName
+            }
+        }
+    }
+
+    private func discoveredToolName(for readToolName: String, in output: String) -> String? {
+        let pattern = #"mcp__[A-Za-z0-9_.-]+__\#(NSRegularExpression.escapedPattern(for: readToolName))(?![A-Za-z0-9_.-])"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else {
+            return nil
+        }
+        let range = NSRange(output.startIndex..<output.endIndex, in: output)
+        return expression.matches(in: output, range: range).compactMap { match in
+            Range(match.range, in: output).map { String(output[$0]) }
+        }.first
+    }
+
+    private func discoveredToolNameFromCache(for readToolName: String) -> String? {
+        discoveredToolNamesLock.lock()
+        defer { discoveredToolNamesLock.unlock() }
+        return discoveredToolNames[readToolName]
+    }
+
+    private func mergeDiscoveredToolNames(_ newToolNames: [String: String]) {
+        discoveredToolNamesLock.lock()
+        discoveredToolNames.merge(newToolNames) { current, _ in current }
+        discoveredToolNamesLock.unlock()
     }
 
     private func callReadToolOnce(
