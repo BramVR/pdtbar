@@ -124,6 +124,61 @@ struct AttentionExplanationTests {
         #expect(income.explanation.currentValue?.value == "2026-06-24; EUR 78.00")
     }
 
+    @Test("Legacy facet and severity strings decode to typed safe vocabulary")
+    func legacyFacetAndSeverityStringsDecodeToTypedSafeVocabulary() throws {
+        let item = try legacyItem("""
+        {
+          "id": "legacy.typo.1",
+          "facet": "allocaton",
+          "rank": 1,
+          "title": "Legacy typo",
+          "severity": "critical",
+          "score": 0.9,
+          "supportingDataSlotIDs": [],
+          "explanation": {
+            "trigger": {
+              "key": "trigger",
+              "label": "Trigger",
+              "value": "Legacy typo"
+            },
+            "severity": {
+              "key": "severity",
+              "label": "Severity",
+              "value": "critical",
+              "numericValue": 0.9
+            },
+            "supportingSourceSlots": []
+          }
+        }
+        """)
+
+        let facetString: String = item.facet
+        let severityString: String = item.severity
+
+        #expect(facetString == "unknown")
+        #expect(severityString == "low")
+        #expect(item.typedFacet == .unknown)
+        #expect(item.typedSeverity == .low)
+        #expect(item.explanation.severity.value == "low")
+        #expect(item.readFingerprint.contains("pulse:v1:unknown"))
+
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(item)) as? [String: Any]
+        #expect(encoded?["facet"] as? String == "unknown")
+        #expect(encoded?["severity"] as? String == "low")
+    }
+
+    @Test("Attention item JSON keeps stable facet and severity strings")
+    func attentionItemJSONKeepsStableFacetAndSeverityStrings() throws {
+        let item = try #require(model("concentration-pressure").rankedAttentionItems.first)
+        let data = try JSONEncoder().encode(item)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let decoded = try JSONDecoder().decode(AttentionItem.self, from: data)
+
+        #expect(object["facet"] as? String == "allocation")
+        #expect(object["severity"] as? String == "medium")
+        #expect(decoded == item)
+    }
+
     @Test("Income explanation window only surfaces in-window events")
     func incomeExplanationWindowOnlySurfacesInWindowEvents() {
         let snapshot = PortfolioSnapshot(

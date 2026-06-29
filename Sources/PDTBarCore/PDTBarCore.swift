@@ -207,6 +207,121 @@ public struct AttentionExplanation: Codable, Equatable {
     }
 }
 
+public enum AttentionFacet: Equatable, Sendable, Codable, ExpressibleByStringLiteral {
+    case allocation
+    case income
+    case bigMovers
+    case unknown
+
+    public init(legacyValue: String) {
+        switch legacyValue {
+        case "allocation":
+            self = .allocation
+        case "income":
+            self = .income
+        case "bigMovers":
+            self = .bigMovers
+        default:
+            self = .unknown
+        }
+    }
+
+    public init(stringLiteral value: String) {
+        self.init(legacyValue: value)
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .allocation:
+            return "allocation"
+        case .income:
+            return "income"
+        case .bigMovers:
+            return "bigMovers"
+        case .unknown:
+            return "unknown"
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.init(legacyValue: try container.decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+public func == (lhs: AttentionFacet, rhs: String) -> Bool {
+    lhs.rawValue == rhs
+}
+
+public func == (lhs: String, rhs: AttentionFacet) -> Bool {
+    lhs == rhs.rawValue
+}
+
+public func != (lhs: AttentionFacet, rhs: String) -> Bool {
+    !(lhs == rhs)
+}
+
+public enum AttentionSeverity: Equatable, Sendable, Codable, ExpressibleByStringLiteral {
+    case low
+    case medium
+    case high
+
+    public init(legacyValue: String) {
+        switch legacyValue {
+        case "high":
+            self = .high
+        case "medium":
+            self = .medium
+        case "low":
+            self = .low
+        default:
+            self = .low
+        }
+    }
+
+    public init(stringLiteral value: String) {
+        self.init(legacyValue: value)
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .low:
+            return "low"
+        case .medium:
+            return "medium"
+        case .high:
+            return "high"
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.init(legacyValue: try container.decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+public func == (lhs: AttentionSeverity, rhs: String) -> Bool {
+    lhs.rawValue == rhs
+}
+
+public func == (lhs: String, rhs: AttentionSeverity) -> Bool {
+    lhs == rhs.rawValue
+}
+
+public func != (lhs: AttentionSeverity, rhs: String) -> Bool {
+    !(lhs == rhs)
+}
+
 public struct AttentionItem: Codable, Equatable {
     public var id: String
     public var facet: String
@@ -232,6 +347,16 @@ public struct AttentionItem: Codable, Equatable {
     public var resetsReadState: Bool
     public var supportingDataSlotIDs: [String]
     public var explanation: AttentionExplanation
+
+    public var typedFacet: AttentionFacet {
+        get { AttentionFacet(legacyValue: facet) }
+        set { facet = newValue.rawValue }
+    }
+
+    public var typedSeverity: AttentionSeverity {
+        get { AttentionSeverity(legacyValue: severity) }
+        set { severity = newValue.rawValue }
+    }
 
     public init(
         id: String,
@@ -260,11 +385,11 @@ public struct AttentionItem: Codable, Equatable {
         explanation: AttentionExplanation? = nil
     ) {
         self.id = id
-        self.facet = facet
+        self.facet = AttentionFacet(legacyValue: facet).rawValue
         self.rank = rank
         self.title = title
         self.detail = detail
-        self.severity = severity
+        self.severity = AttentionSeverity(legacyValue: severity).rawValue
         self.score = score
         self.holdingIdentity = holdingIdentity
         self.currentWeight = currentWeight
@@ -282,33 +407,37 @@ public struct AttentionItem: Codable, Equatable {
         self.windowEnd = windowEnd
         self.resetsReadState = resetsReadState
         self.supportingDataSlotIDs = supportingDataSlotIDs
-        self.explanation = explanation ?? Self.legacyExplanation(
-            title: title,
-            severity: severity,
-            score: score,
-            currentWeight: currentWeight,
-            threshold: threshold,
-            beforeValue: beforeValue,
-            afterValue: afterValue,
-            moveSize: moveSize,
-            beforeWeight: beforeWeight,
-            valueCurrency: valueCurrency,
-            eventDate: eventDate,
-            amount: amount,
-            windowStart: windowStart,
-            windowEnd: windowEnd,
-            supportingDataSlotIDs: supportingDataSlotIDs
-        )
+        if let explanation {
+            self.explanation = Self.normalizedExplanation(explanation, severity: self.severity)
+        } else {
+            self.explanation = Self.legacyExplanation(
+                title: title,
+                severity: self.severity,
+                score: score,
+                currentWeight: currentWeight,
+                threshold: threshold,
+                beforeValue: beforeValue,
+                afterValue: afterValue,
+                moveSize: moveSize,
+                beforeWeight: beforeWeight,
+                valueCurrency: valueCurrency,
+                eventDate: eventDate,
+                amount: amount,
+                windowStart: windowStart,
+                windowEnd: windowEnd,
+                supportingDataSlotIDs: supportingDataSlotIDs
+            )
+        }
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
-        facet = try container.decode(String.self, forKey: .facet)
+        facet = AttentionFacet(legacyValue: try container.decode(String.self, forKey: .facet)).rawValue
         rank = try container.decode(Int.self, forKey: .rank)
         title = try container.decode(String.self, forKey: .title)
         detail = try container.decodeIfPresent(String.self, forKey: .detail) ?? ""
-        severity = try container.decode(String.self, forKey: .severity)
+        severity = AttentionSeverity(legacyValue: try container.decode(String.self, forKey: .severity)).rawValue
         score = try container.decode(Double.self, forKey: .score)
         holdingIdentity = try container.decodeIfPresent(HoldingIdentity.self, forKey: .holdingIdentity)
         currentWeight = try container.decodeIfPresent(Double.self, forKey: .currentWeight)
@@ -326,8 +455,10 @@ public struct AttentionItem: Codable, Equatable {
         windowEnd = try container.decodeIfPresent(String.self, forKey: .windowEnd)
         resetsReadState = try container.decodeIfPresent(Bool.self, forKey: .resetsReadState) ?? false
         supportingDataSlotIDs = try container.decode([String].self, forKey: .supportingDataSlotIDs)
-        explanation = try container.decodeIfPresent(AttentionExplanation.self, forKey: .explanation)
-            ?? Self.legacyExplanation(
+        if let decodedExplanation = try container.decodeIfPresent(AttentionExplanation.self, forKey: .explanation) {
+            explanation = Self.normalizedExplanation(decodedExplanation, severity: severity)
+        } else {
+            explanation = Self.legacyExplanation(
                 title: title,
                 severity: severity,
                 score: score,
@@ -344,6 +475,16 @@ public struct AttentionItem: Codable, Equatable {
                 windowEnd: windowEnd,
                 supportingDataSlotIDs: supportingDataSlotIDs
             )
+        }
+    }
+
+    private static func normalizedExplanation(
+        _ explanation: AttentionExplanation,
+        severity: String
+    ) -> AttentionExplanation {
+        var explanation = explanation
+        explanation.severity.value = severity
+        return explanation
     }
 
     private static func legacyExplanation(
@@ -450,8 +591,8 @@ public extension AttentionItem {
     }
 
     var readFingerprint: String {
-        switch facet {
-        case "allocation":
+        switch typedFacet {
+        case .allocation:
             return [
                 "pulse:v1:allocation",
                 readFingerprintIdentity,
@@ -459,7 +600,7 @@ public extension AttentionItem {
                 "severity:\(fingerprintToken(severity))",
                 "weight-bucket-bp:\(bucketBasisPoints(currentWeight, bucketSize: 100))",
             ].joined(separator: ":")
-        case "income":
+        case .income:
             return [
                 "pulse:v1:income",
                 readFingerprintIdentity,
@@ -467,17 +608,17 @@ public extension AttentionItem {
                 "amount:\(moneyFingerprint(amount))",
                 "change-bp:\(fingerprintBasisPoints(changePercent))",
             ].joined(separator: ":")
-        case "bigMovers":
+        case .bigMovers:
             return [
                 "pulse:v1:bigMovers",
                 readFingerprintIdentity,
                 "window:\(windowStart ?? "unknown")..\(windowEnd ?? "unknown")",
                 "move-bucket-bp:\(bucketBasisPoints(moveSize, bucketSize: 100))",
             ].joined(separator: ":")
-        default:
+        case .unknown:
             return [
                 "pulse:v1",
-                fingerprintToken(facet),
+                fingerprintToken(typedFacet.rawValue),
                 readFingerprintIdentity,
                 "severity:\(fingerprintToken(severity))",
                 "score-bp:\(fingerprintBasisPoints(score))",
@@ -486,18 +627,18 @@ public extension AttentionItem {
     }
 
     var staleReadPruningPrefix: String? {
-        switch facet {
-        case "income":
+        switch typedFacet {
+        case .income:
             return ["pulse:v1:income", readFingerprintIdentity].joined(separator: ":") + ":"
-        case "bigMovers":
+        case .bigMovers:
             return ["pulse:v1:bigMovers", readFingerprintIdentity].joined(separator: ":") + ":"
-        default:
+        case .allocation, .unknown:
             return nil
         }
     }
 
     var concentrationReadFingerprintPrefix: String? {
-        guard facet == "allocation" else {
+        guard typedFacet == .allocation else {
             return nil
         }
         return [
@@ -4132,7 +4273,7 @@ public enum MenuDescriptorRenderer {
     ) -> [MenuRow] {
         holdings.map { holding in
             let attention = model.rankedAttentionItems.first { item in
-                item.facet == "allocation" && item.holdingIdentity?.quoteId == holding.quoteId
+                item.typedFacet == .allocation && item.holdingIdentity?.quoteId == holding.quoteId
             }
             let drillDownDetail = attention?.explanation.currentValue?.value
             return MenuRow(
@@ -4833,16 +4974,16 @@ public enum PressureEngine {
         if lhs.score != rhs.score {
             return lhs.score > rhs.score
         }
-        if lhs.facet == "allocation",
-           rhs.facet == "allocation",
+        if lhs.typedFacet == .allocation,
+           rhs.typedFacet == .allocation,
            let lhsWeight = lhs.currentWeight,
            let rhsWeight = rhs.currentWeight,
            lhsWeight != rhsWeight
         {
             return lhsWeight > rhsWeight
         }
-        if lhs.facet == "allocation",
-           rhs.facet == "allocation",
+        if lhs.typedFacet == .allocation,
+           rhs.typedFacet == .allocation,
            let lhsName = lhs.holdingIdentity?.name,
            let rhsName = rhs.holdingIdentity?.name,
            lhsName != rhsName
@@ -5401,7 +5542,7 @@ public enum PressureEngine {
                             label: "Trigger",
                             value: "Ex-dividend date in income window"
                         ),
-                        severity: explanationSeverity(severity: "low", score: 0.45),
+                        severity: explanationSeverity(severity: .low, score: 0.45),
                         threshold: AttentionExplanationFact(
                             key: "threshold",
                             label: "Threshold",
@@ -5450,11 +5591,11 @@ public enum PressureEngine {
         return "\(base); latest recorded dividend \(display(amount)), \(direction) \(percent(abs(changePercent))) from prior \(display(priorAmount))."
     }
 
-    private static func explanationSeverity(severity: String, score: Double) -> AttentionExplanationFact {
+    private static func explanationSeverity(severity: AttentionSeverity, score: Double) -> AttentionExplanationFact {
         AttentionExplanationFact(
             key: "severity",
             label: "Severity",
-            value: severity,
+            value: severity.rawValue,
             numericValue: score
         )
     }
