@@ -4295,10 +4295,8 @@ public enum MenuDescriptorRenderer {
         }
     }
 
-    private static func portfolioOverviewChildren(for overview: PortfolioOverviewSummary) -> [MenuRow] {
+    private static func portfolioOverviewDistributionRows(for overview: PortfolioOverviewSummary) -> [MenuRow] {
         [
-            portfolioOverviewHoldingsRow(for: overview),
-            portfolioOverviewConcentrationRow(for: overview),
             portfolioOverviewDistributionRow(
                 id: "allocation.portfolio.sectors",
                 role: .portfolioOverviewSector,
@@ -4311,7 +4309,6 @@ public enum MenuDescriptorRenderer {
                 title: "Asset types",
                 summaries: overview.assetTypeSummary
             ),
-            overview.cashSummary.map(portfolioOverviewCashRow),
         ].compactMap { $0 }
     }
 
@@ -4334,10 +4331,10 @@ public enum MenuDescriptorRenderer {
             role: .portfolioOverviewDetails,
             title: "Detailed info",
             detail: "Full allocation list",
-            children: portfolioOverviewChildren(for: overview) + allocationHoldingRows(
+            children: allocationHoldingRows(
                 for: allocation.topHoldings,
                 model: model
-            )
+            ) + portfolioOverviewDistributionRows(for: overview)
         )
     }
 

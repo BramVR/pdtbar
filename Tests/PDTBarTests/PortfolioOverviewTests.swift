@@ -189,14 +189,24 @@ struct PortfolioOverviewTests {
         #expect(detailsRow.id == "allocation.portfolio.details")
         #expect(detailsRow.role == .portfolioOverviewDetails)
         #expect(detailsRow.title == "Detailed info")
-        #expect(detailsRow.children.prefix(5).map(\.id) == [
-            "allocation.portfolio.holdings",
-            "allocation.portfolio.concentration",
+        #expect(detailsRow.children.map(\.id) == [
+            "allocation.9001",
+            "allocation.9002",
+            "allocation.9003",
+            "allocation.9009",
+            "allocation.9011",
+            "allocation.9005",
+            "allocation.9004",
+            "allocation.9012",
+            "allocation.9010",
             "allocation.portfolio.sectors",
             "allocation.portfolio.assetTypes",
-            "allocation.portfolio.cash",
         ])
-        #expect(detailsRow.children.dropFirst(5).first?.id == "allocation.9001")
+        #expect(detailsRow.children.contains { $0.id == "allocation.portfolio.holdings" } == false)
+        #expect(detailsRow.children.contains { $0.id == "allocation.portfolio.concentration" } == false)
+        #expect(detailsRow.children.contains { $0.id == "allocation.portfolio.cash" } == false)
+        #expect(detailsRow.children.filter { $0.title == "Cash" }.map(\.id) == ["allocation.9010"])
+        #expect(detailsRow.children.suffix(2).allSatisfy { !$0.children.isEmpty })
     }
 
     @Test("Portfolio allocation chart carries holding bars and detailed info drills into holdings")
