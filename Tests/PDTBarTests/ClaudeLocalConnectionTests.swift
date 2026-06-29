@@ -106,6 +106,37 @@ struct ClaudeLocalConnectionTests {
         #expect(runner.requests.last?.arguments.joined(separator: " ").contains("--allowedTools mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-list-x-ray-holdings") == true)
     }
 
+    @Test("Inferred read-tool names fall back to ToolSearch when Claude does not call them")
+    func inferredReadToolNamesFallBackToToolSearchWhenClaudeDoesNotCallThem() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: "claude.ai Portfolio Dividend Tracker (PDT): https://mcp.portfoliodividendtracker.com - ✔ Connected", stderr: "", exitCode: 0),
+            .init(stdout: streamJSON(
+                toolName: "mcp__other__pdt-list-x-ray-holdings",
+                result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"items":[]}}"#
+            ), stderr: "", exitCode: 0),
+            .init(stdout: toolSearchStream(readTools: ["pdt-list-x-ray-holdings"]), stderr: "", exitCode: 0),
+            .init(stdout: streamJSON(
+                toolName: "mcp__pdt__pdt-list-x-ray-holdings",
+                result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"items":[]}}"#
+            ), stderr: "", exitCode: 0),
+        ])
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 0),
+            commandRunner: runner
+        )
+
+        _ = try connection.availableReadTools(required: ["pdt-list-x-ray-holdings"])
+        _ = try connection.callReadTool("pdt-list-x-ray-holdings", arguments: [
+            "limit": "1",
+            "offset": "0",
+        ])
+
+        #expect(runner.requests.count == 4)
+        #expect(runner.requests[1].arguments.joined(separator: " ").contains("--allowedTools mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-list-x-ray-holdings"))
+        #expect(runner.requests[2].arguments.contains("ToolSearch"))
+        #expect(runner.requests[3].arguments.joined(separator: " ").contains("--allowedTools mcp__pdt__pdt-list-x-ray-holdings"))
+    }
+
     @Test("ToolSearch availability reports Claude progress")
     func toolSearchAvailabilityReportsClaudeProgress() throws {
         let runner = RecordingClaudeCommandRunner(results: [

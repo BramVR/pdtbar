@@ -84,6 +84,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     private let toolResultParser: ClaudeToolResultParser
     private let discoveredToolNamesLock = NSLock()
     private var discoveredToolNames: [String: String] = [:]
+    private var inferredReadToolNames: Set<String> = []
 
     public convenience init(environment: [String: String]) {
         self.init(configuration: ClaudeLocalConnectionConfiguration(environment: environment))
@@ -155,7 +156,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         )
         if !inferredToolNames.isEmpty {
             progress("Using connected PDT MCP tools")
-            mergeDiscoveredToolNames(inferredToolNames)
+            mergeDiscoveredToolNames(inferredToolNames, source: .inferred)
         }
         let snapshot = discoveredToolNamesSnapshot()
         if requiredReadTools.contains(where: { snapshot[$0] == nil }) {
@@ -178,14 +179,26 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         guard commandRunner.executableExists(configuration.claudePath, environment: configuration.environment) else {
             throw PDTMCPConnectorError.setupUnavailable("Claude CLI is unavailable")
         }
-        let toolName = try resolvedToolName(for: name)
+        var toolName = try resolvedToolName(for: name)
         var attempts = 0
         var lastError: Error?
+        var retriedWithDiscoveredToolName = false
         repeat {
             attempts += 1
             do {
                 return try callReadToolOnce(name, resolvedToolName: toolName, arguments: arguments)
             } catch {
+                if !retriedWithDiscoveredToolName,
+                   toolNameIsInferred(readToolName: name, toolName: toolName),
+                   Self.errorIsMissingToolCall(error, toolName: toolName)
+                {
+                    retriedWithDiscoveredToolName = true
+                    removeInferredToolName(readToolName: name, toolName: toolName)
+                    toolName = try resolvedToolName(for: name)
+                    attempts = 0
+                    lastError = error
+                    continue
+                }
                 lastError = error
                 guard configuration.toolCallRetryPolicy.shouldRetry(error, afterAttempt: attempts) else {
                     throw error
@@ -259,6 +272,13 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         }
         let trimmed = slug.trimmingCharacters(in: CharacterSet(charactersIn: "_"))
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func errorIsMissingToolCall(_ error: Error, toolName: String) -> Bool {
+        guard case PDTMCPConnectorError.transientFailure(let message) = error else {
+            return false
+        }
+        return message == "Claude did not call \(toolName)"
     }
 
     private func mcpList(timeout: TimeInterval) throws -> ClaudeLocalProcessResult {
@@ -368,6 +388,26 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         return discoveredToolNames[readToolName]
     }
 
+    private func toolNameIsInferred(readToolName: String, toolName: String) -> Bool {
+        discoveredToolNamesLock.lock()
+        defer {
+            discoveredToolNamesLock.unlock()
+        }
+        return inferredReadToolNames.contains(readToolName)
+            && discoveredToolNames[readToolName] == toolName
+    }
+
+    private func removeInferredToolName(readToolName: String, toolName: String) {
+        discoveredToolNamesLock.lock()
+        if inferredReadToolNames.contains(readToolName),
+           discoveredToolNames[readToolName] == toolName
+        {
+            discoveredToolNames.removeValue(forKey: readToolName)
+            inferredReadToolNames.remove(readToolName)
+        }
+        discoveredToolNamesLock.unlock()
+    }
+
     private func discoveredToolNamesSnapshot() -> [String: String] {
         discoveredToolNamesLock.lock()
         defer {
@@ -376,9 +416,28 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         return discoveredToolNames
     }
 
-    private func mergeDiscoveredToolNames(_ newToolNames: [String: String]) {
+    private enum ToolNameSource {
+        case discovered
+        case inferred
+    }
+
+    private func mergeDiscoveredToolNames(
+        _ newToolNames: [String: String],
+        source: ToolNameSource = .discovered
+    ) {
         discoveredToolNamesLock.lock()
-        discoveredToolNames.merge(newToolNames) { current, _ in current }
+        for (readToolName, toolName) in newToolNames {
+            switch source {
+            case .discovered:
+                discoveredToolNames[readToolName] = toolName
+                inferredReadToolNames.remove(readToolName)
+            case .inferred:
+                if discoveredToolNames[readToolName] == nil {
+                    discoveredToolNames[readToolName] = toolName
+                    inferredReadToolNames.insert(readToolName)
+                }
+            }
+        }
         discoveredToolNamesLock.unlock()
     }
 
