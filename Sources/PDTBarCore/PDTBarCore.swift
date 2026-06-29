@@ -3471,18 +3471,10 @@ public enum ClaudeLaunchFlow {
             MenuRow(
                 id: "portfolioFetch.backgroundProgress.phase",
                 role: .fetchStatus,
-                title: "Step \(progress.phase.stepIndex)/\(BackgroundDetailRefreshPhase.allCases.count): \(progress.phase.title)"
+                title: "Step \(progress.phase.stepIndex)/\(BackgroundDetailRefreshPhase.allCases.count): \(progress.phase.title)",
+                detail: progress.detail
             ),
         ]
-        if let detail = progress.detail {
-            rows.append(
-                MenuRow(
-                    id: "portfolioFetch.backgroundProgress.detail",
-                    role: .fetchStatus,
-                    title: detail
-                )
-            )
-        }
         if progress.phase == .priceHistory,
            let completed = progress.completedUnitCount,
            let total = progress.totalUnitCount

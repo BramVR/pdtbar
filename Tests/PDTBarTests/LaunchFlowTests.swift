@@ -236,7 +236,8 @@ struct ClaudeLaunchFlowTests {
         #expect(rowTitles(in: descriptor).contains("Filling details"))
         #expect(rowTitles(in: descriptor).contains("Cached data visible"))
         #expect(rowTitles(in: descriptor).contains("Step 5/5: Price history"))
-        #expect(rowTitles(in: descriptor).contains("Calling pdt-list-symbol-prices"))
+        #expect(!rowTitles(in: descriptor).contains("Calling pdt-list-symbol-prices"))
+        #expect(descriptor.sections.first?.rows.first { $0.id == "portfolioFetch.backgroundProgress.phase" }?.detail == "Calling pdt-list-symbol-prices")
         #expect(rowTitles(in: descriptor).contains("12/19 price histories checked"))
         #expect(descriptor.sections.first?.rows.first?.detail == "Last snapshot 2026-03-28")
         #expect(surface.status.toolTip == "PDTBar Syncing portfolio - Calling pdt-list-symbol-prices")
@@ -261,7 +262,8 @@ struct ClaudeLaunchFlowTests {
         )
 
         #expect(rowTitles(in: descriptor).contains("Cached data visible"))
-        #expect(rowTitles(in: descriptor).contains("Checking PDT tools"))
+        #expect(!rowTitles(in: descriptor).contains("Checking PDT tools"))
+        #expect(descriptor.sections.first?.rows.first { $0.id == "portfolioFetch.backgroundProgress.phase" }?.detail == "Checking PDT tools")
         #expect(descriptor.sections.first?.rows.first?.detail == "Last snapshot 2026-03-28")
         #expect(MenuBarSurfaceRenderer.render(descriptor: descriptor).status.toolTip == "PDTBar Syncing portfolio - Checking PDT tools")
     }

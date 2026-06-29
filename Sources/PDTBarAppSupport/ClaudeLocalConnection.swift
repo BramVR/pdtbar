@@ -149,11 +149,21 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             throw PDTMCPConnectorError.setupUnavailable("Claude PDT MCP server is not connected")
         }
         let requiredReadTools = PDTReadTools.requiredV1.filter { required.contains($0) }
-        progress("Waiting on Claude for PDT tool discovery")
+        let inferredToolNames = Self.inferredToolNames(
+            fromMCPListOutput: result.combinedOutput,
+            readToolNames: requiredReadTools
+        )
+        if !inferredToolNames.isEmpty {
+            progress("Using connected PDT MCP tools")
+            mergeDiscoveredToolNames(inferredToolNames)
+        }
+        let snapshot = discoveredToolNamesSnapshot()
+        if requiredReadTools.contains(where: { snapshot[$0] == nil }) {
+            progress("Waiting on Claude for PDT tool discovery")
+        }
         let resolved = try resolvedToolNames(for: requiredReadTools, progress: progress)
         var available = Set(resolved.keys)
         for tool in requiredReadTools where !available.contains(tool) {
-            progress("Finding \(tool)")
             if (try? resolvedToolName(for: tool, progress: progress)) != nil {
                 available.insert(tool)
             }
@@ -201,6 +211,56 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             }
     }
 
+    private static func inferredToolNames(
+        fromMCPListOutput output: String,
+        readToolNames: [String]
+    ) -> [String: String] {
+        guard let prefix = connectedPDTToolPrefixes(in: output).first else {
+            return [:]
+        }
+        return readToolNames.reduce(into: [String: String]()) { inferred, readToolName in
+            inferred[readToolName] = "\(prefix)\(readToolName)"
+        }
+    }
+
+    private static func connectedPDTToolPrefixes(in output: String) -> [String] {
+        output.split(separator: "\n").compactMap { rawLine in
+            let line = String(rawLine)
+            guard pdtServerIsConnected(in: line),
+                  let separatorIndex = line.firstIndex(of: ":")
+            else {
+                return nil
+            }
+            let displayName = String(line[..<separatorIndex])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let slug = mcpToolSlug(for: displayName) else {
+                return nil
+            }
+            return "mcp__\(slug)__"
+        }
+    }
+
+    private static func mcpToolSlug(for displayName: String) -> String? {
+        var slug = ""
+        var previousWasSeparator = false
+        for scalar in displayName.unicodeScalars {
+            let value = scalar.value
+            let isDigit = value >= 48 && value <= 57
+            let isUppercaseLetter = value >= 65 && value <= 90
+            let isLowercaseLetter = value >= 97 && value <= 122
+            let isHyphen = value == 45
+            if isDigit || isUppercaseLetter || isLowercaseLetter || isHyphen {
+                slug.unicodeScalars.append(scalar)
+                previousWasSeparator = false
+            } else if !previousWasSeparator {
+                slug.append("_")
+                previousWasSeparator = true
+            }
+        }
+        let trimmed = slug.trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     private func mcpList(timeout: TimeInterval) throws -> ClaudeLocalProcessResult {
         try commandRunner.run(
             executable: configuration.claudePath,
@@ -245,7 +305,11 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         var lastResultExitCode: Int32 = 0
         repeat {
             attempts += 1
-            progress(attempts == 1 ? "Finding PDT read tools" : "Retrying PDT tool discovery")
+            if unresolved.count == 1, let readToolName = unresolved.first {
+                progress(attempts == 1 ? "Finding \(readToolName)" : "Retrying \(readToolName)")
+            } else {
+                progress(attempts == 1 ? "Finding PDT read tools" : "Retrying PDT tool discovery")
+            }
             let result = try runToolSearch(
                 readToolNames: unresolved,
                 prompt: "Use ToolSearch to find these PDT MCP read-only tools: \(toolList). Return only {\"status\":\"redacted-ok\"}."
