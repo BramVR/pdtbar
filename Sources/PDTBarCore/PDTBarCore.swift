@@ -6712,6 +6712,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         ).compactMapValues { matches -> Int? in
             matches.count == 1 ? matches[0].quoteId : nil
         }
+        let currentQuoteIDs = Set(holdings.map(\.quoteId))
         var quoteIDsBySymbolID = calendarEvents.reduce(into: [Int: Int]()) { result, event in
             guard let symbolId = event.symbolId,
                   neededSymbolIDs.contains(symbolId),
@@ -6727,7 +6728,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 guard let symbolId = event.symbolId,
                       neededSymbolIDs.contains(symbolId),
                       quoteIDsBySymbolID[symbolId] == nil,
-                      let quoteId = event.quoteId
+                      let quoteId = event.quoteId,
+                      currentQuoteIDs.contains(quoteId)
                 else {
                     return
                 }

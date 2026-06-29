@@ -122,6 +122,49 @@ struct BackgroundDetailRefreshTests {
         #expect(connector.calls.contains("pdt-get-symbol-quote"))
     }
 
+    @Test("Background refresh ignores stale cached income quote mapping")
+    func backgroundRefreshIgnoresStaleCachedIncomeQuoteMapping() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-income-stale-cache-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        _ = try store.commitCurrentSnapshot(PortfolioSnapshot(
+            asOf: "2026-03-28",
+            totalValue: Money(value: "0.00", currency: "EUR"),
+            openHoldings: [],
+            sectors: [],
+            assetTypes: [],
+            incomeEvents: [
+                IncomeEventSummary(
+                    date: "2026-03-29",
+                    kind: "ex-dividend",
+                    symbolName: "Old Adapter B",
+                    estimated: false,
+                    symbolId: 5102,
+                    quoteId: 9999
+                ),
+            ],
+            dividendRowCount: 0,
+            priceSeries: []
+        ))
+        let connector = ScriptedPDTMCPConnector(
+            responses: try detailRefreshResponses(calendarSymbolID: 5102, calendarSymbolName: "ADPB")
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        let event = try #require(result.model.facetSnapshots.income.upcomingEvents.first)
+        #expect(event.symbolId == 5102)
+        #expect(event.quoteId == 9102)
+        #expect(event.amount == Money(value: "6.00", currency: "EUR"))
+        #expect(connector.calls.contains("pdt-get-symbol-quote"))
+    }
+
     @Test("Price-history failure keeps completed detail phases and continues other holdings")
     func priceHistoryFailureKeepsCompletedPhasesAndContinuesOtherHoldings() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-test")
