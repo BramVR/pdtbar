@@ -6580,7 +6580,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void = { _ in }
     ) throws -> PDTBackgroundDetailRefreshResult {
         try? snapshotStore.clearLastDetailRefreshDiagnostic()
-        progress(BackgroundDetailRefreshProgress(phase: .baseHoldings, detail: "Checking PDT tools"))
+        progress(BackgroundDetailRefreshProgress(phase: .baseHoldings, detail: "Checking PDT read tools"))
         let requiredTools = PDTReadTools.requiredV1
         let availableTools: Set<String>
         do {

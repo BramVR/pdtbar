@@ -256,7 +256,7 @@ struct ClaudeLaunchFlowTests {
             cachedPulse: cachedPulse,
             progress: BackgroundDetailRefreshProgress(
                 phase: .baseHoldings,
-                detail: "Checking PDT tools"
+                detail: "Checking PDT read tools"
             ),
             cachedSnapshotAsOf: "2026-03-28"
         )
@@ -264,7 +264,7 @@ struct ClaudeLaunchFlowTests {
         #expect(rowTitles(in: descriptor).contains("Cached data visible"))
         #expect(rowTitles(in: descriptor).contains("Filling details"))
         #expect(rowTitles(in: descriptor).contains("Step 1/5: Base holdings"))
-        #expect(descriptor.sections.first?.rows.first { $0.id == "portfolioFetch.backgroundProgress.phase" }?.detail == "Checking PDT tools")
+        #expect(descriptor.sections.first?.rows.first { $0.id == "portfolioFetch.backgroundProgress.phase" }?.detail == "Checking PDT read tools")
         #expect(descriptor.sections.first?.rows.first?.detail == "Last snapshot 2026-03-28")
         #expect(MenuBarSurfaceRenderer.render(descriptor: descriptor).status.toolTip == "PDTBar Syncing portfolio - Checking PDT read tools")
     }

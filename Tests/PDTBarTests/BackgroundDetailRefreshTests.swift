@@ -416,7 +416,7 @@ struct BackgroundDetailRefreshTests {
         #expect(progress.map(\.phase).contains(.xRay))
         #expect(progress.map(\.phase).contains(.income))
         #expect(progress.contains {
-            $0.phase == .baseHoldings && $0.detail == "Checking PDT tools"
+            $0.phase == .baseHoldings && $0.detail == "Checking PDT read tools"
         })
         #expect(progress.contains {
             $0.phase == .baseHoldings && $0.detail == "Calling pdt-get-portfolio-holdings"
