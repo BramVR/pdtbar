@@ -3996,7 +3996,7 @@ public enum MenuDescriptorRenderer {
                         MenuRow(
                             id: "bigMovers.summary",
                             role: .bigMoverSummary,
-                            title: bigMovers.maxMove.map { "Quote \($0.quoteId)" } ?? "No big movers",
+                            title: bigMoverTitle(for: bigMovers.maxMove, allocation: allocation),
                             detail: bigMovers.maxMove.map { "\(percent($0.percentChange)) over recent window" }
                                 ?? "\(bigMovers.priceSeriesCount) price rows checked"
                         ),
@@ -4013,6 +4013,16 @@ public enum MenuDescriptorRenderer {
                 topLevelActionsSection(refreshState: .available),
             ]
         )
+    }
+
+    private static func bigMoverTitle(for move: PriceMoveSummary?, allocation: AllocationSnapshot) -> String {
+        guard let move else {
+            return "No big movers"
+        }
+        return allocation.topHoldings
+            .first { $0.quoteId == move.quoteId }?
+            .name
+            ?? "Quote \(move.quoteId)"
     }
 
     static func descriptorWithTopLevelActions(
