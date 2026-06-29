@@ -13,6 +13,15 @@ struct ClaudeLocalConnectionTests {
         #expect(!ClaudeLocalConnection.pdtServerIsConnected(in: "Some Other MCP connected"))
     }
 
+    @Test("MCP list parsing derives Claude PDT tool prefixes")
+    func mcpListParsingDerivesClaudePDTToolPrefixes() {
+        let output = "claude.ai Portfolio Dividend Tracker (PDT): https://mcp.portfoliodividendtracker.com - ✔ Connected"
+
+        #expect(ClaudeLocalConnection.pdtToolPrefixes(fromMCPListOutput: output) == [
+            "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__",
+        ])
+    }
+
     @Test("Missing Claude classifies readiness and availability as setup unavailable")
     func missingClaudeClassifiesSetupUnavailable() throws {
         let runner = RecordingClaudeCommandRunner(executableAvailable: false)
@@ -112,7 +121,7 @@ struct ClaudeLocalConnectionTests {
         ])
 
         #expect(runner.requests.count == 1)
-        #expect(runner.requests.first?.arguments.joined(separator: " ").contains("--allowedTools mcp__*__pdt-list-x-ray-holdings") == true)
+        #expect(runner.requests.first?.arguments.joined(separator: " ").contains("--allowedTools mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-*") == true)
         #expect(runner.requests.allSatisfy { !$0.arguments.contains("ToolSearch") })
     }
 
@@ -149,7 +158,7 @@ struct ClaudeLocalConnectionTests {
             commandRunner: runner
         )
 
-        #expect(throws: PDTMCPConnectorError.transientFailure("Claude did not call mcp__*__pdt-get-symbol")) {
+        #expect(throws: PDTMCPConnectorError.transientFailure("Claude did not call mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-*")) {
             try connection.callReadTool("pdt-get-symbol", arguments: ["id": "5101"])
         }
     }
@@ -170,7 +179,8 @@ struct ClaudeLocalConnectionTests {
         #expect(try firstHoldingName(in: data) == "Shared Public Co")
         #expect(runner.requests.count == 2)
         let readRequest = try #require(runner.requests.last)
-        #expect(readRequest.arguments.joined(separator: " ").contains("--allowedTools mcp__*__pdt-get-portfolio-holdings"))
+        #expect(readRequest.arguments.joined(separator: " ").contains("--allowedTools mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-*"))
+        #expect(readRequest.arguments.joined(separator: " ").contains("mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-get-portfolio-holdings"))
         #expect(readRequest.arguments.joined(separator: " ").contains("mcp__*__pdt-update-*"))
     }
 

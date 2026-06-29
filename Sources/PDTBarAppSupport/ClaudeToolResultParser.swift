@@ -30,7 +30,9 @@ public struct ClaudeToolResultParser: Sendable {
         currentSessionResultFiles: Set<URL>
     ) throws -> Data {
         let values = try streamValues(from: output)
-        let matchingToolUseIDs = Set(values.flatMap { toolUseIDs(for: toolName, in: $0) })
+        let matchingToolUseIDs = Set(values.flatMap {
+            toolUseIDs(for: toolName, readToolName: readToolName, in: $0)
+        })
         guard !matchingToolUseIDs.isEmpty else {
             throw ClaudeToolResultParserError.missingToolCall(toolName)
         }
@@ -93,29 +95,42 @@ public struct ClaudeToolResultParser: Sendable {
         return values
     }
 
-    private func toolUseIDs(for toolName: String, in value: ClaudeStreamJSONValue) -> [String] {
+    private func toolUseIDs(
+        for toolName: String,
+        readToolName: String,
+        in value: ClaudeStreamJSONValue
+    ) -> [String] {
         let current: [String]
         if value.string(for: "type") == "tool_use",
            let calledToolName = value.string(for: "name"),
-           toolNameMatches(calledToolName, allowedToolName: toolName),
+           toolNameMatches(calledToolName, allowedToolName: toolName, readToolName: readToolName),
            let id = value.string(for: "id")
         {
             current = [id]
         } else {
             current = []
         }
-        return current + value.children.flatMap { toolUseIDs(for: toolName, in: $0) }
+        return current + value.children.flatMap {
+            toolUseIDs(for: toolName, readToolName: readToolName, in: $0)
+        }
     }
 
-    private func toolNameMatches(_ calledToolName: String, allowedToolName: String) -> Bool {
+    private func toolNameMatches(
+        _ calledToolName: String,
+        allowedToolName: String,
+        readToolName: String
+    ) -> Bool {
         if calledToolName == allowedToolName {
             return true
         }
-        guard allowedToolName.hasPrefix("mcp__*__") else {
+        guard allowedToolName.hasPrefix("mcp__"),
+              allowedToolName.hasSuffix("__pdt-*"),
+              calledToolName.hasPrefix("mcp__"),
+              calledToolName.hasSuffix("__\(readToolName)")
+        else {
             return false
         }
-        return calledToolName.hasPrefix("mcp__")
-            && calledToolName.hasSuffix(String(allowedToolName.dropFirst("mcp__*__".count)))
+        return true
     }
 
     private func toolResults(

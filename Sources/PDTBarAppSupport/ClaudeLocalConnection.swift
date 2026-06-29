@@ -82,6 +82,8 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     private let configuration: ClaudeLocalConnectionConfiguration
     private let commandRunner: any ClaudeLocalCommandRunning
     private let toolResultParser: ClaudeToolResultParser
+    private let pdtToolPrefixLock = NSLock()
+    private var rememberedPDTToolPrefixes: [String] = []
 
     public convenience init(environment: [String: String]) {
         self.init(configuration: ClaudeLocalConnectionConfiguration(environment: environment))
@@ -146,6 +148,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         guard result.exitCode == 0, Self.pdtServerIsConnected(in: result.combinedOutput) else {
             throw PDTMCPConnectorError.setupUnavailable("Claude PDT MCP server is not connected")
         }
+        rememberPDTToolPrefixes(fromMCPListOutput: result.combinedOutput)
         let requiredReadTools = PDTReadTools.requiredV1.filter { required.contains($0) }
         return Set(requiredReadTools)
     }
@@ -190,6 +193,45 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             }
     }
 
+    public static func pdtToolPrefixes(fromMCPListOutput output: String) -> [String] {
+        let prefixes = output
+            .split(separator: "\n")
+            .compactMap { line -> String? in
+                let lowercasedLine = line.lowercased()
+                guard lowercasedLine.contains("connected"),
+                      !lowercasedLine.contains("not connected"),
+                      !lowercasedLine.contains("disconnected"),
+                      (
+                        lowercasedLine.contains("portfolio dividend tracker")
+                            || lowercasedLine.contains("portfoliodividendtracker.com")
+                            || lowercasedLine.contains("pdt")
+                      )
+                else {
+                    return nil
+                }
+                let displayName = line.split(separator: ":", maxSplits: 1).first.map(String.init) ?? String(line)
+                return pdtToolPrefix(fromMCPDisplayName: displayName)
+            }
+        return uniqued(prefixes)
+    }
+
+    private static let defaultPDTToolPrefix = "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__"
+
+    private static func pdtToolPrefix(fromMCPDisplayName displayName: String) -> String {
+        let tokens = displayName
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+        guard !tokens.isEmpty else {
+            return defaultPDTToolPrefix
+        }
+        return "mcp__\(tokens.joined(separator: "_"))__"
+    }
+
+    private static func uniqued(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.filter { seen.insert($0).inserted }
+    }
+
     private func mcpList(timeout: TimeInterval) throws -> ClaudeLocalProcessResult {
         try commandRunner.run(
             executable: configuration.claudePath,
@@ -200,7 +242,8 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     }
 
     private func resolvedToolName(for readToolName: String) throws -> String {
-        "mcp__*__\(readToolName)"
+        let prefix = pdtToolPrefixes().first ?? Self.defaultPDTToolPrefix
+        return "\(prefix)pdt-*"
     }
 
     private func callReadToolOnce(
@@ -216,7 +259,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
                 "--allowedTools", toolName,
                 "--disallowedTools", disallowedTools().joined(separator: ","),
                 "--session-id", sessionID,
-                "-p", prompt(toolName: toolName, readToolName: name, arguments: arguments),
+                "-p", prompt(allowedToolName: toolName, readToolName: name, arguments: arguments),
                 "--output-format", "stream-json",
                 "--verbose",
                 "--no-session-persistence",
@@ -243,20 +286,45 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         )
     }
 
-    private func prompt(toolName: String, readToolName: String, arguments: [String: String]) -> String {
+    private func prompt(allowedToolName: String, readToolName: String, arguments: [String: String]) -> String {
         let argumentData = (try? JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys])) ?? Data("{}".utf8)
         let argumentJSON = String(decoding: argumentData, as: UTF8.self)
+        let concreteToolName = concreteToolName(allowedToolName: allowedToolName, readToolName: readToolName)
         return """
         PDTBar needs one local read-only PDT MCP result.
 
         Rules:
-        - Call exactly this read-only PDT MCP tool: \(toolName)
+        - The allowed PDT MCP tools are limited to: \(allowedToolName)
+        - Call exactly this read-only PDT MCP tool: \(concreteToolName)
         - This is the requested PDT read tool: \(readToolName)
         - Use exactly these JSON arguments: \(argumentJSON)
         - Do not call any write, create, update, delete, remove, post, put, or set tool.
         - Do not print holdings, values, account identifiers, endpoints, credentials, or raw tool output in your final answer.
         - After the tool call, return only {"status":"redacted-ok"}.
         """
+    }
+
+    private func concreteToolName(allowedToolName: String, readToolName: String) -> String {
+        guard allowedToolName.hasSuffix("pdt-*") else {
+            return allowedToolName
+        }
+        return String(allowedToolName.dropLast("pdt-*".count)) + readToolName
+    }
+
+    private func rememberPDTToolPrefixes(fromMCPListOutput output: String) {
+        let prefixes = Self.pdtToolPrefixes(fromMCPListOutput: output)
+        guard !prefixes.isEmpty else {
+            return
+        }
+        pdtToolPrefixLock.lock()
+        defer { pdtToolPrefixLock.unlock() }
+        rememberedPDTToolPrefixes = Self.uniqued(prefixes + rememberedPDTToolPrefixes)
+    }
+
+    private func pdtToolPrefixes() -> [String] {
+        pdtToolPrefixLock.lock()
+        defer { pdtToolPrefixLock.unlock() }
+        return rememberedPDTToolPrefixes
     }
 
     private func disallowedTools() -> [String] {

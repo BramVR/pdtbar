@@ -43,6 +43,44 @@ struct ClaudeToolResultParserTests {
         #expect(try firstHoldingName(in: data) == "Text Public Co")
     }
 
+    @Test("Scoped PDT wildcard allow rule accepts the requested concrete read tool")
+    func scopedPDTWildcardAllowRuleAcceptsRequestedConcreteReadTool() throws {
+        let output = streamJSON(
+            toolName: "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-get-portfolio-holdings",
+            result: #"""
+            {"type":"tool_result","tool_use_id":"call_1","structuredContent":{"holdings":[{"symbolName":"Scoped Public Co","portfolioWeight":0.16}]}}
+            """#
+        )
+
+        let data = try ClaudeToolResultParser().resultData(
+            for: "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-*",
+            readToolName: readToolName,
+            output: output,
+            currentSessionResultFiles: []
+        )
+
+        #expect(try firstHoldingName(in: data) == "Scoped Public Co")
+    }
+
+    @Test("Scoped PDT wildcard allow rule rejects a different read tool")
+    func scopedPDTWildcardAllowRuleRejectsDifferentReadTool() throws {
+        let output = streamJSON(
+            toolName: "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-list-dividends",
+            result: #"""
+            {"type":"tool_result","tool_use_id":"call_1","structuredContent":{"data":[]}}
+            """#
+        )
+
+        #expect(throws: ClaudeToolResultParserError.missingToolCall("mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-*")) {
+            _ = try ClaudeToolResultParser().resultData(
+                for: "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-*",
+                readToolName: readToolName,
+                output: output,
+                currentSessionResultFiles: []
+            )
+        }
+    }
+
     @Test("Saved file references are used before JSON text content")
     func savedFileReferencesAreUsedBeforeJSONTextContent() throws {
         let directory = try temporaryDirectory(named: "claude-parser-saved-reference")
