@@ -72,8 +72,8 @@ struct ClaudeLocalConnectionTests {
         #expect(runner.requests.last?.arguments.contains("ToolSearch") == true)
     }
 
-    @Test("Claude history seeds verified read-tool cache without ToolSearch")
-    func claudeHistorySeedsVerifiedReadToolCacheWithoutToolSearch() throws {
+    @Test("Claude history candidates do not bypass availability verification")
+    func claudeHistoryCandidatesDoNotBypassAvailabilityVerification() throws {
         let projectsDirectory = temporaryClaudeProjectsDirectory()
         try writeClaudeTranscript(
             """
@@ -84,10 +84,10 @@ struct ClaudeLocalConnectionTests {
         )
         let runner = RecordingClaudeCommandRunner(results: [
             .init(stdout: "claude.ai Portfolio Dividend Tracker (PDT): https://mcp.portfoliodividendtracker.com - ✔ Connected", stderr: "", exitCode: 0),
-            .init(stdout: streamJSON(
-                toolName: "mcp__d75148ac-b4f0-463d-a18e-2f0ac997cd86__pdt-list-x-ray-holdings",
-                result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"items":[]}}"#
-            ), stderr: "", exitCode: 0),
+            .init(stdout: "", stderr: "", exitCode: 0),
+            .init(stdout: "", stderr: "", exitCode: 0),
+            .init(stdout: "", stderr: "", exitCode: 0),
+            .init(stdout: "", stderr: "", exitCode: 0),
         ])
         let connection = ClaudeLocalConnection(
             configuration: configuration(retryCount: 0, claudeProjectsDirectory: projectsDirectory),
@@ -101,18 +101,43 @@ struct ClaudeLocalConnectionTests {
         ]) {
             progress.append($0)
         }
+
+        #expect(available.isEmpty)
+        #expect(progress.values.contains("Using cached PDT MCP tools"))
+        #expect(progress.values.contains("Using connected PDT MCP tools"))
+        #expect(progress.values.contains("Waiting on Claude for PDT tool discovery"))
+        #expect(runner.requests.contains { $0.arguments.contains("ToolSearch") })
+    }
+
+    @Test("ToolSearch verification overrides stale Claude history candidates")
+    func toolSearchVerificationOverridesStaleClaudeHistoryCandidates() throws {
+        let projectsDirectory = temporaryClaudeProjectsDirectory()
+        try writeClaudeTranscript(
+            #"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__stale__pdt-list-x-ray-holdings"}]}}"#,
+            to: projectsDirectory.appending(path: "project")
+        )
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: "claude.ai Portfolio Dividend Tracker (PDT): https://mcp.portfoliodividendtracker.com - ✔ Connected", stderr: "", exitCode: 0),
+            .init(stdout: toolSearchStream(readTools: ["pdt-list-x-ray-holdings"]), stderr: "", exitCode: 0),
+            .init(stdout: streamJSON(
+                toolName: "mcp__pdt__pdt-list-x-ray-holdings",
+                result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"items":[]}}"#
+            ), stderr: "", exitCode: 0),
+        ])
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 0, claudeProjectsDirectory: projectsDirectory),
+            commandRunner: runner
+        )
+
+        let available = try connection.availableReadTools(required: ["pdt-list-x-ray-holdings"])
         _ = try connection.callReadTool("pdt-list-x-ray-holdings", arguments: [
             "limit": "1",
             "offset": "0",
         ])
 
-        #expect(available == ["pdt-list-dividends", "pdt-list-x-ray-holdings"])
-        #expect(progress.values.contains("Using cached PDT MCP tools"))
-        #expect(progress.values.contains("Using connected PDT MCP tools"))
-        #expect(!progress.values.contains("Waiting on Claude for PDT tool discovery"))
-        #expect(runner.requests.count == 2)
-        #expect(runner.requests.allSatisfy { !$0.arguments.contains("ToolSearch") })
-        #expect(runner.requests.last?.arguments.joined(separator: " ").contains("--allowedTools mcp__d75148ac-b4f0-463d-a18e-2f0ac997cd86__pdt-list-x-ray-holdings") == true)
+        #expect(available == ["pdt-list-x-ray-holdings"])
+        #expect(runner.requests[1].arguments.contains("ToolSearch"))
+        #expect(runner.requests[2].arguments.joined(separator: " ").contains("--allowedTools mcp__pdt__pdt-list-x-ray-holdings"))
     }
 
     @Test("MCP list candidates are not reported available without verification")

@@ -153,7 +153,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         let observedToolNames = observedToolNamesFromClaudeHistory(readToolNames: requiredReadTools)
         if !observedToolNames.isEmpty {
             progress("Using cached PDT MCP tools")
-            mergeDiscoveredToolNames(observedToolNames)
+            mergeDiscoveredToolNames(observedToolNames, source: .candidate)
         }
         let inferredToolNames = Self.inferredToolNames(
             fromMCPListOutput: result.combinedOutput,
