@@ -1951,9 +1951,11 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
             let staleMenuVisible = Set(targets.map(\.accessibilityIdentifier)).isSubset(of: snapshot.identifiers)
             let staleStatusVisible = statusText.contains(refreshingSurface.status.accessibilityLabel)
                 || statusText.contains(refreshingSurface.status.title)
-            backgroundProgressVisible = staleMenuVisible
-                && snapshot.texts.contains { $0.hasPrefix("Filling details") }
+            let preflightVisible = snapshot.texts.contains("Checking PDT read tools")
+            let baseHoldingsProgressVisible = snapshot.texts.contains("Filling details")
                 && snapshot.texts.contains("Step 1/5: Base holdings")
+            backgroundProgressVisible = staleMenuVisible
+                && (preflightVisible || baseHoldingsProgressVisible)
                 && !snapshot.texts.contains("Details fill failed")
             stalePulseVisible = backgroundProgressVisible
                 || staleMenuVisible

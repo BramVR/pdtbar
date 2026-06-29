@@ -1882,12 +1882,13 @@ public struct DataHealthInput: Equatable {
         readState: PulseReadState? = nil,
         detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil,
         diagnostic: PDTDetailRefreshFailureDiagnostic? = nil,
+        availableReadTools: Set<String>? = Set(PDTReadTools.requiredV1),
         priorSnapshotLoadStatus: PriorSnapshotLoadStatus = .notRequested
     ) -> DataHealthInput {
         DataHealthInput(
             claudeReadiness: .ready,
             pdtMCPReadiness: .ready,
-            availableReadTools: Set(PDTReadTools.requiredV1),
+            availableReadTools: availableReadTools,
             readOnlyPolicy: .enforced,
             pulseSource: pulseSource,
             lastSuccessfulCompleteFetchAsOf: freshness.latestCompleteDetailFillAsOf,
@@ -1962,6 +1963,7 @@ public struct DataHealthDiagnosticSummary: Codable, Equatable {
     public var available: Bool
     public var detail: String
     public var copyText: String
+    public var logFilePath: String?
 }
 
 public struct DataHealthSnapshot: Codable, Equatable {
@@ -2189,20 +2191,40 @@ public enum DataHealth {
 
     private static func diagnosticSummary(_ diagnostic: PDTDetailRefreshFailureDiagnostic) -> DataHealthDiagnosticSummary {
         let argumentKeys = diagnostic.argumentShape.joined(separator: ",")
-        let copyText = [
+        var copyLines = [
             "PDTBar data health",
             "tool: \(diagnostic.toolName)",
             "phase: \(diagnostic.phase.rawValue)",
             "category: \(diagnostic.category.rawValue)",
             "attempts: \(diagnostic.attemptCount)",
             "argument_keys: \(argumentKeys)",
-        ].joined(separator: "\n")
+        ]
+        if !diagnostic.missingReadTools.isEmpty {
+            copyLines.append("missing_required_read_tools: \(diagnostic.missingReadTools.joined(separator: ","))")
+        }
+        let copyText = copyLines.joined(separator: "\n")
         return DataHealthDiagnosticSummary(
             available: true,
             detail: "\(diagnostic.toolName); \(diagnostic.phase.rawValue); \(diagnostic.category.rawValue)",
-            copyText: copyText
+            copyText: copyText,
+            logFilePath: diagnostic.logFilePath.map(redactedLocalPathForSharing)
         )
     }
+}
+
+private func redactedLocalPathForSharing(_ path: String) -> String {
+    let homePath = FileManager.default.homeDirectoryForCurrentUser.path
+    guard !homePath.isEmpty else {
+        return path
+    }
+    if path == homePath {
+        return "~"
+    }
+    let homePrefix = homePath + "/"
+    guard path.hasPrefix(homePrefix) else {
+        return path
+    }
+    return "~/" + String(path.dropFirst(homePrefix.count))
 }
 
 public struct StatusVisualState: Codable, Equatable {
@@ -3171,7 +3193,13 @@ public enum ClaudeLaunchFlow {
         cachedPulse: MenuDescriptor,
         diagnostic: PDTDetailRefreshFailureDiagnostic? = nil
     ) -> MenuDescriptor {
-        cachedPulseDescriptor(
+        if let diagnostic, diagnostic.isReadToolPreflightSetupFailure {
+            return descriptorForBackgroundReadToolPreflightFailure(
+                cachedPulse: cachedPulse,
+                diagnostic: diagnostic
+            )
+        }
+        return cachedPulseDescriptor(
             cachedPulseWithRuntimeHealth(cachedPulse, detailFill: .failed, diagnostic: diagnostic, clearsDiagnostic: true)
                 .withRefreshAction(.available),
             statusVisual: cachedPulse.statusVisual.withDimming(true),
@@ -3197,14 +3225,72 @@ public enum ClaudeLaunchFlow {
         progress: BackgroundDetailRefreshProgress,
         cachedSnapshotAsOf: String? = nil
     ) -> MenuDescriptor {
-        let statusCopy = progress.detail.map { "Syncing portfolio - \($0)" }
-            ?? "Syncing portfolio - \(progress.phase.title)"
+        let statusCopy = isReadToolPreflightProgress(progress)
+            ? "Syncing portfolio - Checking PDT read tools"
+            : progress.detail.map { "Syncing portfolio - \($0)" }
+                ?? "Syncing portfolio - \(progress.phase.title)"
         return cachedPulseDescriptor(
             cachedPulseWithRuntimeHealth(cachedPulse, detailFill: .inProgress(progress))
                 .withRefreshAction(.inProgress),
             statusVisual: cachedPulse.statusVisual.withStatusCopy(statusCopy),
             rowsFirst: true,
             rows: backgroundDetailProgressRows(progress, cachedSnapshotAsOf: cachedSnapshotAsOf)
+        )
+    }
+
+    public static func descriptorForBackgroundReadToolPreflight(
+        cachedPulse: MenuDescriptor,
+        detail: String? = nil,
+        cachedSnapshotAsOf: String? = nil
+    ) -> MenuDescriptor {
+        let progress = BackgroundDetailRefreshProgress(
+            phase: .baseHoldings,
+            detail: detail ?? "Checking PDT read tools"
+        )
+        return cachedPulseDescriptor(
+            cachedPulseWithRuntimeHealth(cachedPulse, detailFill: .inProgress(progress))
+                .withRefreshAction(.inProgress),
+            statusVisual: cachedPulse.statusVisual.withStatusCopy("Syncing portfolio - Checking PDT read tools"),
+            rowsFirst: true,
+            rows: backgroundDetailProgressRows(progress, cachedSnapshotAsOf: cachedSnapshotAsOf)
+        )
+    }
+
+    public static func descriptorForBackgroundReadToolPreflightFailure(
+        cachedPulse: MenuDescriptor,
+        diagnostic: PDTDetailRefreshFailureDiagnostic
+    ) -> MenuDescriptor {
+        let availableReadTools: Set<String>? = diagnostic.missingReadTools.isEmpty
+            ? nil
+            : Set(PDTReadTools.requiredV1).subtracting(diagnostic.missingReadTools)
+        return cachedPulseDescriptor(
+            cachedPulseWithRuntimeHealth(
+                cachedPulse,
+                availableReadTools: availableReadTools,
+                detailFill: .failed,
+                diagnostic: diagnostic
+            ).withRefreshAction(.available),
+            statusVisual: cachedPulse.statusVisual.withDimming(true),
+            rowsFirst: true,
+            rows: [
+                MenuRow(
+                    id: "portfolioFetch.readToolPreflightFailed",
+                    role: .fetchStatus,
+                    title: "PDT read tools unavailable",
+                    detail: "Claude could not resolve required PDT read tools"
+                ),
+                MenuRow(
+                    id: "portfolioFetch.readToolPreflightCached",
+                    role: .fetchStatus,
+                    title: "Cached data visible",
+                    detail: "Last pulse is still visible"
+                ),
+                MenuRow(
+                    id: "portfolioFetch.retry",
+                    role: .fetchRetry,
+                    title: "Try details again"
+                ),
+            ]
         )
     }
 
@@ -3308,12 +3394,17 @@ public enum ClaudeLaunchFlow {
         _ cachedPulse: MenuDescriptor,
         claudeReadiness: DataHealthSourceStatus = .ready,
         pdtMCPReadiness: DataHealthSourceStatus = .ready,
+        availableReadTools: Set<String>? = Set(PDTReadTools.requiredV1),
         detailFill: DataHealthDetailFillInput,
         diagnostic: PDTDetailRefreshFailureDiagnostic? = nil,
         clearsDiagnostic: Bool = false
     ) -> MenuDescriptor {
         var descriptor = cachedPulse
-        let sourceDetail = runtimeDataHealthSourceDetail(claudeReadiness: claudeReadiness, pdtMCPReadiness: pdtMCPReadiness)
+        let sourceDetail = runtimeDataHealthSourceDetail(
+            claudeReadiness: claudeReadiness,
+            pdtMCPReadiness: pdtMCPReadiness,
+            availableReadTools: availableReadTools
+        )
         let detailFillDetail = runtimeDataHealthDetailFillDetail(detailFill)
         let summaryDetail = runtimeDataHealthSummaryDetail(
             detailFill,
@@ -3380,16 +3471,14 @@ public enum ClaudeLaunchFlow {
 
     private static func runtimeDataHealthSourceDetail(
         claudeReadiness: DataHealthSourceStatus,
-        pdtMCPReadiness: DataHealthSourceStatus
+        pdtMCPReadiness: DataHealthSourceStatus,
+        availableReadTools: Set<String>?
     ) -> String? {
-        guard claudeReadiness != .ready || pdtMCPReadiness != .ready else {
-            return nil
-        }
         return DataHealth.build(
             DataHealthInput(
                 claudeReadiness: claudeReadiness,
                 pdtMCPReadiness: pdtMCPReadiness,
-                availableReadTools: Set(PDTReadTools.requiredV1),
+                availableReadTools: availableReadTools,
                 readOnlyPolicy: .enforced,
                 pulseSource: .cachedSnapshot,
                 lastSuccessfulCompleteFetchAsOf: nil,
@@ -3510,6 +3599,18 @@ public enum ClaudeLaunchFlow {
             ),
         ]
     }
+
+    private static func isReadToolPreflightProgress(_ progress: BackgroundDetailRefreshProgress) -> Bool {
+        guard progress.phase == .baseHoldings,
+              let detail = progress.detail?.lowercased()
+        else {
+            return false
+        }
+        return detail.contains("pdt tool")
+            || detail.contains("read tool")
+            || detail.contains("claude mcp")
+            || detail.hasPrefix("finding pdt-")
+    }
 }
 
 private extension MenuDescriptor {
@@ -3588,9 +3689,8 @@ public final class PDTLaunchRuntime {
         currentPulse = pulse
         let descriptor: MenuDescriptor
         if backgroundDetailRefreshInFlight {
-            descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+            descriptor = ClaudeLaunchFlow.descriptorForBackgroundReadToolPreflight(
                 cachedPulse: pulse.descriptor,
-                progress: BackgroundDetailRefreshProgress(phase: .baseHoldings),
                 cachedSnapshotAsOf: pulse.model.asOf
             )
         } else {
@@ -3772,9 +3872,8 @@ public final class PDTLaunchRuntime {
         firstFetchInFlight = false
         backgroundDetailRefreshInFlight = true
         state = .fetchingPortfolio
-        let descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+        let descriptor = ClaudeLaunchFlow.descriptorForBackgroundReadToolPreflight(
             cachedPulse: pulse.descriptor,
-            progress: BackgroundDetailRefreshProgress(phase: .baseHoldings),
             cachedSnapshotAsOf: pulse.model.asOf
         )
         lastDescriptor = descriptor
@@ -4592,24 +4691,40 @@ public enum MenuDescriptorRenderer {
                 detail: "None recorded"
             )
         }
+        var children = [
+            MenuRow(
+                id: "dataHealth.diagnostic.copy",
+                role: .dataHealthDiagnosticCopy,
+                actionTarget: MenuRowActionTarget(
+                    kind: .copyDataHealthDiagnostic,
+                    id: "dataHealth.diagnostic.copy",
+                    copyText: diagnostic.copyText
+                ),
+                title: "Copy diagnostics",
+                detail: "Redacted"
+            ),
+        ]
+        if let logFilePath = diagnostic.logFilePath, !logFilePath.isEmpty {
+            children.append(
+                MenuRow(
+                    id: "dataHealth.diagnostic.copyLogPath",
+                    role: .dataHealthDiagnosticCopy,
+                    actionTarget: MenuRowActionTarget(
+                        kind: .copyDataHealthDiagnostic,
+                        id: "dataHealth.diagnostic.copyLogPath",
+                        copyText: logFilePath
+                    ),
+                    title: "Copy log path",
+                    detail: "Redacted .log file"
+                )
+            )
+        }
         return MenuRow(
             id: "dataHealth.diagnostic",
             role: .dataHealthDiagnostic,
             title: "Diagnostics",
             detail: diagnostic.detail,
-            children: [
-                MenuRow(
-                    id: "dataHealth.diagnostic.copy",
-                    role: .dataHealthDiagnosticCopy,
-                    actionTarget: MenuRowActionTarget(
-                        kind: .copyDataHealthDiagnostic,
-                        id: "dataHealth.diagnostic.copy",
-                        copyText: diagnostic.copyText
-                    ),
-                    title: "Copy diagnostics",
-                    detail: "Redacted"
-                ),
-            ]
+            children: children
         )
     }
 
@@ -6357,19 +6472,50 @@ public struct PDTDetailRefreshFailureDiagnostic: Codable, Equatable, Sendable {
     public var attemptCount: Int
     public var category: PDTDetailRefreshFailureCategory
     public var argumentShape: [String]
+    public var missingReadTools: [String]
+    public var logFilePath: String?
 
     public init(
         toolName: String,
         phase: BackgroundDetailRefreshPhase,
         attemptCount: Int,
         category: PDTDetailRefreshFailureCategory,
-        argumentShape: [String]
+        argumentShape: [String],
+        missingReadTools: [String] = [],
+        logFilePath: String? = nil
     ) {
         self.toolName = toolName
         self.phase = phase
         self.attemptCount = attemptCount
         self.category = category
         self.argumentShape = argumentShape.sorted()
+        self.missingReadTools = missingReadTools.sorted()
+        self.logFilePath = logFilePath
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case toolName
+        case phase
+        case attemptCount
+        case category
+        case argumentShape
+        case missingReadTools
+        case logFilePath
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        toolName = try container.decode(String.self, forKey: .toolName)
+        phase = try container.decode(BackgroundDetailRefreshPhase.self, forKey: .phase)
+        attemptCount = try container.decode(Int.self, forKey: .attemptCount)
+        category = try container.decode(PDTDetailRefreshFailureCategory.self, forKey: .category)
+        argumentShape = try container.decode([String].self, forKey: .argumentShape).sorted()
+        missingReadTools = try container.decodeIfPresent([String].self, forKey: .missingReadTools)?.sorted() ?? []
+        logFilePath = try container.decodeIfPresent(String.self, forKey: .logFilePath)
+    }
+
+    public var isReadToolPreflightSetupFailure: Bool {
+        toolName == "PDT read-tool preflight" && category == .setupUnavailable
     }
 }
 
@@ -6435,21 +6581,20 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
     ) throws -> PDTBackgroundDetailRefreshResult {
         try? snapshotStore.clearLastDetailRefreshDiagnostic()
         progress(BackgroundDetailRefreshProgress(phase: .baseHoldings, detail: "Checking PDT tools"))
-        let requiredTools = [
-            "pdt-get-portfolio-holdings",
-            "pdt-get-portfolio-distributions",
-            "pdt-list-x-ray-holdings",
-            "pdt-list-calendar-events",
-            "pdt-list-dividends",
-            "pdt-list-symbol-prices",
-            "pdt-get-symbol-quote",
-        ]
-        let availableTools = try availableReadTools(
-            required: Set(requiredTools),
-            progress: progress
-        )
+        let requiredTools = PDTReadTools.requiredV1
+        let availableTools: Set<String>
+        do {
+            availableTools = try availableReadTools(
+                required: Set(requiredTools),
+                progress: progress
+            )
+        } catch {
+            try? saveReadToolPreflightDiagnostic()
+            throw error
+        }
         let missing = requiredTools.filter { !availableTools.contains($0) }
         guard missing.isEmpty else {
+            try? saveReadToolPreflightDiagnostic(missingReadTools: missing)
             throw PDTMCPConnectorError.missingRequiredReadTools(missing)
         }
 
@@ -6588,6 +6733,23 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             }
         }
         return try connector.availableReadTools(required: required)
+    }
+
+    private func saveReadToolPreflightDiagnostic(missingReadTools: [String] = []) throws {
+        var diagnostic = readToolPreflightDiagnostic(missingReadTools: missingReadTools)
+        diagnostic.logFilePath = try snapshotStore.saveLastDetailRefreshFailureLog(diagnostic)
+        try snapshotStore.saveLastDetailRefreshDiagnostic(diagnostic)
+    }
+
+    private func readToolPreflightDiagnostic(missingReadTools: [String] = []) -> PDTDetailRefreshFailureDiagnostic {
+        PDTDetailRefreshFailureDiagnostic(
+            toolName: "PDT read-tool preflight",
+            phase: .baseHoldings,
+            attemptCount: 1,
+            category: .setupUnavailable,
+            argumentShape: [],
+            missingReadTools: missingReadTools
+        )
     }
 
     private func preserveOptionalDetails(in snapshot: inout PortfolioSnapshot, from priorSnapshot: PortfolioSnapshot?) {
@@ -7405,10 +7567,16 @@ public enum PressureRunner {
         for snapshot: PortfolioSnapshot,
         snapshotStore: SnapshotStore
     ) -> PDTDetailRefreshFailureDiagnostic? {
+        guard let diagnostic = try? snapshotStore.loadLastDetailRefreshDiagnostic() else {
+            return nil
+        }
+        if diagnostic.isReadToolPreflightSetupFailure {
+            return diagnostic
+        }
         guard snapshot.latestDetailFillOutcome == .degraded else {
             return nil
         }
-        return try? snapshotStore.loadLastDetailRefreshDiagnostic()
+        return diagnostic
     }
 
     public static func cachedPulseDescriptor(
@@ -7545,6 +7713,7 @@ public enum PressureRunner {
     ) throws -> PulseLifecycleResult {
         let displayReadState = loadedReadState ?? displayReadState(from: pulseReadStore)
         let effectiveDetailRefreshOutcome = detailRefreshOutcome ?? snapshot.latestDetailFillOutcome
+        let availableReadTools = readToolAvailability(after: detailRefreshDiagnostic)
         var rawModel = PressureEngine.buildModel(
             from: snapshot,
             priorSnapshot: priorSnapshot,
@@ -7558,6 +7727,7 @@ public enum PressureRunner {
                 readState: displayReadState,
                 detailRefreshOutcome: effectiveDetailRefreshOutcome,
                 diagnostic: detailRefreshDiagnostic,
+                availableReadTools: availableReadTools,
                 priorSnapshotLoadStatus: priorSnapshotLoadStatus
             )
         )
@@ -7576,6 +7746,7 @@ public enum PressureRunner {
                 readState: readState,
                 detailRefreshOutcome: effectiveDetailRefreshOutcome,
                 diagnostic: detailRefreshDiagnostic,
+                availableReadTools: availableReadTools,
                 priorSnapshotLoadStatus: priorSnapshotLoadStatus
             )
         )
@@ -7588,6 +7759,18 @@ public enum PressureRunner {
             source: source,
             priorSnapshotLoadStatus: priorSnapshotLoadStatus
         )
+    }
+
+    private static func readToolAvailability(
+        after diagnostic: PDTDetailRefreshFailureDiagnostic?
+    ) -> Set<String>? {
+        guard let diagnostic, diagnostic.isReadToolPreflightSetupFailure else {
+            return Set(PDTReadTools.requiredV1)
+        }
+        guard !diagnostic.missingReadTools.isEmpty else {
+            return nil
+        }
+        return Set(PDTReadTools.requiredV1).subtracting(diagnostic.missingReadTools)
     }
 
     static func readStateAfterResettingReappearedItems(
@@ -7706,16 +7889,40 @@ public struct SnapshotStore: Sendable {
         try OwnerOnlyLocalStore.write(stableJSONData(diagnostic), to: detailRefreshDiagnosticFile)
     }
 
-    public func clearLastDetailRefreshDiagnostic() throws {
-        let target = detailRefreshDiagnosticFile
-        guard FileManager.default.fileExists(atPath: target.path) else {
-            return
+    public func saveLastDetailRefreshFailureLog(_ diagnostic: PDTDetailRefreshFailureDiagnostic) throws -> String {
+        let target = detailRefreshFailureLogFile
+        var lines = [
+            "PDTBar detail refresh failure",
+            "tool: \(diagnostic.toolName)",
+            "phase: \(diagnostic.phase.rawValue)",
+            "category: \(diagnostic.category.rawValue)",
+            "attempts: \(diagnostic.attemptCount)",
+            "argument_keys: \(diagnostic.argumentShape.joined(separator: ","))",
+        ]
+        if !diagnostic.missingReadTools.isEmpty {
+            lines.append("missing_required_read_tools: \(diagnostic.missingReadTools.joined(separator: ","))")
         }
-        try FileManager.default.removeItem(at: target)
+        lines.append("log_file: \(redactedLocalPathForSharing(target.path))")
+        lines.append("")
+        try OwnerOnlyLocalStore.write(Data(lines.joined(separator: "\n").utf8), to: target)
+        return target.path
+    }
+
+    public func clearLastDetailRefreshDiagnostic() throws {
+        for target in [detailRefreshDiagnosticFile, detailRefreshFailureLogFile] {
+            guard FileManager.default.fileExists(atPath: target.path) else {
+                continue
+            }
+            try FileManager.default.removeItem(at: target)
+        }
     }
 
     private var detailRefreshDiagnosticFile: URL {
         directory.appending(path: "latest-detail-refresh-diagnostic.json")
+    }
+
+    public var detailRefreshFailureLogFile: URL {
+        directory.appending(path: "latest-detail-refresh-failure.log")
     }
 
     public var currentSnapshotPath: URL {

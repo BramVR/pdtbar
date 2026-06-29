@@ -91,7 +91,9 @@ and proves each required read tool is called exactly once for the coalesced
 fetch. It also exercises progressive background detail refresh with one missing
 optional price-history response, proving completed allocation/X-ray/income data
 is preserved, a redacted diagnostic is stored, and a retry clears the degraded
-state. The proof artifact reports selectors/counts/scenario status only; no raw
+state. Early read-tool resolver failures also write a redacted `.log` beside
+state and expose only its path for copying into issue reports. The proof artifact
+reports selectors/counts/scenario status only; no raw
 portfolio payloads, values, account identifiers, or live data are written.
 
 Scripted Claude login handoff e2e:
@@ -207,8 +209,9 @@ swift run pdtbar-smoke scripted-returning-launch
 This uses isolated app-support directories and no live Claude credentials. It
 seeds a previous complete local snapshot, launches the no-argument app path with
 a delayed scripted refresh, and verifies the cached pulse stays visible while the
-refresh is in progress. It then verifies complete refreshed data replaces the
-snapshot and pulse only after the scripted fetch finishes. A second
+refresh shows active detail-fill progress, including the Step 1/5 read-tool
+preflight when captured before the scripted fetch advances. It then verifies complete refreshed data
+replaces the snapshot and pulse only after the scripted fetch finishes. A second
 transient-failure launch proves the previous snapshot stays in place and the
 menu shows `Details fill failed` plus `Fill details again`. Proof artifacts contain
 paths, selectors, status text, as-of dates, and booleans only.

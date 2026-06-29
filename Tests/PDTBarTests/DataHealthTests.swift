@@ -79,12 +79,16 @@ struct DataHealthTests {
 
     @Test("Diagnostics are redacted and copyable")
     func diagnosticsAreRedactedAndCopyable() throws {
+        let homeLogPath = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library/Application Support/pdtbar/state/latest-detail-refresh-failure.log")
+            .path
         let diagnostic = PDTDetailRefreshFailureDiagnostic(
             toolName: "pdt-list-symbol-prices",
             phase: .priceHistory,
             attemptCount: 2,
             category: .transientFailure,
-            argumentShape: ["symbol_quote_id", "date_to", "date_from"]
+            argumentShape: ["symbol_quote_id", "date_to", "date_from"],
+            logFilePath: homeLogPath
         )
         let health = DataHealth.build(
             DataHealthInput(
@@ -105,9 +109,11 @@ struct DataHealthTests {
         let summary = try #require(health.diagnostic)
         #expect(summary.available)
         #expect(summary.detail == "pdt-list-symbol-prices; priceHistory; transientFailure")
+        #expect(summary.logFilePath == "~/Library/Application Support/pdtbar/state/latest-detail-refresh-failure.log")
         #expect(summary.copyText.contains("tool: pdt-list-symbol-prices"))
         #expect(summary.copyText.contains("argument_keys: date_from,date_to,symbol_quote_id"))
         #expect(!summary.copyText.contains("/Users/"))
+        #expect(summary.logFilePath?.contains("/Users/") == false)
         #expect(!summary.copyText.localizedCaseInsensitiveContains("portfolio"))
     }
 
@@ -177,6 +183,33 @@ struct DataHealthTests {
 
         #expect(healthRow(in: cached.descriptor)?.children.first { $0.id == "dataHealth.detailFill" }?.detail == "Completed 2026-06-25")
         #expect(healthRow(in: cached.descriptor)?.children.first { $0.id == "dataHealth.diagnostic" }?.detail == "None recorded")
+    }
+
+    @Test("Cached pulse reloads read-tool preflight diagnostic after relaunch")
+    func cachedPulseReloadsReadToolPreflightDiagnosticAfterRelaunch() throws {
+        var snapshot = snapshot()
+        snapshot.latestDetailFillOutcome = .completed
+        let store = try SnapshotStore.temporaryTestStore(prefix: "data-health-preflight-diagnostic")
+        var diagnostic = PDTDetailRefreshFailureDiagnostic(
+            toolName: "PDT read-tool preflight",
+            phase: .baseHoldings,
+            attemptCount: 1,
+            category: .setupUnavailable,
+            argumentShape: [],
+            missingReadTools: ["pdt-list-dividends"]
+        )
+        diagnostic.logFilePath = try store.saveLastDetailRefreshFailureLog(diagnostic)
+        try store.saveLastDetailRefreshDiagnostic(diagnostic)
+        _ = try store.commitCurrentSnapshot(snapshot)
+
+        let cached = try #require(try PressureRunner.cachedPulse(snapshotStore: store))
+        let diagnosticRow = try #require(healthRow(in: cached.descriptor)?.children.first { $0.id == "dataHealth.diagnostic" })
+
+        #expect(healthRow(in: cached.descriptor)?.children.first { $0.id == "dataHealth.detailFill" }?.detail == "Completed 2026-06-25")
+        #expect(healthRow(in: cached.descriptor)?.children.first { $0.id == "dataHealth.source" }?.detail == "Claude ready; PDT ready; 6/7 read tools; missing pdt-list-dividends; read-only")
+        #expect(diagnosticRow.detail == "PDT read-tool preflight; baseHoldings; setupUnavailable")
+        #expect(diagnosticRow.children.first?.actionTarget?.copyText?.contains("missing_required_read_tools: pdt-list-dividends") == true)
+        #expect(diagnosticRow.children.first { $0.id == "dataHealth.diagnostic.copyLogPath" }?.actionTarget?.copyText == store.detailRefreshFailureLogFile.path)
     }
 
     @Test("Applying read state updates Data health read count")
@@ -262,6 +295,36 @@ struct DataHealthTests {
         let failedHealth = try #require(healthRow(in: failedWithoutDiagnostic))
         #expect(failedHealth.children.first { $0.id == "dataHealth.detailFill" }?.detail == "Failed")
         #expect(failedHealth.children.first { $0.id == "dataHealth.diagnostic" }?.detail == "None recorded")
+    }
+
+    @Test("Runtime health overlay clears stale missing read-tool source after preflight succeeds")
+    func runtimeHealthOverlayClearsStaleMissingReadToolSourceAfterPreflightSucceeds() throws {
+        let cached = MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: snapshot()))
+        let preflightDiagnostic = PDTDetailRefreshFailureDiagnostic(
+            toolName: "PDT read-tool preflight",
+            phase: .baseHoldings,
+            attemptCount: 1,
+            category: .setupUnavailable,
+            argumentShape: [],
+            missingReadTools: ["pdt-list-dividends"]
+        )
+        let staleMissing = ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(
+            cachedPulse: cached,
+            diagnostic: preflightDiagnostic
+        )
+        let laterFailure = ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(
+            cachedPulse: staleMissing,
+            diagnostic: PDTDetailRefreshFailureDiagnostic(
+                toolName: "pdt-get-portfolio-holdings",
+                phase: .baseHoldings,
+                attemptCount: 2,
+                category: .transientFailure,
+                argumentShape: []
+            )
+        )
+
+        #expect(healthRow(in: staleMissing)?.children.first { $0.id == "dataHealth.source" }?.detail == "Claude ready; PDT ready; 6/7 read tools; missing pdt-list-dividends; read-only")
+        #expect(healthRow(in: laterFailure)?.children.first { $0.id == "dataHealth.source" }?.detail == "Claude ready; PDT ready; 7/7 read tools; read-only")
     }
 }
 
