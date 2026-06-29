@@ -570,7 +570,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             item.view = makeStaticMenuRowView(
                 title: row.title,
                 detail: row.detail,
-                accessibilityIdentifier: row.accessibilityIdentifier
+                accessibilityIdentifier: row.accessibilityIdentifier,
+                usesSecondaryProgressStyle: row.id == "portfolioFetch.backgroundProgress.priceHistory"
             )
             item.isEnabled = false
         } else {
@@ -797,9 +798,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         return container
     }
 
-    private func makeStaticMenuRowView(title: String, detail: String?, accessibilityIdentifier: String) -> NSView {
+    private func makeStaticMenuRowView(
+        title: String,
+        detail: String?,
+        accessibilityIdentifier: String,
+        usesSecondaryProgressStyle: Bool = false
+    ) -> NSView {
         let hasDetail = detail?.isEmpty == false
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: hasDetail ? 42 : 30))
+        let rowHeight: CGFloat = hasDetail ? 42 : (usesSecondaryProgressStyle ? 24 : 30)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: rowHeight))
         container.autoresizingMask = [.width]
         configureStaticMenuViewAccessibility(
             container,
@@ -808,8 +815,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         let titleField = NSTextField(labelWithString: title)
-        titleField.font = NSFont.menuFont(ofSize: NSFont.systemFontSize)
-        titleField.textColor = NSColor.labelColor
+        titleField.font = NSFont.menuFont(
+            ofSize: usesSecondaryProgressStyle ? NSFont.smallSystemFontSize : NSFont.systemFontSize
+        )
+        titleField.textColor = usesSecondaryProgressStyle ? NSColor.secondaryLabelColor : NSColor.labelColor
         titleField.lineBreakMode = .byTruncatingTail
         titleField.maximumNumberOfLines = 1
         titleField.translatesAutoresizingMaskIntoConstraints = false
