@@ -57,6 +57,60 @@ struct SnapshotStoreTests {
         #expect(try permissions(of: store.currentSnapshotPath) == 0o600)
     }
 
+    @Test("Prior snapshot load result classifies missing corrupt and valid history")
+    func priorSnapshotLoadResultClassifiesMissingCorruptAndValidHistory() throws {
+        let missingStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-missing-prior")
+        defer {
+            try? FileManager.default.removeItem(at: missingStore.directory)
+        }
+        #expect(try missingStore.loadPriorSnapshotResult() == .missing)
+
+        let corruptStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-corrupt-prior")
+        defer {
+            try? FileManager.default.removeItem(at: corruptStore.directory)
+        }
+        try Data("{".utf8).write(to: corruptStore.currentSnapshotPath)
+        #expect(try corruptStore.loadPriorSnapshotResult() == .failed(.decode))
+
+        let unreadableStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-unreadable-prior")
+        defer {
+            try? FileManager.default.removeItem(at: unreadableStore.directory)
+        }
+        try FileManager.default.createDirectory(at: unreadableStore.currentSnapshotPath, withIntermediateDirectories: true)
+        #expect(try unreadableStore.loadPriorSnapshotResult() == .failed(.io))
+
+        let validStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-valid-prior")
+        defer {
+            try? FileManager.default.removeItem(at: validStore.directory)
+        }
+        let snapshot = try PDTFixtureDataSource.snapshot(
+            from: packageRoot.appending(path: "docs/pdt/fixtures/quiet-no-pressure.json")
+        )
+        _ = try validStore.commitCurrentSnapshot(snapshot)
+        #expect(try validStore.loadPriorSnapshotResult() == .loaded(snapshot))
+    }
+
+    @Test("Runner surfaces corrupt prior history without using it for pressure")
+    func runnerSurfacesCorruptPriorHistoryWithoutUsingItForPressure() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-corrupt-prior-runner")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        try Data("{".utf8).write(to: store.currentSnapshotPath)
+
+        let run = try PressureRunner.run(
+            dataSource: StaticPortfolioDataSource(snapshot: try PDTFixtureDataSource.snapshot(
+                from: packageRoot.appending(path: "docs/pdt/fixtures/quiet-no-pressure.json")
+            )),
+            snapshotStore: store
+        )
+
+        #expect(run.priorSnapshotLoadStatus == .failed(.decode))
+        #expect(run.model.portfolioGlance.priorSnapshotAsOf == nil)
+        #expect(run.model.facetSnapshots.dataHealth.cache.priorSnapshotStatus == .corrupt)
+        #expect(run.model.allQuiet)
+    }
+
     @Test("Failed snapshot writes remove temporary files")
     func failedSnapshotWritesRemoveTemporaryFiles() throws {
         let directory = try SnapshotStore.temporaryTestStore(
@@ -79,6 +133,14 @@ struct SnapshotStoreTests {
             _ = try store.commitCurrentSnapshot(snapshot)
         }
         #expect(try temporarySnapshotFiles(in: directory).isEmpty)
+    }
+}
+
+private struct StaticPortfolioDataSource: PortfolioDataSource {
+    var snapshot: PortfolioSnapshot
+
+    func snapshot(asOf: String?) throws -> PortfolioSnapshot {
+        snapshot
     }
 }
 

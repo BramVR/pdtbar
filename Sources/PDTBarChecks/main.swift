@@ -1279,6 +1279,11 @@ try check(
     missingPriorSnapshot == nil,
     "temp-dir SnapshotStore should load nil when no prior snapshot exists"
 )
+let missingPriorSnapshotResult = try emptySnapshotStore.loadPriorSnapshotResult()
+try check(
+    missingPriorSnapshotResult == .missing,
+    "SnapshotStore should classify missing prior snapshot separately from failures"
+)
 let quietSnapshotStore = try SnapshotStore.temporaryTestStore()
 defer {
     try? FileManager.default.removeItem(at: quietSnapshotStore.directory)
@@ -1326,6 +1331,11 @@ let loadedQuietSnapshot = try quietSnapshotStore.loadPriorSnapshot()
 try check(
     loadedQuietSnapshot == quietSnapshot,
     "SnapshotStore should load the committed snapshot as the prior snapshot"
+)
+let loadedQuietSnapshotResult = try quietSnapshotStore.loadPriorSnapshotResult()
+try check(
+    loadedQuietSnapshotResult == .loaded(quietSnapshot),
+    "SnapshotStore should classify a valid prior snapshot as loaded"
 )
 let quietFixtureDataSource = PDTFixtureDataSource(fixture: fixture)
 let quietRunFromDataSource = try PressureRunner.run(
@@ -1746,14 +1756,27 @@ defer {
 try Data("{".utf8).write(
     to: malformedSnapshotStore.directory.appending(path: "latest-portfolio-snapshot.json")
 )
+let malformedPriorSnapshotResult = try malformedSnapshotStore.loadPriorSnapshotResult()
+try check(
+    malformedPriorSnapshotResult == .failed(.decode),
+    "SnapshotStore should classify malformed prior snapshot as a decode failure"
+)
 let quietRunWithMalformedPrior = try PressureRunner.run(
     fixture: fixture,
     snapshotDirectory: malformedSnapshotStore.directory
+)
+try check(
+    quietRunWithMalformedPrior.priorSnapshotLoadStatus == .failed(.decode),
+    "PressureRunner should surface malformed prior snapshot load status"
 )
 try check(quietRunWithMalformedPrior.model.allQuiet, "malformed prior snapshot should fall back to cold-start modeling")
 try check(
     quietRunWithMalformedPrior.model.portfolioGlance.priorSnapshotAsOf == nil,
     "malformed prior snapshot should not populate prior glance context"
+)
+try check(
+    quietRunWithMalformedPrior.model.facetSnapshots.dataHealth.cache.priorSnapshotStatus == .corrupt,
+    "Data health should surface corrupt prior snapshot state"
 )
 let replacedMalformedPrior = try malformedSnapshotStore.loadPriorSnapshot()
 var replacedMalformedPriorFacts = replacedMalformedPrior
@@ -1767,6 +1790,19 @@ try check(
     replacedMalformedPrior?.latestCompleteDetailFillAsOf == quietSnapshot.asOf
         && replacedMalformedPrior?.latestDetailFillOutcome == .completed,
     "full fixture run should stamp complete freshness detail metadata"
+)
+let unreadableSnapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-unreadable-prior-check")
+defer {
+    try? FileManager.default.removeItem(at: unreadableSnapshotStore.directory)
+}
+try FileManager.default.createDirectory(
+    at: unreadableSnapshotStore.directory.appending(path: "latest-portfolio-snapshot.json"),
+    withIntermediateDirectories: true
+)
+let unreadablePriorSnapshotResult = try unreadableSnapshotStore.loadPriorSnapshotResult()
+try check(
+    unreadablePriorSnapshotResult == .failed(.io),
+    "SnapshotStore should classify unreadable prior snapshot as an I/O failure"
 )
 
 let bigMoverFixture = packageRoot.appending(path: "docs/pdt/fixtures/big-mover.json")
