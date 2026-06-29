@@ -289,26 +289,17 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     private func prompt(allowedToolName: String, readToolName: String, arguments: [String: String]) -> String {
         let argumentData = (try? JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys])) ?? Data("{}".utf8)
         let argumentJSON = String(decoding: argumentData, as: UTF8.self)
-        let concreteToolName = concreteToolName(allowedToolName: allowedToolName, readToolName: readToolName)
         return """
         PDTBar needs one local read-only PDT MCP result.
 
         Rules:
         - The allowed PDT MCP tools are limited to: \(allowedToolName)
-        - Call exactly this read-only PDT MCP tool: \(concreteToolName)
-        - This is the requested PDT read tool: \(readToolName)
+        - Call the PDT read tool named \(readToolName) from the allowed PDT MCP server.
         - Use exactly these JSON arguments: \(argumentJSON)
         - Do not call any write, create, update, delete, remove, post, put, or set tool.
         - Do not print holdings, values, account identifiers, endpoints, credentials, or raw tool output in your final answer.
         - After the tool call, return only {"status":"redacted-ok"}.
         """
-    }
-
-    private func concreteToolName(allowedToolName: String, readToolName: String) -> String {
-        guard allowedToolName.hasSuffix("pdt-*") else {
-            return allowedToolName
-        }
-        return String(allowedToolName.dropLast("pdt-*".count)) + readToolName
     }
 
     private func rememberPDTToolPrefixes(fromMCPListOutput output: String) {
@@ -329,35 +320,6 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
 
     private func disallowedTools() -> [String] {
         [
-            "AskUserQuestion",
-            "Bash",
-            "CronCreate",
-            "CronDelete",
-            "CronList",
-            "DesignSync",
-            "Edit",
-            "EnterPlanMode",
-            "EnterWorktree",
-            "ExitPlanMode",
-            "ExitWorktree",
-            "Monitor",
-            "NotebookEdit",
-            "PushNotification",
-            "Read",
-            "RemoteTrigger",
-            "ScheduleWakeup",
-            "Skill",
-            "Task",
-            "TaskCreate",
-            "TaskGet",
-            "TaskList",
-            "TaskOutput",
-            "TaskStop",
-            "TaskUpdate",
-            "WebFetch",
-            "WebSearch",
-            "Workflow",
-            "Write",
             "mcp__*__pdt-add-*",
             "mcp__*__pdt-create-*",
             "mcp__*__pdt-delete-*",

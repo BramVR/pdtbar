@@ -180,7 +180,7 @@ struct ClaudeLocalConnectionTests {
         #expect(runner.requests.count == 2)
         let readRequest = try #require(runner.requests.last)
         #expect(readRequest.arguments.joined(separator: " ").contains("--allowedTools mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-*"))
-        #expect(readRequest.arguments.joined(separator: " ").contains("mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-get-portfolio-holdings"))
+        #expect(readRequest.arguments.joined(separator: " ").contains("Call the PDT read tool named pdt-get-portfolio-holdings"))
         #expect(readRequest.arguments.joined(separator: " ").contains("mcp__*__pdt-update-*"))
     }
 
