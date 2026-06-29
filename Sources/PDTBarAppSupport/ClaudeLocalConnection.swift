@@ -209,13 +209,27 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
                 else {
                     return nil
                 }
-                let displayName = line.split(separator: ":", maxSplits: 1).first.map(String.init) ?? String(line)
+                let displayName = pdtMCPDisplayName(from: line)
                 return pdtToolPrefix(fromMCPDisplayName: displayName)
             }
         return uniqued(prefixes)
     }
 
     private static let defaultPDTToolPrefix = "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__"
+
+    private static func pdtMCPDisplayName(from line: Substring) -> String {
+        if let colonIndex = line.firstIndex(of: ":") {
+            return String(line[..<colonIndex])
+        }
+        let trimmed = String(line).trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().hasPrefix("pdt ") {
+            return "pdt"
+        }
+        return trimmed
+            .replacingOccurrences(of: "✔", with: "")
+            .replacingOccurrences(of: "Connected", with: "", options: [.caseInsensitive])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     private static func pdtToolPrefix(fromMCPDisplayName displayName: String) -> String {
         let tokens = displayName
@@ -243,7 +257,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
 
     private func resolvedToolName(for readToolName: String) throws -> String {
         let prefix = pdtToolPrefixes().first ?? Self.defaultPDTToolPrefix
-        return "\(prefix)pdt-*"
+        return "\(prefix)\(readToolName)"
     }
 
     private func callReadToolOnce(
@@ -293,7 +307,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         PDTBar needs one local read-only PDT MCP result.
 
         Rules:
-        - The allowed PDT MCP tools are limited to: \(allowedToolName)
+        - The allowed PDT MCP tool is limited to: \(allowedToolName)
         - Call the PDT read tool named \(readToolName) from the allowed PDT MCP server.
         - Use exactly these JSON arguments: \(argumentJSON)
         - Do not call any write, create, update, delete, remove, post, put, or set tool.

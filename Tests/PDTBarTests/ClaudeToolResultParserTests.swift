@@ -43,8 +43,8 @@ struct ClaudeToolResultParserTests {
         #expect(try firstHoldingName(in: data) == "Text Public Co")
     }
 
-    @Test("Scoped PDT wildcard allow rule accepts the requested concrete read tool")
-    func scopedPDTWildcardAllowRuleAcceptsRequestedConcreteReadTool() throws {
+    @Test("Concrete PDT allow rule accepts the requested concrete read tool")
+    func concretePDTAllowRuleAcceptsRequestedConcreteReadTool() throws {
         let output = streamJSON(
             toolName: "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-get-portfolio-holdings",
             result: #"""
@@ -53,7 +53,7 @@ struct ClaudeToolResultParserTests {
         )
 
         let data = try ClaudeToolResultParser().resultData(
-            for: "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-*",
+            for: "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-get-portfolio-holdings",
             readToolName: readToolName,
             output: output,
             currentSessionResultFiles: []
@@ -62,8 +62,8 @@ struct ClaudeToolResultParserTests {
         #expect(try firstHoldingName(in: data) == "Scoped Public Co")
     }
 
-    @Test("Scoped PDT wildcard allow rule rejects a different read tool")
-    func scopedPDTWildcardAllowRuleRejectsDifferentReadTool() throws {
+    @Test("Concrete PDT allow rule rejects a different read tool")
+    func concretePDTAllowRuleRejectsDifferentReadTool() throws {
         let output = streamJSON(
             toolName: "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-list-dividends",
             result: #"""
@@ -71,9 +71,9 @@ struct ClaudeToolResultParserTests {
             """#
         )
 
-        #expect(throws: ClaudeToolResultParserError.missingToolCall("mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-*")) {
+        #expect(throws: ClaudeToolResultParserError.missingToolCall("mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-get-portfolio-holdings")) {
             _ = try ClaudeToolResultParser().resultData(
-                for: "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-*",
+                for: "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-get-portfolio-holdings",
                 readToolName: readToolName,
                 output: output,
                 currentSessionResultFiles: []

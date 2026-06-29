@@ -31,7 +31,7 @@ public struct ClaudeToolResultParser: Sendable {
     ) throws -> Data {
         let values = try streamValues(from: output)
         let matchingToolUseIDs = Set(values.flatMap {
-            toolUseIDs(for: toolName, readToolName: readToolName, in: $0)
+            toolUseIDs(for: toolName, in: $0)
         })
         guard !matchingToolUseIDs.isEmpty else {
             throw ClaudeToolResultParserError.missingToolCall(toolName)
@@ -97,13 +97,12 @@ public struct ClaudeToolResultParser: Sendable {
 
     private func toolUseIDs(
         for toolName: String,
-        readToolName: String,
         in value: ClaudeStreamJSONValue
     ) -> [String] {
         let current: [String]
         if value.string(for: "type") == "tool_use",
            let calledToolName = value.string(for: "name"),
-           toolNameMatches(calledToolName, allowedToolName: toolName, readToolName: readToolName),
+           toolNameMatches(calledToolName, allowedToolName: toolName),
            let id = value.string(for: "id")
         {
             current = [id]
@@ -111,26 +110,15 @@ public struct ClaudeToolResultParser: Sendable {
             current = []
         }
         return current + value.children.flatMap {
-            toolUseIDs(for: toolName, readToolName: readToolName, in: $0)
+            toolUseIDs(for: toolName, in: $0)
         }
     }
 
     private func toolNameMatches(
         _ calledToolName: String,
-        allowedToolName: String,
-        readToolName: String
+        allowedToolName: String
     ) -> Bool {
-        if calledToolName == allowedToolName {
-            return true
-        }
-        guard allowedToolName.hasPrefix("mcp__"),
-              allowedToolName.hasSuffix("__pdt-*"),
-              calledToolName.hasPrefix("mcp__"),
-              calledToolName.hasSuffix("__\(readToolName)")
-        else {
-            return false
-        }
-        return true
+        calledToolName == allowedToolName
     }
 
     private func toolResults(

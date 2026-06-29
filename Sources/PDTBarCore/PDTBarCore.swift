@@ -6491,7 +6491,12 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
 
         do {
             progress(BackgroundDetailRefreshProgress(phase: .income))
-            let income = try incomeEvents(asOf: snapshotAsOf, priorSnapshot: originalPriorSnapshot, progress: progress)
+            let income = try incomeEvents(
+                asOf: snapshotAsOf,
+                holdings: snapshot.openHoldings,
+                priorSnapshot: originalPriorSnapshot,
+                progress: progress
+            )
             snapshot.incomeEvents = income.events
             snapshot.dividendRowCount = income.dividendRowCount
             _ = try snapshotStore.commitCurrentSnapshot(snapshot)
@@ -6632,6 +6637,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
 
     private func incomeEvents(
         asOf snapshotAsOf: String,
+        holdings: [NormalizedHolding],
         priorSnapshot: PortfolioSnapshot?,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) throws -> (events: [IncomeEventSummary], dividendRowCount: Int) {
@@ -6648,6 +6654,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         let calendarEvents = paginatedCalendarEvents.filter { $0.type != "no-events-today" }
         let quoteIDsBySymbolID = incomeQuoteIDsBySymbolID(
             for: calendarEvents,
+            holdings: holdings,
             priorSnapshot: priorSnapshot
         )
         let normalized = PDTOptionalDetailNormalizer.normalizeIncomeEvents(
@@ -6690,21 +6697,47 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
 
     private func incomeQuoteIDsBySymbolID(
         for calendarEvents: [LiveCalendarEvent],
+        holdings: [NormalizedHolding],
         priorSnapshot: PortfolioSnapshot?
     ) -> [Int: Int] {
         let neededSymbolIDs = Set(calendarEvents.compactMap(\.symbolId))
-        guard !neededSymbolIDs.isEmpty, let priorSnapshot else {
+        guard !neededSymbolIDs.isEmpty else {
             return [:]
         }
-        return priorSnapshot.incomeEvents.reduce(into: [:]) { result, event in
+        let holdingQuoteIDsByName = Dictionary(
+            grouping: holdings,
+            by: { normalizedIncomeSymbolName($0.name) }
+        ).compactMapValues { matches -> Int? in
+            matches.count == 1 ? matches[0].quoteId : nil
+        }
+        var quoteIDsBySymbolID = calendarEvents.reduce(into: [Int: Int]()) { result, event in
             guard let symbolId = event.symbolId,
                   neededSymbolIDs.contains(symbolId),
-                  let quoteId = event.quoteId
+                  let symbolName = event.symbolName,
+                  let quoteId = holdingQuoteIDsByName[normalizedIncomeSymbolName(symbolName)]
             else {
                 return
             }
             result[symbolId] = quoteId
         }
+        guard let priorSnapshot else {
+            return quoteIDsBySymbolID
+        }
+        priorSnapshot.incomeEvents.forEach { event in
+            guard let symbolId = event.symbolId,
+                  neededSymbolIDs.contains(symbolId),
+                  quoteIDsBySymbolID[symbolId] == nil,
+                  let quoteId = event.quoteId
+            else {
+                return
+            }
+            quoteIDsBySymbolID[symbolId] = quoteId
+        }
+        return quoteIDsBySymbolID
+    }
+
+    private func normalizedIncomeSymbolName(_ name: String) -> String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     private func liveDividends(

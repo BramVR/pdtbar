@@ -74,6 +74,30 @@ struct BackgroundDetailRefreshTests {
         #expect(holdingRow.children.first { $0.id == "allocation.9102.nextIncome" }?.detail == "Ex-dividend date on 2026-03-30; confirmed; EUR 6.00")
     }
 
+    @Test("Background refresh maps income by current holding name")
+    func backgroundRefreshMapsIncomeByCurrentHoldingName() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-income-name-map-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let connector = ScriptedPDTMCPConnector(
+            responses: try detailRefreshResponses(calendarSymbolID: 5102, calendarSymbolName: "Scripted Adapter B")
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        let event = try #require(result.model.facetSnapshots.income.upcomingEvents.first)
+        #expect(event.symbolId == 5102)
+        #expect(event.quoteId == 9102)
+        #expect(event.amount == Money(value: "6.00", currency: "EUR"))
+        #expect(connector.calls.filter { $0 == "pdt-get-symbol-quote" }.isEmpty)
+    }
+
     @Test("Price-history failure keeps completed detail phases and continues other holdings")
     func priceHistoryFailureKeepsCompletedPhasesAndContinuesOtherHoldings() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-test")
