@@ -78,7 +78,7 @@ public struct ClaudeLocalConnectionConfiguration: Sendable {
     }
 }
 
-public final class ClaudeLocalConnection: PDTMCPConnector {
+public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgressReporting {
     private let configuration: ClaudeLocalConnectionConfiguration
     private let commandRunner: any ClaudeLocalCommandRunning
     private let toolResultParser: ClaudeToolResultParser
@@ -133,18 +133,28 @@ public final class ClaudeLocalConnection: PDTMCPConnector {
     }
 
     public func availableReadTools(required: Set<String>) throws -> Set<String> {
+        try availableReadTools(required: required, progress: { _ in })
+    }
+
+    public func availableReadTools(
+        required: Set<String>,
+        progress: @escaping @Sendable (String) -> Void
+    ) throws -> Set<String> {
         guard commandRunner.executableExists(configuration.claudePath, environment: configuration.environment) else {
             throw PDTMCPConnectorError.setupUnavailable("Claude CLI is unavailable")
         }
+        progress("Checking Claude MCP servers")
         let result = try mcpList(timeout: min(configuration.toolTimeout, 30.0))
         guard result.exitCode == 0, Self.pdtServerIsConnected(in: result.combinedOutput) else {
             throw PDTMCPConnectorError.setupUnavailable("Claude PDT MCP server is not connected")
         }
         let requiredReadTools = PDTReadTools.requiredV1.filter { required.contains($0) }
-        let resolved = try resolvedToolNames(for: requiredReadTools)
+        progress("Waiting on Claude for PDT tool discovery")
+        let resolved = try resolvedToolNames(for: requiredReadTools, progress: progress)
         var available = Set(resolved.keys)
         for tool in requiredReadTools where !available.contains(tool) {
-            if (try? resolvedToolName(for: tool)) != nil {
+            progress("Finding \(tool)")
+            if (try? resolvedToolName(for: tool, progress: progress)) != nil {
                 available.insert(tool)
             }
         }
@@ -201,16 +211,30 @@ public final class ClaudeLocalConnection: PDTMCPConnector {
     }
 
     private func resolvedToolName(for readToolName: String) throws -> String {
+        try resolvedToolName(for: readToolName, progress: { _ in })
+    }
+
+    private func resolvedToolName(
+        for readToolName: String,
+        progress: @escaping @Sendable (String) -> Void
+    ) throws -> String {
         if let cached = discoveredToolNameFromCache(for: readToolName) {
             return cached
         }
-        if let resolved = try resolvedToolNames(for: [readToolName])[readToolName] {
+        if let resolved = try resolvedToolNames(for: [readToolName], progress: progress)[readToolName] {
             return resolved
         }
         throw PDTMCPConnectorError.setupUnavailable("Claude could not find \(readToolName)")
     }
 
     private func resolvedToolNames(for readToolNames: [String]) throws -> [String: String] {
+        try resolvedToolNames(for: readToolNames, progress: { _ in })
+    }
+
+    private func resolvedToolNames(
+        for readToolNames: [String],
+        progress: @escaping @Sendable (String) -> Void
+    ) throws -> [String: String] {
         let cached = discoveredToolNamesSnapshot()
         let unresolved = readToolNames.filter { cached[$0] == nil }
         guard !unresolved.isEmpty else {
@@ -221,6 +245,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector {
         var lastResultExitCode: Int32 = 0
         repeat {
             attempts += 1
+            progress(attempts == 1 ? "Finding PDT read tools" : "Retrying PDT tool discovery")
             let result = try runToolSearch(
                 readToolNames: unresolved,
                 prompt: "Use ToolSearch to find these PDT MCP read-only tools: \(toolList). Return only {\"status\":\"redacted-ok\"}."
@@ -235,7 +260,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector {
             }
         } while attempts < configuration.toolCallRetryPolicy.maxAttempts
         for readToolName in unresolved where discoveredToolNameFromCache(for: readToolName) == nil {
-            try resolveToolNameIndividually(readToolName)
+            try resolveToolNameIndividually(readToolName, progress: progress)
         }
         let finalSnapshot = discoveredToolNamesSnapshot()
         let missing = unresolved.filter { finalSnapshot[$0] == nil }
@@ -246,9 +271,17 @@ public final class ClaudeLocalConnection: PDTMCPConnector {
     }
 
     private func resolveToolNameIndividually(_ readToolName: String) throws {
+        try resolveToolNameIndividually(readToolName, progress: { _ in })
+    }
+
+    private func resolveToolNameIndividually(
+        _ readToolName: String,
+        progress: @escaping @Sendable (String) -> Void
+    ) throws {
         var attempts = 0
         repeat {
             attempts += 1
+            progress(attempts == 1 ? "Finding \(readToolName)" : "Retrying \(readToolName)")
             let result = try runToolSearch(
                 readToolNames: [readToolName],
                 prompt: "Use ToolSearch to find exactly this PDT MCP read-only tool: \(readToolName). Return only {\"status\":\"redacted-ok\"}."

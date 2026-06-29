@@ -72,6 +72,27 @@ struct ClaudeLocalConnectionTests {
         #expect(runner.requests.last?.arguments.contains("ToolSearch") == true)
     }
 
+    @Test("ToolSearch availability reports Claude progress")
+    func toolSearchAvailabilityReportsClaudeProgress() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: "Portfolio Dividend Tracker connected", stderr: "", exitCode: 0),
+            .init(stdout: toolSearchStream(readTools: ["pdt-list-x-ray-holdings"]), stderr: "", exitCode: 0),
+        ])
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 0),
+            commandRunner: runner
+        )
+        let progress = StringProgressRecorder()
+
+        _ = try connection.availableReadTools(required: ["pdt-list-x-ray-holdings"]) {
+            progress.append($0)
+        }
+
+        #expect(progress.values.contains("Checking Claude MCP servers"))
+        #expect(progress.values.contains("Waiting on Claude for PDT tool discovery"))
+        #expect(progress.values.contains("Finding PDT read tools"))
+    }
+
     @Test("ToolSearch does not resolve prefix tool names")
     func toolSearchDoesNotResolvePrefixToolNames() throws {
         let runner = RecordingClaudeCommandRunner(results: [
@@ -205,5 +226,22 @@ private final class RecordingClaudeCommandRunner: ClaudeLocalCommandRunning, @un
             : queuedResults.removeFirst()
         lock.unlock()
         return result
+    }
+}
+
+private final class StringProgressRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [String] = []
+
+    var values: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
+
+    func append(_ value: String) {
+        lock.lock()
+        recorded.append(value)
+        lock.unlock()
     }
 }

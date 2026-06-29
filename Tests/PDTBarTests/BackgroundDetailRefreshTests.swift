@@ -300,6 +300,28 @@ struct BackgroundDetailRefreshTests {
         })
     }
 
+    @Test("Tool discovery progress is forwarded before first read call")
+    func toolDiscoveryProgressIsForwardedBeforeFirstReadCall() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-tool-discovery-progress-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let recorder = DetailProgressRecorder()
+        let connector = ProgressReportingPDTConnector(responses: try detailRefreshResponses())
+
+        _ = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh { recorder.append($0) }
+
+        let details = recorder.values.compactMap(\.detail)
+        let discoveryIndex = try #require(details.firstIndex(of: "Waiting on Claude for PDT tool discovery"))
+        let holdingsIndex = try #require(details.firstIndex(of: "Calling pdt-get-portfolio-holdings"))
+        #expect(discoveryIndex < holdingsIndex)
+    }
+
     @Test("Price-history refresh honors bounded concurrency")
     func priceHistoryRefreshHonorsBoundedConcurrency() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-concurrency-test")
@@ -543,6 +565,38 @@ private final class OneShotFailingPDTConnector: PDTMCPConnector, @unchecked Send
         }
         lock.unlock()
 
+        let suffix = arguments
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "&")
+        let key = suffix.isEmpty ? name : "\(name)?\(suffix)"
+        guard let response = responses[key] ?? responses[name] else {
+            throw PDTMCPConnectorError.missingScriptedResponse(key)
+        }
+        return response
+    }
+}
+
+private final class ProgressReportingPDTConnector: PDTMCPConnector, PDTMCPConnectorProgressReporting, @unchecked Sendable {
+    let responses: [String: Data]
+
+    init(responses: [String: Data]) {
+        self.responses = responses
+    }
+
+    func availableReadTools() throws -> Set<String> {
+        Set(PDTReadTools.requiredV1)
+    }
+
+    func availableReadTools(
+        required: Set<String>,
+        progress: @escaping @Sendable (String) -> Void
+    ) throws -> Set<String> {
+        progress("Waiting on Claude for PDT tool discovery")
+        return required
+    }
+
+    func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
         let suffix = arguments
             .sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }

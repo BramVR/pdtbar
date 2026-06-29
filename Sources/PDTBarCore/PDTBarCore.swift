@@ -5985,6 +5985,13 @@ public protocol PDTMCPConnector {
     func callReadTool(_ name: String, arguments: [String: String]) throws -> Data
 }
 
+public protocol PDTMCPConnectorProgressReporting {
+    func availableReadTools(
+        required: Set<String>,
+        progress: @escaping @Sendable (String) -> Void
+    ) throws -> Set<String>
+}
+
 public extension PDTMCPConnector {
     func availableReadTools(required: Set<String>) throws -> Set<String> {
         try availableReadTools().intersection(required)
@@ -6430,7 +6437,10 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             "pdt-list-symbol-prices",
             "pdt-get-symbol-quote",
         ]
-        let availableTools = try connector.availableReadTools(required: Set(requiredTools))
+        let availableTools = try availableReadTools(
+            required: Set(requiredTools),
+            progress: progress
+        )
         let missing = requiredTools.filter { !availableTools.contains($0) }
         guard missing.isEmpty else {
             throw PDTMCPConnectorError.missingRequiredReadTools(missing)
@@ -6554,6 +6564,18 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 holdings: holdingsEnvelope.holdings.map(\.baseHoldingInput)
             )
         )
+    }
+
+    private func availableReadTools(
+        required: Set<String>,
+        progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
+    ) throws -> Set<String> {
+        if let progressReportingConnector = connector as? any PDTMCPConnectorProgressReporting {
+            return try progressReportingConnector.availableReadTools(required: required) { detail in
+                progress(BackgroundDetailRefreshProgress(phase: .baseHoldings, detail: detail))
+            }
+        }
+        return try connector.availableReadTools(required: required)
     }
 
     private func preserveOptionalDetails(in snapshot: inout PortfolioSnapshot, from priorSnapshot: PortfolioSnapshot?) {
