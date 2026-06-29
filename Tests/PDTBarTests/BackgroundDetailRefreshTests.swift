@@ -284,6 +284,18 @@ struct BackgroundDetailRefreshTests {
         #expect(progress.map(\.phase).contains(.xRay))
         #expect(progress.map(\.phase).contains(.income))
         #expect(progress.contains {
+            $0.phase == .baseHoldings && $0.detail == "Checking PDT tools"
+        })
+        #expect(progress.contains {
+            $0.phase == .baseHoldings && $0.detail == "Calling pdt-get-portfolio-holdings"
+        })
+        #expect(progress.contains {
+            $0.phase == .priceHistory && $0.detail == "Calling pdt-list-symbol-prices"
+        })
+        #expect(!progress.contains {
+            $0.phase == .priceHistory && $0.detail != nil && ($0.completedUnitCount == nil || $0.totalUnitCount == nil)
+        })
+        #expect(progress.contains {
             $0.phase == .priceHistory && $0.completedUnitCount == 2 && $0.totalUnitCount == 2
         })
     }

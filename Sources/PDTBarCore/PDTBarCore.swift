@@ -2257,6 +2257,15 @@ public struct StatusVisualState: Codable, Equatable {
             statusCopy: statusCopy
         )
     }
+
+    public func withStatusCopy(_ statusCopy: String) -> StatusVisualState {
+        StatusVisualState(
+            barHeights: barHeights,
+            filledBarCount: filledBarCount,
+            isDimmed: isDimmed,
+            statusCopy: statusCopy
+        )
+    }
 }
 
 public struct MenuDescriptor: Codable, Equatable {
@@ -2907,15 +2916,18 @@ public enum BackgroundDetailRefreshPhase: String, Codable, Equatable, Sendable, 
 
 public struct BackgroundDetailRefreshProgress: Codable, Equatable, Sendable {
     public var phase: BackgroundDetailRefreshPhase
+    public var detail: String?
     public var completedUnitCount: Int?
     public var totalUnitCount: Int?
 
     public init(
         phase: BackgroundDetailRefreshPhase,
+        detail: String? = nil,
         completedUnitCount: Int? = nil,
         totalUnitCount: Int? = nil
     ) {
         self.phase = phase
+        self.detail = detail
         self.completedUnitCount = completedUnitCount
         self.totalUnitCount = totalUnitCount
     }
@@ -3182,13 +3194,17 @@ public enum ClaudeLaunchFlow {
 
     public static func descriptorForBackgroundDetailProgress(
         cachedPulse: MenuDescriptor,
-        progress: BackgroundDetailRefreshProgress
+        progress: BackgroundDetailRefreshProgress,
+        cachedSnapshotAsOf: String? = nil
     ) -> MenuDescriptor {
-        cachedPulseDescriptor(
+        let statusCopy = progress.detail.map { "Syncing portfolio - \($0)" }
+            ?? "Syncing portfolio - \(progress.phase.title)"
+        return cachedPulseDescriptor(
             cachedPulseWithRuntimeHealth(cachedPulse, detailFill: .inProgress(progress))
                 .withRefreshAction(.inProgress),
+            statusVisual: cachedPulse.statusVisual.withStatusCopy(statusCopy),
             rowsFirst: true,
-            rows: backgroundDetailProgressRows(progress)
+            rows: backgroundDetailProgressRows(progress, cachedSnapshotAsOf: cachedSnapshotAsOf)
         )
     }
 
@@ -3435,13 +3451,22 @@ public enum ClaudeLaunchFlow {
         )
     }
 
-    private static func backgroundDetailProgressRows(_ progress: BackgroundDetailRefreshProgress) -> [MenuRow] {
+    private static func backgroundDetailProgressRows(
+        _ progress: BackgroundDetailRefreshProgress,
+        cachedSnapshotAsOf: String?
+    ) -> [MenuRow] {
         var rows = [
+            MenuRow(
+                id: "portfolioFetch.backgroundProgress.cached",
+                role: .fetchStatus,
+                title: "Cached data visible",
+                detail: cachedSnapshotAsOf.map { "Last snapshot \($0)" } ?? "Last pulse is still visible"
+            ),
             MenuRow(
                 id: "portfolioFetch.backgroundProgress",
                 role: .fetchStatus,
                 title: "Filling details",
-                detail: "Keeping last pulse visible"
+                detail: "Sync in progress"
             ),
             MenuRow(
                 id: "portfolioFetch.backgroundProgress.phase",
@@ -3449,6 +3474,15 @@ public enum ClaudeLaunchFlow {
                 title: "Step \(progress.phase.stepIndex)/\(BackgroundDetailRefreshPhase.allCases.count): \(progress.phase.title)"
             ),
         ]
+        if let detail = progress.detail {
+            rows.append(
+                MenuRow(
+                    id: "portfolioFetch.backgroundProgress.detail",
+                    role: .fetchStatus,
+                    title: detail
+                )
+            )
+        }
         if progress.phase == .priceHistory,
            let completed = progress.completedUnitCount,
            let total = progress.totalUnitCount
@@ -3564,7 +3598,8 @@ public final class PDTLaunchRuntime {
         if backgroundDetailRefreshInFlight {
             descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
                 cachedPulse: pulse.descriptor,
-                progress: BackgroundDetailRefreshProgress(phase: .baseHoldings)
+                progress: BackgroundDetailRefreshProgress(phase: .baseHoldings),
+                cachedSnapshotAsOf: pulse.model.asOf
             )
         } else {
             descriptor = ClaudeLaunchFlow.descriptor(
@@ -3673,7 +3708,8 @@ public final class PDTLaunchRuntime {
         state = .fetchingPortfolio
         let descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
             cachedPulse: pulse.descriptor,
-            progress: progress
+            progress: progress,
+            cachedSnapshotAsOf: pulse.model.asOf
         )
         lastDescriptor = descriptor
         return PDTOnboardingUpdate(
@@ -3746,7 +3782,8 @@ public final class PDTLaunchRuntime {
         state = .fetchingPortfolio
         let descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
             cachedPulse: pulse.descriptor,
-            progress: BackgroundDetailRefreshProgress(phase: .baseHoldings)
+            progress: BackgroundDetailRefreshProgress(phase: .baseHoldings),
+            cachedSnapshotAsOf: pulse.model.asOf
         )
         lastDescriptor = descriptor
         return PDTOnboardingUpdate(
@@ -6383,6 +6420,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void = { _ in }
     ) throws -> PDTBackgroundDetailRefreshResult {
         try? snapshotStore.clearLastDetailRefreshDiagnostic()
+        progress(BackgroundDetailRefreshProgress(phase: .baseHoldings, detail: "Checking PDT tools"))
         let requiredTools = [
             "pdt-get-portfolio-holdings",
             "pdt-get-portfolio-distributions",
@@ -6419,7 +6457,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             let distributions: LiveDistributionsEnvelope = try callDecodedWithRetry(
                 "pdt-get-portfolio-distributions",
                 phase: .allocation,
-                arguments: [:]
+                arguments: [:],
+                progress: progress
             )
             let normalized = PDTOptionalDetailNormalizer.normalizeDistributions(distributions.optionalDetailInput)
             snapshot.sectors = normalized.sectors
@@ -6431,7 +6470,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
 
         do {
             progress(BackgroundDetailRefreshProgress(phase: .xRay))
-            snapshot.xRayHoldings = PDTOptionalDetailNormalizer.normalizeXRayHoldings(try xRayHoldings())
+            snapshot.xRayHoldings = PDTOptionalDetailNormalizer.normalizeXRayHoldings(try xRayHoldings(progress: progress))
             _ = try snapshotStore.commitCurrentSnapshot(snapshot)
         } catch {
             diagnostics.append(diagnostic(for: error, tool: "pdt-list-x-ray-holdings", phase: .xRay, arguments: [
@@ -6442,7 +6481,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
 
         do {
             progress(BackgroundDetailRefreshProgress(phase: .income))
-            let income = try incomeEvents(asOf: snapshotAsOf, holdings: snapshot.openHoldings)
+            let income = try incomeEvents(asOf: snapshotAsOf, holdings: snapshot.openHoldings, progress: progress)
             snapshot.incomeEvents = income.events
             snapshot.dividendRowCount = income.dividendRowCount
             _ = try snapshotStore.commitCurrentSnapshot(snapshot)
@@ -6499,13 +6538,14 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
 
     private func baseSnapshot(
         asOf snapshotAsOf: String,
-        progress: @Sendable (BackgroundDetailRefreshProgress) -> Void
+        progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) throws -> PortfolioSnapshot {
         progress(BackgroundDetailRefreshProgress(phase: .baseHoldings))
         let holdingsEnvelope: LiveHoldingsEnvelope = try callDecodedWithRetry(
             "pdt-get-portfolio-holdings",
             phase: .baseHoldings,
-            arguments: [:]
+            arguments: [:],
+            progress: progress
         )
         return PDTSnapshotNormalizer.normalize(
             PDTSnapshotNormalizationInput(
@@ -6547,16 +6587,18 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         return refreshed + fallback
     }
 
-    private func xRayHoldings() throws -> [PDTXRayHoldingInput] {
+    private func xRayHoldings(progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void) throws -> [PDTXRayHoldingInput] {
         let limit = 500
         var offset = 0
         var holdings: [PDTXRayHoldingInput] = []
         while true {
             let arguments = ["limit": String(limit), "offset": String(offset)]
+            progress(BackgroundDetailRefreshProgress(phase: .xRay, detail: "Fetching pdt-list-x-ray-holdings batch \(offset / limit + 1)"))
             let envelope: XRayHoldingsEnvelope = try callDecodedWithRetry(
                 "pdt-list-x-ray-holdings",
                 phase: .xRay,
-                arguments: arguments
+                arguments: arguments,
+                progress: progress
             )
             holdings.append(contentsOf: envelope.items.map(\.optionalDetailInput))
             guard envelope.hasMore == true, !envelope.items.isEmpty else {
@@ -6568,7 +6610,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
 
     private func incomeEvents(
         asOf snapshotAsOf: String,
-        holdings: [NormalizedHolding]
+        holdings: [NormalizedHolding],
+        progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) throws -> (events: [IncomeEventSummary], dividendRowCount: Int) {
         let incomeDateRange = [
             "date_from": snapshotAsOf,
@@ -6578,10 +6621,14 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             "date_from": dayString(snapshotAsOf, addingDays: -370),
             "date_to": incomeDateRange["date_to"] ?? snapshotAsOf,
         ]
-        let paginatedCalendarEvents = try liveCalendarEvents(arguments: incomeDateRange)
-        let dividends = try liveDividends(arguments: dividendDateRange)
+        let paginatedCalendarEvents = try liveCalendarEvents(arguments: incomeDateRange, progress: progress)
+        let dividends = try liveDividends(arguments: dividendDateRange, progress: progress)
         let calendarEvents = paginatedCalendarEvents.filter { $0.type != "no-events-today" }
-        let quoteIDsBySymbolID = try incomeQuoteIDsBySymbolID(for: calendarEvents, holdings: holdings)
+        let quoteIDsBySymbolID = try incomeQuoteIDsBySymbolID(
+            for: calendarEvents,
+            holdings: holdings,
+            progress: progress
+        )
         let normalized = PDTOptionalDetailNormalizer.normalizeIncomeEvents(
             calendarEvents: calendarEvents.map(\.optionalDetailInput),
             dividends: dividends.map(\.optionalDetailInput),
@@ -6593,7 +6640,10 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         )
     }
 
-    private func liveCalendarEvents(arguments baseArguments: [String: String]) throws -> [LiveCalendarEvent] {
+    private func liveCalendarEvents(
+        arguments baseArguments: [String: String],
+        progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
+    ) throws -> [LiveCalendarEvent] {
         var page = 1
         var events: [LiveCalendarEvent] = []
         while true {
@@ -6601,10 +6651,12 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 "page": String(page),
                 "per_page": "250",
             ]) { _, new in new }
+            progress(BackgroundDetailRefreshProgress(phase: .income, detail: "Fetching pdt-list-calendar-events page \(page)"))
             let envelope: LiveCalendarEventsEnvelope = try callDecodedWithRetry(
                 "pdt-list-calendar-events",
                 phase: .income,
-                arguments: arguments
+                arguments: arguments,
+                progress: progress
             )
             events.append(contentsOf: envelope.data)
             let lastPage = envelope.meta?.lastPage ?? page
@@ -6617,7 +6669,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
 
     private func incomeQuoteIDsBySymbolID(
         for calendarEvents: [LiveCalendarEvent],
-        holdings: [NormalizedHolding]
+        holdings: [NormalizedHolding],
+        progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) throws -> [Int: Int] {
         var neededSymbolIDs = Set(calendarEvents.compactMap(\.symbolId))
         guard !neededSymbolIDs.isEmpty else {
@@ -6625,10 +6678,12 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         }
         var quoteIDsBySymbolID: [Int: Int] = [:]
         for holding in holdings.reversed() {
+            progress(BackgroundDetailRefreshProgress(phase: .income, detail: "Calling pdt-get-symbol-quote"))
             let quote: LiveSymbolQuoteEnvelope = try callDecodedWithRetry(
                 "pdt-get-symbol-quote",
                 phase: .income,
-                arguments: ["id": String(holding.quoteId)]
+                arguments: ["id": String(holding.quoteId)],
+                progress: progress
             )
             guard neededSymbolIDs.remove(quote.symbolId) != nil else {
                 continue
@@ -6641,7 +6696,10 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         return quoteIDsBySymbolID
     }
 
-    private func liveDividends(arguments baseArguments: [String: String]) throws -> [LiveDividend] {
+    private func liveDividends(
+        arguments baseArguments: [String: String],
+        progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
+    ) throws -> [LiveDividend] {
         var page = 1
         var dividends: [LiveDividend] = []
         while true {
@@ -6649,10 +6707,12 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 "page": String(page),
                 "per_page": "250",
             ]) { _, new in new }
+            progress(BackgroundDetailRefreshProgress(phase: .income, detail: "Fetching pdt-list-dividends page \(page)"))
             let envelope: LiveDividendsEnvelope = try callDecodedWithRetry(
                 "pdt-list-dividends",
                 phase: .income,
-                arguments: arguments
+                arguments: arguments,
+                progress: progress
             )
             dividends.append(contentsOf: envelope.data)
             let lastPage = envelope.meta?.lastPage ?? page
@@ -6695,7 +6755,15 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                         let prices: LivePricesEnvelope = try callDecodedWithRetry(
                             "pdt-list-symbol-prices",
                             phase: .priceHistory,
-                            arguments: arguments
+                            arguments: arguments,
+                            progress: { detailProgress in
+                                progress(BackgroundDetailRefreshProgress(
+                                    phase: .priceHistory,
+                                    detail: detailProgress.detail,
+                                    completedUnitCount: accumulator.completedCount(),
+                                    totalUnitCount: totalCount
+                                ))
+                            }
                         )
                         let nextPoints = PDTOptionalDetailNormalizer.normalizePriceSeries(
                             prices.data.map(\.optionalDetailInput)
@@ -6766,12 +6834,15 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
     private func callDecodedWithRetry<T: Decodable>(
         _ tool: String,
         phase: BackgroundDetailRefreshPhase,
-        arguments: [String: String]
+        arguments: [String: String],
+        progress: (@Sendable (BackgroundDetailRefreshProgress) -> Void)? = nil
     ) throws -> T {
         var attempts = 0
         var lastError: Error?
         repeat {
             attempts += 1
+            let detail = attempts == 1 ? "Calling \(tool)" : "Retrying \(tool)"
+            progress?(BackgroundDetailRefreshProgress(phase: phase, detail: detail))
             do {
                 return try callDecoded(tool, arguments: arguments)
             } catch {
@@ -6850,6 +6921,14 @@ private final class PDTPriceHistoryAccumulator: @unchecked Sendable {
             lock.unlock()
         }
         completed += 1
+        return completed
+    }
+
+    func completedCount() -> Int {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
         return completed
     }
 
