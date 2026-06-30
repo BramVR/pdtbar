@@ -2333,6 +2333,33 @@ public struct MenuRowBarChart: Codable, Equatable {
     }
 }
 
+public struct MenuRowGrid: Codable, Equatable {
+    public var cells: [Cell]
+
+    public init(cells: [Cell]) {
+        self.cells = cells
+    }
+
+    public struct Cell: Codable, Equatable {
+        public var id: String
+        public var accessibilityIdentifier: String
+        public var title: String
+        public var detail: String
+
+        public init(
+            id: String,
+            accessibilityIdentifier: String? = nil,
+            title: String,
+            detail: String
+        ) {
+            self.id = id
+            self.accessibilityIdentifier = accessibilityIdentifier ?? MenuRow.defaultAccessibilityIdentifier(for: id)
+            self.title = title
+            self.detail = detail
+        }
+    }
+}
+
 public struct MenuRow: Codable, Equatable {
     public var id: String
     public var role: MenuRowRole
@@ -2341,6 +2368,7 @@ public struct MenuRow: Codable, Equatable {
     public var title: String
     public var detail: String?
     public var barChart: MenuRowBarChart?
+    public var grid: MenuRowGrid?
     public var actionPayload: String?
     public var children: [MenuRow]
 
@@ -2352,6 +2380,7 @@ public struct MenuRow: Codable, Equatable {
         title: String,
         detail: String? = nil,
         barChart: MenuRowBarChart? = nil,
+        grid: MenuRowGrid? = nil,
         actionPayload: String? = nil,
         children: [MenuRow] = []
     ) {
@@ -2362,6 +2391,7 @@ public struct MenuRow: Codable, Equatable {
         self.title = title
         self.detail = detail
         self.barChart = barChart
+        self.grid = grid
         self.actionPayload = actionPayload
         self.children = children
     }
@@ -2374,6 +2404,7 @@ public struct MenuRow: Codable, Equatable {
         case title
         case detail
         case barChart
+        case grid
         case actionPayload
         case children
     }
@@ -2389,11 +2420,12 @@ public struct MenuRow: Codable, Equatable {
         title = try container.decode(String.self, forKey: .title)
         detail = try container.decodeIfPresent(String.self, forKey: .detail)
         barChart = try container.decodeIfPresent(MenuRowBarChart.self, forKey: .barChart)
+        grid = try container.decodeIfPresent(MenuRowGrid.self, forKey: .grid)
         actionPayload = try container.decodeIfPresent(String.self, forKey: .actionPayload)
         children = try container.decodeIfPresent([MenuRow].self, forKey: .children) ?? []
     }
 
-    private static func defaultAccessibilityIdentifier(for id: String) -> String {
+    fileprivate static func defaultAccessibilityIdentifier(for id: String) -> String {
         id.isEmpty ? "" : "pdtbar.row.\(id)"
     }
 }
@@ -2458,6 +2490,7 @@ public struct MenuBarRowSurface: Codable, Equatable {
     public var accessibilityIdentifier: String
     public var actionTarget: MenuRowActionTarget?
     public var barChart: MenuRowBarChart?
+    public var grid: MenuRowGrid?
     public var actionPayload: String?
     public var children: [MenuBarRowSurface]
 
@@ -2469,6 +2502,7 @@ public struct MenuBarRowSurface: Codable, Equatable {
         accessibilityIdentifier: String,
         actionTarget: MenuRowActionTarget? = nil,
         barChart: MenuRowBarChart? = nil,
+        grid: MenuRowGrid? = nil,
         actionPayload: String? = nil,
         children: [MenuBarRowSurface] = []
     ) {
@@ -2479,6 +2513,7 @@ public struct MenuBarRowSurface: Codable, Equatable {
         self.accessibilityIdentifier = accessibilityIdentifier
         self.actionTarget = actionTarget
         self.barChart = barChart
+        self.grid = grid
         self.actionPayload = actionPayload
         self.children = children
     }
@@ -3890,6 +3925,7 @@ public enum MenuBarSurfaceRenderer {
             accessibilityIdentifier: row.accessibilityIdentifier,
             actionTarget: row.actionTarget,
             barChart: row.barChart,
+            grid: row.grid,
             actionPayload: row.actionPayload,
             children: row.children.map(renderRow)
         )
@@ -3906,42 +3942,11 @@ public enum MenuDescriptorRenderer {
         let freshness = model.facetSnapshots.freshness
         let dataHealth = model.facetSnapshots.dataHealth
 
-        let pulseRows: [MenuRow]
+        let attentionRows: [MenuRow]
         if model.allQuiet {
-            pulseRows = [
-                MenuRow(
-                    id: "pulse.quiet",
-                    role: .pulseQuiet,
-                    title: model.allQuietSignal.title,
-                    detail: model.allQuietSignal.detail,
-                    children: [
-                        MenuRow(
-                            id: "pulse.quiet.value",
-                            title: "Value",
-                            detail: display(model.portfolioGlance.totalValue)
-                        ),
-                        MenuRow(
-                            id: "pulse.quiet.holdings",
-                            title: "Open holdings",
-                            detail: "\(model.portfolioGlance.openHoldingCount)"
-                        ),
-                        model.facetSnapshots.allocation.portfolioOverview.topNConcentration.map {
-                            MenuRow(
-                                id: "pulse.quiet.topAllocation",
-                                title: "Top \($0.rankCount)",
-                                detail: percent($0.weight)
-                            )
-                        },
-                        MenuRow(
-                            id: "pulse.quiet.freshness",
-                            title: "Latest prices",
-                            detail: model.portfolioGlance.worstPriceAsOf ?? "Unknown"
-                        ),
-                    ].compactMap { $0 }
-                ),
-            ]
+            attentionRows = []
         } else {
-            pulseRows = model.rankedAttentionItems.prefix(maxPulseAttentionItems).map { item in
+            attentionRows = model.rankedAttentionItems.prefix(maxPulseAttentionItems).map { item in
                 MenuRow(
                     id: "\(item.id).glance",
                     role: .pulseAttention,
@@ -3957,6 +3962,7 @@ public enum MenuDescriptorRenderer {
             : model.rankedAttentionItems.first?.title ?? "Attention"
         let statusTitle = "\(display(model.allQuietSignal.totalValue)) - \(statusSignal)"
         let statusVisual = statusVisual(for: model)
+        let overviewRows = overviewRows(for: model, attentionRows: attentionRows)
 
         return MenuDescriptor(
             statusTitle: statusTitle,
@@ -3965,14 +3971,8 @@ public enum MenuDescriptorRenderer {
             sections: [
                 MenuSection(
                     id: "pulse",
-                    title: "Pulse",
-                    rows: [
-                        MenuRow(
-                            id: "pulse.status",
-                            role: .pulseSummary,
-                            title: statusTitle
-                        ),
-                    ] + pulseRows
+                    title: "Overview",
+                    rows: overviewRows
                 ),
                 MenuSection(
                     id: "allocation",
@@ -4013,6 +4013,58 @@ public enum MenuDescriptorRenderer {
                 topLevelActionsSection(refreshState: .available),
             ]
         )
+    }
+
+    private static func overviewRows(for model: PortfolioPulseModel, attentionRows: [MenuRow]) -> [MenuRow] {
+        var rows = [
+            overviewGridRow(for: model, topAttentionRow: attentionRows.first),
+        ]
+        rows.append(contentsOf: attentionRows.dropFirst())
+        return rows
+    }
+
+    private static func overviewGridRow(for model: PortfolioPulseModel, topAttentionRow: MenuRow?) -> MenuRow {
+        if var topAttentionRow {
+            topAttentionRow.grid = overviewGrid(for: model, topAttentionTitle: topAttentionRow.title)
+            return topAttentionRow
+        }
+
+        return MenuRow(
+            id: "pulse.quiet",
+            role: .pulseQuiet,
+            title: model.allQuietSignal.title,
+            detail: model.allQuietSignal.detail,
+            grid: overviewGrid(for: model, topAttentionTitle: nil)
+        )
+    }
+
+    private static func overviewGrid(for model: PortfolioPulseModel, topAttentionTitle: String?) -> MenuRowGrid {
+        MenuRowGrid(cells: [
+            MenuRowGrid.Cell(
+                id: "pulse.overview.value",
+                title: "Portfolio value",
+                detail: display(model.portfolioGlance.totalValue)
+            ),
+            MenuRowGrid.Cell(
+                id: "pulse.overview.freshness",
+                title: "Prices as of",
+                detail: model.portfolioGlance.worstPriceAsOf ?? "Unknown"
+            ),
+            MenuRowGrid.Cell(
+                id: "pulse.overview.attention",
+                title: "Attention",
+                detail: model.allQuiet ? "0 items" : attentionCountDetail(model.rankedAttentionItems.count)
+            ),
+            MenuRowGrid.Cell(
+                id: "pulse.overview.status",
+                title: topAttentionTitle == nil ? "Status" : "Top item",
+                detail: topAttentionTitle ?? model.allQuietSignal.title
+            ),
+        ])
+    }
+
+    private static func attentionCountDetail(_ count: Int) -> String {
+        count == 1 ? "1 item" : "\(count) items"
     }
 
     private static func bigMoverTitle(for move: PriceMoveSummary?, allocation: AllocationSnapshot) -> String {

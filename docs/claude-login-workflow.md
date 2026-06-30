@@ -61,7 +61,7 @@ The menu bar always shows the Concentration Stack icon. It is a stable portfolio
 - no separate round notification dot
 - stale/fetch-failed/setup states: tooltip/menu copy and optional whole-icon dimming only
 
-Full status copy remains in tooltip, accessibility label, and the first Pulse menu row.
+Full status copy remains in tooltip and accessibility label. The Overview grid keeps portfolio value separate from attention copy.
 
 ## Redaction and proof
 

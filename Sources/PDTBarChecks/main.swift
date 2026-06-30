@@ -746,14 +746,31 @@ try check(
     "fixture launch surface should preserve descriptor row selectors"
 )
 try check(
-    launchSurface.sections.first { $0.id == "pulse" }?.rows.first?.title
-        == "EUR 51,200.00 - All quiet",
-    "fixture launch surface should put displaced status copy in the top Pulse row"
+    launchSurface.sections.first { $0.id == "pulse" }?.title == "Overview",
+    "fixture launch surface should title the first menu section Overview"
 )
 try check(
-    descriptor.sections.first { $0.id == "pulse" }?.rows.dropFirst().first?.children.map(\.id)
-        == ["pulse.quiet.value", "pulse.quiet.holdings", "pulse.quiet.topAllocation", "pulse.quiet.freshness"],
-    "quiet pulse row should expose compact portfolio overview readouts"
+    launchSurface.sections.first { $0.id == "pulse" }?.rows.first?.grid?.cells.map(\.id) == [
+        "pulse.overview.value",
+        "pulse.overview.freshness",
+        "pulse.overview.attention",
+        "pulse.overview.status",
+    ],
+    "fixture launch surface should render Overview as a 2x2 grid"
+)
+try check(
+    launchSurface.sections.first { $0.id == "pulse" }?.rows.first?.grid?.cells.first?.title == "Portfolio value"
+        && launchSurface.sections.first { $0.id == "pulse" }?.rows.first?.grid?.cells.first?.detail == "EUR 51,200.00",
+    "fixture launch surface should keep portfolio value in the first Overview grid cell"
+)
+try check(
+    descriptor.sections.first { $0.id == "pulse" }?.rows.first?.grid?.cells.map(\.detail)
+        == ["EUR 51,200.00", "2026-06-22", "0 items", "All quiet"],
+    "quiet overview grid should expose value, price date, attention count, and status"
+)
+try check(
+    descriptor.sections.first { $0.id == "pulse" }?.rows.first?.children.isEmpty == true,
+    "quiet overview grid should stay static"
 )
 try check(
     descriptor.sections.map(\.accessibilityIdentifier) == [
@@ -1073,8 +1090,14 @@ try check(
     "non-quiet descriptor should use the top attention item in status"
 )
 try check(
-    nonQuietDescriptor.sections.first { $0.id == "pulse" }?.rows.dropFirst().first?.children.isEmpty == false,
+    nonQuietDescriptor.sections.first { $0.id == "pulse" }?
+        .rows.first { $0.role == .pulseAttention }?.children.isEmpty == false,
     "attention pulse rows should expose nested drill-down readouts instead of flat expansion rows"
+)
+try check(
+    nonQuietDescriptor.sections.first { $0.id == "pulse" }?
+        .rows.first { $0.role == .pulseAttention }?.grid?.cells.first { $0.id == "pulse.overview.attention" }?.detail == "1 item",
+    "non-quiet overview should summarize attention count separately from portfolio value"
 )
 try check(
     nonQuietDescriptor.statusVisual.filledBarCount == 1,
@@ -2362,10 +2385,10 @@ try check(
     "pressure fixture launch surface should keep status text out of the menu bar title"
 )
 try check(
-    concentrationSurface.sections.first { $0.id == "pulse" }?.rows.dropFirst().allSatisfy {
+    concentrationSurface.sections.first { $0.id == "pulse" }?.rows.drop { $0.role == .pulseSummary }.allSatisfy {
         $0.role == .pulseAttention
     } == true,
-    "fixture launch surface should keep attention items compact at the top level"
+    "fixture launch surface should keep attention items compact below overview rows"
 )
 try check(
     concentrationRun.descriptor.sections.first?.rows.first { $0.role == .pulseAttention }?.children.contains {

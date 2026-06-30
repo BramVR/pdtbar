@@ -529,7 +529,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             item.submenu = submenu
         }
-        if let barChart = row.barChart {
+        if let grid = row.grid {
+            item.view = makeOverviewGridRowView(
+                row: row,
+                grid: grid
+            )
+            item.isEnabled = item.action != nil || item.submenu != nil
+        } else if let barChart = row.barChart {
             item.view = makePortfolioAllocationChartRowView(
                 title: row.title,
                 detail: row.detail,
@@ -549,6 +555,94 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             applyDetailSubtitle(row.detail, to: item, title: row.title)
         }
         return item
+    }
+
+    private func makeOverviewGridRowView(row: MenuBarRowSurface, grid: MenuRowGrid) -> NSView {
+        let cells = Array(grid.cells.prefix(4))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: 88))
+        container.autoresizingMask = [.width]
+        let cellSummary = cells.map { "\($0.title) \($0.detail)" }.joined(separator: ", ")
+        configureStaticMenuViewAccessibility(
+            container,
+            accessibilityIdentifier: row.accessibilityIdentifier,
+            label: cellSummary
+        )
+
+        let cellViews = cells.map(makeOverviewGridCellView)
+        for cellView in cellViews {
+            cellView.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(cellView)
+        }
+        guard cellViews.count == 4 else {
+            return container
+        }
+
+        let leftTop = cellViews[0]
+        let rightTop = cellViews[1]
+        let leftBottom = cellViews[2]
+        let rightBottom = cellViews[3]
+        let columnGap: CGFloat = 18
+        NSLayoutConstraint.activate([
+            leftTop.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            leftTop.topAnchor.constraint(equalTo: container.topAnchor, constant: 6),
+            leftTop.heightAnchor.constraint(equalToConstant: 34),
+
+            rightTop.leadingAnchor.constraint(equalTo: leftTop.trailingAnchor, constant: columnGap),
+            rightTop.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            rightTop.topAnchor.constraint(equalTo: leftTop.topAnchor),
+            rightTop.widthAnchor.constraint(equalTo: leftTop.widthAnchor),
+            rightTop.heightAnchor.constraint(equalTo: leftTop.heightAnchor),
+
+            leftBottom.leadingAnchor.constraint(equalTo: leftTop.leadingAnchor),
+            leftBottom.trailingAnchor.constraint(equalTo: leftTop.trailingAnchor),
+            leftBottom.topAnchor.constraint(equalTo: leftTop.bottomAnchor, constant: 7),
+            leftBottom.heightAnchor.constraint(equalTo: leftTop.heightAnchor),
+
+            rightBottom.leadingAnchor.constraint(equalTo: rightTop.leadingAnchor),
+            rightBottom.trailingAnchor.constraint(equalTo: rightTop.trailingAnchor),
+            rightBottom.topAnchor.constraint(equalTo: leftBottom.topAnchor),
+            rightBottom.heightAnchor.constraint(equalTo: leftTop.heightAnchor),
+        ])
+
+        return container
+    }
+
+    private func makeOverviewGridCellView(_ cell: MenuRowGrid.Cell) -> NSView {
+        let cellView = NSView()
+        configureStaticMenuViewAccessibility(
+            cellView,
+            accessibilityIdentifier: cell.accessibilityIdentifier,
+            label: "\(cell.title) - \(cell.detail)"
+        )
+
+        let titleField = NSTextField(labelWithString: cell.title)
+        titleField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize)
+        titleField.textColor = NSColor.secondaryLabelColor
+        titleField.lineBreakMode = .byTruncatingTail
+        titleField.maximumNumberOfLines = 1
+        titleField.translatesAutoresizingMaskIntoConstraints = false
+        cellView.addSubview(titleField)
+
+        let detailField = NSTextField(labelWithString: cell.detail)
+        detailField.font = NSFont.menuFont(ofSize: NSFont.systemFontSize)
+        detailField.textColor = NSColor.labelColor
+        detailField.lineBreakMode = .byTruncatingTail
+        detailField.maximumNumberOfLines = 1
+        detailField.translatesAutoresizingMaskIntoConstraints = false
+        cellView.addSubview(detailField)
+
+        NSLayoutConstraint.activate([
+            titleField.leadingAnchor.constraint(equalTo: cellView.leadingAnchor),
+            titleField.trailingAnchor.constraint(equalTo: cellView.trailingAnchor),
+            titleField.topAnchor.constraint(equalTo: cellView.topAnchor),
+
+            detailField.leadingAnchor.constraint(equalTo: titleField.leadingAnchor),
+            detailField.trailingAnchor.constraint(equalTo: titleField.trailingAnchor),
+            detailField.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 1),
+            detailField.bottomAnchor.constraint(lessThanOrEqualTo: cellView.bottomAnchor),
+        ])
+
+        return cellView
     }
 
     @objc private func openPDT(_ sender: NSMenuItem) {

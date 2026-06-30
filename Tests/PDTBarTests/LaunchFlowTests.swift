@@ -856,7 +856,13 @@ struct LaunchSurfaceTests {
         #expect(surface.status.menuBarTitle.isEmpty)
         #expect(surface.status.visual == descriptor.statusVisual)
         #expect(surface.status.accessibilityIdentifier == "pdtbar.status")
-        #expect(surface.sections.first { $0.id == "pulse" }?.rows.first?.title == "EUR 51,200.00 - All quiet")
+        #expect(surface.sections.first { $0.id == "pulse" }?.title == "Overview")
+        #expect(surface.sections.first { $0.id == "pulse" }?.rows.first?.grid?.cells.map(\.detail) == [
+            "EUR 51,200.00",
+            "2026-06-22",
+            "0 items",
+            "All quiet",
+        ])
     }
 }
 

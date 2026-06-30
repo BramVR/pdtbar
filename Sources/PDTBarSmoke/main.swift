@@ -2643,7 +2643,9 @@ private func requiredSetupMenuTargets(in surface: MenuBarSurface) -> [PulseTarge
 }
 
 private func requiredMenuTargets(for row: MenuBarRowSurface) -> [PulseTarget] {
-    [PulseTarget(accessibilityIdentifier: row.accessibilityIdentifier, title: row.title)]
+    // Custom NSMenuItem views that also own submenus expose the parent row
+    // reliably, while nested cell views are not consistently addressable.
+    return [PulseTarget(accessibilityIdentifier: row.accessibilityIdentifier, title: row.title)]
         + row.children.flatMap(requiredMenuTargets)
 }
 
