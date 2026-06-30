@@ -150,6 +150,10 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
     assert.match(index, /class="nav-toggle"/);
     assert.match(index, /class="home-hero"/);
     assert.match(index, /class="pulse-art"/);
+    assert.match(index, /<rect x="0" y="0" width="360" height="200" rx="16" fill="url\(#pulse-card\)" stroke="#1e293b" stroke-width="1"\/>/);
+    assert.match(index, /class="pulse-fill pulse-fill-one"/);
+    assert.match(index, /class="pulse-fill pulse-fill-two"/);
+    assert.match(index, /class="pulse-fill pulse-fill-three"/);
     assert.match(index, /application\/ld\+json/);
     assert.match(index, /"@type":"SoftwareApplication"/);
     assert.match(index, /"applicationCategory":"FinanceApplication"/);
