@@ -345,7 +345,7 @@ function layout({ page, html, toc, sectionName }) {
   const alternate = alternatePage(page);
   const isDutch = page.lang === "nl";
   const lede = isDutch
-    ? "Een rustig portefeuilleoverzicht in de macOS-menubalk, via je bestaande Claude CLI en PDT MCP-koppeling."
+    ? "Wat er nu toe doet in je portefeuille, direct in de macOS-menubalk."
     : "A quiet portfolio pulse in the macOS menu bar, powered by your existing Claude CLI + PDT MCP setup.";
   const searchLabel = isDutch ? "Zoek in de site" : "Search";
   const searchPlaceholder = isDutch ? "Filter onderwerpen" : "Filter navigation";
@@ -353,7 +353,7 @@ function layout({ page, html, toc, sectionName }) {
   const langHref = hrefBetween(page, alternate);
   const langLabel = isDutch ? "English" : "Nederlands";
   const langAria = isDutch ? "View this page in English" : "Bekijk deze pagina in het Nederlands";
-  const pulseAnchor = isDutch ? "in-een-oogopslag" : "what-you-see";
+  const pulseAnchor = isDutch ? "wat-je-ziet" : "what-you-see";
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
@@ -417,14 +417,14 @@ function layout({ page, html, toc, sectionName }) {
           <h1>PDTBar</h1>
           <p class="lede">${lede}</p>
           <div class="actions">
-            <a class="btn primary" href="#${pulseAnchor}">${isDutch ? "Bekijk het overzicht" : "View the pulse"}</a>
+            <a class="btn primary" href="#${pulseAnchor}">${isDutch ? "Bekijk wat je ziet" : "View the pulse"}</a>
             <a class="btn" href="${escapeAttr(langHref)}" aria-label="${langAria}">${langLabel}</a>
             <a class="btn" href="${repoBase}">GitHub</a>
           </div>
         </div>
         <div class="hero-art">${pulseArtSvg()}</div>
         <div class="feature-row" aria-label="Product focus">
-          ${(isDutch ? ["Concentratie", "Inkomensmomenten", "Opvallende bewegingen", "Actuele gegevens", "Rustig beeld"] : ["Concentration", "Income events", "Big movers", "Freshness", "All quiet"]).map((label) => `<a class="feature-pill" href="#${pulseAnchor}">${label}</a>`).join("")}
+          ${(isDutch ? ["Concentratie", "Inkomsten", "Grote bewegingen", "Recente data", "Geen bijzonderheden"] : ["Concentration", "Income events", "Big movers", "Freshness", "All quiet"]).map((label) => `<a class="feature-pill" href="#${pulseAnchor}">${label}</a>`).join("")}
         </div>
       </header>
       <div class="doc-grid">
