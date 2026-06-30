@@ -19,7 +19,7 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
     fs
       .readFileSync(dutchPage, "utf8")
       .replace(
-        'description: "PDTBar toont de belangrijkste signalen uit je Portfolio Dividend Tracker-portefeuille in de macOS-menubalk."',
+        'description: "PDTBar toont in de macOS-menubalk wat er nu toe doet in je Portfolio Dividend Tracker-portefeuille."',
         'description: "PDTBar JSON-LD escape </script><script>alert(1)</script> sentinel."',
       ),
     "utf8",
@@ -133,16 +133,18 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
 
     assert.match(index, /<html lang="nl"/);
     assert.match(index, /PDTBar/);
-    assert.match(index, /laat de belangrijkste signalen uit je Portfolio Dividend Tracker-portefeuille zien/);
+    assert.match(index, /wat er nu toe doet in je Portfolio Dividend Tracker-portefeuille/);
+    assert.match(index, /href="#wat-je-ziet">Bekijk wat je ziet/);
     assert.match(index, /Portfolio Dividend Tracker/);
     assert.match(index, /Claude CLI/);
     assert.match(index, /PDT MCP/);
-    assert.match(index, /draait lokaal en wijzigt niets/);
+    assert.match(index, /draait lokaal en verandert niets aan je portefeuille/);
     assert.match(index, /Concentratie/);
     assert.match(index, /Inkomsten/);
     assert.match(index, /Grote bewegingen/);
-    assert.match(index, /hoe vers je PDT-gegevens zijn/);
-    assert.match(index, /niets bijzonders speelt/);
+    assert.match(index, /hoe recent je PDT-gegevens zijn/);
+    assert.match(index, /Geen bijzonderheden/);
+    assert.doesNotMatch(index, /Een rustig portefeuilleoverzicht|Rustig beeld|in-een-oogopslag/);
     assert.match(index, /href="en\/"/);
     assert.match(index, /aria-label="View this page in English"/);
     assert.match(index, /id="doc-search"/);
