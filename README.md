@@ -26,10 +26,10 @@ Fixture mode exists for development only and must be launched explicitly.
 
 ## Install
 
-Homebrew cask distribution is the primary install path once the first public release is published:
+Homebrew cask distribution is the primary install path after a public release has passed release-time Homebrew proof:
 
 ```bash
-brew install --cask BramVR/tap/pdtbar
+brew install --cask bramvr/tap/pdtbar
 open -a PDTBar
 ```
 
@@ -37,8 +37,8 @@ Update and uninstall through Homebrew:
 
 ```bash
 brew update
-brew upgrade --cask BramVR/tap/pdtbar
-brew uninstall --cask BramVR/tap/pdtbar
+brew upgrade --cask bramvr/tap/pdtbar
+brew uninstall --cask bramvr/tap/pdtbar
 ```
 
 Homebrew owns updates for cask installs. PDTBar does not include an in-app updater yet.
