@@ -29,7 +29,7 @@ Public cask releases require Developer ID signing, notarization, and stapling be
 - `APP_STORE_CONNECT_ISSUER_ID`: App Store Connect issuer id.
 - `HOMEBREW_TAP_TOKEN`: token allowed to run `BramVR/homebrew-tap` workflows.
 
-The release workflow sets `PDTBAR_REQUIRE_NOTARIZATION=1` on release events. If any signing/notary secret is missing, the release app archive job fails before upload.
+The release workflow sets `PDTBAR_REQUIRE_NOTARIZATION=1` on release events. If any signing/notary secret is missing, the release app archive job fails before upload. Stable release runs also fail unless the generated Homebrew cask installs and launches from `/Applications`.
 
 ## Manual Archive Proof
 
@@ -51,7 +51,7 @@ codesign --verify --deep --strict --verbose=2 /tmp/pdtbar-release-proof/PDTBar.a
 
 1. Finalize release notes in the GitHub release body.
 2. Publish tag/release `v<version>`.
-3. Wait for `.github/workflows/release-cli.yml`.
+3. Wait for `.github/workflows/release-cli.yml`, including `verify-homebrew-cask`.
 4. Confirm release assets exist:
    - `PDTBar-macos-universal-<version>.zip`
    - `PDTBar-macos-universal-<version>.zip.sha256`
@@ -89,22 +89,28 @@ Then commit and push the changed `Casks/pdtbar.rb`.
 
 ## Homebrew Proof
 
-After the tap commit lands:
+Stable release CI runs this proof automatically after the tap update. For manual verification after the tap commit lands:
 
 ```bash
 brew update
-brew uninstall --cask BramVR/tap/pdtbar || true
-brew install --cask BramVR/tap/pdtbar
+brew uninstall --cask bramvr/tap/pdtbar || true
+brew install --cask bramvr/tap/pdtbar
 open -a PDTBar
-brew uninstall --cask BramVR/tap/pdtbar
+brew uninstall --cask bramvr/tap/pdtbar
+```
+
+The scripted release proof is the same check:
+
+```bash
+./Scripts/verify_homebrew_cask.sh
 ```
 
 Upgrade proof needs two published versions:
 
 ```bash
-brew install --cask BramVR/tap/pdtbar
+brew install --cask bramvr/tap/pdtbar
 brew update
-brew upgrade --cask BramVR/tap/pdtbar
+brew upgrade --cask bramvr/tap/pdtbar
 ```
 
 Homebrew owns updates for cask installs. PDTBar does not ship Sparkle or another in-app updater in this slice.

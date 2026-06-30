@@ -329,3 +329,17 @@ jobs:
           done
           echo "Timed out waiting for tap cask workflow to appear." >&2
           exit 1
+
+  verify-homebrew-cask:
+    runs-on: macos-15
+    needs:
+      - update-homebrew-tap
+    if: github.event_name == 'release' && !github.event.release.prerelease
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify Homebrew cask install and launch
+        shell: bash
+        env:
+          PDTBAR_HOMEBREW_EXPECTED_VERSION: ${{ github.ref_name }}
+        run: ./Scripts/verify_homebrew_cask.sh
