@@ -24,6 +24,25 @@ The product path is Claude-first:
 
 Fixture mode exists for development only and must be launched explicitly.
 
+## Install
+
+Homebrew cask distribution is the primary install path once the first public release is published:
+
+```bash
+brew install --cask BramVR/tap/pdtbar
+open -a PDTBar
+```
+
+Update and uninstall through Homebrew:
+
+```bash
+brew update
+brew upgrade --cask BramVR/tap/pdtbar
+brew uninstall --cask pdtbar
+```
+
+Homebrew owns updates for cask installs. PDTBar does not include an in-app updater yet.
+
 ## Product Principles
 
 - Informational, never prescriptive.
@@ -59,6 +78,12 @@ Packaging smoke:
 
 ```bash
 swift run pdtbar-smoke app-bundle-packaging
+```
+
+Release app archive smoke:
+
+```bash
+ARCHES="$(uname -m)" ./Scripts/package_release_app.sh v0.0.0-test
 ```
 
 ## License

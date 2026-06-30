@@ -1,4 +1,4 @@
-name: Release CLI
+name: Release
 
 on:
   release:
@@ -7,13 +7,132 @@ on:
     inputs:
       tag:
         description: "Release tag/version to package for manual artifact builds; manual runs do not publish."
-        required: false
+        required: true
         type: string
+      require_notarization:
+        description: "Require Developer ID signing, notarization, and stapling for manual app archive builds."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
 jobs:
+  build-app:
+    runs-on: macos-15
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      ARCHES: arm64 x86_64
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Select Xcode 26.1.1 (if present) or fallback to default
+        run: |
+          set -euo pipefail
+          for candidate in /Applications/Xcode_26.1.1.app /Applications/Xcode_26.1.app /Applications/Xcode.app; do
+            if [[ -d "$candidate" ]]; then
+              sudo xcode-select -s "${candidate}/Contents/Developer"
+              echo "DEVELOPER_DIR=${candidate}/Contents/Developer" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+          /usr/bin/xcodebuild -version
+
+      - name: Runner info
+        run: |
+          set -euo pipefail
+          uname -a
+          uname -m
+          swift --version
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$RELEASE_TAG" ]]; then
+            echo "Missing release tag." >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9A-Za-z._-]+$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+      - name: Import Developer ID certificate
+        if: github.event_name == 'release' || inputs.require_notarization
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.PDTBAR_DEVELOPER_ID_APPLICATION_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.PDTBAR_DEVELOPER_ID_APPLICATION_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.PDTBAR_RELEASE_KEYCHAIN_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CERTIFICATE_BASE64"
+          test -n "$CERTIFICATE_PASSWORD"
+          test -n "$KEYCHAIN_PASSWORD"
+
+          CERTIFICATE_PATH="$RUNNER_TEMP/pdtbar-developer-id.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/pdtbar-release.keychain-db"
+
+          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+      - name: Package PDTBar.app release archive
+        id: app_pkg
+        env:
+          PDTBAR_APP_IDENTITY: ${{ secrets.PDTBAR_APP_IDENTITY }}
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REQUIRE_NOTARIZATION=0
+          if [[ "${{ github.event_name }}" == "release" || "${{ inputs.require_notarization }}" == "true" ]]; then
+            REQUIRE_NOTARIZATION=1
+          fi
+          PDTBAR_REQUIRE_NOTARIZATION="$REQUIRE_NOTARIZATION" ./Scripts/package_release_app.sh "$RELEASE_TAG"
+
+      - name: Smoke test app archive
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_ARCHIVE="${{ steps.app_pkg.outputs.archive }}"
+          EXTRACT_DIR="$RUNNER_TEMP/pdtbar-app-archive"
+          mkdir -p "$EXTRACT_DIR"
+          /usr/bin/ditto -x -k "$APP_ARCHIVE" "$EXTRACT_DIR"
+          test -x "$EXTRACT_DIR/PDTBar.app/Contents/MacOS/PDTBar"
+          plutil -extract LSMinimumSystemVersion raw "$EXTRACT_DIR/PDTBar.app/Contents/Info.plist" | grep -Fx "14.0"
+          codesign --verify --deep --strict --verbose=2 "$EXTRACT_DIR/PDTBar.app"
+          swift run pdtbar-smoke packaged-app --app "$EXTRACT_DIR/PDTBar.app" --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir ".build/pdtbar-smoke-artifacts/release-app-archive"
+
+      - name: Upload release assets
+        if: github.event_name == 'release'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          APP_ARCHIVE="${{ steps.app_pkg.outputs.archive }}"
+          gh release upload "$TAG" "$APP_ARCHIVE" "$APP_ARCHIVE.sha256" --clobber
+
+      - name: Upload workflow artifact (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: pdtbar-app-universal
+          path: |
+            ${{ steps.app_pkg.outputs.archive }}
+            ${{ steps.app_pkg.outputs.archive }}.sha256
+
   build-cli:
     strategy:
       fail-fast: false
@@ -55,7 +174,6 @@ jobs:
           swift --version
 
       - name: Validate release tag
-        if: github.event_name == 'release' || inputs.tag != ''
         shell: bash
         run: |
           set -euo pipefail
@@ -133,3 +251,81 @@ jobs:
           path: |
             ${{ steps.pkg.outputs.out_dir }}/${{ steps.pkg.outputs.asset }}
             ${{ steps.pkg.outputs.out_dir }}/${{ steps.pkg.outputs.asset }}.sha256
+
+  update-homebrew-tap:
+    runs-on: ubuntu-latest
+    needs:
+      - build-app
+      - build-cli
+    if: github.event_name == 'release' && !github.event.release.prerelease
+    steps:
+      - name: Resolve release tag
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG}"
+          if [[ -z "$tag" ]]; then
+            echo "Missing release tag." >&2
+            exit 1
+          fi
+          if [[ ! "$tag" =~ ^v[0-9A-Za-z._-]+$ ]]; then
+            echo "Invalid release tag: $tag" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "request_id=pdtbar-${tag}-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch tap cask update
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          REQUEST_ID: ${{ steps.release.outputs.request_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          for attempt in {1..6}; do
+            if gh workflow run update-cask.yml \
+              --repo BramVR/homebrew-tap \
+              -f cask=pdtbar \
+              -f tag="$RELEASE_TAG" \
+              -f repository=BramVR/pdtbar \
+              -f artifact_template='PDTBar-macos-universal-{version}.zip' \
+              -f request_id="$REQUEST_ID"; then
+              exit 0
+            fi
+            if [[ "$attempt" -eq 6 ]]; then
+              echo "Failed to dispatch tap cask update after ${attempt} attempts." >&2
+              exit 1
+            fi
+            sleep $((attempt * 30))
+          done
+
+      - name: Wait for tap cask update
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          REQUEST_ID: ${{ steps.release.outputs.request_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in {1..20}; do
+            run_id="$(
+              gh run list \
+                --repo BramVR/homebrew-tap \
+                --workflow update-cask.yml \
+                --json databaseId,displayTitle \
+                --jq '.[] | select(.displayTitle | contains(env.REQUEST_ID)) | .databaseId' 2>/tmp/pdtbar-tap-run-list.err \
+                | head -n1 || true
+            )"
+            if [[ -n "$run_id" ]]; then
+              gh run watch "$run_id" --repo BramVR/homebrew-tap --exit-status
+              exit 0
+            fi
+            cat /tmp/pdtbar-tap-run-list.err >&2 || true
+            sleep 5
+          done
+          echo "Timed out waiting for tap cask workflow to appear." >&2
+          exit 1

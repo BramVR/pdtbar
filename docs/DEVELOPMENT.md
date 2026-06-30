@@ -76,6 +76,7 @@ swift run pdtbar-dev model --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift build --product pdtbar
 ./Scripts/package_app.sh
+ARCHES="$(uname -m)" ./Scripts/package_release_app.sh v0.0.0-test
 ./Scripts/launch.sh
 ./Scripts/compile_and_run.sh
 swift run pdtbar-smoke app-bundle-packaging
@@ -124,6 +125,14 @@ swift run pdtbar-smoke app-bundle-packaging
 swift run pdtbar-smoke packaged-onboarding --app PDTBar.app
 ```
 
+Release app archive gate:
+
+```bash
+ARCHES="$(uname -m)" ./Scripts/package_release_app.sh v0.0.0-test
+ditto -x -k .build/release-artifacts/PDTBar-macos-$(uname -m)-0.0.0-test.zip /tmp/pdtbar-release-proof
+codesign --verify --deep --strict --verbose=2 /tmp/pdtbar-release-proof/PDTBar.app
+```
+
 Optional local/live checks:
 
 ```bash
@@ -156,6 +165,8 @@ swift run pdtbar-smoke packaged-onboarding --app PDTBar.app
 
 Add optional live proof only when explicitly requested or when the change needs
 live Claude/PDT, Accessibility, or real UI screenshot evidence.
+
+For release/distribution changes, also read [`RELEASING.md`](RELEASING.md) and run the release archive gate above.
 
 ## Project Map
 

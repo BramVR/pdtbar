@@ -8,6 +8,9 @@ PRODUCT_NAME="pdtbar"
 APP_BUNDLE="${ROOT_DIR}/${APP_NAME}.app"
 APP_STAGE="${ROOT_DIR}/.build/package/${APP_NAME}.app"
 BUNDLE_IDENTIFIER="com.bramvr.pdtbar.debug"
+APP_VERSION="${PDTBAR_APP_VERSION:-0.0.0}"
+APP_BUILD="${PDTBAR_APP_BUILD:-${APP_VERSION}}"
+ARCHES_VALUE="${ARCHES:-}"
 
 log() { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -23,12 +26,39 @@ esac
 
 cd "${ROOT_DIR}"
 
-log "==> Building ${PRODUCT_NAME} (${CONF})"
-swift build -c "${CONF}" --product "${PRODUCT_NAME}"
+read -r -a ARCH_LIST <<< "${ARCHES_VALUE}"
 
-BIN_DIR="$(swift build -c "${CONF}" --show-bin-path)"
-SOURCE_BINARY="${BIN_DIR}/${PRODUCT_NAME}"
-[[ -x "${SOURCE_BINARY}" ]] || fail "Built executable missing at ${SOURCE_BINARY}"
+build_for_arch() {
+  local arch="$1"
+  local result_var="$2"
+  local bin_dir
+  log "==> Building ${PRODUCT_NAME} (${CONF}, ${arch})"
+  swift build -c "${CONF}" --product "${PRODUCT_NAME}" --arch "${arch}"
+  bin_dir="$(swift build -c "${CONF}" --product "${PRODUCT_NAME}" --arch "${arch}" --show-bin-path)"
+  [[ -x "${bin_dir}/${PRODUCT_NAME}" ]] || fail "Built executable missing at ${bin_dir}/${PRODUCT_NAME}"
+  printf -v "${result_var}" '%s' "${bin_dir}/${PRODUCT_NAME}"
+}
+
+if [[ "${#ARCH_LIST[@]}" -gt 1 ]]; then
+  SOURCE_BINARIES=()
+  for arch in "${ARCH_LIST[@]}"; do
+    ARCH_BINARY=""
+    build_for_arch "${arch}" ARCH_BINARY
+    SOURCE_BINARIES+=("${ARCH_BINARY}")
+  done
+  SOURCE_BINARY="${ROOT_DIR}/.build/package/${PRODUCT_NAME}-universal"
+  log "==> Creating universal ${PRODUCT_NAME}"
+  mkdir -p "$(dirname "${SOURCE_BINARY}")"
+  lipo -create "${SOURCE_BINARIES[@]}" -output "${SOURCE_BINARY}"
+elif [[ "${#ARCH_LIST[@]}" -eq 1 && -n "${ARCH_LIST[0]}" ]]; then
+  build_for_arch "${ARCH_LIST[0]}" SOURCE_BINARY
+else
+  log "==> Building ${PRODUCT_NAME} (${CONF})"
+  swift build -c "${CONF}" --product "${PRODUCT_NAME}"
+  BIN_DIR="$(swift build -c "${CONF}" --show-bin-path)"
+  SOURCE_BINARY="${BIN_DIR}/${PRODUCT_NAME}"
+  [[ -x "${SOURCE_BINARY}" ]] || fail "Built executable missing at ${SOURCE_BINARY}"
+fi
 
 log "==> Creating ${APP_NAME}.app"
 rm -rf "${APP_STAGE}"
@@ -44,6 +74,10 @@ cat > "${APP_STAGE}/Contents/Info.plist" <<PLIST
     <string>PDTBar</string>
     <key>CFBundleDisplayName</key>
     <string>PDTBar</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${APP_VERSION}</string>
+    <key>CFBundleVersion</key>
+    <string>${APP_BUILD}</string>
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_IDENTIFIER}</string>
     <key>CFBundleExecutable</key>
@@ -70,7 +104,11 @@ fi
 
 if command -v codesign >/dev/null 2>&1; then
   log "==> Signing ${APP_NAME}.app"
-  codesign --force --sign "${SIGN_IDENTITY}" "${APP_STAGE}" >/dev/null
+  CODESIGN_ARGS=(--force --sign "${SIGN_IDENTITY}")
+  if [[ "${SIGN_IDENTITY}" != "-" ]]; then
+    CODESIGN_ARGS+=(--timestamp --options runtime)
+  fi
+  codesign "${CODESIGN_ARGS[@]}" "${APP_STAGE}" >/dev/null
 fi
 
 rm -rf "${APP_BUNDLE}"

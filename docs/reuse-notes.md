@@ -42,7 +42,7 @@ Keep this script close to CodexBar's version unless PDTBar has a concrete docs-r
 - Logging/redaction helpers, if live proof and support diagnostics expand.
 - Menu card measurement/recycling patterns, only if PDTBar adopts hosted SwiftUI menu cards.
 
-Do not copy provider registry, browser cookie import, OAuth/device flow, Keychain credential caches, Sparkle/Homebrew release machinery, WidgetKit, or multi-provider settings for v1. Those solve CodexBar problems earlier than PDTBar needs them.
+Do not copy provider registry, browser cookie import, OAuth/device flow, Keychain credential caches, Sparkle, WidgetKit, or multi-provider settings for v1. Homebrew release machinery is now a narrow distribution need; keep it limited to GitHub app archives and the tap cask.
 
 ## Deferred But Plausible Later
 
@@ -54,7 +54,7 @@ Do not copy provider registry, browser cookie import, OAuth/device flow, Keychai
 
 ## Not now (deferred ecosystem)
 
-oracle, claude-code-mcp, imsg, poltergeist, Sparkle, Homebrew tap, stats.store — all optional and out of the first build. Pull in only when a concrete product need appears.
+oracle, claude-code-mcp, imsg, poltergeist, Sparkle, stats.store — all optional and out of the first build. Pull in only when a concrete product need appears.
 
 ## Decisions this affects
 
