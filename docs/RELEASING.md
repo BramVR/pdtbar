@@ -93,10 +93,10 @@ After the tap commit lands:
 
 ```bash
 brew update
-brew uninstall --cask pdtbar || true
+brew uninstall --cask BramVR/tap/pdtbar || true
 brew install --cask BramVR/tap/pdtbar
 open -a PDTBar
-brew uninstall --cask pdtbar
+brew uninstall --cask BramVR/tap/pdtbar
 ```
 
 Upgrade proof needs two published versions:

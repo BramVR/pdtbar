@@ -26,6 +26,7 @@ esac
 
 cd "${ROOT_DIR}"
 
+ARCHES_VALUE="$(printf '%s' "${ARCHES_VALUE}" | tr ',' ' ')"
 read -r -a ARCH_LIST <<< "${ARCHES_VALUE}"
 
 build_for_arch() {
@@ -34,7 +35,7 @@ build_for_arch() {
   local bin_dir
   log "==> Building ${PRODUCT_NAME} (${CONF}, ${arch})"
   swift build -c "${CONF}" --product "${PRODUCT_NAME}" --arch "${arch}"
-  bin_dir="$(swift build -c "${CONF}" --product "${PRODUCT_NAME}" --arch "${arch}" --show-bin-path)"
+  bin_dir="${ROOT_DIR}/.build/${arch}-apple-macosx/${CONF}"
   [[ -x "${bin_dir}/${PRODUCT_NAME}" ]] || fail "Built executable missing at ${bin_dir}/${PRODUCT_NAME}"
   printf -v "${result_var}" '%s' "${bin_dir}/${PRODUCT_NAME}"
 }

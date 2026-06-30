@@ -38,7 +38,7 @@ Update and uninstall through Homebrew:
 ```bash
 brew update
 brew upgrade --cask BramVR/tap/pdtbar
-brew uninstall --cask pdtbar
+brew uninstall --cask BramVR/tap/pdtbar
 ```
 
 Homebrew owns updates for cask installs. PDTBar does not include an in-app updater yet.

@@ -8,9 +8,22 @@ ARCHES_VALUE="${ARCHES:-arm64 x86_64}"
 OUT_DIR="${PDTBAR_RELEASE_OUT_DIR:-${ROOT_DIR}/.build/release-artifacts}"
 REQUIRE_NOTARIZATION="${PDTBAR_REQUIRE_NOTARIZATION:-0}"
 DITTO_BIN="${DITTO_BIN:-/usr/bin/ditto}"
+TEMP_DIR=""
+VERIFY_DIR=""
 
 log() { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+cleanup() {
+  if [[ -n "${VERIFY_DIR:-}" ]]; then
+    rm -rf "${VERIFY_DIR}"
+  fi
+  if [[ -n "${TEMP_DIR:-}" ]]; then
+    rm -rf "${TEMP_DIR}"
+  fi
+}
+
+trap cleanup EXIT
 
 release_arch_label() {
   local raw="${1:-arm64 x86_64}"
@@ -90,7 +103,6 @@ if [[ "$NOTARIZATION_READY" == "1" ]]; then
   chmod 700 "$TEMP_DIR"
   API_KEY_PATH="${TEMP_DIR}/pdtbar-api-key.p8"
   NOTARY_ZIP="${TEMP_DIR}/${APP_NAME}-notary.zip"
-  trap 'rm -rf "$TEMP_DIR"' EXIT
 
   (
     umask 077
@@ -121,7 +133,6 @@ find "${APP_BUNDLE}" -name '._*' -delete
 (cd "${OUT_DIR}" && shasum -a 256 "${ARCHIVE_NAME}" > "${ARCHIVE_NAME}.sha256")
 
 VERIFY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pdtbar-archive-check.XXXXXX")"
-trap 'rm -rf "$VERIFY_DIR" "${TEMP_DIR:-}"' EXIT
 "$DITTO_BIN" -x -k "${ARCHIVE_PATH}" "${VERIFY_DIR}"
 [[ -x "${VERIFY_DIR}/${APP_NAME}.app/Contents/MacOS/${APP_NAME}" ]] \
   || fail "Archive does not contain ${APP_NAME}.app with executable."
