@@ -7037,11 +7037,16 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 else {
                     throw PDTDetailRefreshToolError(diagnostic: failure)
                 }
+                // The backoff never sleeps past the caller's deadline, and a
+                // backoff that lands on the deadline ends the attempt instead
+                // of launching another full run past the budget.
                 if options.retryBackoffSeconds > 0 {
-                    Thread.sleep(forTimeInterval: options.retryBackoffSeconds)
+                    let remainingBudget = retryDeadline.map { max(0, $0.timeIntervalSinceNow) }
+                    let backoff = min(options.retryBackoffSeconds, remainingBudget ?? options.retryBackoffSeconds)
+                    if backoff > 0 {
+                        Thread.sleep(forTimeInterval: backoff)
+                    }
                 }
-                // The backoff itself can cross the deadline; re-check so the
-                // retry does not launch another full run past the budget.
                 if let retryDeadline, Date() >= retryDeadline {
                     throw PDTDetailRefreshToolError(diagnostic: failure)
                 }
