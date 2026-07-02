@@ -6805,7 +6805,10 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         // The sequential per-holding scan is one full Claude CLI run per quote
         // lookup, so it is deadline-bounded like the price-history phase; on
         // timeout the phase keeps the partial mapping and degrades instead of
-        // holding the whole refresh in "Syncing".
+        // holding the whole refresh in "Syncing". The deadline is checked
+        // between lookups, so one in-flight call may overshoot it by at most
+        // the connector's own tool timeout; that keeps the scan bounded
+        // without parking another thread per refresh in a timed group wait.
         let deadline = Date().addingTimeInterval(options.incomeQuoteLookupTimeoutSeconds)
         for holding in holdings {
             guard !unresolvedSymbolIDs.isEmpty else {
