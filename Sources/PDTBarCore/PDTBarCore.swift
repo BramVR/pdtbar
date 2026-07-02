@@ -7945,6 +7945,7 @@ private struct LiveHolding: Decodable {
     var symbolQuoteId: Int
     var currentPriceDate: String
     var currentPriceLocal: Money?
+    var currentExchangeRate: Double?
     var currentWorth: Money?
     var currentWorthLocal: Money
     var portfolioWeight: Double
@@ -7961,6 +7962,7 @@ private struct LiveHolding: Decodable {
         case symbolQuoteId
         case currentPriceDate
         case currentPriceLocal
+        case currentExchangeRate
         case currentWorth
         case currentWorthLocal
         case portfolioWeight
@@ -7979,6 +7981,7 @@ private struct LiveHolding: Decodable {
         symbolQuoteId = try container.decode(Int.self, forKey: .symbolQuoteId)
         currentPriceDate = try container.decode(String.self, forKey: .currentPriceDate)
         currentPriceLocal = try? container.decodeIfPresent(Money.self, forKey: .currentPriceLocal)
+        currentExchangeRate = try? container.decodeIfPresent(Double.self, forKey: .currentExchangeRate)
         currentWorth = try? container.decodeIfPresent(Money.self, forKey: .currentWorth)
         currentWorthLocal = try container.decode(Money.self, forKey: .currentWorthLocal)
         portfolioWeight = try container.decode(Double.self, forKey: .portfolioWeight)
@@ -8005,6 +8008,7 @@ private extension LiveHolding {
             quoteId: symbolQuoteId,
             currentPriceDate: currentPriceDate,
             currentPriceLocal: currentPriceLocal,
+            currentExchangeRate: currentExchangeRate,
             currentWorth: currentWorth,
             currentWorthLocal: currentWorthLocal,
             portfolioWeight: portfolioWeight,
@@ -8177,6 +8181,7 @@ private struct FixtureHolding: Decodable {
     var symbolQuoteId: Int
     var currentPriceDate: String
     var currentPriceLocal: Money?
+    var currentExchangeRate: Double?
     var currentWorth: Money?
     var currentWorthLocal: Money
     var portfolioWeight: Double
@@ -8193,6 +8198,7 @@ private struct FixtureHolding: Decodable {
         case symbolQuoteId
         case currentPriceDate
         case currentPriceLocal
+        case currentExchangeRate
         case currentWorth
         case currentWorthLocal
         case portfolioWeight
@@ -8211,6 +8217,7 @@ private struct FixtureHolding: Decodable {
         symbolQuoteId = try container.decode(Int.self, forKey: .symbolQuoteId)
         currentPriceDate = try container.decode(String.self, forKey: .currentPriceDate)
         currentPriceLocal = try? container.decodeIfPresent(Money.self, forKey: .currentPriceLocal)
+        currentExchangeRate = try? container.decodeIfPresent(Double.self, forKey: .currentExchangeRate)
         currentWorth = try? container.decodeIfPresent(Money.self, forKey: .currentWorth)
         currentWorthLocal = try container.decode(Money.self, forKey: .currentWorthLocal)
         portfolioWeight = try container.decode(Double.self, forKey: .portfolioWeight)
@@ -8237,6 +8244,7 @@ private extension FixtureHolding {
             quoteId: symbolQuoteId,
             currentPriceDate: currentPriceDate,
             currentPriceLocal: currentPriceLocal,
+            currentExchangeRate: currentExchangeRate,
             currentWorth: currentWorth,
             currentWorthLocal: currentWorthLocal,
             portfolioWeight: portfolioWeight,

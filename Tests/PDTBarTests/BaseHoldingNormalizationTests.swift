@@ -87,6 +87,141 @@ struct BaseHoldingNormalizationTests {
         #expect(normalized.totalValue == Money(value: "500.00", currency: "EUR"))
     }
 
+    @Test("Multi-currency holdings total in the portfolio currency")
+    func multiCurrencyHoldingsTotalInThePortfolioCurrency() {
+        let normalized = PDTBaseHoldingNormalizer.normalize(
+            [
+                PDTBaseHoldingInput(
+                    name: "US Traded Co",
+                    quoteId: 2001,
+                    currentPriceDate: "2026-06-26T21:59:00+00:00",
+                    currentPriceLocal: Money(value: "347.66", currency: "EUR"),
+                    currentExchangeRate: 1.154,
+                    currentWorth: Money(value: "9347.40", currency: "USD"),
+                    currentWorthLocal: Money(value: "8100.00", currency: "EUR"),
+                    portfolioWeight: 0.34,
+                    closedAt: nil
+                ),
+                PDTBaseHoldingInput(
+                    name: "EU Traded Co",
+                    quoteId: 2002,
+                    currentPriceDate: "2026-06-26T21:59:00+00:00",
+                    currentPriceLocal: Money(value: "612.40", currency: "EUR"),
+                    currentExchangeRate: 1,
+                    currentWorth: Money(value: "15500.00", currency: "EUR"),
+                    currentWorthLocal: Money(value: "15500.00", currency: "EUR"),
+                    portfolioWeight: 0.66,
+                    closedAt: nil
+                ),
+            ],
+            currency: "EUR"
+        )
+
+        #expect(normalized.openHoldings.map(\.quoteId) == [2001, 2002])
+        #expect(normalized.totalValue == Money(value: "23600.00", currency: "EUR"))
+    }
+
+    @Test("Headline total prefers each holding's portfolio-currency worth over the first holding's currency")
+    func headlineTotalPrefersEachHoldingsPortfolioCurrencyWorth() {
+        let normalized = PDTBaseHoldingNormalizer.normalize(
+            [
+                PDTBaseHoldingInput(
+                    name: "Trading Currency Local",
+                    quoteId: 3001,
+                    currentPriceDate: "2026-06-26T21:59:00+00:00",
+                    currentPriceLocal: Money(value: "50.00", currency: "USD"),
+                    currentWorth: Money(value: "400.00", currency: "EUR"),
+                    currentWorthLocal: Money(value: "500.00", currency: "USD"),
+                    portfolioWeight: 0.30,
+                    closedAt: nil
+                ),
+                PDTBaseHoldingInput(
+                    name: "Portfolio Currency Co",
+                    quoteId: 3002,
+                    currentPriceDate: "2026-06-26T21:59:00+00:00",
+                    currentPriceLocal: Money(value: "10.00", currency: "EUR"),
+                    currentWorth: Money(value: "1000.00", currency: "EUR"),
+                    currentWorthLocal: Money(value: "1000.00", currency: "EUR"),
+                    portfolioWeight: 0.70,
+                    closedAt: nil
+                ),
+            ],
+            currency: "EUR"
+        )
+
+        // 400.00 EUR + 1000.00 EUR; never 500 USD + 1000 EUR labeled "USD".
+        #expect(normalized.openHoldings.map(\.quoteId) == [3001, 3002])
+        #expect(normalized.totalValue == Money(value: "1400.00", currency: "EUR"))
+    }
+
+    @Test("Headline total converts trading-only worth with the holding exchange rate")
+    func headlineTotalConvertsTradingOnlyWorthWithTheHoldingExchangeRate() {
+        let normalized = PDTBaseHoldingNormalizer.normalize(
+            [
+                PDTBaseHoldingInput(
+                    name: "Danish Traded Co",
+                    quoteId: 4001,
+                    currentPriceDate: "2026-06-26T21:59:00+00:00",
+                    currentPriceLocal: Money(value: "25.00", currency: "DKK"),
+                    currentExchangeRate: 2.0,
+                    currentWorth: Money(value: "250.00", currency: "DKK"),
+                    currentWorthLocal: Money(value: "250.00", currency: "DKK"),
+                    portfolioWeight: 0.20,
+                    closedAt: nil
+                ),
+                PDTBaseHoldingInput(
+                    name: "Portfolio Currency Co",
+                    quoteId: 4002,
+                    currentPriceDate: "2026-06-26T21:59:00+00:00",
+                    currentPriceLocal: Money(value: "10.00", currency: "EUR"),
+                    currentWorth: Money(value: "1000.00", currency: "EUR"),
+                    currentWorthLocal: Money(value: "1000.00", currency: "EUR"),
+                    portfolioWeight: 0.80,
+                    closedAt: nil
+                ),
+            ],
+            currency: "EUR"
+        )
+
+        // 250.00 DKK / 2.0 = 125.00 EUR, plus 1000.00 EUR.
+        #expect(normalized.openHoldings.map(\.quoteId) == [4001, 4002])
+        #expect(normalized.totalValue == Money(value: "1125.00", currency: "EUR"))
+    }
+
+    @Test("Headline total keeps the portfolio currency when a worth cannot be converted")
+    func headlineTotalKeepsThePortfolioCurrencyWhenAWorthCannotBeConverted() {
+        let normalized = PDTBaseHoldingNormalizer.normalize(
+            [
+                PDTBaseHoldingInput(
+                    name: "Unconvertible Co",
+                    quoteId: 5001,
+                    currentPriceDate: "2026-06-26T21:59:00+00:00",
+                    currentPriceLocal: Money(value: "25.00", currency: "USD"),
+                    currentWorthLocal: Money(value: "250.00", currency: "USD"),
+                    portfolioWeight: 0.20,
+                    closedAt: nil
+                ),
+                PDTBaseHoldingInput(
+                    name: "Portfolio Currency Co",
+                    quoteId: 5002,
+                    currentPriceDate: "2026-06-26T21:59:00+00:00",
+                    currentPriceLocal: Money(value: "10.00", currency: "EUR"),
+                    currentWorth: Money(value: "1000.00", currency: "EUR"),
+                    currentWorthLocal: Money(value: "1000.00", currency: "EUR"),
+                    portfolioWeight: 0.80,
+                    closedAt: nil
+                ),
+            ],
+            currency: "EUR"
+        )
+
+        // The USD-only worth stays visible as a holding but is excluded from the
+        // headline total instead of being mixed into an EUR-labeled sum.
+        #expect(normalized.openHoldings.map(\.quoteId) == [5001, 5002])
+        #expect(normalized.openHoldings[0].worth == Money(value: "250.00", currency: "USD"))
+        #expect(normalized.totalValue == Money(value: "1000.00", currency: "EUR"))
+    }
+
     @Test("Fixture-backed Pulse scenarios keep their normalized behavior")
     func fixtureBackedPulseScenariosKeepTheirNormalizedBehavior() throws {
         let concentration = try model("concentration-pressure")
@@ -123,6 +258,28 @@ struct BaseHoldingNormalizationTests {
 
         #expect(snapshot.openHoldings.map(\.quoteId) == [1001])
         #expect(snapshot.totalValue == Money(value: "500.00", currency: "EUR"))
+    }
+
+    @Test("Live connector sums multi-currency holdings in the portfolio currency")
+    func liveConnectorSumsMultiCurrencyHoldingsInThePortfolioCurrency() throws {
+        let connector = ScriptedPDTMCPConnector(responses: [
+            "pdt-get-portfolio-holdings": Data(multiCurrencyHoldingsJSON.utf8),
+        ])
+        let snapshot = try PDTMCPConnectorDataSource(
+            connector: connector,
+            liveOptions: PDTLiveDataSourceOptions(
+                includeDistributions: false,
+                includeXRayHoldings: false,
+                includeIncomeEvents: false,
+                includeDividends: false,
+                includeIncomeQuoteLookups: false,
+                includePriceSeries: false
+            )
+        ).snapshot(asOf: "2026-06-26")
+
+        #expect(snapshot.openHoldings.map(\.quoteId) == [2001, 2002])
+        // 8100.00 EUR (PDT-converted USD worth) + 250.00 DKK / 2.0 = 8225.00 EUR.
+        #expect(snapshot.totalValue == Money(value: "8225.00", currency: "EUR"))
     }
 
     @Test("Live wrapped setup error is classified as unavailable")
@@ -549,6 +706,35 @@ private let baseHoldingsJSON = """
       "currentWorth": { "value": "-10.00", "currency": "EUR" },
       "currentWorthLocal": { "value": "-10.00", "currency": "EUR" },
       "portfolioWeight": 0.05,
+      "closedAt": null
+    }
+  ]
+}
+"""
+
+private let multiCurrencyHoldingsJSON = """
+{
+  "holdings": [
+    {
+      "symbolName": "US Traded Co",
+      "symbolQuoteId": 2001,
+      "currentPriceDate": "2026-06-26T21:59:00+00:00",
+      "currentPriceLocal": { "value": "347.66", "currency": "EUR" },
+      "currentExchangeRate": 1.154,
+      "currentWorth": { "value": "9347.40", "currency": "USD" },
+      "currentWorthLocal": { "value": "8100.00", "currency": "EUR" },
+      "portfolioWeight": 0.34,
+      "closedAt": null
+    },
+    {
+      "symbolName": "Danish Traded Co",
+      "symbolQuoteId": 2002,
+      "currentPriceDate": "2026-06-26T21:59:00+00:00",
+      "currentPriceLocal": { "value": "25.00", "currency": "DKK" },
+      "currentExchangeRate": 2.0,
+      "currentWorth": { "value": "250.00", "currency": "DKK" },
+      "currentWorthLocal": { "value": "250.00", "currency": "DKK" },
+      "portfolioWeight": 0.66,
       "closedAt": null
     }
   ]
