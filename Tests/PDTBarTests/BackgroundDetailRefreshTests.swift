@@ -677,6 +677,46 @@ struct BackgroundDetailRefreshTests {
         #expect(committed.priceSeries.map(\.quoteId) == [9101, 9101, 9102, 9102])
     }
 
+    @Test("Income quote scan does not start retries after its deadline passes")
+    func incomeQuoteScanDoesNotStartRetriesAfterDeadlinePasses() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-income-deadline-retry-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let connector = SelectiveFailingPDTConnector(
+            responses: try detailRefreshResponses(calendarSymbolID: 5102, calendarSymbolName: "ADPB"),
+            failures: [
+                "pdt-get-symbol-quote": .transientFailure("Claude pdt-get-symbol-quote call timed out"),
+            ],
+            delaySecondsByTool: ["pdt-get-symbol-quote": 0.1]
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(
+                priceHistoryConcurrencyLimit: 2,
+                incomeQuoteLookupTimeoutSeconds: 0.05,
+                optionalRetryCount: 1,
+                retryBackoffSeconds: 0
+            )
+        ).refresh()
+
+        #expect(result.outcome == .degraded)
+        // The transient lookup failure would normally earn a retry, but the
+        // deadline already passed, so no second full Claude run starts.
+        #expect(connector.callCount(of: "pdt-get-symbol-quote") == 1)
+        #expect(result.diagnostics.contains {
+            $0.toolName == "pdt-get-symbol-quote"
+                && $0.phase == .income
+                && $0.category == .timeout
+        })
+
+        let committed = try #require(try store.loadPriorSnapshot())
+        #expect(committed.incomeEvents.count == 1)
+    }
+
     @Test("Price-history workers stop pulling holdings after an unavailable setup failure")
     func priceHistoryWorkersStopAfterUnavailableSetupFailure() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-price-abandon-test")

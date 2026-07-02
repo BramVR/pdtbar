@@ -6806,37 +6806,52 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         // lookup, so it is deadline-bounded like the price-history phase; on
         // timeout the phase keeps the partial mapping and degrades instead of
         // holding the whole refresh in "Syncing". The deadline is checked
-        // between lookups, so one in-flight call may overshoot it by at most
-        // the connector's own tool timeout; that keeps the scan bounded
-        // without parking another thread per refresh in a timed group wait.
+        // between lookups and before every retry, so one in-flight call may
+        // overshoot it by at most the connector's own budget; that keeps the
+        // scan bounded without parking another thread per refresh in a timed
+        // group wait.
         let deadline = Date().addingTimeInterval(options.incomeQuoteLookupTimeoutSeconds)
         for holding in holdings {
             guard !unresolvedSymbolIDs.isEmpty else {
                 break
             }
             guard Date() < deadline else {
-                return (quoteIDsBySymbolID, [
-                    PDTDetailRefreshFailureDiagnostic(
-                        toolName: "pdt-get-symbol-quote",
-                        phase: .income,
-                        attemptCount: 1,
-                        category: .timeout,
-                        argumentShape: ["id"]
-                    ),
-                ])
+                return (quoteIDsBySymbolID, [Self.incomeQuoteScanTimeoutDiagnostic()])
             }
-            let quote: LiveSymbolQuoteEnvelope = try callDecodedWithRetry(
-                "pdt-get-symbol-quote",
-                phase: .income,
-                arguments: ["id": String(holding.quoteId)],
-                progress: progress
-            )
+            let quote: LiveSymbolQuoteEnvelope
+            do {
+                quote = try callDecodedWithRetry(
+                    "pdt-get-symbol-quote",
+                    phase: .income,
+                    arguments: ["id": String(holding.quoteId)],
+                    progress: progress,
+                    retryDeadline: deadline
+                )
+            } catch {
+                // A lookup that failed once the budget ran out degrades the
+                // scan like any other deadline hit; failures inside the
+                // budget keep their real diagnostics.
+                guard Date() < deadline else {
+                    return (quoteIDsBySymbolID, [Self.incomeQuoteScanTimeoutDiagnostic()])
+                }
+                throw error
+            }
             guard unresolvedSymbolIDs.remove(quote.symbolId) != nil else {
                 continue
             }
             quoteIDsBySymbolID[quote.symbolId] = quote.id
         }
         return (quoteIDsBySymbolID, [])
+    }
+
+    private static func incomeQuoteScanTimeoutDiagnostic() -> PDTDetailRefreshFailureDiagnostic {
+        PDTDetailRefreshFailureDiagnostic(
+            toolName: "pdt-get-symbol-quote",
+            phase: .income,
+            attemptCount: 1,
+            category: .timeout,
+            argumentShape: ["id"]
+        )
     }
 
     private func normalizedIncomeSymbolName(_ name: String) -> String {
@@ -6991,7 +7006,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         _ tool: String,
         phase: BackgroundDetailRefreshPhase,
         arguments: [String: String],
-        progress: (@Sendable (BackgroundDetailRefreshProgress) -> Void)? = nil
+        progress: (@Sendable (BackgroundDetailRefreshProgress) -> Void)? = nil,
+        retryDeadline: Date? = nil
     ) throws -> T {
         var attempts = 0
         while true {
@@ -7010,8 +7026,12 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 )
                 // Every retry is another full Claude CLI run, so only true
                 // transients earn one; deterministic decode/unavailable/setup
-                // failures fail fast with a single attempt.
-                guard attempts <= options.optionalRetryCount, failure.category.isRetryable else {
+                // failures fail fast with a single attempt, and no retry
+                // starts after the caller's deadline has passed.
+                guard attempts <= options.optionalRetryCount,
+                      failure.category.isRetryable,
+                      retryDeadline.map({ Date() < $0 }) ?? true
+                else {
                     throw PDTDetailRefreshToolError(diagnostic: failure)
                 }
                 if options.retryBackoffSeconds > 0 {
