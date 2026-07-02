@@ -38,6 +38,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingReadyProbeAfterCachedPulseLoad: (result: ClaudeReadinessProbeResult, attemptID: Int)?
     private let claudeLoginAttemptGate = ClaudeLoginAttemptGate()
     private let menuActionDispatcher = MenuActionDispatcher()
+    private let statusMenuHost = StatusMenuHost()
     private let menuItemViewWidth: CGFloat = 400
 
     init(options: PDTBarLaunchOptions) {
@@ -450,9 +451,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             statusItem = item
         }
-        if cancelOpenMenu {
-            item.menu?.cancelTracking()
-        }
         item.length = NSStatusItem.squareLength
         item.button?.title = surface.status.menuBarTitle
         item.button?.image = makeConcentrationStackStatusImage(from: surface.status.visual)
@@ -461,25 +459,34 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.toolTip = surface.status.toolTip
         item.button?.setAccessibilityLabel(surface.status.accessibilityLabel)
         item.button?.setAccessibilityIdentifier(surface.status.accessibilityIdentifier)
-        item.menu = makeMenu(from: surface)
+        // Mutate the one live menu in place. Assigning a fresh NSMenu on every
+        // update would leave an already-open menu tracking a detached
+        // instance that later progress updates and cancelTracking() calls can
+        // no longer reach, freezing stale fetch-progress rows on screen.
+        let menu = statusMenuHost.apply(
+            items: makeMenuItems(from: surface),
+            cancelOpenMenu: cancelOpenMenu
+        )
+        if item.menu !== menu {
+            item.menu = menu
+        }
     }
 
-    private func makeMenu(from surface: MenuBarSurface) -> NSMenu {
-        let menu = NSMenu()
-        menu.autoenablesItems = false
+    private func makeMenuItems(from surface: MenuBarSurface) -> [NSMenuItem] {
+        var items: [NSMenuItem] = []
         for section in surface.sections {
             let heading = makeSectionHeadingItem(
                 title: section.title,
                 accessibilityIdentifier: section.accessibilityIdentifier
             )
-            menu.addItem(heading)
+            items.append(heading)
             for row in section.rows {
-                menu.addItem(makeMenuItem(from: row))
+                items.append(makeMenuItem(from: row))
             }
-            menu.addItem(.separator())
+            items.append(.separator())
         }
-        menu.addItem(NSMenuItem(title: "Quit PDTBar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-        return menu
+        items.append(NSMenuItem(title: "Quit PDTBar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        return items
     }
 
     private func makeSectionHeadingItem(title: String, accessibilityIdentifier: String) -> NSMenuItem {
