@@ -7455,7 +7455,8 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         switch error {
         case is PDTMCPConnectorError:
             return true
-        case PDTLiveDataSourceError.unavailableToolResult:
+        case PDTLiveDataSourceError.unavailableToolResult,
+             PDTLiveDataSourceError.transientUnavailableToolResult:
             return true
         default:
             return false

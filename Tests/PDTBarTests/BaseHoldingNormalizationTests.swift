@@ -595,6 +595,38 @@ struct BaseHoldingNormalizationTests {
         #expect(connector.calls.filter { $0 == "pdt-get-symbol" }.count == 1)
     }
 
+    @Test("Transient optional symbol lookup outage stops later optional lookups")
+    func transientOptionalSymbolLookupOutageStopsLaterOptionalLookups() throws {
+        let connector = ScriptedPDTMCPConnector(responses: [
+            "pdt-get-portfolio-holdings": Data(twoOpenHoldingsJSON.utf8),
+            "pdt-get-symbol-quote?id=1001": Data(#"{"id":1001,"code":"PUBC","symbolId":5001}"#.utf8),
+            "pdt-get-symbol-quote?id=1002": Data(#"{"id":1002,"code":"OTHR","symbolId":5002}"#.utf8),
+            "pdt-get-symbol?id=5001": try mcpTextContent(
+                "PDT MCP server unavailable; try again later",
+                isError: true
+            ),
+            "pdt-get-symbol?id=5002": try mcpTextContent(
+                "PDT MCP server unavailable; try again later",
+                isError: true
+            ),
+        ])
+        let snapshot = try PDTMCPConnectorDataSource(
+            connector: connector,
+            liveOptions: PDTLiveDataSourceOptions(
+                includeDistributions: false,
+                includeXRayHoldings: false,
+                includeIncomeEvents: false,
+                includeDividends: false,
+                includeIncomeQuoteLookups: true,
+                includePriceSeries: false
+            )
+        ).snapshot(asOf: "2026-06-26")
+
+        #expect(snapshot.openHoldings.map(\.copyableIdentifier) == ["PUBC", "OTHR"])
+        #expect(snapshot.openHoldings.map(\.isin) == [nil, nil])
+        #expect(connector.calls.filter { $0 == "pdt-get-symbol" }.count == 1)
+    }
+
     @Test("Live connector skips optional symbol lookup when holdings already include ISIN")
     func liveConnectorSkipsOptionalSymbolLookupWhenHoldingsAlreadyIncludeISIN() throws {
         let connector = ScriptedPDTMCPConnector(responses: [
