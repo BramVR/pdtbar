@@ -85,6 +85,13 @@ public struct ClaudeToolResultParser: Sendable {
             guard !trimmed.isEmpty else {
                 continue
             }
+            // The Claude CLI is an npm wrapper that can print plain-text noise
+            // (update notices and similar) around stream-json lines. Skip
+            // lines that do not look like JSON objects, but keep failing loud
+            // when a line that claims to be JSON does not decode.
+            guard trimmed.hasPrefix("{") else {
+                continue
+            }
             guard let data = trimmed.data(using: .utf8),
                   let value = try? decoder.decode(ClaudeStreamJSONValue.self, from: data)
             else {

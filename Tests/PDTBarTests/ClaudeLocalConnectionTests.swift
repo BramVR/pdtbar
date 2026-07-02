@@ -278,8 +278,175 @@ struct ClaudeLocalConnectionTests {
         #expect(runner.requests.isEmpty)
     }
 
+    @Test("Readiness probe timeout reports a retryable failure, not a logged-out user")
+    func readinessProbeTimeoutReportsRetryableFailure() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: #"{"loggedIn":true}"#, stderr: "", exitCode: 0),
+            .init(stdout: "", stderr: "", exitCode: -1),
+        ])
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(),
+            commandRunner: runner
+        )
+
+        #expect(connection.checkReadiness() == .failed)
+    }
+
+    @Test("Readiness probe still reports missing login for real nonzero MCP list exits")
+    func readinessProbeStillReportsMissingLoginForRealNonzeroExits() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: #"{"loggedIn":true}"#, stderr: "", exitCode: 0),
+            .init(stdout: "", stderr: "Not logged in", exitCode: 1),
+        ])
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(),
+            commandRunner: runner
+        )
+
+        #expect(connection.checkReadiness() == .missingClaudeLogin)
+    }
+
+    @Test("Readiness probe reports missing login when the Claude binary vanished mid-probe")
+    func readinessProbeReportsMissingLoginWhenClaudeBinaryVanishedMidProbe() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: #"{"loggedIn":true}"#, stderr: "", exitCode: 0),
+            .init(stdout: "", stderr: "claude not found", exitCode: -1),
+        ])
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(),
+            commandRunner: runner
+        )
+
+        #expect(connection.checkReadiness() == .missingClaudeLogin)
+    }
+
+    @Test("MCP list missing binary during availability stays setup unavailable")
+    func mcpListMissingBinaryDuringAvailabilityStaysSetupUnavailable() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: "", stderr: "claude not found", exitCode: -1),
+        ])
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 0),
+            commandRunner: runner
+        )
+
+        #expect(throws: PDTMCPConnectorError.setupUnavailable("Claude CLI is unavailable")) {
+            try connection.availableReadTools(required: ["pdt-get-portfolio-holdings"])
+        }
+    }
+
+    @Test("MCP list timeout during availability is transient, not missing setup")
+    func mcpListTimeoutDuringAvailabilityIsTransient() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: "", stderr: "", exitCode: -1),
+        ])
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 0),
+            commandRunner: runner
+        )
+
+        #expect(throws: PDTMCPConnectorError.transientFailure("Claude MCP server check timed out")) {
+            try connection.availableReadTools(required: ["pdt-get-portfolio-holdings"])
+        }
+    }
+
+    @Test("Timed-out read calls classify as transient and retry with backoff between attempts")
+    func timedOutReadCallsClassifyAsTransientAndRetryWithBackoff() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: "pdt (portfoliodividendtracker.com) connected", stderr: "", exitCode: 0),
+            .init(stdout: "", stderr: "", exitCode: -1),
+            .init(stdout: "", stderr: "", exitCode: -1),
+            .init(stdout: "", stderr: "", exitCode: -1),
+        ])
+        let delays = DelayRecorder()
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 2, retryBackoffSeconds: 2.0),
+            commandRunner: runner,
+            retryDelay: { delays.append($0) }
+        )
+
+        #expect(throws: PDTMCPConnectorError.transientFailure("Claude pdt-get-portfolio-holdings call timed out")) {
+            try connection.callReadTool("pdt-get-portfolio-holdings", arguments: [:])
+        }
+        // Three attempts (mcp list + three read runs) with a backoff before
+        // each retry: N-1 delays for N attempts.
+        #expect(runner.requests.count == 4)
+        #expect(delays.values == [2.0, 2.0])
+    }
+
+    @Test("Transient nonzero exits recover after a backed-off retry")
+    func transientNonzeroExitsRecoverAfterBackedOffRetry() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: "pdt (portfoliodividendtracker.com) connected", stderr: "", exitCode: 0),
+            .init(stdout: "", stderr: "stream error: unexpected disconnect", exitCode: 1),
+            .init(stdout: streamJSON(
+                toolName: "mcp__pdt__pdt-get-portfolio-holdings",
+                result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"holdings":[]}}"#
+            ), stderr: "", exitCode: 0),
+        ])
+        let delays = DelayRecorder()
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 1, retryBackoffSeconds: 0.25),
+            commandRunner: runner,
+            retryDelay: { delays.append($0) }
+        )
+
+        _ = try connection.callReadTool("pdt-get-portfolio-holdings", arguments: [:])
+
+        #expect(runner.requests.count == 3)
+        #expect(delays.values == [0.25])
+    }
+
+    @Test("Transient server-unavailable read failures recover after retry")
+    func transientServerUnavailableReadFailuresRecoverAfterRetry() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: "pdt (portfoliodividendtracker.com) connected", stderr: "", exitCode: 0),
+            .init(stdout: "", stderr: "PDT MCP server unavailable; try again later", exitCode: 1),
+            .init(stdout: streamJSON(
+                toolName: "mcp__pdt__pdt-get-portfolio-holdings",
+                result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"holdings":[]}}"#
+            ), stderr: "", exitCode: 0),
+        ])
+        let delays = DelayRecorder()
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 1, retryBackoffSeconds: 0.5),
+            commandRunner: runner,
+            retryDelay: { delays.append($0) }
+        )
+
+        _ = try connection.callReadTool("pdt-get-portfolio-holdings", arguments: [:])
+
+        #expect(runner.requests.count == 3)
+        #expect(delays.values == [0.5])
+    }
+
+    @Test("Auth-outage read failures classify as setup unavailable and never retry")
+    func authOutageReadFailuresClassifyAsSetupUnavailableAndNeverRetry() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: "pdt (portfoliodividendtracker.com) connected", stderr: "", exitCode: 0),
+            .init(stdout: "", stderr: "Error: Not logged in. Run claude auth login first.", exitCode: 1),
+        ])
+        let delays = DelayRecorder()
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 2, retryBackoffSeconds: 2.0),
+            commandRunner: runner,
+            retryDelay: { delays.append($0) }
+        )
+
+        #expect(throws: PDTMCPConnectorError.setupUnavailable(
+            "Claude pdt-get-portfolio-holdings reported missing auth or unavailable access"
+        )) {
+            try connection.callReadTool("pdt-get-portfolio-holdings", arguments: [:])
+        }
+        // One mcp list plus a single read attempt: deterministic auth
+        // failures must not spawn further full CLI runs.
+        #expect(runner.requests.count == 2)
+        #expect(delays.values.isEmpty)
+    }
+
     private func configuration(
         retryCount: Int = 1,
+        retryBackoffSeconds: Double = 0,
         claudeProjectsDirectory: URL? = nil
     ) -> ClaudeLocalConnectionConfiguration {
         ClaudeLocalConnectionConfiguration(
@@ -287,7 +454,10 @@ struct ClaudeLocalConnectionTests {
             model: "opus",
             toolTimeout: 10,
             readinessTimeout: 10,
-            toolCallRetryPolicy: ClaudeToolCallRetryPolicy(retryCount: retryCount),
+            toolCallRetryPolicy: ClaudeToolCallRetryPolicy(
+                retryCount: retryCount,
+                retryBackoffSeconds: retryBackoffSeconds
+            ),
             environment: [:],
             claudeProjectsDirectory: claudeProjectsDirectory ?? temporaryClaudeProjectsDirectory()
         )
@@ -376,6 +546,23 @@ private final class StringProgressRecorder: @unchecked Sendable {
     }
 
     func append(_ value: String) {
+        lock.lock()
+        recorded.append(value)
+        lock.unlock()
+    }
+}
+
+private final class DelayRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [TimeInterval] = []
+
+    var values: [TimeInterval] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
+
+    func append(_ value: TimeInterval) {
         lock.lock()
         recorded.append(value)
         lock.unlock()
