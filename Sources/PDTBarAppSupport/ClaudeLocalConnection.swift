@@ -322,6 +322,13 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         arguments: [String: String]
     ) throws -> Data {
         let sessionID = UUID().uuidString
+        var readEnvironment = configuration.environment
+        // Claude Code 2.1.185 enables nonblocking MCP startup for `-p` runs.
+        // PDTBar immediately asks for one MCP tool call, so a nonblocking
+        // session can start before PDT tools are hydrated and falsely report
+        // that only built-in file tools exist. The preceding `claude mcp list`
+        // already bounds server health; the read run itself must wait for MCP.
+        readEnvironment["MCP_CONNECTION_NONBLOCKING"] = "false"
         let result = try commandRunner.run(
             executable: configuration.claudePath,
             arguments: [
@@ -335,7 +342,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
                 "--no-session-persistence",
             ],
             timeout: configuration.toolTimeout,
-            environment: configuration.environment
+            environment: readEnvironment
         )
         let currentSessionFiles = currentSessionToolResultFiles(readToolNames: [name], sessionID: sessionID)
         defer {
