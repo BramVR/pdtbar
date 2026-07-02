@@ -593,13 +593,14 @@ public struct DefaultClaudeLocalCommandRunner: ClaudeLocalCommandRunning {
         _ stderrDrain: ClaudeLocalPipeDrain,
         deadline: Date
     ) {
-        if stdoutDrain.waitUntilFinished(deadline: deadline),
-           stderrDrain.waitUntilFinished(deadline: deadline)
-        {
-            return
+        let stdoutFinished = stdoutDrain.waitUntilFinished(deadline: deadline)
+        let stderrFinished = stderrDrain.waitUntilFinished(deadline: deadline)
+        if !stdoutFinished {
+            stdoutDrain.abandon()
         }
-        stdoutDrain.abandon()
-        stderrDrain.abandon()
+        if !stderrFinished {
+            stderrDrain.abandon()
+        }
     }
 
     private func resolvedExecutable(
