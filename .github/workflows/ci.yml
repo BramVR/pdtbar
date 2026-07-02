@@ -1,0 +1,63 @@
+name: CI
+
+# Lean replacement for the workflow removed in PR #188 (billing/spending
+# limits): one small macOS job, no matrix, no sharding, cancel superseded runs.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**"
+      - "!docs/**"
+      # Swift tests load these fixtures at runtime, so keep them CI-triggering.
+      - "docs/pdt/fixtures/**"
+      - "!**.md"
+  pull_request:
+    paths:
+      - "**"
+      - "!docs/**"
+      - "docs/pdt/fixtures/**"
+      - "!**.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift:
+    name: Swift build and test
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Select Xcode 26.1.1 (if present) or fallback to default
+        run: |
+          set -euo pipefail
+          for candidate in /Applications/Xcode_26.1.1.app /Applications/Xcode_26.1.app /Applications/Xcode.app; do
+            if [[ -d "$candidate" ]]; then
+              sudo xcode-select -s "${candidate}/Contents/Developer"
+              echo "DEVELOPER_DIR=${candidate}/Contents/Developer" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+          /usr/bin/xcodebuild -version
+          swift --version
+
+      - name: Build
+        run: swift build
+
+      - name: Test
+        # Raw parallel `swift test` is flaky on shared CI runners: timing-
+        # sensitive suites (e.g. background detail refresh) hit internal
+        # timeouts under contention. Use the repo's bounded suite runner
+        # (swift test --no-parallel per suite) with the pre-#188 CI knobs.
+        run: |
+          PDTBAR_TEST_GROUP_SIZE=1 \
+            PDTBAR_TEST_SUITE_TIMEOUT=120 \
+            ./Scripts/test.sh
+
+      - name: Deterministic checks
+        run: swift run pdtbar-checks
