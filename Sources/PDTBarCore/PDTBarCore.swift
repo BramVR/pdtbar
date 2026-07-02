@@ -6828,10 +6828,13 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                     retryDeadline: deadline
                 )
             } catch {
-                // A lookup that failed once the budget ran out degrades the
-                // scan like any other deadline hit; failures inside the
-                // budget keep their real diagnostics.
-                guard Date() < deadline else {
+                // A transient lookup failure once the budget ran out degrades
+                // the scan like any other deadline hit. Non-transient
+                // failures (auth/setup outages, decode mismatches) keep their
+                // real diagnostics even past the deadline so the caller can
+                // classify them and short-circuit the remaining phases.
+                let category = (error as? PDTDetailRefreshToolError)?.diagnostic.category
+                if Date() >= deadline, category?.isRetryable == true {
                     return (quoteIDsBySymbolID, [Self.incomeQuoteScanTimeoutDiagnostic()])
                 }
                 throw error
@@ -7036,6 +7039,11 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 }
                 if options.retryBackoffSeconds > 0 {
                     Thread.sleep(forTimeInterval: options.retryBackoffSeconds)
+                }
+                // The backoff itself can cross the deadline; re-check so the
+                // retry does not launch another full run past the budget.
+                if let retryDeadline, Date() >= retryDeadline {
+                    throw PDTDetailRefreshToolError(diagnostic: failure)
                 }
             }
         }

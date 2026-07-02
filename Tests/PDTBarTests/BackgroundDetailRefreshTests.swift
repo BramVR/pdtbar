@@ -717,6 +717,85 @@ struct BackgroundDetailRefreshTests {
         #expect(committed.incomeEvents.count == 1)
     }
 
+    @Test("Income quote scan does not retry when the backoff crosses the deadline")
+    func incomeQuoteScanDoesNotRetryWhenBackoffCrossesDeadline() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-income-backoff-deadline-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let connector = SelectiveFailingPDTConnector(
+            responses: try detailRefreshResponses(calendarSymbolID: 5102, calendarSymbolName: "ADPB"),
+            failures: [
+                "pdt-get-symbol-quote": .transientFailure("Claude pdt-get-symbol-quote call failed"),
+            ]
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(
+                priceHistoryConcurrencyLimit: 2,
+                incomeQuoteLookupTimeoutSeconds: 0.05,
+                optionalRetryCount: 1,
+                retryBackoffSeconds: 0.2
+            )
+        ).refresh()
+
+        #expect(result.outcome == .degraded)
+        // The first attempt fails inside the budget, but the backoff sleep
+        // crosses the deadline, so no second full Claude run starts.
+        #expect(connector.callCount(of: "pdt-get-symbol-quote") == 1)
+        #expect(result.diagnostics.contains {
+            $0.toolName == "pdt-get-symbol-quote"
+                && $0.phase == .income
+                && $0.category == .timeout
+        })
+    }
+
+    @Test("Setup outage during the quote scan still short-circuits past the deadline")
+    func setupOutageDuringQuoteScanStillShortCircuitsPastDeadline() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-income-outage-deadline-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        _ = try store.commitCurrentSnapshot(testSnapshot(asOf: "2026-03-28"))
+        let connector = SelectiveFailingPDTConnector(
+            responses: try detailRefreshResponses(calendarSymbolID: 5102, calendarSymbolName: "ADPB"),
+            failures: [
+                "pdt-get-symbol-quote": .setupUnavailable("Claude PDT MCP server is not connected"),
+            ],
+            delaySecondsByTool: ["pdt-get-symbol-quote": 0.1]
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(
+                priceHistoryConcurrencyLimit: 2,
+                incomeQuoteLookupTimeoutSeconds: 0.05,
+                retryBackoffSeconds: 0
+            )
+        ).refresh()
+
+        #expect(result.outcome == .degraded)
+        // The outage surfaced after the in-flight lookup crossed the
+        // deadline, but it must keep its real category so the price-history
+        // phase is skipped instead of spawning more doomed Claude runs.
+        #expect(connector.callCount(of: "pdt-get-symbol-quote") == 1)
+        #expect(connector.callCount(of: "pdt-list-symbol-prices") == 0)
+        #expect(result.diagnostics.contains {
+            $0.toolName == "pdt-get-symbol-quote"
+                && $0.phase == .income
+                && $0.category == .setupUnavailable
+        })
+
+        // Prior details, including price series, stay visible.
+        let committed = try #require(try store.loadPriorSnapshot())
+        #expect(committed.priceSeries.map(\.quoteId) == [9101, 9101, 9102, 9102])
+    }
+
     @Test("Price-history workers stop pulling holdings after an unavailable setup failure")
     func priceHistoryWorkersStopAfterUnavailableSetupFailure() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-price-abandon-test")
