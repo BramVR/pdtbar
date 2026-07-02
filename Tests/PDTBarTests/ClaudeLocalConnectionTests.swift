@@ -150,18 +150,24 @@ struct ClaudeLocalConnectionTests {
         ])
 
         #expect(runner.requests.count == 2)
-        let readArguments = runner.requests.last?.arguments.joined(separator: " ") ?? ""
-        #expect(readArguments.contains("--allowedTools ToolSearch,mcp__pdt__pdt-list-x-ray-holdings"))
-        #expect(readArguments.contains("--disallowedTools"))
-        #expect(readArguments.contains("mcp__*__pdt-update-*"))
-        #expect(readArguments.contains("mcp__*__pdt-get-portfolio-holdings"))
-        #expect(readArguments.contains("mcp__*__pdt-get-symbol"))
-        #expect(readArguments.contains("AskUserQuestion"))
-        #expect(readArguments.contains("DesignSync"))
-        #expect(readArguments.contains("Edit"))
-        #expect(readArguments.contains("Bash"))
-        #expect(readArguments.contains("Read"))
-        #expect(readArguments.contains("WebSearch"))
+        let readArguments = runner.requests.last?.arguments ?? []
+        #expect(readArguments.joined(separator: " ").contains("--allowedTools ToolSearch,mcp__pdt__pdt-list-x-ray-holdings"))
+        var disallowed = Set<String>()
+        if let flagIndex = readArguments.firstIndex(of: "--disallowedTools"), flagIndex + 1 < readArguments.count {
+            disallowed = Set(readArguments[flagIndex + 1].split(separator: ",").map(String.init))
+        }
+        // Production must send the entire shared read-only deny policy plus
+        // the non-requested PDT read tools, and never deny the requested tool
+        // or ToolSearch.
+        #expect(Set(ClaudePDTReadOnlyToolPolicy.disallowedTools).isSubset(of: disallowed))
+        #expect(disallowed.contains("ListMcpResourcesTool"))
+        #expect(disallowed.contains("ReadMcpResourceTool"))
+        #expect(disallowed.contains("mcp__*__pdt-update-*"))
+        #expect(disallowed.contains("mcp__*__pdt-get-portfolio-holdings"))
+        #expect(disallowed.contains("mcp__*__pdt-get-symbol"))
+        #expect(!disallowed.contains("mcp__*__pdt-list-x-ray-holdings"))
+        #expect(!disallowed.contains("mcp__pdt__pdt-list-x-ray-holdings"))
+        #expect(!disallowed.contains("ToolSearch"))
     }
 
     @Test("Availability reports PDT server check progress")
