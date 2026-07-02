@@ -491,16 +491,16 @@ struct PulseReadTests {
             supportingDataSlotIDs: ["bigMovers.priceHistory"]
         )
 
-        #expect(hugeMove.readFingerprint.contains("move-bucket-bp:9223372036854775807"))
+        #expect(hugeMove.readFingerprint.contains("move-bucket-bp:\(Int.max)"))
 
         hugeMove.moveSize = -1e300
-        #expect(hugeMove.readFingerprint.contains("move-bucket-bp:-9223372036854775808"))
+        #expect(hugeMove.readFingerprint.contains("move-bucket-bp:\(Int.min)"))
 
         hugeMove.moveSize = .infinity
-        #expect(hugeMove.readFingerprint.contains("move-bucket-bp:9223372036854775807"))
+        #expect(hugeMove.readFingerprint.contains("move-bucket-bp:\(Int.max)"))
 
         hugeMove.moveSize = -.infinity
-        #expect(hugeMove.readFingerprint.contains("move-bucket-bp:-9223372036854775808"))
+        #expect(hugeMove.readFingerprint.contains("move-bucket-bp:\(Int.min)"))
 
         hugeMove.moveSize = .nan
         #expect(hugeMove.readFingerprint.contains("move-bucket-bp:0"))
@@ -518,10 +518,10 @@ struct PulseReadTests {
             supportingDataSlotIDs: ["income.calendar"]
         )
 
-        #expect(hugeChange.readFingerprint.contains("change-bp:9223372036854775807"))
+        #expect(hugeChange.readFingerprint.contains("change-bp:\(Int.max)"))
 
         hugeChange.changePercent = -1e300
-        #expect(hugeChange.readFingerprint.contains("change-bp:-9223372036854775808"))
+        #expect(hugeChange.readFingerprint.contains("change-bp:\(Int.min)"))
 
         var hugeScore = AttentionItem(
             id: "custom.signal",
@@ -533,7 +533,7 @@ struct PulseReadTests {
             supportingDataSlotIDs: ["custom.slot"]
         )
 
-        #expect(hugeScore.readFingerprint.contains("score-bp:9223372036854775807"))
+        #expect(hugeScore.readFingerprint.contains("score-bp:\(Int.max)"))
 
         hugeScore.score = .nan
         #expect(hugeScore.readFingerprint.contains("score-bp:0"))
