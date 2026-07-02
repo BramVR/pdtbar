@@ -50,6 +50,8 @@ Returning launches load the previous real snapshot asynchronously after the prob
 
 The published pulse includes a `Data health` submenu under Freshness. It reports Claude/PDT source readiness, required read-tool availability, read-only policy, cache/source state, detail-fill progress or outcome, read-state count, freshness, and copyable redacted diagnostics when a safe diagnostic exists.
 
+Data health source facts are truthful about how the pulse was built. A cached pulse alone reports unverified source facts (`Claude unknown; PDT unknown; read tools unknown; policy unknown`); a successful readiness probe upgrades Claude/PDT readiness on republished cached pulses (for example after `Mark as read`), and only a live fetch through the connector claims verified read tools and read-only policy. Cached-pulse freshness is evaluated against the current day, not only the snapshot's own asOf, so a snapshot from a prior day shows stale holdings (with the existing one-business-day grace, so weekends do not spuriously go stale) instead of staying `Fresh` forever. There is no automatic background re-sync; a stale cached pulse stays visible until the user refreshes or relaunches.
+
 ## Status icon
 
 The menu bar always shows the Concentration Stack icon. It is a stable portfolio mark, not top-three holdings and not a mini dashboard:

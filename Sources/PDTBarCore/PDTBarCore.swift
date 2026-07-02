@@ -1645,7 +1645,8 @@ public enum FreshnessLedger {
 
     public static func build(
         from snapshot: PortfolioSnapshot,
-        detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil
+        detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil,
+        today: String? = nil
     ) -> FreshnessSnapshot {
         let effectiveDetailRefreshOutcome = detailRefreshOutcome ?? snapshot.latestDetailFillOutcome
         let datedRows = snapshot.openHoldings.compactMap { holding -> (row: FreshnessHoldingRow, date: Date)? in
@@ -1666,8 +1667,9 @@ public enum FreshnessLedger {
             }
             return $0.row.quoteId < $1.row.quoteId
         }
+        let staleReferenceAsOf = staleReferenceDay(asOf: snapshot.asOf, today: today)
         let staleRows = datedRows.filter {
-            isStale(priceDate: $0.date, asOf: snapshot.asOf)
+            isStale(priceDate: $0.date, asOf: staleReferenceAsOf)
         }
         let oldestRows = Array(sortedRows.prefix(oldestRowLimit).map(\.row))
         let oldestPriceAsOf = sortedRows.first?.row.priceAsOf
@@ -1724,6 +1726,19 @@ public enum FreshnessLedger {
         return caveats
     }
 
+    /// Staleness is judged against the later of the snapshot's own `asOf` and the
+    /// caller-supplied current day, so a cached snapshot from a prior day cannot
+    /// keep reporting day-one prices as fresh.
+    static func staleReferenceDay(asOf: String, today: String?) -> String {
+        guard let today, let todayDate = freshnessDate(from: today) else {
+            return asOf
+        }
+        guard let asOfDate = freshnessDate(from: asOf), asOfDate >= todayDate else {
+            return today
+        }
+        return asOf
+    }
+
     private static func isStale(priceDate: Date, asOf: String) -> Bool {
         guard let asOfDate = freshnessDate(from: asOf),
               priceDate < asOfDate
@@ -1774,7 +1789,7 @@ public enum DataHealthStatus: String, Codable, Equatable {
     case degraded
 }
 
-public enum DataHealthSourceStatus: String, Codable, Equatable {
+public enum DataHealthSourceStatus: String, Codable, Equatable, Sendable {
     case ready
     case checking
     case missing
@@ -1788,7 +1803,7 @@ public enum DataHealthReadToolsStatus: String, Codable, Equatable {
     case unknown
 }
 
-public enum DataHealthReadOnlyPolicyStatus: String, Codable, Equatable {
+public enum DataHealthReadOnlyPolicyStatus: String, Codable, Equatable, Sendable {
     case enforced
     case unknown
 }
@@ -1830,6 +1845,57 @@ private extension PriorSnapshotLoadStatus {
             return .corrupt
         case .failed(.io):
             return .unreadable
+        }
+    }
+}
+
+/// What the runtime actually knows about the Claude/PDT source right now.
+/// Cached snapshots alone prove nothing about connectivity, read tools, or
+/// policy; only a live fetch through the connector verifies all of them.
+public struct DataHealthRuntimeSourceState: Equatable, Sendable {
+    public var claudeReadiness: DataHealthSourceStatus
+    public var pdtMCPReadiness: DataHealthSourceStatus
+    public var availableReadTools: Set<String>?
+    public var readOnlyPolicy: DataHealthReadOnlyPolicyStatus
+
+    public init(
+        claudeReadiness: DataHealthSourceStatus,
+        pdtMCPReadiness: DataHealthSourceStatus,
+        availableReadTools: Set<String>?,
+        readOnlyPolicy: DataHealthReadOnlyPolicyStatus
+    ) {
+        self.claudeReadiness = claudeReadiness
+        self.pdtMCPReadiness = pdtMCPReadiness
+        self.availableReadTools = availableReadTools
+        self.readOnlyPolicy = readOnlyPolicy
+    }
+
+    /// Facts proven by a live fetch through the Claude/PDT read-only connector.
+    public static let liveFetchVerified = DataHealthRuntimeSourceState(
+        claudeReadiness: .ready,
+        pdtMCPReadiness: .ready,
+        availableReadTools: Set(PDTReadTools.requiredV1),
+        readOnlyPolicy: .enforced
+    )
+
+    /// Nothing verified in this session; the honest state for cache-only pulses.
+    public static let unverified = DataHealthRuntimeSourceState(
+        claudeReadiness: .unknown,
+        pdtMCPReadiness: .unknown,
+        availableReadTools: nil,
+        readOnlyPolicy: .unknown
+    )
+
+    /// The source facts a pulse can truthfully assume from how it was built:
+    /// fetched/refreshed pulses just came through the live connector, while a
+    /// cached snapshot or an unknown source proves nothing about the current
+    /// connection, so optimistic facts are never the silent fallback.
+    public static func assumed(for pulseSource: PulseLifecycleSource?) -> DataHealthRuntimeSourceState {
+        switch pulseSource {
+        case .fetchedSnapshot, .refreshedSnapshot:
+            return .liveFetchVerified
+        case .cachedSnapshot, nil:
+            return .unverified
         }
     }
 }
@@ -1884,11 +1950,12 @@ public struct DataHealthInput: Equatable {
         diagnostic: PDTDetailRefreshFailureDiagnostic? = nil,
         priorSnapshotLoadStatus: PriorSnapshotLoadStatus = .notRequested
     ) -> DataHealthInput {
-        DataHealthInput(
-            claudeReadiness: .ready,
-            pdtMCPReadiness: .ready,
-            availableReadTools: Set(PDTReadTools.requiredV1),
-            readOnlyPolicy: .enforced,
+        let runtimeSourceState = DataHealthRuntimeSourceState.assumed(for: pulseSource)
+        return DataHealthInput(
+            claudeReadiness: runtimeSourceState.claudeReadiness,
+            pdtMCPReadiness: runtimeSourceState.pdtMCPReadiness,
+            availableReadTools: runtimeSourceState.availableReadTools,
+            readOnlyPolicy: runtimeSourceState.readOnlyPolicy,
             pulseSource: pulseSource,
             lastSuccessfulCompleteFetchAsOf: freshness.latestCompleteDetailFillAsOf,
             cachedPulseAvailable: pulseSource != nil,
@@ -1976,31 +2043,11 @@ public struct DataHealthSnapshot: Codable, Equatable {
 
 public enum DataHealth {
     public static func build(_ input: DataHealthInput) -> DataHealthSnapshot {
-        let requiredTools = PDTReadTools.requiredV1
-        let missingTools = input.availableReadTools.map { PDTReadTools.missingRequiredV1Tools(in: $0) } ?? []
-        let readToolsStatus: DataHealthReadToolsStatus
-        if input.availableReadTools == nil {
-            readToolsStatus = .unknown
-        } else if missingTools.isEmpty {
-            readToolsStatus = .available
-        } else {
-            readToolsStatus = .missingRequired
-        }
-        let source = DataHealthSourceSnapshot(
-            claude: input.claudeReadiness,
-            pdtMCP: input.pdtMCPReadiness,
-            readTools: readToolsStatus,
-            requiredReadToolCount: requiredTools.count,
-            availableReadToolCount: input.availableReadTools?.intersection(requiredTools).count,
-            missingReadTools: missingTools,
-            readOnlyPolicy: input.readOnlyPolicy,
-            detail: sourceDetail(
-                claude: input.claudeReadiness,
-                pdtMCP: input.pdtMCPReadiness,
-                readTools: readToolsStatus,
-                availableCount: input.availableReadTools?.intersection(requiredTools).count,
-                requiredCount: requiredTools.count,
-                missingTools: missingTools,
+        let source = sourceSnapshot(
+            DataHealthRuntimeSourceState(
+                claudeReadiness: input.claudeReadiness,
+                pdtMCPReadiness: input.pdtMCPReadiness,
+                availableReadTools: input.availableReadTools,
                 readOnlyPolicy: input.readOnlyPolicy
             )
         )
@@ -2039,6 +2086,56 @@ public enum DataHealth {
             freshness: freshness,
             readState: readState,
             diagnostic: diagnostic
+        )
+    }
+
+    /// Rebuilds the source facts of an already-built health snapshot from what
+    /// the runtime currently knows, then recomputes the overall status. Used
+    /// when a cached pulse is republished after the launch flow has learned
+    /// real Claude/PDT readiness.
+    public static func applyingRuntimeSourceState(
+        _ state: DataHealthRuntimeSourceState,
+        to snapshot: DataHealthSnapshot
+    ) -> DataHealthSnapshot {
+        var snapshot = snapshot
+        snapshot.source = sourceSnapshot(state)
+        snapshot.status = healthStatus(
+            source: snapshot.source,
+            detailFill: snapshot.detailFill,
+            freshness: snapshot.freshness,
+            diagnostic: snapshot.diagnostic
+        )
+        return snapshot
+    }
+
+    static func sourceSnapshot(_ state: DataHealthRuntimeSourceState) -> DataHealthSourceSnapshot {
+        let requiredTools = PDTReadTools.requiredV1
+        let missingTools = state.availableReadTools.map { PDTReadTools.missingRequiredV1Tools(in: $0) } ?? []
+        let readToolsStatus: DataHealthReadToolsStatus
+        if state.availableReadTools == nil {
+            readToolsStatus = .unknown
+        } else if missingTools.isEmpty {
+            readToolsStatus = .available
+        } else {
+            readToolsStatus = .missingRequired
+        }
+        return DataHealthSourceSnapshot(
+            claude: state.claudeReadiness,
+            pdtMCP: state.pdtMCPReadiness,
+            readTools: readToolsStatus,
+            requiredReadToolCount: requiredTools.count,
+            availableReadToolCount: state.availableReadTools?.intersection(requiredTools).count,
+            missingReadTools: missingTools,
+            readOnlyPolicy: state.readOnlyPolicy,
+            detail: sourceDetail(
+                claude: state.claudeReadiness,
+                pdtMCP: state.pdtMCPReadiness,
+                readTools: readToolsStatus,
+                availableCount: state.availableReadTools?.intersection(requiredTools).count,
+                requiredCount: requiredTools.count,
+                missingTools: missingTools,
+                readOnlyPolicy: state.readOnlyPolicy
+            )
         )
     }
 
@@ -2961,6 +3058,67 @@ public enum ClaudeLaunchFlow {
         }
     }
 
+    /// Maps the launch flow's last-known readiness probe result to the source
+    /// facts a republished cached pulse may truthfully claim. A probe verifies
+    /// Claude and the PDT MCP server only; read-tool availability and the
+    /// read-only policy are proven by live fetches, not probes.
+    public static func runtimeSourceState(
+        afterReadinessProbe result: ClaudeReadinessProbeResult?
+    ) -> DataHealthRuntimeSourceState {
+        switch result {
+        case nil, .failed:
+            return .unverified
+        case .ready:
+            return DataHealthRuntimeSourceState(
+                claudeReadiness: .ready,
+                pdtMCPReadiness: .ready,
+                availableReadTools: nil,
+                readOnlyPolicy: .unknown
+            )
+        case .notReady, .missingClaudeLogin:
+            return DataHealthRuntimeSourceState(
+                claudeReadiness: .missing,
+                pdtMCPReadiness: .unknown,
+                availableReadTools: nil,
+                readOnlyPolicy: .unknown
+            )
+        case .missingPDTMCP:
+            return DataHealthRuntimeSourceState(
+                claudeReadiness: .ready,
+                pdtMCPReadiness: .missing,
+                availableReadTools: nil,
+                readOnlyPolicy: .unknown
+            )
+        }
+    }
+
+    /// Applies the runtime's known source facts to a cached pulse before it is
+    /// republished, so Data health never claims connector readiness from cache
+    /// alone. Fetched and refreshed pulses keep their live-verified facts.
+    public static func pulseApplyingRuntimeSourceState(
+        _ runtimeSourceState: DataHealthRuntimeSourceState,
+        to pulse: PulseLifecycleResult
+    ) -> PulseLifecycleResult {
+        guard pulse.source == .cachedSnapshot else {
+            return pulse
+        }
+        var pulse = pulse
+        let health = DataHealth.applyingRuntimeSourceState(
+            runtimeSourceState,
+            to: pulse.model.facetSnapshots.dataHealth
+        )
+        pulse.model.facetSnapshots.dataHealth = health
+        pulse.unfilteredModel.facetSnapshots.dataHealth = DataHealth.applyingRuntimeSourceState(
+            runtimeSourceState,
+            to: pulse.unfilteredModel.facetSnapshots.dataHealth
+        )
+        pulse.descriptor = MenuDescriptorRenderer.descriptorByReplacingDataHealth(
+            in: pulse.descriptor,
+            with: health
+        )
+        return pulse
+    }
+
     public static func descriptor(
         for state: ClaudeLaunchState,
         cachedPulse: MenuDescriptor? = nil,
@@ -3385,20 +3543,14 @@ public enum ClaudeLaunchFlow {
         guard claudeReadiness != .ready || pdtMCPReadiness != .ready else {
             return nil
         }
-        return DataHealth.build(
-            DataHealthInput(
+        return DataHealth.sourceSnapshot(
+            DataHealthRuntimeSourceState(
                 claudeReadiness: claudeReadiness,
                 pdtMCPReadiness: pdtMCPReadiness,
-                availableReadTools: Set(PDTReadTools.requiredV1),
-                readOnlyPolicy: .enforced,
-                pulseSource: .cachedSnapshot,
-                lastSuccessfulCompleteFetchAsOf: nil,
-                cachedPulseAvailable: true,
-                detailFill: .notStarted,
-                freshness: FreshnessSnapshot(worstPriceAsOf: nil, stale: false),
-                readState: nil
+                availableReadTools: nil,
+                readOnlyPolicy: .unknown
             )
-        ).source.detail
+        ).detail
     }
 
     private static func runtimeDataHealthDetailFillDetail(_ detailFill: DataHealthDetailFillInput) -> String {
@@ -3569,6 +3721,7 @@ public final class PDTLaunchRuntime {
     public private(set) var readinessAttemptID = 0
     public private(set) var firstFetchInFlight = false
     public private(set) var backgroundDetailRefreshInFlight = false
+    public private(set) var lastKnownReadiness: ClaudeReadinessProbeResult?
     private var lastDescriptor: MenuDescriptor?
 
     public init() {}
@@ -3585,18 +3738,19 @@ public final class PDTLaunchRuntime {
         if let currentPulse, currentPulse.source != .cachedSnapshot {
             return nil
         }
-        currentPulse = pulse
+        let installedPulse = pulseApplyingLastKnownReadiness(pulse)
+        currentPulse = installedPulse
         let descriptor: MenuDescriptor
         if backgroundDetailRefreshInFlight {
             descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
-                cachedPulse: pulse.descriptor,
+                cachedPulse: installedPulse.descriptor,
                 progress: BackgroundDetailRefreshProgress(phase: .baseHoldings),
-                cachedSnapshotAsOf: pulse.model.asOf
+                cachedSnapshotAsOf: installedPulse.model.asOf
             )
         } else {
             descriptor = ClaudeLaunchFlow.descriptor(
                 for: state,
-                cachedPulse: pulse.descriptor
+                cachedPulse: installedPulse.descriptor
             )
         }
         lastDescriptor = descriptor
@@ -3624,6 +3778,10 @@ public final class PDTLaunchRuntime {
             }
         }
         readinessProbeInFlight = false
+        lastKnownReadiness = result
+        if let currentPulse {
+            self.currentPulse = pulseApplyingLastKnownReadiness(currentPulse)
+        }
         let nextState = ClaudeLaunchFlow.state(afterReadinessProbe: result)
         if nextState == .fetchingPortfolio {
             guard !firstFetchInFlight, !backgroundDetailRefreshInFlight else {
@@ -3752,13 +3910,23 @@ public final class PDTLaunchRuntime {
 
     public func publishPulse(_ pulse: PulseLifecycleResult) -> PDTOnboardingUpdate {
         backgroundDetailRefreshInFlight = false
-        currentPulse = pulse
+        let publishedPulse = pulseApplyingLastKnownReadiness(pulse)
+        currentPulse = publishedPulse
         state = .fetchingPortfolio
-        let descriptor = ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: pulse.descriptor)
+        let descriptor = ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: publishedPulse.descriptor)
         lastDescriptor = descriptor
         return PDTOnboardingUpdate(
             state: state,
             descriptor: descriptor
+        )
+    }
+
+    /// Cached pulses only claim the source facts the runtime has actually
+    /// verified; fetched and refreshed pulses pass through unchanged.
+    private func pulseApplyingLastKnownReadiness(_ pulse: PulseLifecycleResult) -> PulseLifecycleResult {
+        ClaudeLaunchFlow.pulseApplyingRuntimeSourceState(
+            ClaudeLaunchFlow.runtimeSourceState(afterReadinessProbe: lastKnownReadiness),
+            to: pulse
         )
     }
 
@@ -4901,7 +5069,8 @@ public enum PressureEngine {
         from snapshot: PortfolioSnapshot,
         priorSnapshot: PortfolioSnapshot? = nil,
         readState: PulseReadState? = nil,
-        detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil
+        detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil,
+        today: String? = nil
     ) -> PortfolioPulseModel {
         let portfolioOverview = PortfolioOverview.build(from: snapshot)
         let priorPortfolioOverview = priorSnapshot.map(PortfolioOverview.build)
@@ -4918,7 +5087,11 @@ public enum PressureEngine {
         )
         let totalValue = snapshot.totalValue
         let effectiveDetailRefreshOutcome = detailRefreshOutcome ?? snapshot.latestDetailFillOutcome
-        let freshness = FreshnessLedger.build(from: snapshot, detailRefreshOutcome: effectiveDetailRefreshOutcome)
+        let freshness = FreshnessLedger.build(
+            from: snapshot,
+            detailRefreshOutcome: effectiveDetailRefreshOutcome,
+            today: today
+        )
         let recentMovesByQuoteID = recentMoves(from: snapshot.priceSeries)
         let nextIncomeEventsByQuoteID = nextIncomeEventsByQuoteID(from: snapshot)
         let topHoldingSummaries = snapshot.openHoldings
@@ -7605,9 +7778,14 @@ public struct PDTLiveDataSource: PortfolioDataSource {
 }
 
 public enum PressureRunner {
+    /// Rebuilds a pulse from the cached snapshot. Freshness is evaluated
+    /// against `today` (defaulting to the current day), never only against the
+    /// cached snapshot's own asOf, so a snapshot from a prior day cannot be
+    /// relabeled fresh on relaunch. Tests inject `today` for determinism.
     public static func cachedPulse(
         snapshotStore: SnapshotStore,
-        pulseReadStore: PulseReadStore? = nil
+        pulseReadStore: PulseReadStore? = nil,
+        today: String? = nil
     ) throws -> PulseLifecycleResult? {
         let snapshotLoad = try snapshotStore.loadPriorSnapshotResult()
         guard case .loaded(let snapshot) = snapshotLoad else {
@@ -7629,7 +7807,8 @@ public enum PressureRunner {
             source: .cachedSnapshot,
             resetsReappearedReadState: false,
             detailRefreshDiagnostic: cachedDetailRefreshDiagnostic(for: snapshot, snapshotStore: snapshotStore),
-            priorSnapshotLoadStatus: snapshotLoad.status
+            priorSnapshotLoadStatus: snapshotLoad.status,
+            today: today ?? currentDayString()
         )
     }
 
@@ -7645,9 +7824,14 @@ public enum PressureRunner {
 
     public static func cachedPulseDescriptor(
         snapshotStore: SnapshotStore,
-        pulseReadStore: PulseReadStore? = nil
+        pulseReadStore: PulseReadStore? = nil,
+        today: String? = nil
     ) throws -> MenuDescriptor? {
-        try cachedPulse(snapshotStore: snapshotStore, pulseReadStore: pulseReadStore)?.descriptor
+        try cachedPulse(
+            snapshotStore: snapshotStore,
+            pulseReadStore: pulseReadStore,
+            today: today
+        )?.descriptor
     }
 
     public static func seedPriorSnapshot(
@@ -7773,7 +7957,8 @@ public enum PressureRunner {
         resetsReappearedReadState: Bool,
         detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil,
         detailRefreshDiagnostic: PDTDetailRefreshFailureDiagnostic? = nil,
-        priorSnapshotLoadStatus: PriorSnapshotLoadStatus = .notRequested
+        priorSnapshotLoadStatus: PriorSnapshotLoadStatus = .notRequested,
+        today: String? = nil
     ) throws -> PulseLifecycleResult {
         let displayReadState = loadedReadState ?? displayReadState(from: pulseReadStore)
         let effectiveDetailRefreshOutcome = detailRefreshOutcome ?? snapshot.latestDetailFillOutcome
@@ -7781,7 +7966,8 @@ public enum PressureRunner {
             from: snapshot,
             priorSnapshot: priorSnapshot,
             readState: displayReadState,
-            detailRefreshOutcome: effectiveDetailRefreshOutcome
+            detailRefreshOutcome: effectiveDetailRefreshOutcome,
+            today: today
         )
         rawModel.facetSnapshots.dataHealth = DataHealth.build(
             DataHealthInput.default(
