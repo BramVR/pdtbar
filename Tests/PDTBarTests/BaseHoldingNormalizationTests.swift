@@ -282,6 +282,27 @@ struct BaseHoldingNormalizationTests {
         #expect(snapshot.totalValue == Money(value: "8225.00", currency: "EUR"))
     }
 
+    @Test("Live connector derives non-EUR portfolio currency from local worths")
+    func liveConnectorDerivesNonEURPortfolioCurrencyFromLocalWorths() throws {
+        let connector = ScriptedPDTMCPConnector(responses: [
+            "pdt-get-portfolio-holdings": Data(nonEURPortfolioHoldingsJSON.utf8),
+        ])
+        let snapshot = try PDTMCPConnectorDataSource(
+            connector: connector,
+            liveOptions: PDTLiveDataSourceOptions(
+                includeDistributions: false,
+                includeXRayHoldings: false,
+                includeIncomeEvents: false,
+                includeDividends: false,
+                includeIncomeQuoteLookups: false,
+                includePriceSeries: false
+            )
+        ).snapshot(asOf: "2026-06-26")
+
+        #expect(snapshot.openHoldings.map(\.quoteId) == [6001, 6002])
+        #expect(snapshot.totalValue == Money(value: "750.00", currency: "USD"))
+    }
+
     @Test("Live wrapped setup error is classified as unavailable")
     func liveWrappedSetupErrorIsClassifiedAsUnavailable() throws {
         let connector = ScriptedPDTMCPConnector(responses: [
@@ -579,6 +600,33 @@ struct BaseHoldingNormalizationTests {
         #expect(snapshot.totalValue == Money(value: "500.00", currency: "EUR"))
     }
 
+    @Test("Background detail refresh derives non-EUR portfolio currency from local worths")
+    func backgroundDetailRefreshDerivesNonEURPortfolioCurrencyFromLocalWorths() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-base-normalization-background-currency-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let connector = ScriptedPDTMCPConnector(responses: [
+            "pdt-get-portfolio-holdings": Data(nonEURPortfolioHoldingsJSON.utf8),
+            "pdt-get-portfolio-distributions": Data(#"{"sectors":[],"assetTypes":[]}"#.utf8),
+            "pdt-list-x-ray-holdings": Data(#"{"items":[],"hasMore":false}"#.utf8),
+            "pdt-list-calendar-events": Data(#"{"data":[]}"#.utf8),
+            "pdt-list-dividends": Data(#"{"data":[],"meta":{"last_page":1}}"#.utf8),
+            "pdt-list-symbol-prices": Data(#"{"data":[]}"#.utf8),
+        ])
+
+        _ = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-06-26",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 1, retryBackoffSeconds: 0)
+        ).refresh()
+
+        let snapshot = try #require(try store.loadPriorSnapshot())
+        #expect(snapshot.openHoldings.map(\.quoteId) == [6001, 6002])
+        #expect(snapshot.totalValue == Money(value: "750.00", currency: "USD"))
+    }
+
     private func model(_ fixtureName: String, withPrior: Bool = false) throws -> PortfolioPulseModel {
         let fixture = packageRoot.appending(path: "docs/pdt/fixtures/\(fixtureName).json")
         let snapshot = try PDTFixtureDataSource.snapshot(from: fixture)
@@ -735,6 +783,34 @@ private let multiCurrencyHoldingsJSON = """
       "currentWorth": { "value": "250.00", "currency": "DKK" },
       "currentWorthLocal": { "value": "250.00", "currency": "DKK" },
       "portfolioWeight": 0.66,
+      "closedAt": null
+    }
+  ]
+}
+"""
+
+private let nonEURPortfolioHoldingsJSON = """
+{
+  "holdings": [
+    {
+      "symbolName": "US Portfolio Holding",
+      "symbolQuoteId": 6001,
+      "currentPriceDate": "2026-06-26T21:59:00+00:00",
+      "currentPriceLocal": { "value": "100.00", "currency": "USD" },
+      "currentExchangeRate": 0.8,
+      "currentWorth": { "value": "400.00", "currency": "EUR" },
+      "currentWorthLocal": { "value": "500.00", "currency": "USD" },
+      "portfolioWeight": 0.67,
+      "closedAt": null
+    },
+    {
+      "symbolName": "Second US Portfolio Holding",
+      "symbolQuoteId": 6002,
+      "currentPriceDate": "2026-06-26T21:59:00+00:00",
+      "currentPriceLocal": { "value": "25.00", "currency": "USD" },
+      "currentWorth": { "value": "250.00", "currency": "USD" },
+      "currentWorthLocal": { "value": "250.00", "currency": "USD" },
+      "portfolioWeight": 0.33,
       "closedAt": null
     }
   ]

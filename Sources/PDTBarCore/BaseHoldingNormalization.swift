@@ -138,6 +138,12 @@ public enum PDTBaseHoldingNormalizer {
         return Money(value: canonicalDecimalString(average, places: 4), currency: total.currency)
     }
 
+    public static func portfolioCurrency(from holdings: [PDTBaseHoldingInput], fallback: String) -> String {
+        holdings.lazy.compactMap { holding in
+            isOpenHolding(holding) ? validMoney(holding.currentWorthLocal)?.currency : nil
+        }.first ?? fallback
+    }
+
     private static func isOpenHolding(_ holding: PDTBaseHoldingInput) -> Bool {
         guard holding.closedAt == nil,
               let worth = validMoney(holding.currentWorthLocal),

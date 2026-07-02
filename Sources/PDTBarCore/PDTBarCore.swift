@@ -6569,11 +6569,13 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             arguments: [:],
             progress: progress
         )
+        let holdingInputs = holdingsEnvelope.holdings.map(\.baseHoldingInput)
+        let portfolioCurrency = PDTBaseHoldingNormalizer.portfolioCurrency(from: holdingInputs, fallback: "EUR")
         return PDTSnapshotNormalizer.normalize(
             PDTSnapshotNormalizationInput(
                 asOf: snapshotAsOf,
-                currency: "EUR",
-                holdings: holdingsEnvelope.holdings.map(\.baseHoldingInput)
+                currency: portfolioCurrency,
+                holdings: holdingInputs
             )
         )
     }
@@ -7190,10 +7192,11 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         let dividends = options.includeDividends ? try liveDividends(arguments: dividendDateRange) : []
 
         let holdingInputs = holdingsEnvelope.holdings.map(\.baseHoldingInput)
+        let portfolioCurrency = PDTBaseHoldingNormalizer.portfolioCurrency(from: holdingInputs, fallback: "EUR")
         let baseSnapshot = PDTSnapshotNormalizer.normalize(
             PDTSnapshotNormalizationInput(
                 asOf: snapshotAsOf,
-                currency: "EUR",
+                currency: portfolioCurrency,
                 holdings: holdingInputs
             )
         )
@@ -7207,7 +7210,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         return PDTSnapshotNormalizer.normalize(
             PDTSnapshotNormalizationInput(
                 asOf: snapshotAsOf,
-                currency: "EUR",
+                currency: portfolioCurrency,
                 holdings: holdingInputs,
                 symbolQuotes: quoteMetadata.snapshotNormalizationInputs,
                 distributions: distributionsEnvelope?.optionalDetailInput,
