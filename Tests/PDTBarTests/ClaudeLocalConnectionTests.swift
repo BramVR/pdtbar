@@ -397,6 +397,29 @@ struct ClaudeLocalConnectionTests {
         #expect(delays.values == [0.25])
     }
 
+    @Test("Transient server-unavailable read failures recover after retry")
+    func transientServerUnavailableReadFailuresRecoverAfterRetry() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: "pdt (portfoliodividendtracker.com) connected", stderr: "", exitCode: 0),
+            .init(stdout: "", stderr: "PDT MCP server unavailable; try again later", exitCode: 1),
+            .init(stdout: streamJSON(
+                toolName: "mcp__pdt__pdt-get-portfolio-holdings",
+                result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"holdings":[]}}"#
+            ), stderr: "", exitCode: 0),
+        ])
+        let delays = DelayRecorder()
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 1, retryBackoffSeconds: 0.5),
+            commandRunner: runner,
+            retryDelay: { delays.append($0) }
+        )
+
+        _ = try connection.callReadTool("pdt-get-portfolio-holdings", arguments: [:])
+
+        #expect(runner.requests.count == 3)
+        #expect(delays.values == [0.5])
+    }
+
     @Test("Auth-outage read failures classify as setup unavailable and never retry")
     func authOutageReadFailuresClassifyAsSetupUnavailableAndNeverRetry() throws {
         let runner = RecordingClaudeCommandRunner(results: [

@@ -374,10 +374,34 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         case nil:
             break
         }
-        if PDTLiveUnavailableClassifier.shouldSkip(result.combinedOutput) {
+        if Self.outputReportsAuthOrSetupOutage(result.combinedOutput) {
             return .setupUnavailable("Claude \(name) reported missing auth or unavailable access")
         }
         return .transientFailure("Claude \(name) call failed")
+    }
+
+    private static func outputReportsAuthOrSetupOutage(_ output: String) -> Bool {
+        let lowercased = output.lowercased()
+        return [
+            "not authenticated",
+            "authentication required",
+            "oauth",
+            "missing credential",
+            "credentials not found",
+            "login required",
+            "please login",
+            "not logged in",
+            "token expired",
+            "session expired",
+            "unauthorized",
+            "forbidden",
+            "server not found",
+            "unknown mcp server",
+            "setup required",
+            "setup unavailable",
+            "missing setup",
+            "needs setup",
+        ].contains { lowercased.contains($0) }
     }
 
     /// `DefaultClaudeLocalCommandRunner` reports the same exit code for a
