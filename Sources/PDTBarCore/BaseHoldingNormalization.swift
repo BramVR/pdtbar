@@ -5,6 +5,7 @@ public struct PDTBaseHoldingInput: Equatable {
     public var quoteId: Int
     public var currentPriceDate: String
     public var currentPriceLocal: Money?
+    public var currentExchangeRate: Double?
     public var currentWorth: Money?
     public var currentWorthLocal: Money
     public var portfolioWeight: Double
@@ -22,6 +23,7 @@ public struct PDTBaseHoldingInput: Equatable {
         quoteId: Int,
         currentPriceDate: String,
         currentPriceLocal: Money?,
+        currentExchangeRate: Double? = nil,
         currentWorth: Money? = nil,
         currentWorthLocal: Money,
         portfolioWeight: Double,
@@ -38,6 +40,7 @@ public struct PDTBaseHoldingInput: Equatable {
         self.quoteId = quoteId
         self.currentPriceDate = currentPriceDate
         self.currentPriceLocal = currentPriceLocal
+        self.currentExchangeRate = currentExchangeRate
         self.currentWorth = currentWorth
         self.currentWorthLocal = currentWorthLocal
         self.portfolioWeight = portfolioWeight
@@ -68,10 +71,10 @@ public enum PDTBaseHoldingNormalizer {
         currency: String,
         reportedTotalValue: Money? = nil
     ) -> PDTBaseHoldingNormalization {
-        let openHoldings = holdings.compactMap(normalizedHolding)
-        let summedCurrency = openHoldings.first?.worth.currency ?? currency
+        let openInputs = holdings.filter(isOpenHolding)
+        let openHoldings = openInputs.compactMap(normalizedHolding)
         let totalValue = validMoney(reportedTotalValue)
-            ?? sumWorth(openHoldings, currency: summedCurrency)
+            ?? totalPortfolioCurrencyWorth(of: openInputs, currency: currency)
         return PDTBaseHoldingNormalization(openHoldings: openHoldings, totalValue: totalValue)
     }
 
@@ -135,11 +138,33 @@ public enum PDTBaseHoldingNormalizer {
         return Money(value: canonicalDecimalString(average, places: 4), currency: total.currency)
     }
 
-    private static func normalizedHolding(_ holding: PDTBaseHoldingInput) -> NormalizedHolding? {
+    public static func portfolioCurrency(from holdings: [PDTBaseHoldingInput], fallback: String) -> String {
+        var inferredCurrency: String?
+        for holding in holdings where isOpenHolding(holding) {
+            guard let currency = validMoney(holding.currentWorthLocal)?.currency else {
+                continue
+            }
+            if let inferredCurrency, inferredCurrency != currency {
+                return fallback
+            }
+            inferredCurrency = currency
+        }
+        return inferredCurrency ?? fallback
+    }
+
+    private static func isOpenHolding(_ holding: PDTBaseHoldingInput) -> Bool {
         guard holding.closedAt == nil,
               let worth = validMoney(holding.currentWorthLocal),
-              worth.isPositive,
-              holding.currentWorth.map({ validMoney($0) != nil && $0.isPositive }) ?? true
+              worth.isPositive
+        else {
+            return false
+        }
+        return holding.currentWorth.map { validMoney($0) != nil && $0.isPositive } ?? true
+    }
+
+    private static func normalizedHolding(_ holding: PDTBaseHoldingInput) -> NormalizedHolding? {
+        guard isOpenHolding(holding),
+              let worth = validMoney(holding.currentWorthLocal)
         else {
             return nil
         }
@@ -162,11 +187,42 @@ public enum PDTBaseHoldingNormalizer {
         )
     }
 
-    private static func sumWorth(_ holdings: [NormalizedHolding], currency: String) -> Money {
+    // The headline total is always denominated in the portfolio currency. Each open
+    // holding contributes its portfolio-currency worth component; trading-currency
+    // worths are converted with the holding exchange rate (trading -> portfolio,
+    // so portfolio = trading / rate per docs/pdt/fixtures-schema-notes.md). Worths
+    // that cannot be expressed in the portfolio currency are excluded rather than
+    // silently mixed into a total with a mismatched currency label.
+    private static func totalPortfolioCurrencyWorth(
+        of holdings: [PDTBaseHoldingInput],
+        currency: String
+    ) -> Money {
         let total = holdings.reduce(Decimal(0)) { partial, holding in
-            partial + (posixDecimal(holding.worth.value) ?? 0)
+            partial + (portfolioCurrencyWorth(of: holding, currency: currency) ?? 0)
         }
         return Money(value: canonicalDecimalString(total, places: 2), currency: currency)
+    }
+
+    private static func portfolioCurrencyWorth(
+        of holding: PDTBaseHoldingInput,
+        currency: String
+    ) -> Decimal? {
+        if let worthLocal = validMoney(holding.currentWorthLocal), worthLocal.currency == currency {
+            return posixDecimal(worthLocal.value)
+        }
+        if let worth = validMoney(holding.currentWorth), worth.currency == currency {
+            return posixDecimal(worth.value)
+        }
+        guard let tradingWorth = validMoney(holding.currentWorth),
+              let exchangeRate = finite(holding.currentExchangeRate),
+              exchangeRate > 0,
+              let tradingValue = posixDecimal(tradingWorth.value),
+              let rateValue = posixDecimal(String(exchangeRate)),
+              rateValue > 0
+        else {
+            return nil
+        }
+        return tradingValue / rateValue
     }
 
     private static func posixDecimal(_ value: String) -> Decimal? {

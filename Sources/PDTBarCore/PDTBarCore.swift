@@ -6623,11 +6623,13 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             arguments: [:],
             progress: progress
         )
+        let holdingInputs = holdingsEnvelope.holdings.map(\.baseHoldingInput)
+        let portfolioCurrency = PDTBaseHoldingNormalizer.portfolioCurrency(from: holdingInputs, fallback: "EUR")
         return PDTSnapshotNormalizer.normalize(
             PDTSnapshotNormalizationInput(
                 asOf: snapshotAsOf,
-                currency: "EUR",
-                holdings: holdingsEnvelope.holdings.map(\.baseHoldingInput)
+                currency: portfolioCurrency,
+                holdings: holdingInputs
             )
         )
     }
@@ -7319,10 +7321,11 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         let dividends = options.includeDividends ? try liveDividends(arguments: dividendDateRange) : []
 
         let holdingInputs = holdingsEnvelope.holdings.map(\.baseHoldingInput)
+        let portfolioCurrency = PDTBaseHoldingNormalizer.portfolioCurrency(from: holdingInputs, fallback: "EUR")
         let baseSnapshot = PDTSnapshotNormalizer.normalize(
             PDTSnapshotNormalizationInput(
                 asOf: snapshotAsOf,
-                currency: "EUR",
+                currency: portfolioCurrency,
                 holdings: holdingInputs
             )
         )
@@ -7336,7 +7339,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         return PDTSnapshotNormalizer.normalize(
             PDTSnapshotNormalizationInput(
                 asOf: snapshotAsOf,
-                currency: "EUR",
+                currency: portfolioCurrency,
                 holdings: holdingInputs,
                 symbolQuotes: quoteMetadata.snapshotNormalizationInputs,
                 distributions: distributionsEnvelope?.optionalDetailInput,
@@ -8074,6 +8077,7 @@ private struct LiveHolding: Decodable {
     var symbolQuoteId: Int
     var currentPriceDate: String
     var currentPriceLocal: Money?
+    var currentExchangeRate: Double?
     var currentWorth: Money?
     var currentWorthLocal: Money
     var portfolioWeight: Double
@@ -8090,6 +8094,7 @@ private struct LiveHolding: Decodable {
         case symbolQuoteId
         case currentPriceDate
         case currentPriceLocal
+        case currentExchangeRate
         case currentWorth
         case currentWorthLocal
         case portfolioWeight
@@ -8108,6 +8113,7 @@ private struct LiveHolding: Decodable {
         symbolQuoteId = try container.decode(Int.self, forKey: .symbolQuoteId)
         currentPriceDate = try container.decode(String.self, forKey: .currentPriceDate)
         currentPriceLocal = try? container.decodeIfPresent(Money.self, forKey: .currentPriceLocal)
+        currentExchangeRate = try? container.decodeIfPresent(Double.self, forKey: .currentExchangeRate)
         currentWorth = try? container.decodeIfPresent(Money.self, forKey: .currentWorth)
         currentWorthLocal = try container.decode(Money.self, forKey: .currentWorthLocal)
         portfolioWeight = try container.decode(Double.self, forKey: .portfolioWeight)
@@ -8134,6 +8140,7 @@ private extension LiveHolding {
             quoteId: symbolQuoteId,
             currentPriceDate: currentPriceDate,
             currentPriceLocal: currentPriceLocal,
+            currentExchangeRate: currentExchangeRate,
             currentWorth: currentWorth,
             currentWorthLocal: currentWorthLocal,
             portfolioWeight: portfolioWeight,
@@ -8306,6 +8313,7 @@ private struct FixtureHolding: Decodable {
     var symbolQuoteId: Int
     var currentPriceDate: String
     var currentPriceLocal: Money?
+    var currentExchangeRate: Double?
     var currentWorth: Money?
     var currentWorthLocal: Money
     var portfolioWeight: Double
@@ -8322,6 +8330,7 @@ private struct FixtureHolding: Decodable {
         case symbolQuoteId
         case currentPriceDate
         case currentPriceLocal
+        case currentExchangeRate
         case currentWorth
         case currentWorthLocal
         case portfolioWeight
@@ -8340,6 +8349,7 @@ private struct FixtureHolding: Decodable {
         symbolQuoteId = try container.decode(Int.self, forKey: .symbolQuoteId)
         currentPriceDate = try container.decode(String.self, forKey: .currentPriceDate)
         currentPriceLocal = try? container.decodeIfPresent(Money.self, forKey: .currentPriceLocal)
+        currentExchangeRate = try? container.decodeIfPresent(Double.self, forKey: .currentExchangeRate)
         currentWorth = try? container.decodeIfPresent(Money.self, forKey: .currentWorth)
         currentWorthLocal = try container.decode(Money.self, forKey: .currentWorthLocal)
         portfolioWeight = try container.decode(Double.self, forKey: .portfolioWeight)
@@ -8366,6 +8376,7 @@ private extension FixtureHolding {
             quoteId: symbolQuoteId,
             currentPriceDate: currentPriceDate,
             currentPriceLocal: currentPriceLocal,
+            currentExchangeRate: currentExchangeRate,
             currentWorth: currentWorth,
             currentWorthLocal: currentWorthLocal,
             portfolioWeight: portfolioWeight,
@@ -8559,143 +8570,4 @@ private func posixDecimal(_ value: String) -> Decimal? {
 
 private func finite(_ value: Double?) -> Double? {
     PDTBaseHoldingNormalizer.finite(value)
-}
-
-private func currentDayString() -> String {
-    dayString(from: Date())
-}
-
-private func dayString(_ day: String, addingDays days: Int) -> String {
-    let formatter = dayFormatter()
-    var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-    guard let date = formatter.date(from: day),
-          let shifted = calendar.date(byAdding: .day, value: days, to: date)
-    else {
-        return day
-    }
-    return dayString(from: shifted)
-}
-
-private func dayString(from date: Date) -> String {
-    dayFormatter().string(from: date)
-}
-
-private func dayFormatter() -> DateFormatter {
-    let formatter = DateFormatter()
-    formatter.calendar = Calendar(identifier: .gregorian)
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.timeZone = TimeZone(secondsFromGMT: 0)
-    formatter.dateFormat = "yyyy-MM-dd"
-    return formatter
-}
-
-private func display(_ money: Money) -> String {
-    "\(money.currency) \(decimalString(money.value, places: 2))"
-}
-
-private func fingerprintToken(_ value: String) -> String {
-    value.lowercased()
-        .map { character -> Character in
-            if character.isLetter || character.isNumber {
-                return character
-            }
-            return "-"
-        }
-        .reduce(into: "") { result, character in
-            if character == "-", result.last == "-" {
-                return
-            }
-            result.append(character)
-        }
-        .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-}
-
-private func stableIDToken(_ value: String) -> String {
-    let token = fingerprintToken(value)
-    return token.isEmpty ? "unknown" : token
-}
-
-private func distributionLabel(_ value: String) -> String {
-    value
-        .split(separator: "-")
-        .map { part in
-            if part.uppercased() == "ETF" {
-                return "ETF"
-            }
-            guard let first = part.first else {
-                return ""
-            }
-            return first.uppercased() + part.dropFirst()
-        }
-        .joined(separator: " ")
-}
-
-private func moneyFingerprint(_ money: Money?) -> String {
-    guard let money else {
-        return "none"
-    }
-    let value = Decimal(string: money.value).map { canonicalDecimalString($0, places: 2) } ?? money.value
-    return "\(money.currency):\(value)"
-}
-
-private func fingerprintBasisPoints(_ value: Double?) -> String {
-    guard let value else {
-        return "missing"
-    }
-    return String(basisPoints(value))
-}
-
-private func basisPoints(_ value: Double) -> Int {
-    return Int((value * 10_000).rounded())
-}
-
-private func bucketBasisPoints(_ value: Double?, bucketSize: Int) -> String {
-    guard let value else {
-        return "missing"
-    }
-    guard bucketSize > 0 else {
-        return String(basisPoints(value))
-    }
-    let points = basisPoints(value)
-    return String(Int((Double(points) / Double(bucketSize)).rounded()) * bucketSize)
-}
-
-private func percent(_ value: Double) -> String {
-    "\(decimalString(String(value * 100), places: 1))%"
-}
-
-private func signedPercent(_ value: Double) -> String {
-    let sign = value >= 0 ? "+" : ""
-    return "\(sign)\(percent(value))"
-}
-
-private func decimalString(_ value: String, places: Int) -> String {
-    guard let decimal = Decimal(string: value) else { return value }
-    let formatter = NumberFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.numberStyle = .decimal
-    formatter.usesGroupingSeparator = true
-    formatter.minimumFractionDigits = places
-    formatter.maximumFractionDigits = places
-    return formatter.string(from: decimal as NSDecimalNumber) ?? value
-}
-
-private func dayPrefix(_ dateTime: String) -> String {
-    String(dateTime.prefix(10))
-}
-
-private func rounded(_ value: Double, places: Int) -> Double {
-    let multiplier = pow(10.0, Double(places))
-    return (value * multiplier).rounded() / multiplier
-}
-
-private func canonicalDecimalString(_ value: Decimal, places: Int) -> String {
-    let formatter = NumberFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.numberStyle = .decimal
-    formatter.usesGroupingSeparator = false
-    formatter.minimumFractionDigits = places
-    formatter.maximumFractionDigits = places
-    return formatter.string(from: value as NSDecimalNumber) ?? (value as NSDecimalNumber).stringValue
 }
