@@ -612,14 +612,12 @@ public struct DefaultClaudeLocalCommandRunner: ClaudeLocalCommandRunning {
             while process.isRunning, Date() < waitDeadline {
                 Thread.sleep(forTimeInterval: 0.1)
             }
-            if process.isRunning {
-                ClaudeLocalProcessTreeTerminator.terminateProcessTree(
-                    rootPID: process.processIdentifier,
-                    processGroup: processGroup,
-                    signal: SIGKILL,
-                    knownDescendants: descendants
-                )
-            }
+            ClaudeLocalProcessTreeTerminator.terminateProcessTree(
+                rootPID: process.processIdentifier,
+                processGroup: processGroup,
+                signal: SIGKILL,
+                knownDescendants: descendants
+            )
             process.waitUntilExit()
             finishDrains(
                 stdoutDrain,
