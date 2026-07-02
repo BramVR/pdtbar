@@ -6218,10 +6218,11 @@ public final class PDTCoalescedFirstPortfolioFetch {
 public enum PDTLiveDataSourceError: Error, CustomStringConvertible {
     case malformedToolResult(String)
     case unavailableToolResult(String)
+    case transientUnavailableToolResult(String)
 
     public var shouldSkipLiveSmoke: Bool {
         switch self {
-        case .unavailableToolResult:
+        case .unavailableToolResult, .transientUnavailableToolResult:
             true
         case .malformedToolResult:
             false
@@ -6234,38 +6235,70 @@ public enum PDTLiveDataSourceError: Error, CustomStringConvertible {
             "live PDT tool \(tool) did not return the expected read-only JSON shape"
         case .unavailableToolResult(let tool):
             "live PDT tool \(tool) reported missing auth or unavailable local access"
+        case .transientUnavailableToolResult(let tool):
+            "live PDT tool \(tool) reported a transient unavailable response"
         }
     }
 }
 
+public enum PDTLiveUnavailableKind: Equatable, Sendable {
+    case authOrSetup
+    case transient
+}
+
 public enum PDTLiveUnavailableClassifier {
     public static func shouldSkip(_ value: String) -> Bool {
+        unavailableKind(in: value) != nil
+    }
+
+    public static func unavailableKind(in value: String) -> PDTLiveUnavailableKind? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            return false
+            return nil
         }
         if let data = trimmed.data(using: .utf8),
            let object = try? JSONSerialization.jsonObject(with: data)
         {
-            return unavailableTexts(in: object).contains(where: containsUnavailablePhrase)
+            return unavailableKind(in: object)
         }
-        return containsUnavailablePhrase(trimmed)
+        return unavailableKind(inText: trimmed)
     }
 
     static func shouldSkipObject(_ object: Any) -> Bool {
-        unavailableTexts(in: object).contains(where: containsUnavailablePhrase)
+        unavailableKind(in: object) != nil
     }
 
     static func shouldSkipErrorPayload(_ object: Any) -> Bool {
-        unavailableTexts(in: object, forceErrorContext: true).contains(where: containsUnavailablePhrase)
+        unavailableKind(in: object, forceErrorContext: true) != nil
     }
 
-    private static func containsUnavailablePhrase(_ value: String) -> Bool {
+    static func unavailableKind(in object: Any, forceErrorContext: Bool = false) -> PDTLiveUnavailableKind? {
+        var sawTransient = false
+        for text in unavailableTexts(in: object, forceErrorContext: forceErrorContext) {
+            switch unavailableKind(inText: text) {
+            case .authOrSetup:
+                return .authOrSetup
+            case .transient:
+                sawTransient = true
+            case nil:
+                continue
+            }
+        }
+        return sawTransient ? .transient : nil
+    }
+
+    private static func unavailableKind(inText value: String) -> PDTLiveUnavailableKind? {
         let lower = value.lowercased()
-        return unavailablePhrases.contains { lower.contains($0) }
+        if authOrSetupPhrases.contains(where: { lower.contains($0) }) {
+            return .authOrSetup
+        }
+        if transientUnavailablePhrases.contains(where: { lower.contains($0) }) {
+            return .transient
+        }
+        return nil
     }
 
-    private static let unavailablePhrases = [
+    private static let authOrSetupPhrases = [
         "not authenticated",
         "authentication required",
         "oauth",
@@ -6278,18 +6311,21 @@ public enum PDTLiveUnavailableClassifier {
         "session expired",
         "unauthorized",
         "forbidden",
+        "server not found",
+        "unknown mcp server",
+        "setup required",
+        "setup unavailable",
+        "missing setup",
+        "needs setup",
+    ]
+
+    private static let transientUnavailablePhrases = [
         "offline",
         "connection refused",
         "failed to connect",
         "could not connect",
         "econnrefused",
-        "server not found",
-        "unknown mcp server",
         "server unavailable",
-        "setup required",
-        "setup unavailable",
-        "missing setup",
-        "needs setup",
     ]
 
     private static let errorTextKeys = Set([
@@ -7030,9 +7066,9 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                     arguments: arguments
                 )
                 // Every retry is another full Claude CLI run, so only true
-                // transients earn one; deterministic decode/unavailable/setup
-                // failures fail fast with a single attempt, and no retry
-                // starts after the caller's deadline has passed.
+                // transients earn one; deterministic decode and auth/setup
+                // unavailable failures fail fast with a single attempt, and no
+                // retry starts after the caller's deadline has passed.
                 guard attempts <= options.optionalRetryCount,
                       failure.category.isRetryable,
                       retryDeadline.map({ Date() < $0 }) ?? true
@@ -7087,6 +7123,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             .decode
         case PDTLiveDataSourceError.unavailableToolResult:
             .unavailable
+        case PDTLiveDataSourceError.transientUnavailableToolResult:
+            .transientFailure
         default:
             .exit
         }
@@ -8490,35 +8528,37 @@ private func decodeLiveTool<T: Decodable>(_ tool: String, data: Data) throws -> 
     if let decoded = try? JSONDecoder().decode(T.self, from: extraction.payloadData) {
         return decoded
     }
-    if extraction.unavailable
-        || unavailableTextPayload(extraction.payloadData)
-    {
+    let unavailableKind = extraction.unavailableKind ?? unavailableTextPayloadKind(extraction.payloadData)
+    if unavailableKind == .authOrSetup {
         throw PDTLiveDataSourceError.unavailableToolResult(tool)
+    }
+    if unavailableKind == .transient {
+        throw PDTLiveDataSourceError.transientUnavailableToolResult(tool)
     }
     throw PDTLiveDataSourceError.malformedToolResult(tool)
 }
 
 private struct LiveToolPayloadExtraction {
     var payloadData: Data
-    var unavailable: Bool
+    var unavailableKind: PDTLiveUnavailableKind?
 }
 
 private struct ExtractedMCPPayload {
     var data: Data
-    var unavailable: Bool
+    var unavailableKind: PDTLiveUnavailableKind?
 }
 
 private func extractLiveToolPayload(from data: Data) -> LiveToolPayloadExtraction {
     guard let object = try? JSONSerialization.jsonObject(with: data) else {
         return LiveToolPayloadExtraction(
             payloadData: data,
-            unavailable: unavailableTextPayload(data)
+            unavailableKind: unavailableTextPayloadKind(data)
         )
     }
     let extracted = extractedMCPPayload(from: object)
     return LiveToolPayloadExtraction(
         payloadData: extracted?.data ?? data,
-        unavailable: PDTLiveUnavailableClassifier.shouldSkipObject(object) || (extracted?.unavailable ?? false)
+        unavailableKind: PDTLiveUnavailableClassifier.unavailableKind(in: object) ?? extracted?.unavailableKind
     )
 }
 
@@ -8531,7 +8571,7 @@ private func extractedMCPPayload(from object: Any) -> ExtractedMCPPayload? {
                       let text = item["text"] as? String,
                       let textData = text.data(using: .utf8)
                 else { continue }
-                return ExtractedMCPPayload(data: textData, unavailable: false)
+                return ExtractedMCPPayload(data: textData, unavailableKind: nil)
             }
         }
         guard let nested = dictionary["result"],
@@ -8542,22 +8582,26 @@ private func extractedMCPPayload(from object: Any) -> ExtractedMCPPayload? {
             else { return nil }
             return ExtractedMCPPayload(
                 data: nestedData,
-                unavailable: PDTLiveUnavailableClassifier.shouldSkipErrorPayload(nested)
+                unavailableKind: PDTLiveUnavailableClassifier.unavailableKind(in: nested, forceErrorContext: true)
             )
         }
         return ExtractedMCPPayload(
             data: nestedData,
-            unavailable: PDTLiveUnavailableClassifier.shouldSkipErrorPayload(nested)
+            unavailableKind: PDTLiveUnavailableClassifier.unavailableKind(in: nested, forceErrorContext: true)
         )
     }
     return nil
 }
 
 private func unavailableTextPayload(_ data: Data) -> Bool {
+    unavailableTextPayloadKind(data) != nil
+}
+
+private func unavailableTextPayloadKind(_ data: Data) -> PDTLiveUnavailableKind? {
     guard let text = String(data: data, encoding: .utf8) else {
-        return false
+        return nil
     }
-    return PDTLiveUnavailableClassifier.shouldSkip(text)
+    return PDTLiveUnavailableClassifier.unavailableKind(in: text)
 }
 
 private func validMoney(_ money: Money?) -> Money? {

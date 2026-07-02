@@ -397,6 +397,33 @@ struct BaseHoldingNormalizationTests {
         }
     }
 
+    @Test("Live wrapped transient unavailable error is classified as retryable")
+    func liveWrappedTransientUnavailableErrorIsClassifiedAsRetryable() throws {
+        let connector = ScriptedPDTMCPConnector(responses: [
+            "pdt-get-portfolio-holdings": try mcpTextContent(
+                "PDT MCP server unavailable; try again later",
+                isError: true
+            ),
+        ])
+
+        do {
+            _ = try PDTMCPConnectorDataSource(
+                connector: connector,
+                liveOptions: PDTLiveDataSourceOptions(
+                    includeDistributions: false,
+                    includeXRayHoldings: false,
+                    includeIncomeEvents: false,
+                    includeDividends: false,
+                    includeIncomeQuoteLookups: false,
+                    includePriceSeries: false
+                )
+            ).snapshot(asOf: "2026-06-26")
+            Issue.record("Expected wrapped transient unavailable error")
+        } catch PDTLiveDataSourceError.transientUnavailableToolResult(let tool) {
+            #expect(tool == "pdt-get-portfolio-holdings")
+        }
+    }
+
     @Test("Live connector decodes large wrapped MCP holdings payload")
     func liveConnectorDecodesLargeWrappedMCPHoldingsPayload() throws {
         let connector = ScriptedPDTMCPConnector(responses: [

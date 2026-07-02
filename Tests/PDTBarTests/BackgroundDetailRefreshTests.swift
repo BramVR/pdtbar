@@ -596,6 +596,33 @@ struct BackgroundDetailRefreshTests {
         #expect(connector.callCount(of: "pdt-list-symbol-prices") == 2)
     }
 
+    @Test("Structured transient unavailable optional phases retry")
+    func structuredTransientUnavailableOptionalPhasesRetry() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-transient-unavailable-retry-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let connector = OneShotResponsePDTConnector(
+            responses: try detailRefreshResponses(),
+            firstResponses: [
+                "pdt-get-portfolio-distributions": try mcpErrorTextContent("PDT MCP server unavailable; try again later"),
+            ]
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        #expect(result.outcome == .completed)
+        #expect(connector.callCount(of: "pdt-get-portfolio-distributions") == 2)
+        #expect(connector.callCount(of: "pdt-list-calendar-events") == 1)
+        #expect(connector.callCount(of: "pdt-list-symbol-prices") == 2)
+        #expect(result.diagnostics.isEmpty)
+    }
+
     @Test("Unavailable setup failure short-circuits the remaining detail phases")
     func unavailableSetupFailureShortCircuitsRemainingDetailPhases() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-short-circuit-test")
@@ -1023,6 +1050,50 @@ private final class OneShotFailingPDTConnector: PDTMCPConnector, @unchecked Send
     }
 }
 
+private final class OneShotResponsePDTConnector: PDTMCPConnector, @unchecked Sendable {
+    let responses: [String: Data]
+    private var firstResponses: [String: Data]
+    private let lock = NSLock()
+    private var calls: [String] = []
+
+    init(responses: [String: Data], firstResponses: [String: Data]) {
+        self.responses = responses
+        self.firstResponses = firstResponses
+    }
+
+    func callCount(of name: String) -> Int {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return calls.filter { $0 == name }.count
+    }
+
+    func availableReadTools() throws -> Set<String> {
+        Set(PDTReadTools.requiredV1)
+    }
+
+    func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
+        lock.lock()
+        calls.append(name)
+        if let firstResponse = firstResponses.removeValue(forKey: name) {
+            lock.unlock()
+            return firstResponse
+        }
+        lock.unlock()
+
+        let suffix = arguments
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "&")
+        let key = suffix.isEmpty ? name : "\(name)?\(suffix)"
+        guard let response = responses[key] ?? responses[name] else {
+            throw PDTMCPConnectorError.missingScriptedResponse(key)
+        }
+        return response
+    }
+}
+
 private final class ProgressReportingPDTConnector: PDTMCPConnector, PDTMCPConnectorProgressReporting, @unchecked Sendable {
     let responses: [String: Data]
 
@@ -1176,6 +1247,18 @@ private func detailRefreshResponses(
         """)
     }
     return responses
+}
+
+private func mcpErrorTextContent(_ text: String) throws -> Data {
+    try JSONSerialization.data(withJSONObject: [
+        "content": [
+            [
+                "type": "text",
+                "text": text,
+            ],
+        ],
+        "isError": true,
+    ], options: [.sortedKeys])
 }
 
 private func testSnapshot(
