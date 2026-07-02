@@ -54,6 +54,96 @@ struct FreshnessLedgerTests {
         #expect(unknown.sourceCaveats.contains("No open holdings with dated prices"))
     }
 
+    @Test("Ledger goes stale when evaluated days after the snapshot asOf")
+    func ledgerGoesStaleWhenEvaluatedDaysAfterTheSnapshotAsOf() {
+        // Wednesday snapshot whose prices are current on its own asOf day.
+        let snapshot = freshnessSnapshot(
+            asOf: "2026-06-24",
+            holdings: [
+                datedHolding("Fresh A", quoteId: 1, priceAsOf: "2026-06-24"),
+            ]
+        )
+
+        let sameDay = FreshnessLedger.build(from: snapshot, detailRefreshOutcome: .completed, today: "2026-06-24")
+        let withinGrace = FreshnessLedger.build(from: snapshot, detailRefreshOutcome: .completed, today: "2026-06-25")
+        let twoBusinessDaysLater = FreshnessLedger.build(from: snapshot, detailRefreshOutcome: .completed, today: "2026-06-26")
+
+        #expect(sameDay.status == .fresh)
+        #expect(sameDay.staleHoldingCount == 0)
+        #expect(withinGrace.status == .fresh)
+        #expect(twoBusinessDaysLater.status == .stale)
+        #expect(twoBusinessDaysLater.staleHoldingCount == 1)
+        #expect(twoBusinessDaysLater.oldestPriceAsOf == "2026-06-24")
+    }
+
+    @Test("Weekend does not spuriously stale a Friday snapshot")
+    func weekendDoesNotSpuriouslyStaleAFridaySnapshot() {
+        // Friday 2026-06-26 snapshot with same-day prices.
+        let snapshot = freshnessSnapshot(
+            asOf: "2026-06-26",
+            holdings: [
+                datedHolding("Fresh A", quoteId: 1, priceAsOf: "2026-06-26"),
+            ]
+        )
+
+        let saturday = FreshnessLedger.build(from: snapshot, detailRefreshOutcome: .completed, today: "2026-06-27")
+        let sunday = FreshnessLedger.build(from: snapshot, detailRefreshOutcome: .completed, today: "2026-06-28")
+        let monday = FreshnessLedger.build(from: snapshot, detailRefreshOutcome: .completed, today: "2026-06-29")
+        let tuesday = FreshnessLedger.build(from: snapshot, detailRefreshOutcome: .completed, today: "2026-06-30")
+
+        #expect(saturday.status == .fresh)
+        #expect(sunday.status == .fresh)
+        #expect(monday.status == .fresh)
+        #expect(tuesday.status == .stale)
+    }
+
+    @Test("Ledger ignores a today earlier than the snapshot asOf")
+    func ledgerIgnoresATodayEarlierThanTheSnapshotAsOf() {
+        let snapshot = freshnessSnapshot(
+            asOf: "2026-06-25",
+            holdings: [
+                datedHolding("Fresh A", quoteId: 1, priceAsOf: "2026-06-24"),
+            ]
+        )
+
+        let skewed = FreshnessLedger.build(from: snapshot, detailRefreshOutcome: .completed, today: "2026-06-20")
+        let asOfRelative = FreshnessLedger.build(from: snapshot, detailRefreshOutcome: .completed)
+
+        #expect(skewed.status == asOfRelative.status)
+        #expect(skewed.status == .fresh)
+    }
+
+    @Test("Cached pulse from a prior day cannot stay fresh")
+    func cachedPulseFromAPriorDayCannotStayFresh() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "freshness-cached-age")
+        var snapshot = freshnessSnapshot(
+            asOf: "2026-06-24",
+            holdings: [
+                datedHolding("Fresh A", quoteId: 1, priceAsOf: "2026-06-24"),
+            ]
+        )
+        snapshot.latestCompleteDetailFillAsOf = "2026-06-24"
+        snapshot.latestDetailFillOutcome = .completed
+        _ = try store.commitCurrentSnapshot(snapshot)
+
+        let sameDay = try #require(try PressureRunner.cachedPulse(snapshotStore: store, today: "2026-06-24"))
+        let daysLater = try #require(try PressureRunner.cachedPulse(snapshotStore: store, today: "2026-06-30"))
+        let daysLaterFreshness = daysLater.model.facetSnapshots.freshness
+        let freshnessSummary = daysLater.descriptor.sections
+            .first { $0.id == "freshness" }?
+            .rows
+            .first { $0.id == "freshness.summary" }
+
+        #expect(sameDay.model.facetSnapshots.freshness.status == .fresh)
+        #expect(!sameDay.descriptor.statusVisual.isDimmed)
+        #expect(daysLaterFreshness.status == .stale)
+        #expect(daysLaterFreshness.staleHoldingCount == 1)
+        #expect(daysLater.model.facetSnapshots.dataHealth.freshness.status == .stale)
+        #expect(daysLater.model.facetSnapshots.dataHealth.status == .degraded)
+        #expect(daysLater.descriptor.statusVisual.isDimmed)
+        #expect(freshnessSummary?.detail == "1 stale; oldest 2026-06-24")
+    }
+
     @Test("Ledger distinguishes mixed unknown price dates")
     func ledgerDistinguishesMixedUnknownPriceDates() {
         let ledger = FreshnessLedger.build(
@@ -88,7 +178,7 @@ struct FreshnessLedgerTests {
             snapshotStore: store,
             detailRefreshOutcome: .completed
         )
-        let cached = try #require(try PressureRunner.cachedPulse(snapshotStore: store))
+        let cached = try #require(try PressureRunner.cachedPulse(snapshotStore: store, today: "2026-06-25"))
         let loaded = try #require(try store.loadPriorSnapshot())
         let rebuilt = FreshnessLedger.build(from: loaded)
 
@@ -110,7 +200,7 @@ struct FreshnessLedgerTests {
             snapshotStore: store,
             detailRefreshOutcome: .degraded
         )
-        let cachedDegraded = try #require(try PressureRunner.cachedPulse(snapshotStore: store))
+        let cachedDegraded = try #require(try PressureRunner.cachedPulse(snapshotStore: store, today: "2026-06-26"))
 
         #expect(inProgress.status == .partial)
         #expect(inProgress.latestCompleteDetailFillAsOf == "2026-06-25")
