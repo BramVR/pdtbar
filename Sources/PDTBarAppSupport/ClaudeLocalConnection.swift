@@ -489,6 +489,10 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
 }
 
 public struct DefaultClaudeLocalCommandRunner: ClaudeLocalCommandRunning {
+    /// How long a finished (exited or killed) run waits for the pipe drains
+    /// to reach end-of-file before abandoning them.
+    private static let drainGracePeriod: TimeInterval = 1.0
+
     public init() {}
 
     public func executableExists(
@@ -520,20 +524,9 @@ public struct DefaultClaudeLocalCommandRunner: ClaudeLocalCommandRunning {
         let stderr = Pipe()
         process.standardOutput = stdout
         process.standardError = stderr
-        let stdoutData = LockedDataAccumulator()
-        let stderrData = LockedDataAccumulator()
-        let readers = DispatchGroup()
-        readers.enter()
-        DispatchQueue.global(qos: .utility).async {
-            stdoutData.append(stdout.fileHandleForReading.readDataToEndOfFile())
-            readers.leave()
-        }
-        readers.enter()
-        DispatchQueue.global(qos: .utility).async {
-            stderrData.append(stderr.fileHandleForReading.readDataToEndOfFile())
-            readers.leave()
-        }
         try process.run()
+        let stdoutDrain = ClaudeLocalPipeDrain(pipe: stdout)
+        let stderrDrain = ClaudeLocalPipeDrain(pipe: stderr)
         let processGroup = setProcessGroup(process.processIdentifier)
         let deadline = Date().addingTimeInterval(timeout)
         while process.isRunning && Date() < deadline {
@@ -561,20 +554,53 @@ public struct DefaultClaudeLocalCommandRunner: ClaudeLocalCommandRunning {
                 )
             }
             process.waitUntilExit()
-            readers.wait()
+            finishDrains(
+                stdoutDrain,
+                stderrDrain,
+                deadline: Date().addingTimeInterval(Self.drainGracePeriod)
+            )
             return ClaudeLocalProcessResult(
-                stdout: String(decoding: stdoutData.snapshot(), as: UTF8.self),
-                stderr: String(decoding: stderrData.snapshot(), as: UTF8.self),
+                stdout: String(decoding: stdoutDrain.snapshot(), as: UTF8.self),
+                stderr: String(decoding: stderrDrain.snapshot(), as: UTF8.self),
                 exitCode: -1
             )
         }
         process.waitUntilExit()
-        readers.wait()
+        finishDrains(
+            stdoutDrain,
+            stderrDrain,
+            deadline: Date().addingTimeInterval(Self.drainGracePeriod)
+        )
         return ClaudeLocalProcessResult(
-            stdout: String(decoding: stdoutData.snapshot(), as: UTF8.self),
-            stderr: String(decoding: stderrData.snapshot(), as: UTF8.self),
+            stdout: String(decoding: stdoutDrain.snapshot(), as: UTF8.self),
+            stderr: String(decoding: stderrDrain.snapshot(), as: UTF8.self),
             exitCode: process.terminationStatus
         )
+    }
+
+    /// Joins the pipe drains without trusting the child's process tree to
+    /// release the pipes. A descendant that survived the process exit or
+    /// escaped the kill sweep (for example one spawned between the descendant
+    /// scan and the signals, or before setpgid took effect) keeps the pipe
+    /// write ends open, so a drain never sees end-of-file and an unbounded
+    /// join would hang `run()` — and the menu's fetch state — forever. The
+    /// exited process already wrote everything it had to say, and buffered
+    /// output is readable immediately, so a short grace period after exit
+    /// keeps healthy runs complete; anything still open at the deadline is
+    /// abandoned with whatever output was captured so far.
+    private func finishDrains(
+        _ stdoutDrain: ClaudeLocalPipeDrain,
+        _ stderrDrain: ClaudeLocalPipeDrain,
+        deadline: Date
+    ) {
+        let stdoutFinished = stdoutDrain.waitUntilFinished(deadline: deadline)
+        let stderrFinished = stderrDrain.waitUntilFinished(deadline: deadline)
+        if !stdoutFinished {
+            stdoutDrain.abandon()
+        }
+        if !stderrFinished {
+            stderrDrain.abandon()
+        }
     }
 
     private func resolvedExecutable(
@@ -789,6 +815,115 @@ public struct ClaudeLocalLoginRunner: Sendable {
             "authenticated successfully",
         ]
         return successNeedles.contains { normalized.contains($0) }
+    }
+}
+
+/// Drains one pipe's read end on a background thread without ever blocking in
+/// an uninterruptible call. `readDataToEndOfFile()` cannot be used here: when
+/// a kill-sweep escapee keeps the write end open it never returns, and
+/// force-closing the handle from another thread to unblock it raises
+/// `NSFileHandleOperationException` on the reader thread (observed under
+/// `swift test`), crashing the process. Instead the file descriptor is set
+/// non-blocking and polled with a short timeout, so normal runs still read to
+/// end-of-file while a hung drain can be abandoned within one poll interval.
+private final class ClaudeLocalPipeDrain: @unchecked Sendable {
+    private static let pollIntervalMilliseconds: Int32 = 50
+    private static let abandonGracePeriod: TimeInterval = 1.0
+    /// How many more chunk reads an abandoned drain may perform. One chunk
+    /// covers the whole kernel pipe buffer, so pre-hang output is always
+    /// swept, while an escapee that keeps writing cannot pin the drain
+    /// thread or grow memory after `run()` has returned.
+    private static let abandonedSweepReadLimit = 4
+
+    private let readHandle: FileHandle
+    private let accumulated = LockedDataAccumulator()
+    private let finished = DispatchGroup()
+    private let stateLock = NSLock()
+    private var abandoned = false
+
+    init(pipe: Pipe) {
+        readHandle = pipe.fileHandleForReading
+        let descriptor = readHandle.fileDescriptor
+        _ = fcntl(descriptor, F_SETFL, fcntl(descriptor, F_GETFL) | O_NONBLOCK)
+        finished.enter()
+        // A dedicated thread, not a global GCD queue: pool starvation under
+        // load could otherwise delay the drain past the grace period and
+        // lose output that was already sitting in the pipe buffer.
+        let thread = Thread { [self] in
+            drain(descriptor)
+            finished.leave()
+        }
+        thread.name = "pdtbar-claude-pipe-drain"
+        thread.qualityOfService = .utility
+        thread.start()
+    }
+
+    func snapshot() -> Data {
+        accumulated.snapshot()
+    }
+
+    /// Waits for the drain to reach end-of-file. Returns false when the pipe
+    /// write end is still open at the deadline.
+    func waitUntilFinished(deadline: Date) -> Bool {
+        finished.wait(timeout: .now() + max(deadline.timeIntervalSinceNow, 0)) == .success
+    }
+
+    /// Stops the drain even though the write end never closed. The drain
+    /// thread notices within one poll interval, so this returns quickly and
+    /// the read descriptor is released only after the thread has exited.
+    func abandon() {
+        stateLock.lock()
+        abandoned = true
+        stateLock.unlock()
+        _ = finished.wait(timeout: .now() + Self.abandonGracePeriod)
+    }
+
+    private var isAbandoned: Bool {
+        stateLock.lock()
+        defer {
+            stateLock.unlock()
+        }
+        return abandoned
+    }
+
+    private func drain(_ descriptor: Int32) {
+        var chunk = [UInt8](repeating: 0, count: 65536)
+        var remainingAbandonedReads = Self.abandonedSweepReadLimit
+        while true {
+            // Abandonment is re-checked on every iteration so an escapee
+            // that keeps writing cannot pin the drain in the readable
+            // branch; already-buffered output is still swept (bounded) so
+            // whatever the process wrote before hanging is captured.
+            let abandoned = isAbandoned
+            if abandoned, remainingAbandonedReads <= 0 {
+                return
+            }
+            let readCount = read(descriptor, &chunk, chunk.count)
+            if readCount > 0 {
+                accumulated.append(Data(bytes: chunk, count: readCount))
+                if abandoned {
+                    remainingAbandonedReads -= 1
+                }
+                continue
+            }
+            if readCount == 0 {
+                return
+            }
+            if errno == EINTR {
+                continue
+            }
+            if errno != EAGAIN && errno != EWOULDBLOCK {
+                return
+            }
+            // Nothing buffered right now.
+            if abandoned {
+                return
+            }
+            var pollDescriptor = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+            if poll(&pollDescriptor, 1, Self.pollIntervalMilliseconds) < 0, errno != EINTR, errno != EAGAIN {
+                return
+            }
+        }
     }
 }
 
