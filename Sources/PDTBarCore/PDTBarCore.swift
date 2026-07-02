@@ -6351,6 +6351,32 @@ public enum PDTDetailRefreshFailureCategory: String, Codable, Equatable, Sendabl
     case exit
 }
 
+public extension PDTDetailRefreshFailureCategory {
+    /// True transients where a fresh Claude CLI run can plausibly succeed.
+    /// Deterministic failures (stable-input decode mismatches, missing scripted
+    /// responses) and Claude/PDT setup or auth outages repeat identically, so
+    /// retrying them only spawns more full CLI runs.
+    var isRetryable: Bool {
+        switch self {
+        case .transientFailure, .timeout, .exit:
+            true
+        case .setupUnavailable, .unavailable, .decode, .missingScriptedResponse:
+            false
+        }
+    }
+
+    /// Claude/PDT auth or setup outages that would fail every remaining detail
+    /// phase the same way; once observed, later phases should be skipped.
+    var indicatesUnavailableSetup: Bool {
+        switch self {
+        case .setupUnavailable, .unavailable:
+            true
+        case .transientFailure, .timeout, .exit, .decode, .missingScriptedResponse:
+            false
+        }
+    }
+}
+
 public struct PDTDetailRefreshFailureDiagnostic: Codable, Equatable, Sendable {
     public var toolName: String
     public var phase: BackgroundDetailRefreshPhase
@@ -6376,17 +6402,20 @@ public struct PDTDetailRefreshFailureDiagnostic: Codable, Equatable, Sendable {
 public struct PDTBackgroundDetailRefreshOptions: Equatable, Sendable {
     public var priceHistoryConcurrencyLimit: Int
     public var priceHistoryTimeoutSeconds: Double
+    public var incomeQuoteLookupTimeoutSeconds: Double
     public var optionalRetryCount: Int
     public var retryBackoffSeconds: Double
 
     public init(
         priceHistoryConcurrencyLimit: Int = 4,
         priceHistoryTimeoutSeconds: Double = 240,
+        incomeQuoteLookupTimeoutSeconds: Double = 240,
         optionalRetryCount: Int = 1,
         retryBackoffSeconds: Double = 0.35
     ) {
         self.priceHistoryConcurrencyLimit = max(1, priceHistoryConcurrencyLimit)
         self.priceHistoryTimeoutSeconds = max(0.01, priceHistoryTimeoutSeconds)
+        self.incomeQuoteLookupTimeoutSeconds = max(0.01, incomeQuoteLookupTimeoutSeconds)
         self.optionalRetryCount = max(0, optionalRetryCount)
         self.retryBackoffSeconds = max(0, retryBackoffSeconds)
     }
@@ -6469,6 +6498,24 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         preserveOptionalDetails(in: &snapshot, from: originalPriorSnapshot)
         _ = try snapshotStore.commitCurrentSnapshot(snapshot)
 
+        // Once one optional phase fails because Claude/PDT is unavailable
+        // (auth or setup outage), every remaining phase would burn the same
+        // full Claude CLI runs on the same outage, so they are skipped and the
+        // refresh degrades with the unavailable diagnostic instead.
+        var skipRemainingPhasesForUnavailableSetup = false
+        func recordOptionalPhaseFailure(
+            _ error: Error,
+            tool: String,
+            phase: BackgroundDetailRefreshPhase,
+            arguments: [String: String] = [:]
+        ) {
+            let failure = diagnostic(for: error, tool: tool, phase: phase, arguments: arguments)
+            diagnostics.append(failure)
+            if failure.category.indicatesUnavailableSetup {
+                skipRemainingPhasesForUnavailableSetup = true
+            }
+        }
+
         do {
             progress(BackgroundDetailRefreshProgress(phase: .allocation))
             let distributions: LiveDistributionsEnvelope = try callDecodedWithRetry(
@@ -6482,57 +6529,64 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             snapshot.assetTypes = normalized.assetTypes
             _ = try snapshotStore.commitCurrentSnapshot(snapshot)
         } catch {
-            diagnostics.append(diagnostic(for: error, tool: "pdt-get-portfolio-distributions", phase: .allocation))
+            recordOptionalPhaseFailure(error, tool: "pdt-get-portfolio-distributions", phase: .allocation)
         }
 
-        do {
-            progress(BackgroundDetailRefreshProgress(phase: .xRay))
-            snapshot.xRayHoldings = PDTOptionalDetailNormalizer.normalizeXRayHoldings(try xRayHoldings(progress: progress))
-            _ = try snapshotStore.commitCurrentSnapshot(snapshot)
-        } catch {
-            diagnostics.append(diagnostic(for: error, tool: "pdt-list-x-ray-holdings", phase: .xRay, arguments: [
-                "limit": "",
-                "offset": "",
-            ]))
+        if !skipRemainingPhasesForUnavailableSetup {
+            do {
+                progress(BackgroundDetailRefreshProgress(phase: .xRay))
+                snapshot.xRayHoldings = PDTOptionalDetailNormalizer.normalizeXRayHoldings(try xRayHoldings(progress: progress))
+                _ = try snapshotStore.commitCurrentSnapshot(snapshot)
+            } catch {
+                recordOptionalPhaseFailure(error, tool: "pdt-list-x-ray-holdings", phase: .xRay, arguments: [
+                    "limit": "",
+                    "offset": "",
+                ])
+            }
         }
 
-        do {
-            progress(BackgroundDetailRefreshProgress(phase: .income))
-            let income = try incomeEvents(
+        if !skipRemainingPhasesForUnavailableSetup {
+            do {
+                progress(BackgroundDetailRefreshProgress(phase: .income))
+                let income = try incomeEvents(
+                    asOf: snapshotAsOf,
+                    holdings: snapshot.openHoldings,
+                    priorSnapshot: originalPriorSnapshot,
+                    progress: progress
+                )
+                snapshot.incomeEvents = income.events
+                snapshot.dividendRowCount = income.dividendRowCount
+                _ = try snapshotStore.commitCurrentSnapshot(snapshot)
+                diagnostics.append(contentsOf: income.diagnostics)
+            } catch {
+                recordOptionalPhaseFailure(error, tool: "pdt-list-calendar-events", phase: .income)
+            }
+        }
+
+        if !skipRemainingPhasesForUnavailableSetup {
+            progress(BackgroundDetailRefreshProgress(
+                phase: .priceHistory,
+                completedUnitCount: 0,
+                totalUnitCount: snapshot.openHoldings.count
+            ))
+            let priceHistory = priceSeries(
+                for: snapshot.openHoldings,
                 asOf: snapshotAsOf,
-                holdings: snapshot.openHoldings,
-                priorSnapshot: originalPriorSnapshot,
                 progress: progress
             )
-            snapshot.incomeEvents = income.events
-            snapshot.dividendRowCount = income.dividendRowCount
-            _ = try snapshotStore.commitCurrentSnapshot(snapshot)
-        } catch {
-            diagnostics.append(diagnostic(for: error, tool: "pdt-list-calendar-events", phase: .income))
-        }
-
-        progress(BackgroundDetailRefreshProgress(
-            phase: .priceHistory,
-            completedUnitCount: 0,
-            totalUnitCount: snapshot.openHoldings.count
-        ))
-        let priceHistory = priceSeries(
-            for: snapshot.openHoldings,
-            asOf: snapshotAsOf,
-            progress: progress
-        )
-        snapshot.priceSeries = priceSeriesWithPriorFallback(
-            refreshed: priceHistory.points,
-            failedQuoteIDs: priceHistory.failedQuoteIDs,
-            priorSnapshot: originalPriorSnapshot,
-            currentQuoteIDs: Set(snapshot.openHoldings.map(\.quoteId))
-        ).sorted {
-            if $0.quoteId != $1.quoteId {
-                return $0.quoteId < $1.quoteId
+            snapshot.priceSeries = priceSeriesWithPriorFallback(
+                refreshed: priceHistory.points,
+                failedQuoteIDs: priceHistory.failedQuoteIDs,
+                priorSnapshot: originalPriorSnapshot,
+                currentQuoteIDs: Set(snapshot.openHoldings.map(\.quoteId))
+            ).sorted {
+                if $0.quoteId != $1.quoteId {
+                    return $0.quoteId < $1.quoteId
+                }
+                return $0.date < $1.date
             }
-            return $0.date < $1.date
+            diagnostics.append(contentsOf: priceHistory.diagnostics)
         }
-        diagnostics.append(contentsOf: priceHistory.diagnostics)
         let outcome: PDTBackgroundDetailRefreshOutcome = diagnostics.isEmpty ? .completed : .degraded
         let pulse = try PressureRunner.refreshedPulse(
             snapshot: snapshot,
@@ -6647,7 +6701,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         holdings: [NormalizedHolding],
         priorSnapshot: PortfolioSnapshot?,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
-    ) throws -> (events: [IncomeEventSummary], dividendRowCount: Int) {
+    ) throws -> (events: [IncomeEventSummary], dividendRowCount: Int, diagnostics: [PDTDetailRefreshFailureDiagnostic]) {
         let incomeDateRange = [
             "date_from": snapshotAsOf,
             "date_to": dayString(snapshotAsOf, addingDays: 30),
@@ -6659,7 +6713,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         let paginatedCalendarEvents = try liveCalendarEvents(arguments: incomeDateRange, progress: progress)
         let dividends = try liveDividends(arguments: dividendDateRange, progress: progress)
         let calendarEvents = paginatedCalendarEvents.filter { $0.type != "no-events-today" }
-        let quoteIDsBySymbolID = try incomeQuoteIDsBySymbolID(
+        let quoteLookup = try incomeQuoteIDsBySymbolID(
             for: calendarEvents,
             holdings: holdings,
             priorSnapshot: priorSnapshot,
@@ -6668,11 +6722,12 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         let normalized = PDTOptionalDetailNormalizer.normalizeIncomeEvents(
             calendarEvents: calendarEvents.map(\.optionalDetailInput),
             dividends: dividends.map(\.optionalDetailInput),
-            quoteIDsBySymbolID: quoteIDsBySymbolID
+            quoteIDsBySymbolID: quoteLookup.quoteIDsBySymbolID
         )
         return (
             events: normalized.events,
-            dividendRowCount: normalized.dividendRowCount
+            dividendRowCount: normalized.dividendRowCount,
+            diagnostics: quoteLookup.diagnostics
         )
     }
 
@@ -6708,10 +6763,10 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         holdings: [NormalizedHolding],
         priorSnapshot: PortfolioSnapshot?,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
-    ) throws -> [Int: Int] {
+    ) throws -> (quoteIDsBySymbolID: [Int: Int], diagnostics: [PDTDetailRefreshFailureDiagnostic]) {
         let neededSymbolIDs = Set(calendarEvents.compactMap(\.symbolId))
         guard !neededSymbolIDs.isEmpty else {
-            return [:]
+            return ([:], [])
         }
         let holdingQuoteIDsByName = Dictionary(
             grouping: holdings,
@@ -6745,11 +6800,27 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         }
         var unresolvedSymbolIDs = neededSymbolIDs.subtracting(quoteIDsBySymbolID.keys)
         guard !unresolvedSymbolIDs.isEmpty else {
-            return quoteIDsBySymbolID
+            return (quoteIDsBySymbolID, [])
         }
+        // The sequential per-holding scan is one full Claude CLI run per quote
+        // lookup, so it is deadline-bounded like the price-history phase; on
+        // timeout the phase keeps the partial mapping and degrades instead of
+        // holding the whole refresh in "Syncing".
+        let deadline = Date().addingTimeInterval(options.incomeQuoteLookupTimeoutSeconds)
         for holding in holdings {
             guard !unresolvedSymbolIDs.isEmpty else {
                 break
+            }
+            guard Date() < deadline else {
+                return (quoteIDsBySymbolID, [
+                    PDTDetailRefreshFailureDiagnostic(
+                        toolName: "pdt-get-symbol-quote",
+                        phase: .income,
+                        attemptCount: 1,
+                        category: .timeout,
+                        argumentShape: ["id"]
+                    ),
+                ])
             }
             let quote: LiveSymbolQuoteEnvelope = try callDecodedWithRetry(
                 "pdt-get-symbol-quote",
@@ -6762,7 +6833,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             }
             quoteIDsBySymbolID[quote.symbolId] = quote.id
         }
-        return quoteIDsBySymbolID
+        return (quoteIDsBySymbolID, [])
     }
 
     private func normalizedIncomeSymbolName(_ name: String) -> String {
@@ -6821,7 +6892,13 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 defer {
                     group.leave()
                 }
-                while Date() < deadline, let quoteID = workTracker.nextQuoteID() {
+                // Stop pulling new holdings once any price call reports a
+                // Claude/PDT auth or setup outage; the remaining holdings
+                // would each burn another doomed full CLI run.
+                while Date() < deadline,
+                      accumulator.unavailableSetupCategory() == nil,
+                      let quoteID = workTracker.nextQuoteID()
+                {
                     let arguments = priceDateRange.merging([
                         "symbol_quote_id": String(quoteID),
                     ]) { _, new in new }
@@ -6875,8 +6952,10 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         }
         let timedOut = group.wait(timeout: .now() + timeoutSeconds) == .timedOut
             || Date() >= deadline
-        if timedOut {
-            for quoteID in workTracker.markTimedOut() {
+        let unavailableSetupCategory = accumulator.unavailableSetupCategory()
+        if timedOut || unavailableSetupCategory != nil {
+            let abandonedCategory = unavailableSetupCategory ?? .timeout
+            for quoteID in workTracker.markAbandoned() {
                 let arguments = priceDateRange.merging([
                     "symbol_quote_id": String(quoteID),
                 ]) { _, new in new }
@@ -6885,7 +6964,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                         toolName: "pdt-list-symbol-prices",
                         phase: .priceHistory,
                         attemptCount: 1,
-                        category: .timeout,
+                        category: abandonedCategory,
                         argumentShape: arguments.keys.sorted()
                     ),
                     failedQuoteID: quoteID
@@ -6912,29 +6991,31 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         progress: (@Sendable (BackgroundDetailRefreshProgress) -> Void)? = nil
     ) throws -> T {
         var attempts = 0
-        var lastError: Error?
-        repeat {
+        while true {
             attempts += 1
             let detail = attempts == 1 ? "Calling \(tool)" : "Retrying \(tool)"
             progress?(BackgroundDetailRefreshProgress(phase: phase, detail: detail))
             do {
                 return try callDecoded(tool, arguments: arguments)
             } catch {
-                lastError = error
-                if attempts <= options.optionalRetryCount, options.retryBackoffSeconds > 0 {
+                let failure = diagnostic(
+                    for: error,
+                    tool: tool,
+                    phase: phase,
+                    attempts: attempts,
+                    arguments: arguments
+                )
+                // Every retry is another full Claude CLI run, so only true
+                // transients earn one; deterministic decode/unavailable/setup
+                // failures fail fast with a single attempt.
+                guard attempts <= options.optionalRetryCount, failure.category.isRetryable else {
+                    throw PDTDetailRefreshToolError(diagnostic: failure)
+                }
+                if options.retryBackoffSeconds > 0 {
                     Thread.sleep(forTimeInterval: options.retryBackoffSeconds)
                 }
             }
-        } while attempts <= options.optionalRetryCount
-        throw PDTDetailRefreshToolError(
-            diagnostic: diagnostic(
-                for: lastError ?? PDTMCPConnectorError.transientFailure("unknown detail refresh failure"),
-                tool: tool,
-                phase: phase,
-                attempts: attempts,
-                arguments: arguments
-            )
-        )
+        }
     }
 
     private func diagnostic(
@@ -6988,6 +7069,7 @@ private final class PDTPriceHistoryAccumulator: @unchecked Sendable {
     private var points: [PricePoint] = []
     private var diagnostics: [PDTDetailRefreshFailureDiagnostic] = []
     private var failedQuoteIDs: Set<Int> = []
+    private var firstUnavailableSetupCategory: PDTDetailRefreshFailureCategory?
 
     func markCompleted() -> Int {
         lock.lock()
@@ -7006,6 +7088,14 @@ private final class PDTPriceHistoryAccumulator: @unchecked Sendable {
         return completed
     }
 
+    func unavailableSetupCategory() -> PDTDetailRefreshFailureCategory? {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return firstUnavailableSetupCategory
+    }
+
     func append(points newPoints: [PricePoint]) {
         lock.lock()
         points.append(contentsOf: newPoints)
@@ -7016,6 +7106,9 @@ private final class PDTPriceHistoryAccumulator: @unchecked Sendable {
         lock.lock()
         diagnostics.append(diagnostic)
         failedQuoteIDs.insert(failedQuoteID)
+        if firstUnavailableSetupCategory == nil, diagnostic.category.indicatesUnavailableSetup {
+            firstUnavailableSetupCategory = diagnostic.category
+        }
         lock.unlock()
     }
 
@@ -7033,7 +7126,7 @@ private final class PDTPriceHistoryWorkTracker: @unchecked Sendable {
     private var pendingQuoteIDs: [Int]
     private var runningQuoteIDs: Set<Int> = []
     private var finishedQuoteIDs: Set<Int> = []
-    private var timedOutQuoteIDs: Set<Int> = []
+    private var abandonedQuoteIDs: Set<Int> = []
 
     init(quoteIDs: [Int]) {
         pendingQuoteIDs = quoteIDs.reversed()
@@ -7057,14 +7150,14 @@ private final class PDTPriceHistoryWorkTracker: @unchecked Sendable {
             lock.unlock()
         }
         runningQuoteIDs.remove(quoteID)
-        guard !timedOutQuoteIDs.contains(quoteID), finishedQuoteIDs.insert(quoteID).inserted else {
+        guard !abandonedQuoteIDs.contains(quoteID), finishedQuoteIDs.insert(quoteID).inserted else {
             return false
         }
         record()
         return true
     }
 
-    func markTimedOut() -> [Int] {
+    func markAbandoned() -> [Int] {
         lock.lock()
         defer {
             lock.unlock()
@@ -7072,10 +7165,10 @@ private final class PDTPriceHistoryWorkTracker: @unchecked Sendable {
         let unfinished = Set(pendingQuoteIDs)
             .union(runningQuoteIDs)
             .subtracting(finishedQuoteIDs)
-            .subtracting(timedOutQuoteIDs)
+            .subtracting(abandonedQuoteIDs)
         pendingQuoteIDs.removeAll()
         runningQuoteIDs.subtract(unfinished)
-        timedOutQuoteIDs.formUnion(unfinished)
+        abandonedQuoteIDs.formUnion(unfinished)
         return unfinished.sorted()
     }
 }
