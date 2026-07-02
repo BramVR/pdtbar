@@ -306,6 +306,35 @@ struct ClaudeLocalConnectionTests {
         #expect(connection.checkReadiness() == .missingClaudeLogin)
     }
 
+    @Test("Readiness probe reports missing login when the Claude binary vanished mid-probe")
+    func readinessProbeReportsMissingLoginWhenClaudeBinaryVanishedMidProbe() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: #"{"loggedIn":true}"#, stderr: "", exitCode: 0),
+            .init(stdout: "", stderr: "claude not found", exitCode: -1),
+        ])
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(),
+            commandRunner: runner
+        )
+
+        #expect(connection.checkReadiness() == .missingClaudeLogin)
+    }
+
+    @Test("MCP list missing binary during availability stays setup unavailable")
+    func mcpListMissingBinaryDuringAvailabilityStaysSetupUnavailable() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: "", stderr: "claude not found", exitCode: -1),
+        ])
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 0),
+            commandRunner: runner
+        )
+
+        #expect(throws: PDTMCPConnectorError.setupUnavailable("Claude CLI is unavailable")) {
+            try connection.availableReadTools(required: ["pdt-get-portfolio-holdings"])
+        }
+    }
+
     @Test("MCP list timeout during availability is transient, not missing setup")
     func mcpListTimeoutDuringAvailabilityIsTransient() throws {
         let runner = RecordingClaudeCommandRunner(results: [

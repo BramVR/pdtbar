@@ -79,6 +79,11 @@ public struct ClaudeLocalConnectionConfiguration: Sendable {
     }
 }
 
+private enum ClaudeAbnormalRunExit {
+    case timedOut
+    case executableMissing
+}
+
 public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgressReporting {
     /// `DefaultClaudeLocalCommandRunner` reports this exit code when it had to
     /// kill a run that outlived its timeout (and when the executable vanished
@@ -130,9 +135,15 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             }
             // A probe that timed out proves the CLI was slow, not that the
             // user is logged out; report a retryable probe failure instead of
-            // asking a logged-in user to log in again.
-            guard result.exitCode != Self.timedOutExitCode else {
+            // asking a logged-in user to log in again. A binary that vanished
+            // mid-probe still reports the missing-CLI/login state.
+            switch abnormalRunExit(result) {
+            case .executableMissing:
+                return .missingClaudeLogin
+            case .timedOut:
                 return .failed
+            case nil:
+                break
             }
             guard result.exitCode == 0 else {
                 return .missingClaudeLogin
@@ -160,9 +171,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         }
         progress("Checking Claude MCP servers")
         let result = try mcpList(timeout: min(configuration.toolTimeout, 30.0))
-        guard result.exitCode != Self.timedOutExitCode else {
-            throw PDTMCPConnectorError.transientFailure("Claude MCP server check timed out")
-        }
+        try throwOnAbnormalMCPListExit(result)
         guard result.exitCode == 0, Self.pdtServerIsConnected(in: result.combinedOutput) else {
             throw PDTMCPConnectorError.setupUnavailable("Claude PDT MCP server is not connected")
         }
@@ -284,13 +293,22 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             return
         }
         let result = try mcpList(timeout: min(configuration.toolTimeout, 30.0))
-        guard result.exitCode != Self.timedOutExitCode else {
-            throw PDTMCPConnectorError.transientFailure("Claude MCP server check timed out")
-        }
+        try throwOnAbnormalMCPListExit(result)
         guard result.exitCode == 0, Self.pdtServerIsConnected(in: result.combinedOutput) else {
             throw PDTMCPConnectorError.setupUnavailable("Claude PDT MCP server is not connected")
         }
         rememberMCPToolPrefixes(fromMCPListOutput: result.combinedOutput)
+    }
+
+    private func throwOnAbnormalMCPListExit(_ result: ClaudeLocalProcessResult) throws {
+        switch abnormalRunExit(result) {
+        case .executableMissing:
+            throw PDTMCPConnectorError.setupUnavailable("Claude CLI is unavailable")
+        case .timedOut:
+            throw PDTMCPConnectorError.transientFailure("Claude MCP server check timed out")
+        case nil:
+            break
+        }
     }
 
     private func resolvedToolName(for readToolName: String) -> String {
@@ -328,7 +346,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             ))
         }
         guard result.exitCode == 0 else {
-            throw Self.readToolCallFailure(name, result: result)
+            throw readToolCallFailure(name, result: result)
         }
         return try toolResultData(
             for: toolName,
@@ -340,24 +358,41 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
 
     /// Classifies a failed Claude CLI read-tool run so the retry policy only
     /// re-spawns full CLI runs for true transients: timeouts and unexplained
-    /// nonzero exits stay `transientFailure` (retryable), while output that
-    /// reports a missing login or unavailable access becomes
-    /// `setupUnavailable` (never retried, and short-circuits later detail
-    /// phases).
-    static func readToolCallFailure(
+    /// nonzero exits stay `transientFailure` (retryable), while a missing
+    /// binary or output that reports a missing login or unavailable access
+    /// becomes `setupUnavailable` (never retried, and short-circuits later
+    /// detail phases).
+    private func readToolCallFailure(
         _ name: String,
         result: ClaudeLocalProcessResult
     ) -> PDTMCPConnectorError {
-        if result.exitCode == timedOutExitCode {
-            if result.stderr.localizedCaseInsensitiveContains("not found") {
-                return .setupUnavailable("Claude CLI is unavailable")
-            }
+        switch abnormalRunExit(result) {
+        case .executableMissing:
+            return .setupUnavailable("Claude CLI is unavailable")
+        case .timedOut:
             return .transientFailure("Claude \(name) call timed out")
+        case nil:
+            break
         }
         if PDTLiveUnavailableClassifier.shouldSkip(result.combinedOutput) {
             return .setupUnavailable("Claude \(name) reported missing auth or unavailable access")
         }
         return .transientFailure("Claude \(name) call failed")
+    }
+
+    /// `DefaultClaudeLocalCommandRunner` reports the same exit code for a
+    /// timeout kill and for an executable that vanished between the existence
+    /// check and the run; the runner's missing-binary result carries the exact
+    /// `"<executable> not found"` stderr, which tells the two apart.
+    private func abnormalRunExit(_ result: ClaudeLocalProcessResult) -> ClaudeAbnormalRunExit? {
+        guard result.exitCode == Self.timedOutExitCode else {
+            return nil
+        }
+        let trimmedStderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedStderr == "\(configuration.claudePath) not found" {
+            return .executableMissing
+        }
+        return .timedOut
     }
 
     private func prompt(readToolName: String, arguments: [String: String]) -> String {
