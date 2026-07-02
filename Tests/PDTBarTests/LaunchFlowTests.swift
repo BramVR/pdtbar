@@ -603,6 +603,66 @@ struct PDTOnboardingRunnerTests {
         #expect(!rowTitles(in: failed.descriptor).contains("Log in with Claude"))
     }
 
+    @Test("Mark-read republish carries last known runtime readiness")
+    func markReadRepublishCarriesLastKnownRuntimeReadiness() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launch(cachedPulse: cachedPulse)
+        _ = runtime.completeReadinessProbe(.ready)
+        let republished = runtime.publishPulse(
+            cachedPulse.applyingReadState(PulseReadState(readFingerprints: ["pulse:v1:test"]))
+        )
+        let health = try #require(healthRow(in: republished.descriptor))
+
+        #expect(runtime.lastKnownReadiness == .ready)
+        #expect(health.children.first { $0.id == "dataHealth.source" }?.detail == "Claude ready; PDT ready; read tools unknown; policy unknown")
+        #expect(health.children.first { $0.id == "dataHealth.readState" }?.detail == "1 read")
+        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.claude == .ready)
+        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.pdtMCP == .ready)
+        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.readTools == .unknown)
+    }
+
+    @Test("Mark-read republish without verified readiness keeps source facts unverified")
+    func markReadRepublishWithoutVerifiedReadinessKeepsSourceFactsUnverified() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launch(cachedPulse: cachedPulse)
+        let republished = runtime.publishPulse(cachedPulse)
+        let health = try #require(healthRow(in: republished.descriptor))
+
+        #expect(runtime.lastKnownReadiness == nil)
+        #expect(health.detail == "Needs attention")
+        #expect(health.children.first { $0.id == "dataHealth.source" }?.detail == "Claude unknown; PDT unknown; read tools unknown; policy unknown")
+    }
+
+    @Test("Mark-read republish reflects missing PDT MCP readiness")
+    func markReadRepublishReflectsMissingPDTMCPReadiness() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launch(cachedPulse: cachedPulse)
+        _ = runtime.completeReadinessProbe(.missingPDTMCP)
+        let republished = runtime.publishPulse(cachedPulse)
+        let health = try #require(healthRow(in: republished.descriptor))
+
+        #expect(health.children.first { $0.id == "dataHealth.source" }?.detail == "Claude ready; PDT missing; read tools unknown; policy unknown")
+        #expect(health.detail == "Needs attention")
+    }
+
+    @Test("Republished fetched pulse keeps live-verified source facts")
+    func republishedFetchedPulseKeepsLiveVerifiedSourceFacts() throws {
+        let fetchedPulse = try quietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launch(cachedPulse: nil)
+        let republished = runtime.publishPulse(fetchedPulse)
+        let health = try #require(healthRow(in: republished.descriptor))
+
+        #expect(health.children.first { $0.id == "dataHealth.source" }?.detail == "Claude ready; PDT ready; 7/7 read tools; read-only")
+    }
+
     @Test("Launch runtime renders first fetch failure without cache as retryable setup")
     func launchRuntimeRendersFirstFetchFailureWithoutCacheAsRetryableSetup() {
         let runtime = PDTLaunchRuntime()
@@ -995,7 +1055,8 @@ private func cachedQuietFixturePulse() throws -> PulseLifecycleResult {
     )
     return try #require(try PressureRunner.cachedPulse(
         snapshotStore: snapshotStore,
-        pulseReadStore: PulseReadStore(directory: snapshotStore.directory)
+        pulseReadStore: PulseReadStore(directory: snapshotStore.directory),
+        today: "2026-06-22"
     ))
 }
 

@@ -49,7 +49,11 @@ the AppKit delegate.
 `DataHealth` composes runtime/source facts into model state: Claude/PDT
 readiness, required read tools, read-only policy, cache/source, detail-fill,
 freshness, read-state, and redacted diagnostics. Menu descriptors render this
-state; AppKit does not derive health facts.
+state; AppKit does not derive health facts. Source facts follow the pulse
+source: live fetches claim verified readiness/tools/policy, cached snapshots
+claim nothing until the launch flow's last-known readiness is applied on
+republish, and cached-pulse freshness is evaluated against the current day
+rather than only the snapshot's own asOf.
 
 Live and fixture PDT decoders both feed PDT-shaped DTO inputs into
 `PDTSnapshotNormalizer`, so holding filtering, symbol quote joins, dividend

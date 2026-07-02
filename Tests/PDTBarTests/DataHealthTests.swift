@@ -218,7 +218,42 @@ struct DataHealthTests {
 
         let probing = ClaudeLaunchFlow.descriptor(for: .probingClaude, cachedPulse: cached)
         #expect(healthRow(in: probing)?.detail == "Checking")
-        #expect(healthRow(in: probing)?.children.first { $0.id == "dataHealth.source" }?.detail == "Claude checking; PDT unknown; 7/7 read tools; read-only")
+        #expect(healthRow(in: probing)?.children.first { $0.id == "dataHealth.source" }?.detail == "Claude checking; PDT unknown; read tools unknown; policy unknown")
+    }
+
+    @Test("Cached pulse does not claim connector readiness from cache alone")
+    func cachedPulseDoesNotClaimConnectorReadinessFromCacheAlone() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "data-health-cached-truth")
+        _ = try store.commitCurrentSnapshot(snapshot())
+
+        let cached = try #require(try PressureRunner.cachedPulse(snapshotStore: store, today: "2026-06-25"))
+        let source = cached.model.facetSnapshots.dataHealth.source
+
+        #expect(source.claude == .unknown)
+        #expect(source.pdtMCP == .unknown)
+        #expect(source.readTools == .unknown)
+        #expect(source.readOnlyPolicy == .unknown)
+        #expect(cached.model.facetSnapshots.dataHealth.status == .degraded)
+        #expect(healthRow(in: cached.descriptor)?.detail == "Needs attention")
+        #expect(healthRow(in: cached.descriptor)?.children.first { $0.id == "dataHealth.source" }?.detail == "Claude unknown; PDT unknown; read tools unknown; policy unknown")
+    }
+
+    @Test("Fetched pulse keeps live-verified source facts")
+    func fetchedPulseKeepsLiveVerifiedSourceFacts() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "data-health-fetched-truth")
+
+        let fetched = try PressureRunner.run(
+            dataSource: StaticPortfolioDataSource(fixedSnapshot: snapshot()),
+            snapshotStore: store
+        )
+        let source = fetched.model.facetSnapshots.dataHealth.source
+
+        #expect(fetched.source == .fetchedSnapshot)
+        #expect(source.claude == .ready)
+        #expect(source.pdtMCP == .ready)
+        #expect(source.readTools == .available)
+        #expect(source.readOnlyPolicy == .enforced)
+        #expect(healthRow(in: fetched.descriptor)?.children.first { $0.id == "dataHealth.source" }?.detail == "Claude ready; PDT ready; 7/7 read tools; read-only")
     }
 
     @Test("Runtime health overlay preserves cached diagnostics and cache state")
@@ -288,6 +323,14 @@ private func freshness(
         latestCompleteDetailFillAsOf: status == .unknown ? nil : "2026-06-25",
         sourceCaveats: []
     )
+}
+
+private struct StaticPortfolioDataSource: PortfolioDataSource {
+    var fixedSnapshot: PortfolioSnapshot
+
+    func snapshot(asOf: String?) throws -> PortfolioSnapshot {
+        fixedSnapshot
+    }
 }
 
 private func snapshot() -> PortfolioSnapshot {
