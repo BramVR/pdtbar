@@ -133,7 +133,7 @@ struct DataHealthTests {
             "dataHealth.readState",
             "dataHealth.diagnostic",
         ])
-        #expect(dataHealth.children.first { $0.id == "dataHealth.source" }?.detail == "Claude ready; PDT ready; 7/7 read tools; read-only")
+        #expect(dataHealth.children.first { $0.id == "dataHealth.source" }?.detail == "Claude unknown; PDT unknown; read tools unknown; policy unknown")
     }
 
     @Test("Cached snapshot preserves saved degraded detail fill")

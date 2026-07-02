@@ -1888,9 +1888,15 @@ public struct DataHealthRuntimeSourceState: Equatable, Sendable {
 
     /// The source facts a pulse can truthfully assume from how it was built:
     /// fetched/refreshed pulses just came through the live connector, while a
-    /// cached snapshot proves nothing about the current connection.
+    /// cached snapshot or an unknown source proves nothing about the current
+    /// connection, so optimistic facts are never the silent fallback.
     public static func assumed(for pulseSource: PulseLifecycleSource?) -> DataHealthRuntimeSourceState {
-        pulseSource == .cachedSnapshot ? .unverified : .liveFetchVerified
+        switch pulseSource {
+        case .fetchedSnapshot, .refreshedSnapshot:
+            return .liveFetchVerified
+        case .cachedSnapshot, nil:
+            return .unverified
+        }
     }
 }
 
