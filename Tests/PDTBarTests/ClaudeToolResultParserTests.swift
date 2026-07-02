@@ -234,6 +234,47 @@ struct ClaudeToolResultParserTests {
         }
     }
 
+    @Test("Plain-text CLI noise between stream lines is skipped")
+    func plainTextCLINoiseBetweenStreamLinesIsSkipped() throws {
+        let output = """
+        npm notice New minor version of npm available! 10.8.0 -> 10.9.0
+        {"type":"assistant","message":{"content":[{"type":"tool_use","id":"call_1","name":"\(toolName)"}]}}
+        Update available: run npm install -g @anthropic-ai/claude-code
+        {"type":"tool_result","tool_use_id":"call_1","structuredContent":{"holdings":[{"symbolName":"Noisy Public Co","portfolioWeight":0.30}]}}
+        {"type":"result","result":"{\\"status\\":\\"redacted-ok\\"}"}
+        """
+
+        let data = try ClaudeToolResultParser().resultData(
+            for: toolName,
+            readToolName: readToolName,
+            output: output,
+            currentSessionResultFiles: []
+        )
+
+        #expect(try firstHoldingName(in: data) == "Noisy Public Co")
+    }
+
+    @Test("Corrupt JSON-looking lines still fail loudly despite noise tolerance")
+    func corruptJSONLookingLinesStillFailLoudlyDespiteNoiseTolerance() throws {
+        let output = """
+        npm notice New minor version of npm available!
+        {"type":"assistant","message":{"content":[{"type":"tool_use","id":"call_1","name":"\(toolName)"}]}}
+        {"type":"tool_result","tool_use_id":"call_1","structuredContent":{"holdings":[
+        """
+
+        do {
+            _ = try ClaudeToolResultParser().resultData(
+                for: toolName,
+                readToolName: readToolName,
+                output: output,
+                currentSessionResultFiles: []
+            )
+            Issue.record("Expected malformed stream error")
+        } catch let error as ClaudeToolResultParserError {
+            #expect(error == .malformedStreamJSON(line: 3))
+        }
+    }
+
     @Test("Cleanup selection is limited to current-session PDT read-tool result files")
     func cleanupSelectionIsLimitedToCurrentSessionPDTReadToolResultFiles() throws {
         let directory = try temporaryDirectory(named: "claude-parser-cleanup")

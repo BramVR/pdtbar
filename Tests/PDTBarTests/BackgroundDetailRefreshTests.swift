@@ -2,7 +2,12 @@ import Foundation
 import Testing
 import PDTBarCore
 
-@Suite("Background detail refresh")
+// Serialized: every refresh test parks one thread in the price-history
+// phase's DispatchGroup.wait and spawns worker threads besides it. Running
+// twenty-plus of those concurrently exhausts libdispatch's thread pool, so
+// workers never get scheduled and each parked wait only returns after the full
+// 240-second price-history budget.
+@Suite("Background detail refresh", .serialized)
 struct BackgroundDetailRefreshTests {
     @Test("Default price-history budget covers Claude CLI batches")
     func defaultPriceHistoryBudgetCoversClaudeCLIBatches() {
@@ -195,12 +200,14 @@ struct BackgroundDetailRefreshTests {
         #expect(committed.xRayHoldings?.count == 2)
         #expect(committed.incomeEvents.count == 1)
         #expect(committed.priceSeries.map(\.quoteId) == [9101, 9101])
-        #expect(connector.calls.filter { $0 == "pdt-list-symbol-prices" }.count == 3)
+        // The missing scripted response is deterministic, so the failing
+        // holding gets exactly one attempt instead of a retry.
+        #expect(connector.calls.filter { $0 == "pdt-list-symbol-prices" }.count == 2)
 
         let diagnostic = try #require(try store.loadLastDetailRefreshDiagnostic())
         #expect(diagnostic.toolName == "pdt-list-symbol-prices")
         #expect(diagnostic.phase == .priceHistory)
-        #expect(diagnostic.attemptCount == 2)
+        #expect(diagnostic.attemptCount == 1)
         #expect(diagnostic.category == .missingScriptedResponse)
         #expect(diagnostic.argumentShape == ["date_from", "date_to", "symbol_quote_id"])
     }
@@ -506,7 +513,7 @@ struct BackgroundDetailRefreshTests {
         let connector = OneShotFailingPDTConnector(
             responses: try detailRefreshResponses(),
             failures: [
-                "pdt-get-portfolio-holdings": .setupUnavailable("Claude did not call mcp__pdt__pdt-get-portfolio-holdings"),
+                "pdt-get-portfolio-holdings": .transientFailure("Claude did not call mcp__pdt__pdt-get-portfolio-holdings"),
             ]
         )
 
@@ -534,7 +541,7 @@ struct BackgroundDetailRefreshTests {
             _ = try PDTBackgroundDetailRefresh(
                 connector: ScriptedPDTMCPConnector(
                     responses: try detailRefreshResponses(),
-                    failure: .setupUnavailable("Claude did not call mcp__pdt__pdt-get-portfolio-holdings")
+                    failure: .setupUnavailable("Claude PDT MCP server is not connected")
                 ),
                 snapshotStore: store,
                 asOf: "2026-03-29",
@@ -545,7 +552,9 @@ struct BackgroundDetailRefreshTests {
             let diagnostic = try #require(try store.loadLastDetailRefreshDiagnostic())
             #expect(diagnostic.toolName == "pdt-get-portfolio-holdings")
             #expect(diagnostic.phase == .baseHoldings)
-            #expect(diagnostic.attemptCount == 2)
+            // Setup outages are deterministic for the refresh, so the failure
+            // is recorded after a single attempt instead of burning retries.
+            #expect(diagnostic.attemptCount == 1)
             #expect(diagnostic.category == .setupUnavailable)
             #expect(diagnostic.argumentShape == [])
 
@@ -554,6 +563,152 @@ struct BackgroundDetailRefreshTests {
             #expect(committed.sectors.count == 1)
             #expect(committed.priceSeries.count == 4)
         }
+    }
+
+    @Test("Deterministic decode failures are not retried in optional phases")
+    func deterministicDecodeFailuresAreNotRetriedInOptionalPhases() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-decode-no-retry-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        var responses = try detailRefreshResponses()
+        responses["pdt-get-portfolio-distributions"] = Data("{".utf8)
+        let connector = SelectiveFailingPDTConnector(responses: responses)
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        #expect(result.outcome == .degraded)
+        // Same malformed payload on every attempt: one full call is enough.
+        #expect(connector.callCount(of: "pdt-get-portfolio-distributions") == 1)
+        #expect(result.diagnostics.contains {
+            $0.toolName == "pdt-get-portfolio-distributions"
+                && $0.phase == .allocation
+                && $0.category == .decode
+                && $0.attemptCount == 1
+        })
+        // A decode mismatch is tool-specific, not an outage: later phases run.
+        #expect(connector.callCount(of: "pdt-list-calendar-events") == 1)
+        #expect(connector.callCount(of: "pdt-list-symbol-prices") == 2)
+    }
+
+    @Test("Unavailable setup failure short-circuits the remaining detail phases")
+    func unavailableSetupFailureShortCircuitsRemainingDetailPhases() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-short-circuit-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        _ = try store.commitCurrentSnapshot(testSnapshot(asOf: "2026-03-28"))
+        let connector = SelectiveFailingPDTConnector(
+            responses: try detailRefreshResponses(),
+            failures: [
+                "pdt-get-portfolio-distributions": .setupUnavailable("Claude PDT MCP server is not connected"),
+            ]
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        #expect(result.outcome == .degraded)
+        // One failing attempt for the outage; the X-ray, income, and
+        // price-history phases must not spawn further doomed Claude runs.
+        #expect(connector.callCount(of: "pdt-get-portfolio-distributions") == 1)
+        #expect(connector.callCount(of: "pdt-list-x-ray-holdings") == 0)
+        #expect(connector.callCount(of: "pdt-list-calendar-events") == 0)
+        #expect(connector.callCount(of: "pdt-list-dividends") == 0)
+        #expect(connector.callCount(of: "pdt-get-symbol-quote") == 0)
+        #expect(connector.callCount(of: "pdt-list-symbol-prices") == 0)
+        #expect(result.diagnostics.map(\.category) == [.setupUnavailable])
+
+        // Prior optional details stay visible instead of being discarded.
+        let committed = try #require(try store.loadPriorSnapshot())
+        #expect(committed.sectors.map(\.name) == ["Technology"])
+        #expect(committed.xRayHoldings?.count == 2)
+        #expect(committed.incomeEvents.count == 1)
+        #expect(committed.priceSeries.map(\.quoteId) == [9101, 9101, 9102, 9102])
+    }
+
+    @Test("Income quote scan honors its deadline and degrades instead of blocking")
+    func incomeQuoteScanHonorsDeadlineAndDegrades() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-income-deadline-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let connector = SelectiveFailingPDTConnector(
+            responses: try detailRefreshResponses(calendarSymbolID: 5102, calendarSymbolName: "ADPB"),
+            delaySecondsByTool: ["pdt-get-symbol-quote": 0.2]
+        )
+
+        let startedAt = Date()
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(
+                priceHistoryConcurrencyLimit: 2,
+                incomeQuoteLookupTimeoutSeconds: 0.05,
+                retryBackoffSeconds: 0
+            )
+        ).refresh()
+        let elapsedSeconds = Date().timeIntervalSince(startedAt)
+
+        #expect(result.outcome == .degraded)
+        #expect(elapsedSeconds < 2.0)
+        // The scan stops at the deadline instead of walking every holding.
+        #expect(connector.callCount(of: "pdt-get-symbol-quote") == 1)
+        #expect(result.diagnostics.contains {
+            $0.toolName == "pdt-get-symbol-quote"
+                && $0.phase == .income
+                && $0.category == .timeout
+                && $0.argumentShape == ["id"]
+        })
+
+        // The partial mapping still publishes income events.
+        let committed = try #require(try store.loadPriorSnapshot())
+        #expect(committed.incomeEvents.count == 1)
+        #expect(committed.priceSeries.map(\.quoteId) == [9101, 9101, 9102, 9102])
+    }
+
+    @Test("Price-history workers stop pulling holdings after an unavailable setup failure")
+    func priceHistoryWorkersStopAfterUnavailableSetupFailure() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-price-abandon-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        _ = try store.commitCurrentSnapshot(testSnapshot(asOf: "2026-03-28"))
+        let connector = SelectiveFailingPDTConnector(
+            responses: try detailRefreshResponses(includingThirdHolding: true),
+            failures: [
+                "pdt-list-symbol-prices": .setupUnavailable("Claude PDT MCP server is not connected"),
+            ]
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 1, retryBackoffSeconds: 0)
+        ).refresh()
+
+        #expect(result.outcome == .degraded)
+        // One failing price call reveals the outage; the other holdings are
+        // abandoned instead of each spawning another doomed Claude run.
+        #expect(connector.callCount(of: "pdt-list-symbol-prices") == 1)
+        let priceDiagnostics = result.diagnostics.filter { $0.phase == .priceHistory }
+        #expect(priceDiagnostics.count == 3)
+        #expect(priceDiagnostics.allSatisfy { $0.category == .setupUnavailable })
+
+        // Prior price series for the abandoned holdings stay visible.
+        let committed = try #require(try store.loadPriorSnapshot())
+        #expect(committed.priceSeries.map(\.quoteId) == [9101, 9101, 9102, 9102])
     }
 }
 
@@ -649,6 +804,57 @@ private final class SlowPriceHistoryPDTConnector: PDTMCPConnector, @unchecked Se
                 activePriceCalls -= 1
                 lock.unlock()
             }
+        }
+        let suffix = arguments
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "&")
+        let key = suffix.isEmpty ? name : "\(name)?\(suffix)"
+        guard let response = responses[key] ?? responses[name] else {
+            throw PDTMCPConnectorError.missingScriptedResponse(key)
+        }
+        return response
+    }
+}
+
+private final class SelectiveFailingPDTConnector: PDTMCPConnector, @unchecked Sendable {
+    let responses: [String: Data]
+    private let failures: [String: PDTMCPConnectorError]
+    private let delaySecondsByTool: [String: TimeInterval]
+    private let lock = NSLock()
+    private var calls: [String] = []
+
+    init(
+        responses: [String: Data],
+        failures: [String: PDTMCPConnectorError] = [:],
+        delaySecondsByTool: [String: TimeInterval] = [:]
+    ) {
+        self.responses = responses
+        self.failures = failures
+        self.delaySecondsByTool = delaySecondsByTool
+    }
+
+    func callCount(of name: String) -> Int {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return calls.filter { $0 == name }.count
+    }
+
+    func availableReadTools() throws -> Set<String> {
+        Set(PDTReadTools.requiredV1)
+    }
+
+    func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
+        lock.lock()
+        calls.append(name)
+        lock.unlock()
+        if let delay = delaySecondsByTool[name], delay > 0 {
+            Thread.sleep(forTimeInterval: delay)
+        }
+        if let failure = failures[name] {
+            throw failure
         }
         let suffix = arguments
             .sorted { $0.key < $1.key }
