@@ -270,6 +270,27 @@ struct ClaudeLocalConnectionTests {
         #expect(readArguments.contains("mcp__*__pdt-get-portfolio-holdings"))
     }
 
+    @Test("Read-tool print runs wait for MCP tools before prompting Claude")
+    func readToolPrintRunsWaitForMCPToolsBeforePromptingClaude() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: "pdt (portfoliodividendtracker.com) connected", stderr: "", exitCode: 0),
+            .init(stdout: streamJSON(
+                toolName: "mcp__pdt__pdt-get-portfolio-holdings",
+                result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"holdings":[]}}"#
+            ), stderr: "", exitCode: 0),
+        ])
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(environment: ["MCP_CONNECTION_NONBLOCKING": "true"]),
+            commandRunner: runner
+        )
+
+        _ = try connection.callReadTool("pdt-get-portfolio-holdings", arguments: [:])
+
+        #expect(runner.requests.first?.environment["MCP_CONNECTION_NONBLOCKING"] == "true")
+        #expect(runner.requests.last?.arguments.first == "--model")
+        #expect(runner.requests.last?.environment["MCP_CONNECTION_NONBLOCKING"] == "false")
+    }
+
     @Test("Non-read PDT tools are refused before Claude is invoked")
     func nonReadPDTToolsAreRefusedBeforeClaudeIsInvoked() throws {
         let runner = RecordingClaudeCommandRunner()
@@ -453,6 +474,7 @@ struct ClaudeLocalConnectionTests {
     private func configuration(
         retryCount: Int = 1,
         retryBackoffSeconds: Double = 0,
+        environment: [String: String] = [:],
         claudeProjectsDirectory: URL? = nil
     ) -> ClaudeLocalConnectionConfiguration {
         ClaudeLocalConnectionConfiguration(
@@ -464,7 +486,7 @@ struct ClaudeLocalConnectionTests {
                 retryCount: retryCount,
                 retryBackoffSeconds: retryBackoffSeconds
             ),
-            environment: [:],
+            environment: environment,
             claudeProjectsDirectory: claudeProjectsDirectory ?? temporaryClaudeProjectsDirectory()
         )
     }
@@ -497,6 +519,7 @@ private final class RecordingClaudeCommandRunner: ClaudeLocalCommandRunning, @un
     struct Request: Equatable {
         var executable: String
         var arguments: [String]
+        var environment: [String: String]
     }
 
     private let lock = NSLock()
@@ -532,7 +555,7 @@ private final class RecordingClaudeCommandRunner: ClaudeLocalCommandRunning, @un
         environment: [String: String]
     ) throws -> ClaudeLocalProcessResult {
         lock.lock()
-        recordedRequests.append(Request(executable: executable, arguments: arguments))
+        recordedRequests.append(Request(executable: executable, arguments: arguments, environment: environment))
         let result = queuedResults.isEmpty
             ? ClaudeLocalProcessResult(stdout: "", stderr: "", exitCode: 0)
             : queuedResults.removeFirst()
