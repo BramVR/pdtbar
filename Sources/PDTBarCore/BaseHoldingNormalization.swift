@@ -139,9 +139,17 @@ public enum PDTBaseHoldingNormalizer {
     }
 
     public static func portfolioCurrency(from holdings: [PDTBaseHoldingInput], fallback: String) -> String {
-        holdings.lazy.compactMap { holding in
-            isOpenHolding(holding) ? validMoney(holding.currentWorthLocal)?.currency : nil
-        }.first ?? fallback
+        var inferredCurrency: String?
+        for holding in holdings where isOpenHolding(holding) {
+            guard let currency = validMoney(holding.currentWorthLocal)?.currency else {
+                continue
+            }
+            if let inferredCurrency, inferredCurrency != currency {
+                return fallback
+            }
+            inferredCurrency = currency
+        }
+        return inferredCurrency ?? fallback
     }
 
     private static func isOpenHolding(_ holding: PDTBaseHoldingInput) -> Bool {

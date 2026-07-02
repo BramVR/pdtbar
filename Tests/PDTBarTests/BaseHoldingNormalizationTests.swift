@@ -121,6 +121,25 @@ struct BaseHoldingNormalizationTests {
         #expect(normalized.totalValue == Money(value: "23600.00", currency: "EUR"))
     }
 
+    @Test("Portfolio currency inference requires a local-currency consensus")
+    func portfolioCurrencyInferenceRequiresLocalCurrencyConsensus() {
+        let usdHoldings = [
+            testHolding(quoteId: 6101, localWorth: Money(value: "500.00", currency: "USD")),
+            testHolding(quoteId: 6102, localWorth: Money(value: "250.00", currency: "USD")),
+        ]
+        let mixedHoldings = [
+            testHolding(
+                quoteId: 6201,
+                currentWorth: Money(value: "250.00", currency: "DKK"),
+                localWorth: Money(value: "250.00", currency: "DKK")
+            ),
+            testHolding(quoteId: 6202, localWorth: Money(value: "500.00", currency: "EUR")),
+        ]
+
+        #expect(PDTBaseHoldingNormalizer.portfolioCurrency(from: usdHoldings, fallback: "EUR") == "USD")
+        #expect(PDTBaseHoldingNormalizer.portfolioCurrency(from: mixedHoldings, fallback: "EUR") == "EUR")
+    }
+
     @Test("Headline total prefers each holding's portfolio-currency worth over the first holding's currency")
     func headlineTotalPrefersEachHoldingsPortfolioCurrencyWorth() {
         let normalized = PDTBaseHoldingNormalizer.normalize(
@@ -632,6 +651,23 @@ struct BaseHoldingNormalizationTests {
         let snapshot = try PDTFixtureDataSource.snapshot(from: fixture)
         let prior = withPrior ? try? PDTFixtureDataSource.priorSnapshot(from: fixture) : nil
         return PressureEngine.buildModel(from: snapshot, priorSnapshot: prior)
+    }
+
+    private func testHolding(
+        quoteId: Int,
+        currentWorth: Money? = nil,
+        localWorth: Money
+    ) -> PDTBaseHoldingInput {
+        PDTBaseHoldingInput(
+            name: "Test Holding \(quoteId)",
+            quoteId: quoteId,
+            currentPriceDate: "2026-06-26T21:59:00+00:00",
+            currentPriceLocal: localWorth,
+            currentWorth: currentWorth ?? localWorth,
+            currentWorthLocal: localWorth,
+            portfolioWeight: 0.5,
+            closedAt: nil
+        )
     }
 }
 
