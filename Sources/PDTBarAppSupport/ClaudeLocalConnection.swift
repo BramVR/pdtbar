@@ -569,7 +569,7 @@ public struct DefaultClaudeLocalCommandRunner: ClaudeLocalCommandRunning {
         finishDrains(
             stdoutDrain,
             stderrDrain,
-            deadline: Date(timeIntervalSinceNow: max(deadline.timeIntervalSinceNow, 0) + Self.drainGracePeriod)
+            deadline: Date().addingTimeInterval(Self.drainGracePeriod)
         )
         return ClaudeLocalProcessResult(
             stdout: String(decoding: stdoutDrain.snapshot(), as: UTF8.self),
@@ -579,13 +579,15 @@ public struct DefaultClaudeLocalCommandRunner: ClaudeLocalCommandRunning {
     }
 
     /// Joins the pipe drains without trusting the child's process tree to
-    /// release the pipes. A descendant that escaped the kill sweep (for
-    /// example one spawned between the descendant scan and the signals, or
-    /// before setpgid took effect) keeps the pipe write ends open, so a drain
-    /// never sees end-of-file and an unbounded join would hang `run()` — and
-    /// the menu's fetch state — forever. Runs that reached end-of-file join
-    /// with everything the process wrote; anything still open at the deadline
-    /// is abandoned with whatever output was captured so far.
+    /// release the pipes. A descendant that survived the process exit or
+    /// escaped the kill sweep (for example one spawned between the descendant
+    /// scan and the signals, or before setpgid took effect) keeps the pipe
+    /// write ends open, so a drain never sees end-of-file and an unbounded
+    /// join would hang `run()` — and the menu's fetch state — forever. The
+    /// exited process already wrote everything it had to say, and buffered
+    /// output is readable immediately, so a short grace period after exit
+    /// keeps healthy runs complete; anything still open at the deadline is
+    /// abandoned with whatever output was captured so far.
     private func finishDrains(
         _ stdoutDrain: ClaudeLocalPipeDrain,
         _ stderrDrain: ClaudeLocalPipeDrain,
@@ -826,6 +828,11 @@ public struct ClaudeLocalLoginRunner: Sendable {
 private final class ClaudeLocalPipeDrain: @unchecked Sendable {
     private static let pollIntervalMilliseconds: Int32 = 50
     private static let abandonGracePeriod: TimeInterval = 1.0
+    /// How many more chunk reads an abandoned drain may perform. One chunk
+    /// covers the whole kernel pipe buffer, so pre-hang output is always
+    /// swept, while an escapee that keeps writing cannot pin the drain
+    /// thread or grow memory after `run()` has returned.
+    private static let abandonedSweepReadLimit = 4
 
     private let readHandle: FileHandle
     private let accumulated = LockedDataAccumulator()
@@ -880,28 +887,35 @@ private final class ClaudeLocalPipeDrain: @unchecked Sendable {
 
     private func drain(_ descriptor: Int32) {
         var chunk = [UInt8](repeating: 0, count: 65536)
+        var remainingAbandonedReads = Self.abandonedSweepReadLimit
         while true {
-            // Sweep everything already buffered before honoring abandonment,
-            // so output the process wrote before hanging is always captured.
-            let stopAfterSweep = isAbandoned
-            while true {
-                let readCount = read(descriptor, &chunk, chunk.count)
-                if readCount > 0 {
-                    accumulated.append(Data(bytes: chunk, count: readCount))
-                    continue
-                }
-                if readCount == 0 {
-                    return
-                }
-                if errno == EINTR {
-                    continue
-                }
-                if errno == EAGAIN || errno == EWOULDBLOCK {
-                    break
-                }
+            // Abandonment is re-checked on every iteration so an escapee
+            // that keeps writing cannot pin the drain in the readable
+            // branch; already-buffered output is still swept (bounded) so
+            // whatever the process wrote before hanging is captured.
+            let abandoned = isAbandoned
+            if abandoned, remainingAbandonedReads <= 0 {
                 return
             }
-            if stopAfterSweep {
+            let readCount = read(descriptor, &chunk, chunk.count)
+            if readCount > 0 {
+                accumulated.append(Data(bytes: chunk, count: readCount))
+                if abandoned {
+                    remainingAbandonedReads -= 1
+                }
+                continue
+            }
+            if readCount == 0 {
+                return
+            }
+            if errno == EINTR {
+                continue
+            }
+            if errno != EAGAIN && errno != EWOULDBLOCK {
+                return
+            }
+            // Nothing buffered right now.
+            if abandoned {
                 return
             }
             var pollDescriptor = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
