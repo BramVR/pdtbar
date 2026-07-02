@@ -3732,18 +3732,19 @@ public final class PDTLaunchRuntime {
         if let currentPulse, currentPulse.source != .cachedSnapshot {
             return nil
         }
-        currentPulse = pulse
+        let installedPulse = pulseApplyingLastKnownReadiness(pulse)
+        currentPulse = installedPulse
         let descriptor: MenuDescriptor
         if backgroundDetailRefreshInFlight {
             descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
-                cachedPulse: pulse.descriptor,
+                cachedPulse: installedPulse.descriptor,
                 progress: BackgroundDetailRefreshProgress(phase: .baseHoldings),
-                cachedSnapshotAsOf: pulse.model.asOf
+                cachedSnapshotAsOf: installedPulse.model.asOf
             )
         } else {
             descriptor = ClaudeLaunchFlow.descriptor(
                 for: state,
-                cachedPulse: pulse.descriptor
+                cachedPulse: installedPulse.descriptor
             )
         }
         lastDescriptor = descriptor
@@ -3772,6 +3773,9 @@ public final class PDTLaunchRuntime {
         }
         readinessProbeInFlight = false
         lastKnownReadiness = result
+        if let currentPulse {
+            self.currentPulse = pulseApplyingLastKnownReadiness(currentPulse)
+        }
         let nextState = ClaudeLaunchFlow.state(afterReadinessProbe: result)
         if nextState == .fetchingPortfolio {
             guard !firstFetchInFlight, !backgroundDetailRefreshInFlight else {
@@ -3900,10 +3904,7 @@ public final class PDTLaunchRuntime {
 
     public func publishPulse(_ pulse: PulseLifecycleResult) -> PDTOnboardingUpdate {
         backgroundDetailRefreshInFlight = false
-        let publishedPulse = ClaudeLaunchFlow.pulseApplyingRuntimeSourceState(
-            ClaudeLaunchFlow.runtimeSourceState(afterReadinessProbe: lastKnownReadiness),
-            to: pulse
-        )
+        let publishedPulse = pulseApplyingLastKnownReadiness(pulse)
         currentPulse = publishedPulse
         state = .fetchingPortfolio
         let descriptor = ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: publishedPulse.descriptor)
@@ -3911,6 +3912,15 @@ public final class PDTLaunchRuntime {
         return PDTOnboardingUpdate(
             state: state,
             descriptor: descriptor
+        )
+    }
+
+    /// Cached pulses only claim the source facts the runtime has actually
+    /// verified; fetched and refreshed pulses pass through unchanged.
+    private func pulseApplyingLastKnownReadiness(_ pulse: PulseLifecycleResult) -> PulseLifecycleResult {
+        ClaudeLaunchFlow.pulseApplyingRuntimeSourceState(
+            ClaudeLaunchFlow.runtimeSourceState(afterReadinessProbe: lastKnownReadiness),
+            to: pulse
         )
     }
 

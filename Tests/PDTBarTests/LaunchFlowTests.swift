@@ -603,6 +603,35 @@ struct PDTOnboardingRunnerTests {
         #expect(!rowTitles(in: failed.descriptor).contains("Log in with Claude"))
     }
 
+    @Test("Returning launch refresh reflects probe readiness in cached data health")
+    func returningLaunchRefreshReflectsProbeReadinessInCachedDataHealth() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launch(cachedPulse: cachedPulse)
+        let ready = runtime.completeReadinessProbe(.ready)
+        let health = try #require(healthRow(in: ready.descriptor))
+
+        #expect(ready.effect == .startBackgroundDetailRefresh)
+        #expect(health.children.first { $0.id == "dataHealth.source" }?.detail == "Claude ready; PDT ready; read tools unknown; policy unknown")
+        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.claude == .ready)
+        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.pdtMCP == .ready)
+    }
+
+    @Test("Cached pulse installed after a probe reflects last known readiness")
+    func cachedPulseInstalledAfterAProbeReflectsLastKnownReadiness() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launch(cachedPulse: nil)
+        _ = runtime.completeReadinessProbe(.missingPDTMCP)
+        _ = try #require(runtime.completeCachedPulseLoad(cachedPulse))
+
+        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.claude == .ready)
+        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.pdtMCP == .missing)
+        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.readTools == .unknown)
+    }
+
     @Test("Mark-read republish carries last known runtime readiness")
     func markReadRepublishCarriesLastKnownRuntimeReadiness() throws {
         let cachedPulse = try cachedQuietFixturePulse()
