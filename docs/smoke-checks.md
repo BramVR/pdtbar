@@ -162,7 +162,9 @@ mode plus an explicit `--allowedTools` list for the seven required PDT read tool
 under the observed Desktop server name and renamed MCP server names, structured
 output, and non-mutating tool discovery; a broad `--disallowedTools` denylist
 for built-ins plus PDT mutate-tool prefixes on the configured Claude CLI MCP
-server; verbose stream JSON telemetry; and schema-enforced structured output to
+server (`ClaudePDTReadOnlyToolPolicy` in PDTBarCore — the same shared denylist
+the production read-only sync sends); verbose stream JSON telemetry; and
+schema-enforced structured output to
 exercise the currently logged-in Claude user and Claude CLI PDT MCP setup.
 It never passes `claude --bare`;
 if `--bare` is supplied to the smoke, it refuses the run because bare mode does

@@ -452,48 +452,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     }
 
     private func disallowedTools(readToolName: String, allowedToolName: String) -> [String] {
-        var tools = [
-            "AskUserQuestion",
-            "DesignSync",
-            "Edit",
-            "NotebookEdit",
-            "EnterPlanMode",
-            "EnterWorktree",
-            "ExitPlanMode",
-            "ExitWorktree",
-            "Skill",
-            "CronCreate",
-            "CronDelete",
-            "CronList",
-            "RemoteTrigger",
-            "PushNotification",
-            "ScheduleWakeup",
-            "Monitor",
-            "Task",
-            "TaskCreate",
-            "TaskGet",
-            "TaskList",
-            "TaskOutput",
-            "TaskStop",
-            "TaskUpdate",
-            "Workflow",
-            "Bash",
-            "Read",
-            "WebFetch",
-            "WebSearch",
-            "Write",
-            "ListMcpResourcesTool",
-            "ReadMcpResourceTool",
-            "mcp__*__pdt-add-*",
-            "mcp__*__pdt-create-*",
-            "mcp__*__pdt-delete-*",
-            "mcp__*__pdt-patch-*",
-            "mcp__*__pdt-post-*",
-            "mcp__*__pdt-put-*",
-            "mcp__*__pdt-remove-*",
-            "mcp__*__pdt-set-*",
-            "mcp__*__pdt-update-*",
-        ]
+        var tools = ClaudePDTReadOnlyToolPolicy.disallowedTools
         // Intentional live-Claude policy: ToolSearch is allowed only so Claude can
         // hydrate deferred remote MCP tools. The requested PDT read tool is exact;
         // built-ins, known non-requested PDT reads, and PDT mutators are denied

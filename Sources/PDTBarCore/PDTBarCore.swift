@@ -5978,6 +5978,67 @@ public enum PDTReadTools {
     }
 }
 
+/// Single source of truth for the Claude CLI `--disallowedTools` denylist used
+/// during read-only PDT syncs. Both the production connection
+/// (`ClaudeLocalConnection`) and the `manual-claude-pdt` smoke must consume
+/// this policy so the smoke keeps exercising the exact read-only policy the
+/// app ships with. Production additionally denies non-requested PDT read
+/// tools per call on top of this base list.
+public enum ClaudePDTReadOnlyToolPolicy {
+    /// Built-in Claude CLI tools denied during read-only PDT sync calls.
+    /// ToolSearch is intentionally absent: it stays allowed so Claude can
+    /// hydrate deferred remote MCP tools.
+    public static let disallowedBuiltInTools = [
+        "AskUserQuestion",
+        "Bash",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "DesignSync",
+        "Edit",
+        "EnterPlanMode",
+        "EnterWorktree",
+        "ExitPlanMode",
+        "ExitWorktree",
+        "ListMcpResourcesTool",
+        "Monitor",
+        "NotebookEdit",
+        "PushNotification",
+        "Read",
+        "ReadMcpResourceTool",
+        "RemoteTrigger",
+        "ScheduleWakeup",
+        "Skill",
+        "Task",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskOutput",
+        "TaskStop",
+        "TaskUpdate",
+        "WebFetch",
+        "WebSearch",
+        "Workflow",
+        "Write",
+    ]
+
+    /// Wildcard selectors denying every known PDT mutating tool name shape.
+    public static let disallowedPDTMutationSelectors = [
+        "mcp__*__pdt-add-*",
+        "mcp__*__pdt-create-*",
+        "mcp__*__pdt-delete-*",
+        "mcp__*__pdt-patch-*",
+        "mcp__*__pdt-post-*",
+        "mcp__*__pdt-put-*",
+        "mcp__*__pdt-remove-*",
+        "mcp__*__pdt-set-*",
+        "mcp__*__pdt-update-*",
+    ]
+
+    /// The full shared denylist: denied built-ins plus PDT mutator selectors.
+    public static let disallowedTools = disallowedBuiltInTools + disallowedPDTMutationSelectors
+}
+
 public protocol PDTMCPConnector {
     func availableReadTools() throws -> Set<String>
     func availableReadTools(required: Set<String>) throws -> Set<String>

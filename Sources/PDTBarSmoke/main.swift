@@ -5278,46 +5278,9 @@ private func manualClaudePDTToolName(readTool: String, in output: String) -> Str
 }
 
 private func manualClaudePDTDisallowedTools() -> [String] {
-    [
-        "AskUserQuestion",
-        "Bash",
-        "CronCreate",
-        "CronDelete",
-        "CronList",
-        "DesignSync",
-        "Edit",
-        "EnterPlanMode",
-        "EnterWorktree",
-        "ExitPlanMode",
-        "ExitWorktree",
-        "Monitor",
-        "NotebookEdit",
-        "PushNotification",
-        "Read",
-        "RemoteTrigger",
-        "ScheduleWakeup",
-        "Skill",
-        "Task",
-        "TaskCreate",
-        "TaskGet",
-        "TaskList",
-        "TaskOutput",
-        "TaskStop",
-        "TaskUpdate",
-        "WebFetch",
-        "WebSearch",
-        "Workflow",
-        "Write",
-        "mcp__*__pdt-add-*",
-        "mcp__*__pdt-create-*",
-        "mcp__*__pdt-delete-*",
-        "mcp__*__pdt-patch-*",
-        "mcp__*__pdt-post-*",
-        "mcp__*__pdt-put-*",
-        "mcp__*__pdt-remove-*",
-        "mcp__*__pdt-set-*",
-        "mcp__*__pdt-update-*",
-    ]
+    // Shared with the production read-only sync (`ClaudeLocalConnection`) so
+    // this smoke always exercises the real read-only deny policy.
+    ClaudePDTReadOnlyToolPolicy.disallowedTools
 }
 
 private func manualClaudePDTToolSearchDisallowedTools() -> [String] {
