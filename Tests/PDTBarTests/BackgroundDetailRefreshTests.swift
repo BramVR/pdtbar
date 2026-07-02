@@ -253,8 +253,8 @@ struct BackgroundDetailRefreshTests {
         #expect(result.model.portfolioGlance.priorSnapshotAsOf == nil)
     }
 
-    @Test("New refresh clears stale diagnostic before setup failure")
-    func newRefreshClearsStaleDiagnosticBeforeSetupFailure() throws {
+    @Test("New refresh replaces stale diagnostic with setup preflight failure")
+    func newRefreshReplacesStaleDiagnosticWithSetupPreflightFailure() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-stale-diagnostic-test")
         defer {
             try? FileManager.default.removeItem(at: store.directory)
@@ -277,7 +277,18 @@ struct BackgroundDetailRefreshTests {
                 options: PDTBackgroundDetailRefreshOptions(retryBackoffSeconds: 0)
             ).refresh()
         }
-        #expect(try store.loadLastDetailRefreshDiagnostic() == nil)
+        let diagnostic = try #require(try store.loadLastDetailRefreshDiagnostic())
+        #expect(diagnostic.toolName == "PDT read-tool preflight")
+        #expect(diagnostic.phase == .baseHoldings)
+        #expect(diagnostic.category == .setupUnavailable)
+        #expect(Set(diagnostic.missingReadTools) == Set(PDTReadTools.requiredV1))
+        let logPath = try #require(diagnostic.logFilePath)
+        #expect(logPath.hasSuffix("latest-detail-refresh-failure.log"))
+        let log = try String(contentsOf: URL(fileURLWithPath: logPath), encoding: .utf8)
+        #expect(log.contains("tool: PDT read-tool preflight"))
+        #expect(log.contains("category: setupUnavailable"))
+        #expect(log.contains("missing_required_read_tools:"))
+        #expect(!log.localizedCaseInsensitiveContains("portfolio payload"))
     }
 
     @Test("Failed optional phase preserves prior detail slice")
@@ -405,7 +416,7 @@ struct BackgroundDetailRefreshTests {
         #expect(progress.map(\.phase).contains(.xRay))
         #expect(progress.map(\.phase).contains(.income))
         #expect(progress.contains {
-            $0.phase == .baseHoldings && $0.detail == "Checking PDT tools"
+            $0.phase == .baseHoldings && $0.detail == "Checking PDT read tools"
         })
         #expect(progress.contains {
             $0.phase == .baseHoldings && $0.detail == "Calling pdt-get-portfolio-holdings"
@@ -553,6 +564,71 @@ struct BackgroundDetailRefreshTests {
             #expect(committed.asOf == "2026-03-28")
             #expect(committed.sectors.count == 1)
             #expect(committed.priceSeries.count == 4)
+        }
+    }
+
+    @Test("Read tool preflight failure persists setup diagnostic without committing snapshot")
+    func readToolPreflightFailurePersistsSetupDiagnosticWithoutCommittingSnapshot() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-preflight-failure-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        _ = try store.commitCurrentSnapshot(testSnapshot(asOf: "2026-03-28"))
+        let recorder = DetailProgressRecorder()
+
+        do {
+            _ = try PDTBackgroundDetailRefresh(
+                connector: ScriptedPDTMCPConnector(
+                    availableTools: Set(PDTReadTools.requiredV1).subtracting(["pdt-list-dividends"]),
+                    responses: try detailRefreshResponses()
+                ),
+                snapshotStore: store,
+                asOf: "2026-03-29",
+                options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+            ).refresh(progress: recorder.append)
+            Issue.record("Expected read-tool preflight failure to throw")
+        } catch PDTMCPConnectorError.missingRequiredReadTools(let missing) {
+            #expect(missing == ["pdt-list-dividends"])
+
+            let diagnostic = try #require(try store.loadLastDetailRefreshDiagnostic())
+            #expect(diagnostic.toolName == "PDT read-tool preflight")
+            #expect(diagnostic.phase == .baseHoldings)
+            #expect(diagnostic.attemptCount == 1)
+            #expect(diagnostic.category == .setupUnavailable)
+            #expect(diagnostic.argumentShape == [])
+            #expect(diagnostic.missingReadTools == ["pdt-list-dividends"])
+            let logPath = try #require(diagnostic.logFilePath)
+            #expect(logPath == store.detailRefreshFailureLogFile.path)
+            let log = try String(contentsOf: store.detailRefreshFailureLogFile, encoding: .utf8)
+            #expect(log.contains("PDTBar detail refresh failure"))
+            #expect(log.contains("missing_required_read_tools: pdt-list-dividends"))
+            #expect(log.contains("log_file: \(store.detailRefreshFailureLogFile.path)"))
+
+            let committed = try #require(try store.loadPriorSnapshot())
+            #expect(committed.asOf == "2026-03-28")
+            #expect(!recorder.values.contains { $0.phase == .baseHoldings && $0.detail == nil })
+        }
+    }
+
+    @Test("Read tool preflight diagnostic write failure preserves original error")
+    func readToolPreflightDiagnosticWriteFailurePreservesOriginalError() throws {
+        let invalidDirectory = FileManager.default.temporaryDirectory
+            .appending(path: "pdtbar-detail-refresh-invalid-store-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: invalidDirectory.path, contents: Data())
+        defer {
+            try? FileManager.default.removeItem(at: invalidDirectory)
+        }
+
+        #expect(throws: PDTMCPConnectorError.missingRequiredReadTools(["pdt-list-dividends"])) {
+            _ = try PDTBackgroundDetailRefresh(
+                connector: ScriptedPDTMCPConnector(
+                    availableTools: Set(PDTReadTools.requiredV1).subtracting(["pdt-list-dividends"]),
+                    responses: [:]
+                ),
+                snapshotStore: SnapshotStore(directory: invalidDirectory),
+                asOf: "2026-03-29",
+                options: PDTBackgroundDetailRefreshOptions(retryBackoffSeconds: 0)
+            ).refresh()
         }
     }
 }

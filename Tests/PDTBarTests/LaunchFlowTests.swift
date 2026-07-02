@@ -256,16 +256,33 @@ struct ClaudeLaunchFlowTests {
             cachedPulse: cachedPulse,
             progress: BackgroundDetailRefreshProgress(
                 phase: .baseHoldings,
-                detail: "Checking PDT tools"
+                detail: "Checking PDT read tools"
             ),
             cachedSnapshotAsOf: "2026-03-28"
         )
 
         #expect(rowTitles(in: descriptor).contains("Cached data visible"))
-        #expect(!rowTitles(in: descriptor).contains("Checking PDT tools"))
-        #expect(descriptor.sections.first?.rows.first { $0.id == "portfolioFetch.backgroundProgress.phase" }?.detail == "Checking PDT tools")
+        #expect(rowTitles(in: descriptor).contains("Filling details"))
+        #expect(rowTitles(in: descriptor).contains("Step 1/5: Base holdings"))
+        #expect(descriptor.sections.first?.rows.first { $0.id == "portfolioFetch.backgroundProgress.phase" }?.detail == "Checking PDT read tools")
         #expect(descriptor.sections.first?.rows.first?.detail == "Last snapshot 2026-03-28")
-        #expect(MenuBarSurfaceRenderer.render(descriptor: descriptor).status.toolTip == "PDTBar Syncing portfolio - Checking PDT tools")
+        #expect(MenuBarSurfaceRenderer.render(descriptor: descriptor).status.toolTip == "PDTBar Syncing portfolio - Checking PDT read tools")
+    }
+
+    @Test("Background detail progress keeps base-holdings retry status distinct from preflight")
+    func backgroundDetailProgressKeepsBaseHoldingsRetryStatusDistinctFromPreflight() throws {
+        let cachedPulse = try quietFixtureDescriptor()
+        let descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+            cachedPulse: cachedPulse,
+            progress: BackgroundDetailRefreshProgress(
+                phase: .baseHoldings,
+                detail: "Retrying pdt-get-portfolio-holdings"
+            )
+        )
+
+        #expect(rowTitles(in: descriptor).contains("Step 1/5: Base holdings"))
+        #expect(descriptor.sections.first?.rows.first { $0.id == "portfolioFetch.backgroundProgress.phase" }?.detail == "Retrying pdt-get-portfolio-holdings")
+        #expect(MenuBarSurfaceRenderer.render(descriptor: descriptor).status.toolTip == "PDTBar Syncing portfolio - Retrying pdt-get-portfolio-holdings")
     }
 
     @Test("Background degraded completion keeps pulse rows and exposes retry")
@@ -370,8 +387,8 @@ struct PDTOnboardingRunnerTests {
         #expect(launch.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
         #expect(rowTitles(in: launch.descriptor).contains("Checking Claude setup"))
         #expect(ready.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: ready.descriptor).contains("Filling details"))
         #expect(rowTitles(in: ready.descriptor).contains("Step 1/5: Base holdings"))
+        #expect(ready.descriptor.sections.first?.rows.first { $0.id == "portfolioFetch.backgroundProgress.phase" }?.detail == "Checking PDT read tools")
     }
 
     @Test("Launch runtime can install cached pulse after initial probing paint")
@@ -388,7 +405,7 @@ struct PDTOnboardingRunnerTests {
         #expect(cached.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
         #expect(rowTitles(in: cached.descriptor).contains("Checking Claude setup"))
         #expect(ready.effect == .startBackgroundDetailRefresh)
-        #expect(rowTitles(in: ready.descriptor).contains("Filling details"))
+        #expect(rowTitles(in: ready.descriptor).contains("Step 1/5: Base holdings"))
     }
 
     @Test("Launch runtime first paint is independent of large cached snapshot decode")
@@ -469,7 +486,7 @@ struct PDTOnboardingRunnerTests {
 
         #expect(ready.effect == .startBackgroundDetailRefresh)
         #expect(ready.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: ready.descriptor).contains("Filling details"))
+        #expect(rowTitles(in: ready.descriptor).contains("Step 1/5: Base holdings"))
         #expect(progress.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
         #expect(rowTitles(in: progress.descriptor).contains("Step 5/5: Price history"))
         #expect(rowTitles(in: progress.descriptor).contains("12/19 price histories checked"))
@@ -567,6 +584,52 @@ struct PDTOnboardingRunnerTests {
         #expect(diagnosticRow.children.first?.actionTarget?.copyText?.contains("argument_keys: symbol_quote_id") == true)
     }
 
+    @Test("Launch runtime fails fast with resolver copy for read-tool setup failures")
+    func launchRuntimeFailsFastWithResolverCopyForReadToolSetupFailures() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+        let diagnostic = PDTDetailRefreshFailureDiagnostic(
+            toolName: "PDT read-tool preflight",
+            phase: .baseHoldings,
+            attemptCount: 1,
+            category: .setupUnavailable,
+            argumentShape: [],
+            missingReadTools: ["pdt-list-dividends"],
+            logFilePath: "/tmp/pdtbar-test/latest-detail-refresh-failure.log"
+        )
+
+        _ = runtime.launch(cachedPulse: cachedPulse)
+        let ready = runtime.completeReadinessProbe(.ready)
+        let failed = runtime.completeBackgroundDetailRefresh(.failed("missing PDT read tools", diagnostic: diagnostic))
+        let titles = rowTitles(in: failed.descriptor)
+        let diagnosticRow = try #require(healthRow(in: failed.descriptor)?.children.first { $0.id == "dataHealth.diagnostic" })
+
+        #expect(rowTitles(in: ready.descriptor).contains("Step 1/5: Base holdings"))
+        #expect(ready.descriptor.sections.first?.rows.first { $0.id == "portfolioFetch.backgroundProgress.phase" }?.detail == "Checking PDT read tools")
+        #expect(!titles.contains("Details fill failed"))
+        #expect(titles.contains("PDT read tools unavailable"))
+        #expect(titles.contains("Try details again"))
+        #expect(failed.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
+        #expect(runtime.currentPulse?.source == .cachedSnapshot)
+        #expect(!runtime.backgroundDetailRefreshInFlight)
+        #expect(diagnosticRow.children.first?.actionTarget?.copyText?.contains("missing_required_read_tools: pdt-list-dividends") == true)
+        #expect(diagnosticRow.children.first { $0.id == "dataHealth.diagnostic.copyLogPath" }?.actionTarget?.copyText == "/tmp/pdtbar-test/latest-detail-refresh-failure.log")
+        #expect(healthRow(in: failed.descriptor)?.children.first { $0.id == "dataHealth.source" }?.detail?.contains("6/7 read tools") == true)
+
+        let unknownAvailabilityDiagnostic = PDTDetailRefreshFailureDiagnostic(
+            toolName: "PDT read-tool preflight",
+            phase: .baseHoldings,
+            attemptCount: 1,
+            category: .setupUnavailable,
+            argumentShape: []
+        )
+        let unknownFailure = ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(
+            cachedPulse: cachedPulse.descriptor,
+            diagnostic: unknownAvailabilityDiagnostic
+        )
+        #expect(healthRow(in: unknownFailure)?.children.first { $0.id == "dataHealth.source" }?.detail?.contains("read tools unknown") == true)
+    }
+
     @Test("Launch runtime retries failed background detail refresh")
     func launchRuntimeRetriesFailedBackgroundDetailRefresh() throws {
         let cachedPulse = try cachedQuietFixturePulse()
@@ -583,7 +646,7 @@ struct PDTOnboardingRunnerTests {
         #expect(runtime.backgroundDetailRefreshInFlight)
         #expect(duplicateRetry == nil)
         #expect(retry.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: retry.descriptor).contains("Filling details"))
+        #expect(rowTitles(in: retry.descriptor).contains("Step 1/5: Base holdings"))
         #expect(!rowTitles(in: retry.descriptor).contains("Details fill failed"))
     }
 
