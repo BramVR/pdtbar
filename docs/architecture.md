@@ -11,7 +11,7 @@ read_when:
 ## Modules
 
 - `Sources/PDTBarCore`: normalized portfolio model, pressure engine, fixture/live data sources, menu descriptor rendering.
-- `Sources/PDTBarAppSupport`: shared AppKit-adjacent support used by the app, smoke runner, and tests for app state, status visuals, menu actions, scripted launch seams, and local Claude/PDT connection handling.
+- `Sources/PDTBarAppSupport`: shared AppKit-adjacent support used by the app, smoke runner, and tests for app state, status visuals, menu actions, status-item menu hosting, scripted launch seams, and local Claude/PDT connection handling.
 - `Sources/PDTBarApp`: AppKit status item, Claude-first readiness probe, first fetch, cached pulse, menu actions.
 - `Sources/PDTBarDev`: command-line model and descriptor inspection.
 - `Sources/PDTBarSmoke`: scripted, packaged, Accessibility, manual Claude, and live PDT smoke checks.
