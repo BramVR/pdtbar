@@ -57,7 +57,7 @@ func fingerprintBasisPoints(_ value: Double?) -> String {
 }
 
 func basisPoints(_ value: Double) -> Int {
-    return Int((value * 10_000).rounded())
+    return saturatedBasisPointsInt((value * 10_000).rounded())
 }
 
 func bucketBasisPoints(_ value: Double?, bucketSize: Int) -> String {
@@ -68,7 +68,27 @@ func bucketBasisPoints(_ value: Double?, bucketSize: Int) -> String {
         return String(basisPoints(value))
     }
     let points = basisPoints(value)
-    return String(Int((Double(points) / Double(bucketSize)).rounded()) * bucketSize)
+    return String(saturatedBasisPointsInt((Double(points) / Double(bucketSize)).rounded() * Double(bucketSize)))
+}
+
+/// Converts an already-rounded Double to Int without trapping. Malformed source
+/// data (for example a garbage price ratio driving `moveSize` toward 1e15+) can
+/// scale past `Int.max` here; fingerprint rendering must degrade gracefully
+/// instead of crashing the app, so out-of-range values saturate at the Int
+/// bounds and NaN maps to 0. Every in-range value converts exactly as before.
+private func saturatedBasisPointsInt(_ value: Double) -> Int {
+    guard !value.isNaN else {
+        return 0
+    }
+    // Double(Int.max) rounds up to 2^63, the first magnitude Int(_:) traps on.
+    if value >= Double(Int.max) {
+        return Int.max
+    }
+    // Double(Int.min) is exactly -2^63, which still converts; below it traps.
+    if value < Double(Int.min) {
+        return Int.min
+    }
+    return Int(value)
 }
 
 func percent(_ value: Double) -> String {

@@ -475,6 +475,70 @@ struct PulseReadTests {
         #expect(missingChange.readFingerprint != zeroChange.readFingerprint)
     }
 
+    @Test("Extreme numeric fingerprint facts saturate instead of trapping")
+    func extremeNumericFingerprintFactsSaturateInsteadOfTrapping() {
+        var hugeMove = AttentionItem(
+            id: "bigMovers.move.9001",
+            facet: "bigMovers",
+            rank: 1,
+            title: "Glitch Corp moved",
+            severity: "high",
+            score: 1.0,
+            holdingIdentity: HoldingIdentity(name: "Glitch Corp", quoteId: 9001),
+            moveSize: 1e300,
+            windowStart: "2026-06-15",
+            windowEnd: "2026-06-19",
+            supportingDataSlotIDs: ["bigMovers.priceHistory"]
+        )
+
+        #expect(hugeMove.readFingerprint.contains("move-bucket-bp:9223372036854775807"))
+
+        hugeMove.moveSize = -1e300
+        #expect(hugeMove.readFingerprint.contains("move-bucket-bp:-9223372036854775808"))
+
+        hugeMove.moveSize = .infinity
+        #expect(hugeMove.readFingerprint.contains("move-bucket-bp:9223372036854775807"))
+
+        hugeMove.moveSize = -.infinity
+        #expect(hugeMove.readFingerprint.contains("move-bucket-bp:-9223372036854775808"))
+
+        hugeMove.moveSize = .nan
+        #expect(hugeMove.readFingerprint.contains("move-bucket-bp:0"))
+
+        var hugeChange = AttentionItem(
+            id: "income.ex-dividend.9003",
+            facet: "income",
+            rank: 1,
+            title: "Glitch Corp ex-dividend",
+            severity: "low",
+            score: 0.45,
+            holdingIdentity: HoldingIdentity(name: "Glitch Corp", quoteId: 9003),
+            eventDate: "2026-06-24",
+            changePercent: 1e300,
+            supportingDataSlotIDs: ["income.calendar"]
+        )
+
+        #expect(hugeChange.readFingerprint.contains("change-bp:9223372036854775807"))
+
+        hugeChange.changePercent = -1e300
+        #expect(hugeChange.readFingerprint.contains("change-bp:-9223372036854775808"))
+
+        var hugeScore = AttentionItem(
+            id: "custom.signal",
+            facet: "custom",
+            rank: 1,
+            title: "Custom signal",
+            severity: "low",
+            score: 1e300,
+            supportingDataSlotIDs: ["custom.slot"]
+        )
+
+        #expect(hugeScore.readFingerprint.contains("score-bp:9223372036854775807"))
+
+        hugeScore.score = .nan
+        #expect(hugeScore.readFingerprint.contains("score-bp:0"))
+    }
+
     @Test("Renderer exposes one mark-as-read action per attention row")
     func rendererExposesMarkAsReadAction() throws {
         let model = PressureEngine.buildModel(from: try fixtureSnapshot("concentration-pressure.json"))
