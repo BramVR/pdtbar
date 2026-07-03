@@ -3557,7 +3557,9 @@ public enum ClaudeLaunchFlow {
                 diagnostic: diagnostic
             )
         )
-        return MenuDescriptorRenderer.dataHealthRow(for: health)
+        var row = MenuDescriptorRenderer.dataHealthRow(for: health)
+        row.children.removeAll { $0.id == "dataHealth.readState" }
+        return row
     }
 
     private static func runtimeDataHealthDiagnosticRow(
