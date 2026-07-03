@@ -341,6 +341,9 @@ prior into an isolated smoke snapshot directory before launch; cold-start and
 seeded-prior runs do not read or write the user's real app state. If macOS
 Accessibility permission is missing, it exits successfully with `skipped` and
 reports that exact TCC permission to grant.
+When `--peekaboo` is available, successful runs also capture real menu PNGs for
+the main pulse plus allocation, attention, Data/Prices, and Data health
+drill-downs when those submenus are present.
 
 Peekaboo-only local UI proof:
 
@@ -367,5 +370,6 @@ swift run pdtbar-smoke menu-polish-proof --output docs/smoke/menu-polish-proof.s
 ```
 
 This renders sanitized setup, fetching, all-quiet, pressure, and retryable-error
-menu cards from the same descriptors used by the app and AX smoke. It contains
-only fixture/scripted copy and no live portfolio payloads.
+menu cards from the same descriptors used by the app and AX smoke, including the
+quiet Data/Prices overview row. It contains only fixture/scripted copy and no
+live portfolio payloads.
