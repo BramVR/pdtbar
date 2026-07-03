@@ -310,7 +310,6 @@ struct FreshnessLedgerTests {
         #expect(summary.children.map(\.id) == [
             "freshness.staleCount",
             "freshness.oldestPrice",
-            "freshness.detailFill",
         ])
         #expect(model.facetSnapshots.freshness.oldestRows.map(\.name) == ["Stale B", "Fresh A"])
         #expect(summary.children.contains { $0.id == "freshness.oldestRows" } == false)

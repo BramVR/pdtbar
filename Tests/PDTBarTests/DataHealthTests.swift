@@ -261,6 +261,49 @@ struct DataHealthTests {
         #expect(dataSection(in: fetched.descriptor)?.title == "Data")
         #expect(pricesRow(in: fetched.descriptor)?.title == "Prices")
         #expect(pricesRow(in: fetched.descriptor)?.detail == "Current through 2026-06-24")
+        #expect(pricesRow(in: fetched.descriptor)?.children.isEmpty == true)
+    }
+
+    @Test("Quiet overview surfaces degraded price data signal")
+    func quietOverviewSurfacesDegradedPriceDataSignal() throws {
+        let descriptor = MenuDescriptorRenderer.render(
+            model: PressureEngine.buildModel(
+                from: snapshot(
+                    holdings: [
+                        holding("Stale One", quoteId: 1, priceAsOf: "2026-06-22"),
+                        holding("Stale Two", quoteId: 2, priceAsOf: "2026-06-22"),
+                    ],
+                    sectors: []
+                ),
+                detailRefreshOutcome: .completed
+            )
+        )
+        let overviewPrices = try #require(descriptor.sections
+            .first { $0.id == "pulse" }?
+            .rows
+            .first { $0.id == "pulse.quiet" }?
+            .children
+            .first { $0.id == "pulse.quiet.freshness" })
+
+        #expect(overviewPrices.title == "Prices")
+        #expect(overviewPrices.detail == "2 stale")
+    }
+
+    @Test("Partial price data shows only useful supporting facts")
+    func partialPriceDataShowsOnlyUsefulSupportingFacts() throws {
+        var partial = snapshot()
+        partial.latestCompleteDetailFillAsOf = "2026-06-24"
+        let descriptor = MenuDescriptorRenderer.render(
+            model: PressureEngine.buildModel(from: partial, detailRefreshOutcome: .degraded)
+        )
+        let prices = try #require(pricesRow(in: descriptor))
+
+        #expect(prices.detail == "Partial; oldest 2026-06-24")
+        #expect(prices.children.map(\.id) == [
+            "freshness.oldestPrice",
+            "freshness.detailFill",
+        ])
+        #expect(healthRow(in: descriptor) != nil)
     }
 
     @Test("Runtime health overlay can insert health row for quiet healthy descriptor")
@@ -381,21 +424,15 @@ private struct StaticPortfolioDataSource: PortfolioDataSource {
     }
 }
 
-private func snapshot() -> PortfolioSnapshot {
+private func snapshot(
+    holdings: [NormalizedHolding]? = nil,
+    sectors: [DistributionSummary]? = nil
+) -> PortfolioSnapshot {
     PortfolioSnapshot(
         asOf: "2026-06-25",
         totalValue: Money(value: "1000.00", currency: "EUR"),
-        openHoldings: [
-            NormalizedHolding(
-                name: "Example Holding",
-                quoteId: 1,
-                weight: 0.1,
-                worth: Money(value: "100.00", currency: "EUR"),
-                price: Money(value: "10.00", currency: "EUR"),
-                priceAsOf: "2026-06-24"
-            ),
-        ],
-        sectors: [
+        openHoldings: holdings ?? [holding("Example Holding", quoteId: 1, priceAsOf: "2026-06-24")],
+        sectors: sectors ?? [
             DistributionSummary(
                 name: "Technology",
                 percentage: 100,
@@ -407,5 +444,16 @@ private func snapshot() -> PortfolioSnapshot {
         incomeEvents: [],
         dividendRowCount: 0,
         priceSeries: []
+    )
+}
+
+private func holding(_ name: String, quoteId: Int, priceAsOf: String) -> NormalizedHolding {
+    NormalizedHolding(
+        name: name,
+        quoteId: quoteId,
+        weight: 0.1,
+        worth: Money(value: "100.00", currency: "EUR"),
+        price: Money(value: "10.00", currency: "EUR"),
+        priceAsOf: priceAsOf
     )
 }
