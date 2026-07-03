@@ -4791,7 +4791,7 @@ public enum MenuDescriptorRenderer {
     }
 
     private static func freshnessDetailRows(for freshness: FreshnessSnapshot) -> [MenuRow] {
-        [
+        return [
             MenuRow(
                 id: "freshness.staleCount",
                 role: .freshnessStaleCount,
@@ -4810,7 +4810,7 @@ public enum MenuDescriptorRenderer {
                 title: "Latest complete detail fill",
                 detail: freshness.latestCompleteDetailFillAsOf ?? "Not recorded"
             ),
-        ].compactMap { $0 }
+        ]
     }
 
     private static func freshnessSummaryDetail(for freshness: FreshnessSnapshot) -> String {
