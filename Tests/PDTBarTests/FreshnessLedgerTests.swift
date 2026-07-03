@@ -285,8 +285,8 @@ struct FreshnessLedgerTests {
         #expect(model.facetSnapshots.freshness.latestCompleteDetailFillAsOf == "2026-06-25")
     }
 
-    @Test("Descriptor renders freshness detail rows from model facts")
-    func descriptorRendersFreshnessDetailRowsFromModelFacts() throws {
+    @Test("Descriptor renders freshness detail rows without oldest rows submenu")
+    func descriptorRendersFreshnessDetailRowsWithoutOldestRowsSubmenu() throws {
         let model = PressureEngine.buildModel(
             from: freshnessSnapshot(
                 asOf: "2026-06-25",
@@ -310,13 +310,10 @@ struct FreshnessLedgerTests {
         #expect(summary.children.map(\.id) == [
             "freshness.staleCount",
             "freshness.oldestPrice",
-            "freshness.oldestRows",
             "freshness.detailFill",
         ])
-        #expect(summary.children.first { $0.id == "freshness.oldestRows" }?.children.map(\.id) == [
-            "freshness.oldestRows.2",
-            "freshness.oldestRows.1",
-        ])
+        #expect(model.facetSnapshots.freshness.oldestRows.map(\.name) == ["Stale B", "Fresh A"])
+        #expect(summary.children.contains { $0.id == "freshness.oldestRows" } == false)
     }
 }
 
