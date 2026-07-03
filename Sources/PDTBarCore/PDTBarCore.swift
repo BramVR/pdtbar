@@ -4385,7 +4385,7 @@ public enum MenuDescriptorRenderer {
                         MenuRow(
                             id: "pulse.quiet.freshness",
                             title: "Prices",
-                            detail: model.portfolioGlance.worstPriceAsOf ?? "Unknown"
+                            detail: overviewFreshnessDetail(for: freshness)
                         ),
                     ].compactMap { $0 }
                 ),
@@ -4857,26 +4857,51 @@ public enum MenuDescriptorRenderer {
     }
 
     private static func freshnessDetailRows(for freshness: FreshnessSnapshot) -> [MenuRow] {
-        return [
-            MenuRow(
-                id: "freshness.staleCount",
-                role: .freshnessStaleCount,
-                title: "Stale holdings",
-                detail: "\(freshness.staleHoldingCount)"
-            ),
-            MenuRow(
-                id: "freshness.oldestPrice",
-                role: .freshnessOldestPrice,
-                title: "Oldest price",
-                detail: freshness.oldestPriceAsOf ?? "Unknown"
-            ),
-            MenuRow(
-                id: "freshness.detailFill",
-                role: .freshnessDetailFill,
-                title: "Latest complete detail fill",
-                detail: freshness.latestCompleteDetailFillAsOf ?? "Not recorded"
-            ),
-        ]
+        var rows: [MenuRow] = []
+        if freshness.staleHoldingCount > 0 {
+            rows.append(
+                MenuRow(
+                    id: "freshness.staleCount",
+                    role: .freshnessStaleCount,
+                    title: "Stale holdings",
+                    detail: "\(freshness.staleHoldingCount)"
+                )
+            )
+        }
+        if freshness.status != .fresh {
+            rows.append(
+                MenuRow(
+                    id: "freshness.oldestPrice",
+                    role: .freshnessOldestPrice,
+                    title: "Oldest price",
+                    detail: freshness.oldestPriceAsOf ?? "Unknown"
+                )
+            )
+        }
+        if freshness.status == .partial {
+            rows.append(
+                MenuRow(
+                    id: "freshness.detailFill",
+                    role: .freshnessDetailFill,
+                    title: "Latest complete detail fill",
+                    detail: freshness.latestCompleteDetailFillAsOf ?? "Not recorded"
+                )
+            )
+        }
+        return rows
+    }
+
+    private static func overviewFreshnessDetail(for freshness: FreshnessSnapshot) -> String {
+        switch freshness.status {
+        case .fresh:
+            return freshness.oldestPriceAsOf ?? "Current"
+        case .stale:
+            return "\(freshness.staleHoldingCount) stale"
+        case .partial:
+            return "Partial"
+        case .unknown:
+            return "Unknown"
+        }
     }
 
     private static func freshnessSummaryDetail(for freshness: FreshnessSnapshot) -> String {
