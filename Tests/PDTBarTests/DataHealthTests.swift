@@ -111,19 +111,22 @@ struct DataHealthTests {
         #expect(!summary.copyText.localizedCaseInsensitiveContains("portfolio"))
     }
 
-    @Test("Descriptor exposes Data health submenu rows")
-    func descriptorExposesDataHealthSubmenuRows() throws {
+    @Test("Descriptor exposes Data health submenu rows when degraded")
+    func descriptorExposesDataHealthSubmenuRowsWhenDegraded() throws {
         let model = PressureEngine.buildModel(
             from: snapshot(),
             readState: PulseReadState(readFingerprints: ["read-one"]),
             detailRefreshOutcome: .completed
         )
-        let dataHealth = try #require(MenuDescriptorRenderer.render(model: model)
+        let dataSection = try #require(MenuDescriptorRenderer.render(model: model)
             .sections
-            .first { $0.id == "freshness" }?
-            .rows
-            .first { $0.id == "dataHealth" })
+            .first { $0.id == "freshness" })
+        let prices = try #require(dataSection.rows.first { $0.id == "freshness.summary" })
+        let dataHealth = try #require(dataSection.rows.first { $0.id == "dataHealth" })
 
+        #expect(dataSection.title == "Data")
+        #expect(prices.title == "Prices")
+        #expect(prices.detail == "Current through 2026-06-24")
         #expect(dataHealth.title == "Data health")
         #expect(dataHealth.role == .dataHealthSummary)
         #expect(dataHealth.children.map(\.id) == [
@@ -253,7 +256,42 @@ struct DataHealthTests {
         #expect(source.pdtMCP == .ready)
         #expect(source.readTools == .available)
         #expect(source.readOnlyPolicy == .enforced)
-        #expect(healthRow(in: fetched.descriptor)?.children.first { $0.id == "dataHealth.source" }?.detail == "Claude ready; PDT ready; 7/7 read tools; read-only")
+        #expect(fetched.model.facetSnapshots.dataHealth.status == .healthy)
+        #expect(healthRow(in: fetched.descriptor) == nil)
+        #expect(dataSection(in: fetched.descriptor)?.title == "Data")
+        #expect(pricesRow(in: fetched.descriptor)?.title == "Prices")
+        #expect(pricesRow(in: fetched.descriptor)?.detail == "Current through 2026-06-24")
+    }
+
+    @Test("Runtime health overlay can insert health row for quiet healthy descriptor")
+    func runtimeHealthOverlayCanInsertHealthRowForQuietHealthyDescriptor() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "data-health-overlay-insert")
+        let fetched = try PressureRunner.run(
+            dataSource: StaticPortfolioDataSource(fixedSnapshot: snapshot()),
+            snapshotStore: store
+        )
+
+        #expect(healthRow(in: fetched.descriptor) == nil)
+
+        let refreshing = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+            cachedPulse: fetched.descriptor,
+            progress: BackgroundDetailRefreshProgress(
+                phase: .priceHistory,
+                completedUnitCount: 2,
+                totalUnitCount: 9
+            )
+        )
+        let refreshingHealth = try #require(healthRow(in: refreshing))
+        #expect(refreshingHealth.detail == "Refreshing")
+        #expect(refreshingHealth.children.first { $0.id == "dataHealth.source" }?.detail == "Claude ready; PDT ready; 7/7 read tools; read-only")
+        #expect(refreshingHealth.children.first { $0.id == "dataHealth.detailFill" }?.detail == "Price history 2/9")
+        #expect(refreshingHealth.children.contains { $0.id == "dataHealth.readState" } == false)
+
+        let probing = ClaudeLaunchFlow.descriptor(for: .probingClaude, cachedPulse: fetched.descriptor)
+        let probingHealth = try #require(healthRow(in: probing))
+        #expect(probingHealth.detail == "Checking")
+        #expect(probingHealth.children.first { $0.id == "dataHealth.source" }?.detail == "Claude checking; PDT unknown; read tools unknown; policy unknown")
+        #expect(probingHealth.children.contains { $0.id == "dataHealth.readState" } == false)
     }
 
     @Test("Runtime health overlay preserves cached diagnostics and cache state")
@@ -301,11 +339,21 @@ struct DataHealthTests {
 }
 
 private func healthRow(in descriptor: MenuDescriptor) -> MenuRow? {
-    descriptor
-        .sections
-        .first { $0.id == "freshness" }?
+    dataSection(in: descriptor)?
         .rows
         .first { $0.id == "dataHealth" }
+}
+
+private func dataSection(in descriptor: MenuDescriptor) -> MenuSection? {
+    descriptor
+        .sections
+        .first { $0.id == "freshness" }
+}
+
+private func pricesRow(in descriptor: MenuDescriptor) -> MenuRow? {
+    dataSection(in: descriptor)?
+        .rows
+        .first { $0.id == "freshness.summary" }
 }
 
 private func freshness(

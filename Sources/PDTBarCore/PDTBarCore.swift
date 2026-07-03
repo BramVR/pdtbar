@@ -3481,6 +3481,7 @@ public enum ClaudeLaunchFlow {
         let diagnosticRow = runtimeDataHealthDiagnosticRow(for: diagnostic)
             ?? (clearsDiagnostic ? MenuDescriptorRenderer.dataHealthDiagnosticRow(for: nil) : nil)
 
+        var replacedDataHealth = false
         descriptor.sections = descriptor.sections.map { section in
             guard section.id == "freshness" else {
                 return section
@@ -3491,6 +3492,7 @@ public enum ClaudeLaunchFlow {
                     return row
                 }
                 var row = row
+                replacedDataHealth = true
                 if let summaryDetail {
                     row.detail = summaryDetail
                 }
@@ -3507,9 +3509,57 @@ public enum ClaudeLaunchFlow {
                 }
                 return row
             }
+            if !replacedDataHealth {
+                var row = runtimeDataHealthRow(
+                    claudeReadiness: claudeReadiness,
+                    pdtMCPReadiness: pdtMCPReadiness,
+                    detailFill: detailFill,
+                    diagnostic: diagnostic
+                )
+                if let summaryDetail {
+                    row.detail = summaryDetail
+                }
+                section.rows.append(row)
+            }
             return section
         }
         return descriptor
+    }
+
+    private static func runtimeDataHealthRow(
+        claudeReadiness: DataHealthSourceStatus,
+        pdtMCPReadiness: DataHealthSourceStatus,
+        detailFill: DataHealthDetailFillInput,
+        diagnostic: PDTDetailRefreshFailureDiagnostic?
+    ) -> MenuRow {
+        let sourceReady = claudeReadiness == .ready && pdtMCPReadiness == .ready
+        let health = DataHealth.build(
+            DataHealthInput(
+                claudeReadiness: claudeReadiness,
+                pdtMCPReadiness: pdtMCPReadiness,
+                availableReadTools: sourceReady ? Set(PDTReadTools.requiredV1) : nil,
+                readOnlyPolicy: sourceReady ? .enforced : .unknown,
+                pulseSource: .cachedSnapshot,
+                lastSuccessfulCompleteFetchAsOf: nil,
+                cachedPulseAvailable: true,
+                detailFill: detailFill,
+                freshness: FreshnessSnapshot(
+                    status: .fresh,
+                    worstPriceAsOf: nil,
+                    stale: false,
+                    staleHoldingCount: 0,
+                    oldestPriceAsOf: nil,
+                    oldestRows: [],
+                    latestCompleteDetailFillAsOf: nil,
+                    sourceCaveats: []
+                ),
+                readState: nil,
+                diagnostic: diagnostic
+            )
+        )
+        var row = MenuDescriptorRenderer.dataHealthRow(for: health)
+        row.children.removeAll { $0.id == "dataHealth.readState" }
+        return row
     }
 
     private static func runtimeDataHealthDiagnosticRow(
@@ -4334,7 +4384,7 @@ public enum MenuDescriptorRenderer {
                         },
                         MenuRow(
                             id: "pulse.quiet.freshness",
-                            title: "Latest prices",
+                            title: "Prices",
                             detail: model.portfolioGlance.worstPriceAsOf ?? "Unknown"
                         ),
                     ].compactMap { $0 }
@@ -4404,11 +4454,8 @@ public enum MenuDescriptorRenderer {
                 ),
                 MenuSection(
                     id: "freshness",
-                    title: "Freshness",
-                    rows: [
-                        freshnessSummaryRow(for: freshness),
-                        dataHealthRow(for: dataHealth),
-                    ]
+                    title: "Data",
+                    rows: dataRows(freshness: freshness, health: dataHealth)
                 ),
                 topLevelActionsSection(refreshState: .available),
             ]
@@ -4678,10 +4725,18 @@ public enum MenuDescriptorRenderer {
         MenuRow(
             id: "freshness.summary",
             role: .freshnessSummary,
-            title: "Status",
+            title: "Prices",
             detail: freshnessSummaryDetail(for: freshness),
             children: freshnessDetailRows(for: freshness)
         )
+    }
+
+    private static func dataRows(freshness: FreshnessSnapshot, health: DataHealthSnapshot) -> [MenuRow] {
+        var rows = [freshnessSummaryRow(for: freshness)]
+        if health.status != .healthy {
+            rows.append(dataHealthRow(for: health))
+        }
+        return rows
     }
 
     static func dataHealthRow(for health: DataHealthSnapshot) -> MenuRow {
@@ -4699,6 +4754,17 @@ public enum MenuDescriptorRenderer {
         with health: DataHealthSnapshot
     ) -> MenuDescriptor {
         var descriptor = descriptor
+        if health.status == .healthy {
+            descriptor.sections = descriptor.sections.map { section in
+                guard section.id == "freshness" else {
+                    return section
+                }
+                var section = section
+                section.rows.removeAll { $0.id == "dataHealth" }
+                return section
+            }
+            return descriptor
+        }
         let replacement = dataHealthRow(for: health)
         var replaced = false
         descriptor.sections = descriptor.sections.map { section in
@@ -4816,7 +4882,7 @@ public enum MenuDescriptorRenderer {
     private static func freshnessSummaryDetail(for freshness: FreshnessSnapshot) -> String {
         switch freshness.status {
         case .fresh:
-            return "Fresh"
+            return freshness.oldestPriceAsOf.map { "Current through \($0)" } ?? "Current"
         case .stale:
             let oldest = freshness.oldestPriceAsOf.map { "; oldest \($0)" } ?? ""
             return "\(freshness.staleHoldingCount) stale\(oldest)"

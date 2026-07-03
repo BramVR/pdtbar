@@ -424,7 +424,7 @@ function layout({ page, html, toc, sectionName }) {
         </div>
         <div class="hero-art">${pulseArtSvg()}</div>
         <div class="feature-row" aria-label="Product focus">
-          ${(isDutch ? ["Concentratie", "Inkomsten", "Grote bewegingen", "Recente data", "Geen bijzonderheden"] : ["Concentration", "Income events", "Big movers", "Freshness", "All quiet"]).map((label) => `<a class="feature-pill" href="#${pulseAnchor}">${label}</a>`).join("")}
+          ${(isDutch ? ["Concentratie", "Inkomsten", "Grote bewegingen", "Recente data", "Geen bijzonderheden"] : ["Concentration", "Income events", "Big movers", "Prices", "All quiet"]).map((label) => `<a class="feature-pill" href="#${pulseAnchor}">${label}</a>`).join("")}
         </div>
       </header>
       <div class="doc-grid">

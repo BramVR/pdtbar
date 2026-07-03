@@ -17,7 +17,7 @@ PDTBar is a quiet macOS menu bar companion for your Portfolio Dividend Tracker p
 - Concentration: which positions carry the most weight.
 - Income events: dividend and cash-flow moments coming up.
 - Big movers: holdings that clearly moved.
-- Freshness: how recent the PDT data is.
+- Prices: whether price data is current.
 - All quiet: a calm status when nothing needs attention.
 
 ## How It Works

@@ -26,7 +26,7 @@ The product lives in the macOS menu bar (the **pulse**), and **all information i
 
 - **Status item (always visible):** the Concentration Stack icon. Bar heights show the concentration shape; filled bars show attention count capped at three; full status copy stays in tooltip/accessibility and the first Pulse row.
 - **The menu (the glance):** the ranked unread attention items, or "all quiet"; each expands to the numbers that triggered it and can be marked read without hiding the underlying drill-down facts.
-- **Submenus (drill-down):** the current v1 picture — holdings/allocation, income/calendar, and big movers/freshness — without leaving the bar. Full-product facets such as performance vs benchmark and cash are deferred until earned.
+- **Submenus (drill-down):** the current v1 picture — holdings/allocation, income/calendar, big movers, and Data/Prices — without leaving the bar. Full-product facets such as performance vs benchmark and cash are deferred until earned.
 
 Quiet at the top, everything available underneath.
 

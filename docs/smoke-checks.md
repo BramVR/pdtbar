@@ -33,7 +33,7 @@ fill is attention count capped at three filled bars; it is not freshness,
 progress, or a separate notification dot. The center bar stays at max visual
 height; side bars start from a deterministic silhouette (left half-height, right
 two-thirds height) and X-ray look-through concentration scales only those side
-bars. Freshness and fetch failure belong in tooltip/menu copy and may optionally
+bars. Data freshness and fetch failure belong in tooltip/menu copy and may optionally
 dim the whole icon.
 Smoke proof should check the Codable `StatusVisualState`/surface state or
 sanitized rendered SVG, not private screenshots or raw portfolio payloads.
@@ -312,7 +312,7 @@ swift run pdtbar-smoke real-claude-flow-ax
 This launches the actual no-argument app path with isolated app-support
 directories and scripted Claude/PDT dependencies. It opens the menu-bar item
 through macOS Accessibility and verifies stable status/menu identifiers plus
-visible text for setup, fetching, all-quiet, pressure, Data health, and retryable
+visible text for setup, fetching, all-quiet, pressure, Data/Prices, Data health, and retryable
 fetch-error surfaces. Fixture env is injected only as a guard; the smoke fails if fixture
 snapshot state is written. Missing macOS Accessibility permission exits
 successfully with `skipped` and names that exact TCC permission. Proof artifacts
@@ -335,7 +335,7 @@ swift run pdtbar-smoke real-user-pulse --fixture docs/pdt/fixtures/big-mover.jso
 
 This launches the real fixture-mode app, opens the menu-bar pulse through
 macOS Accessibility, and verifies fixture status plus pulse, allocation, income,
-big-mover, and freshness rows using the descriptor's stable accessibility
+big-mover, and data rows using the descriptor's stable accessibility
 identifiers. Fixtures with a prior snapshot, such as `big-mover.json`, seed that
 prior into an isolated smoke snapshot directory before launch; cold-start and
 seeded-prior runs do not read or write the user's real app state. If macOS
