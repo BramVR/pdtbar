@@ -3396,8 +3396,9 @@ private func capturePricesDetailScreenshot(
     artifacts: URL,
     peekaboo: URL?
 ) throws -> URL? {
-    try captureSubmenuScreenshot(
-        rowIdentifier: "pdtbar.row.freshness.summary",
+    let stablePricesRowIdentifier = "pdtbar.row.freshness.summary"
+    return try captureSubmenuScreenshot(
+        rowIdentifier: stablePricesRowIdentifier,
         name: "pdtbar-real-user-pulse-prices-detail",
         snapshot: snapshot,
         artifacts: artifacts,

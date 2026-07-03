@@ -342,8 +342,8 @@ seeded-prior runs do not read or write the user's real app state. If macOS
 Accessibility permission is missing, it exits successfully with `skipped` and
 reports that exact TCC permission to grant.
 When `--peekaboo` is available, successful runs also capture real menu PNGs for
-the main pulse, Data/Prices drill-down, and Data health drill-down when those
-submenus are present.
+the main pulse plus allocation, attention, Data/Prices, and Data health
+drill-downs when those submenus are present.
 
 Peekaboo-only local UI proof:
 
