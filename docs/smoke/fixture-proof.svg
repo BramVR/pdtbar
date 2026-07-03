@@ -1,17 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="460" viewBox="0 0 900 460">
   <rect width="900" height="460" fill="#f7f7f2"/>
   <rect x="30" y="28" width="840" height="48" rx="8" fill="#1f2933"/>
-  <text x="48" y="59" fill="#ffffff" font-family="Menlo, monospace" font-size="18">EUR 51,200.00 - All quiet</text>
+  <g>
+<rect x="48.00" y="52.62" width="6.25" height="10.12" rx="3.12" fill="none" stroke="#ffffff" stroke-width="1.50" opacity="0.86"/>
+<rect x="56.75" y="42.50" width="6.25" height="20.25" rx="3.12" fill="none" stroke="#ffffff" stroke-width="1.50" opacity="0.86"/>
+<rect x="65.50" y="49.24" width="6.25" height="13.51" rx="3.12" fill="none" stroke="#ffffff" stroke-width="1.50" opacity="0.86"/>
+</g>
   <rect x="30" y="100" width="520" height="320" rx="8" fill="#ffffff" stroke="#d6d3ca"/>
   <text x="44" y="132" class="heading">Fixture menu proof</text>
   <text x="44" y="154" class="row">Pulse</text>
-<text x="44" y="182" class="row">All quiet - No attention items right now.</text>
-<text x="44" y="210" class="row">Allocation</text>
-<text x="44" y="238" class="row">Nova Lithography - 11.7%</text>
-<text x="44" y="266" class="row">Orbit Communications - 11.7%</text>
-<text x="44" y="294" class="row">Income</text>
-<text x="44" y="322" class="row">No income events - No calendar events in the next window</text>
-<text x="44" y="350" class="row">Big movers</text>
+<text x="44" y="182" class="row">EUR 51,200.00 - All quiet</text>
+<text x="44" y="210" class="row">All quiet - No attention items right now.</text>
+<text x="44" y="238" class="row">Allocation</text>
+<text x="44" y="266" class="row">Portfolio</text>
+<text x="44" y="294" class="row">Detailed info - Full allocation list</text>
+<text x="44" y="322" class="row">Income</text>
+<text x="44" y="350" class="row">No income events - No calendar events in the next window</text>
   <style>
     .heading { font: 700 18px -apple-system, BlinkMacSystemFont, sans-serif; fill: #18202a; }
     .row { font: 15px -apple-system, BlinkMacSystemFont, sans-serif; fill: #2e3742; }

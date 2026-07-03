@@ -2713,7 +2713,7 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         artifacts: artifacts,
         peekaboo: screenshotPeekaboo
     )
-    let freshnessScreenshot = try? captureFreshnessDetailScreenshot(
+    let pricesScreenshot = try? capturePricesDetailScreenshot(
         snapshot: menuSnapshot,
         artifacts: artifacts,
         peekaboo: screenshotPeekaboo
@@ -2731,7 +2731,7 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
     let priorDetail = expectedScenario.seededPrior.map { "; seeded prior snapshot \($0.asOf)" } ?? ""
     let screenshotDetail = screenshot == nil ? "" : "; captured menu screenshot"
     let allocationScreenshotDetail = allocationScreenshot == nil ? "" : "; captured allocation detail screenshot"
-    let freshnessScreenshotDetail = freshnessScreenshot == nil ? "" : "; captured freshness detail screenshot"
+    let pricesScreenshotDetail = pricesScreenshot == nil ? "" : "; captured Prices detail screenshot"
     let attentionScreenshotDetail = attentionScreenshot == nil ? "" : "; captured attention explanation screenshot"
     let dataHealthScreenshotDetail = dataHealthScreenshot == nil ? "" : "; captured Data health screenshot"
     var reportArtifacts = [artifactPath(evidence)]
@@ -2741,8 +2741,8 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
     if let allocationScreenshot {
         reportArtifacts.append(artifactPath(allocationScreenshot))
     }
-    if let freshnessScreenshot {
-        reportArtifacts.append(artifactPath(freshnessScreenshot))
+    if let pricesScreenshot {
+        reportArtifacts.append(artifactPath(pricesScreenshot))
     }
     if let attentionScreenshot {
         reportArtifacts.append(artifactPath(attentionScreenshot))
@@ -2753,7 +2753,7 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
     return SmokeReport(
         name: "real-user-pulse",
         status: SmokeStatus.passed,
-        detail: "launched fixture-mode app with isolated state\(priorDetail), opened menu-bar pulse through \(openedMenu.successfulAttempt ?? "Accessibility"), verified status plus pulse/allocation/income/big-mover/freshness selectors for \(fixture.lastPathComponent)\(screenshotDetail)\(allocationScreenshotDetail)\(freshnessScreenshotDetail)\(attentionScreenshotDetail)\(dataHealthScreenshotDetail)",
+        detail: "launched fixture-mode app with isolated state\(priorDetail), opened menu-bar pulse through \(openedMenu.successfulAttempt ?? "Accessibility"), verified status plus pulse/allocation/income/big-mover/Data selectors for \(fixture.lastPathComponent)\(screenshotDetail)\(allocationScreenshotDetail)\(pricesScreenshotDetail)\(attentionScreenshotDetail)\(dataHealthScreenshotDetail)",
         artifacts: reportArtifacts
     )
 }
@@ -3391,14 +3391,14 @@ private func captureAllocationDetailScreenshot(
     return screenshot
 }
 
-private func captureFreshnessDetailScreenshot(
+private func capturePricesDetailScreenshot(
     snapshot: AccessibilitySnapshot,
     artifacts: URL,
     peekaboo: URL?
 ) throws -> URL? {
     try captureSubmenuScreenshot(
         rowIdentifier: "pdtbar.row.freshness.summary",
-        name: "pdtbar-real-user-pulse-freshness-detail",
+        name: "pdtbar-real-user-pulse-prices-detail",
         snapshot: snapshot,
         artifacts: artifacts,
         peekaboo: peekaboo
