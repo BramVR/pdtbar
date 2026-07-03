@@ -8,7 +8,7 @@ A **thin renderer** over the engine's model. Holds **no portfolio logic** — it
 
 - **Status item (always visible):** the Concentration Stack icon. Bar heights come from concentration/allocation facts; filled bars are attention-count notification fill capped at three; no separate dot.
 - **The menu (the glance):** the ranked attention items, or **"all quiet"**; each expands to the numbers that triggered it.
-- **Submenus (drill-down):** current v1 snapshots — holdings/allocation, income/calendar, and big movers/freshness — reachable without leaving the bar. Performance vs benchmark and cash are deferred full-product facets.
+- **Submenus (drill-down):** current v1 snapshots — holdings/allocation, income/calendar, big movers, and Data/Prices — reachable without leaving the bar. Performance vs benchmark and cash are deferred full-product facets.
 
 All information reachable through the bar, but via progressive disclosure — never a dashboard grid shown all at once.
 

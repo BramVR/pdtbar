@@ -687,9 +687,16 @@ struct PDTOnboardingRunnerTests {
 
         _ = runtime.launch(cachedPulse: nil)
         let republished = runtime.publishPulse(fetchedPulse)
-        let health = try #require(healthRow(in: republished.descriptor))
 
-        #expect(health.children.first { $0.id == "dataHealth.source" }?.detail == "Claude ready; PDT ready; 7/7 read tools; read-only")
+        #expect(fetchedPulse.model.facetSnapshots.dataHealth.source.detail == "Claude ready; PDT ready; 7/7 read tools; read-only")
+        #expect(fetchedPulse.model.facetSnapshots.dataHealth.status == .healthy)
+        #expect(healthRow(in: republished.descriptor) == nil)
+        #expect(republished.descriptor.sections.first { $0.id == "freshness" }?.title == "Data")
+        #expect(republished.descriptor.sections
+            .first { $0.id == "freshness" }?
+            .rows
+            .first { $0.id == "freshness.summary" }?
+            .title == "Prices")
     }
 
     @Test("Launch runtime renders first fetch failure without cache as retryable setup")
@@ -1045,6 +1052,12 @@ struct LaunchSurfaceTests {
         #expect(descriptor.statusVisual.filledBarCount == 0)
         #expect(!descriptor.statusVisual.isDimmed)
         #expect(descriptor.sections.map(\.id) == ["pulse", "allocation", "income", "bigMovers", "freshness", "actions"])
+        let dataSection = try #require(descriptor.sections.first { $0.id == "freshness" })
+        let prices = try #require(dataSection.rows.first { $0.id == "freshness.summary" })
+        #expect(dataSection.title == "Data")
+        #expect(prices.title == "Prices")
+        #expect(prices.detail == "Current through 2026-06-22")
+        #expect(healthRow(in: descriptor) == nil)
         #expect(actionRow("actions.refreshNow", in: descriptor)?.role == .fetchRetry)
         #expect(actionRow("actions.openPDT", in: descriptor)?.role == .openPDT)
         #expect(surface.status.title == "EUR 51,200.00 - All quiet")

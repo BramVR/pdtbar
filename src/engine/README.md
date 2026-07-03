@@ -10,7 +10,7 @@ Read the portfolio from PDT plus a small **history snapshot**, compute **pressur
 
 ## Inputs
 
-- Current v1 portfolio facets from PDT (holdings/allocation, income + calendar, and big movers/freshness). Performance, cash, corporate actions, and benchmark are deferred full-product facets.
+- Current v1 portfolio facets from PDT (holdings/allocation, income + calendar, big movers, and data freshness). Performance, cash, corporate actions, and benchmark are deferred full-product facets.
 - A small local **snapshot of prior state** (e.g. yesterday's weights/prices) — required to detect change.
 
 ## Output: "the model"
