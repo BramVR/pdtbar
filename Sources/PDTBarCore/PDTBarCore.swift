@@ -4804,20 +4804,6 @@ public enum MenuDescriptorRenderer {
                 title: "Oldest price",
                 detail: freshness.oldestPriceAsOf ?? "Unknown"
             ),
-            freshness.oldestRows.isEmpty ? nil : MenuRow(
-                id: "freshness.oldestRows",
-                role: .freshnessOldestRows,
-                title: "Oldest rows",
-                detail: freshness.oldestRows.count == 1 ? "1 holding" : "\(freshness.oldestRows.count) holdings",
-                children: freshness.oldestRows.map {
-                    MenuRow(
-                        id: "freshness.oldestRows.\($0.quoteId)",
-                        role: .freshnessOldestHolding,
-                        title: $0.name,
-                        detail: $0.priceAsOf
-                    )
-                }
-            ),
             MenuRow(
                 id: "freshness.detailFill",
                 role: .freshnessDetailFill,
