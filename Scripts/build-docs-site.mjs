@@ -44,6 +44,7 @@ for (const page of pages) {
 
 fs.writeFileSync(path.join(outDir, "favicon.svg"), faviconSvg(), "utf8");
 fs.writeFileSync(path.join(outDir, "social-card.svg"), socialCardSvg(), "utf8");
+fs.copyFileSync(path.join(docsDir, "public", "pdtbar-hero.png"), path.join(outDir, "pdtbar-hero.png"));
 fs.writeFileSync(path.join(outDir, ".nojekyll"), "", "utf8");
 fs.writeFileSync(path.join(outDir, "llms.txt"), llmsTxt(), "utf8");
 fs.writeFileSync(path.join(outDir, "llms-full.txt"), llmsFullTxt(), "utf8");
@@ -427,7 +428,7 @@ function layout({ page, html, toc, sectionName }) {
             <a class="btn" href="${repoBase}">GitHub</a>
           </div>
         </div>
-        <div class="hero-art">${pulseArtSvg()}</div>
+        <div class="hero-art">${pulseArtSvg(assetHref(page, "pdtbar-hero.png"))}</div>
         <div class="feature-row" aria-label="Product focus">
           ${(isDutch ? ["Concentratie", "Inkomsten", "Grote bewegingen", "Recente data", "Geen bijzonderheden"] : ["Concentration", "Income events", "Big movers", "Prices", "All quiet"]).map((label) => `<a class="feature-pill" href="${escapeAttr(pulseHref)}">${label}</a>`).join("")}
         </div>
