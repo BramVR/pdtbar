@@ -46,6 +46,7 @@ jobs:
           test -s dist/docs-site/llms-full.txt
           test -s dist/docs-site/favicon.svg
           test -s dist/docs-site/social-card.svg
+          test -s dist/docs-site/pdtbar-hero.png
           test -f dist/docs-site/.nojekyll
           grep -q "application/ld+json" dist/docs-site/index.html
           grep -q "SoftwareApplication" dist/docs-site/index.html
@@ -87,6 +88,7 @@ jobs:
           test -s dist/docs-site/llms-full.txt
           test -s dist/docs-site/favicon.svg
           test -s dist/docs-site/social-card.svg
+          test -s dist/docs-site/pdtbar-hero.png
           test -f dist/docs-site/.nojekyll
           grep -q "application/ld+json" dist/docs-site/index.html
           grep -q "SoftwareApplication" dist/docs-site/index.html

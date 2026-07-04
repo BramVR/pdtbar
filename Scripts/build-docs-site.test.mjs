@@ -127,6 +127,7 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
       "llms.txt",
       "llms-full.txt",
       ".nojekyll",
+      "pdtbar-hero.png",
     ]) {
       assert.ok(fs.existsSync(path.join(outDir, rel)), `${rel} should exist`);
     }
@@ -155,10 +156,9 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
     assert.match(index, /Homebrew wordt nog niet ondersteund/);
     assert.match(index, /PDTBar\.app\.zip/);
     assert.match(index, /class="pulse-art"/);
-    assert.match(index, /<rect x="0" y="0" width="360" height="200" rx="16" fill="url\(#pulse-card\)" stroke="#1e293b" stroke-width="1"\/>/);
-    assert.match(index, /class="pulse-fill pulse-fill-one"/);
-    assert.match(index, /class="pulse-fill pulse-fill-two"/);
-    assert.match(index, /class="pulse-fill pulse-fill-three"/);
+    assert.match(index, /src="pdtbar-hero\.png"/);
+    assert.match(index, /alt="PDTBar portfolio pulse interface preview"/);
+    assert.doesNotMatch(index, /pulse-fill/);
     assert.match(index, /application\/ld\+json/);
     assert.match(index, /"@type":"SoftwareApplication"/);
     assert.match(index, /"applicationCategory":"FinanceApplication"/);
@@ -234,6 +234,7 @@ test("pages workflow builds, tests, smoke-checks, and skips disabled Pages safel
     "dist/docs-site/llms-full.txt",
     "dist/docs-site/favicon.svg",
     "dist/docs-site/social-card.svg",
+    "dist/docs-site/pdtbar-hero.png",
     "dist/docs-site/.nojekyll",
     'grep -q "PDTBar" dist/docs-site/index.html',
     'grep -q "https://bramvr.github.io/pdtbar/" dist/docs-site/index.html',

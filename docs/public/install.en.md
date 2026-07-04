@@ -2,13 +2,13 @@
 summary: "Public English install and first-use guide for PDTBar."
 read_when:
   - Updating public install or first-use copy
-title: "Install PDTBar"
+title: "Install"
 lang: "en"
 permalink: "/en/install/"
 description: "Install and use PDTBar on macOS without Homebrew."
 ---
 
-# Install PDTBar
+# Install
 
 Homebrew is not supported yet. There is no `brew install` command for PDTBar right now.
 
