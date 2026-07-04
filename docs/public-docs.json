@@ -4,7 +4,9 @@
       "name": "PDTBar",
       "pages": [
         "public/index.nl.md",
-        "public/index.en.md"
+        "public/install.nl.md",
+        "public/index.en.md",
+        "public/install.en.md"
       ]
     }
   ]

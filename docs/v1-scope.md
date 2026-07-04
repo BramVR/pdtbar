@@ -55,7 +55,7 @@ The two hardest moments are day one and a calm day. Handle them deliberately:
 
 - LLM-written narrative (v1 copy is **templated**, deterministic).
 - A background, subscription-backed "analyze/narrate" agent runtime.
-- Packaging / auto-update / distribution machinery (Sparkle, Homebrew).
+- Packaging / auto-update / distribution machinery (Sparkle, Homebrew). Until Homebrew is real and tested, user-facing docs must say it is not supported and point users to a shared macOS app zip or the public app download once one exists.
 - Extra connectors (oracle, imsg, poltergeist).
 - A user-facing CLI (the engine emits JSON for testing; a CLI is a dev convenience, not a product surface).
 - Non-Claude login providers, Codex login, generic OAuth, pasted API keys/tokens, and raw MCP JSON as product paths. Existing host-app auth reuse may be used when narrow, read-only, prompt-safe, and documented.

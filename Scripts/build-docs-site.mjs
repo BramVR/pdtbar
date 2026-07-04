@@ -15,7 +15,7 @@ const repoSourceBase = `${repoBase}/blob/main/docs`;
 const siteBase = "https://bramvr.github.io/pdtbar";
 const productName = "PDTBar";
 const productTagline = "Quiet portfolio pulse.";
-const installHint = "Source build: git clone https://github.com/BramVR/pdtbar.git && cd pdtbar && make build";
+const installHint = "Homebrew is not supported yet. Use a shared PDTBar.app.zip build for now; public app downloads will be listed on GitHub releases once ready.";
 
 const manifest = readManifest();
 const sections = manifest.sections.map((section) => [section.name, section.pages]);
@@ -353,7 +353,11 @@ function layout({ page, html, toc, sectionName }) {
   const langHref = hrefBetween(page, alternate);
   const langLabel = isDutch ? "English" : "Nederlands";
   const langAria = isDutch ? "View this page in English" : "Bekijk deze pagina in het Nederlands";
+  const installPage = installPageForLang(page.lang);
+  const installHref = hrefBetween(page, installPage);
   const pulseAnchor = isDutch ? "wat-je-ziet" : "what-you-see";
+  const langHome = homePageForLang(page.lang);
+  const pulseHref = page.rel === langHome.rel ? `#${pulseAnchor}` : `${hrefBetween(page, langHome)}#${pulseAnchor}`;
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
@@ -376,8 +380,8 @@ function layout({ page, html, toc, sectionName }) {
   <meta name="theme-color" content="#f7f8f4">
   <meta name="application-name" content="${productName}">
   <link rel="canonical" href="${canonical}">
-  <link rel="alternate" hreflang="nl" href="${siteBase}/">
-  <link rel="alternate" hreflang="en" href="${siteBase}/en/">
+  <link rel="alternate" hreflang="${escapeAttr(page.lang)}" href="${canonical}">
+  <link rel="alternate" hreflang="${escapeAttr(alternate.lang)}" href="${canonicalUrl(alternate)}">
   <link rel="icon" href="${assetHref(page, "favicon.svg")}" type="image/svg+xml">
   <meta property="og:title" content="${escapeAttr(page.title)}">
   <meta property="og:description" content="${escapeAttr(page.description)}">
@@ -417,14 +421,15 @@ function layout({ page, html, toc, sectionName }) {
           <h1>PDTBar</h1>
           <p class="lede">${lede}</p>
           <div class="actions">
-            <a class="btn primary" href="#${pulseAnchor}">${isDutch ? "Bekijk wat je ziet" : "View the pulse"}</a>
+            <a class="btn primary" href="${escapeAttr(installHref)}">${isDutch ? "Installeer PDTBar" : "Install PDTBar"}</a>
+            <a class="btn" href="${escapeAttr(pulseHref)}">${isDutch ? "Bekijk wat je ziet" : "View the pulse"}</a>
             <a class="btn" href="${escapeAttr(langHref)}" aria-label="${langAria}">${langLabel}</a>
             <a class="btn" href="${repoBase}">GitHub</a>
           </div>
         </div>
         <div class="hero-art">${pulseArtSvg()}</div>
         <div class="feature-row" aria-label="Product focus">
-          ${(isDutch ? ["Concentratie", "Inkomsten", "Grote bewegingen", "Recente data", "Geen bijzonderheden"] : ["Concentration", "Income events", "Big movers", "Prices", "All quiet"]).map((label) => `<a class="feature-pill" href="#${pulseAnchor}">${label}</a>`).join("")}
+          ${(isDutch ? ["Concentratie", "Inkomsten", "Grote bewegingen", "Recente data", "Geen bijzonderheden"] : ["Concentration", "Income events", "Big movers", "Prices", "All quiet"]).map((label) => `<a class="feature-pill" href="${escapeAttr(pulseHref)}">${label}</a>`).join("")}
         </div>
       </header>
       <div class="doc-grid">
@@ -440,9 +445,9 @@ function layout({ page, html, toc, sectionName }) {
 
 function navHtml(currentPage, sectionName) {
   return nav
-    .map((section) => `<section><h2>${escapeHtml(section.name)}</h2>${section.pages.map((page) => {
+    .map((section) => `<section><h2>${escapeHtml(section.name)}</h2>${section.pages.filter((page) => page.lang === currentPage.lang).map((page) => {
       const active = page.rel === currentPage.rel ? " active" : "";
-      return `<a class="nav-link${active}" href="${escapeAttr(hrefBetween(currentPage, page))}">${escapeHtml(page.lang === "nl" ? "Nederlands" : "English")}</a>`;
+      return `<a class="nav-link${active}" href="${escapeAttr(hrefBetween(currentPage, page))}">${escapeHtml(page.title)}</a>`;
     }).join("")}</section>`)
     .join("");
 }
@@ -456,6 +461,11 @@ function tocHtml(toc, isDutch) {
 function homePageForLang(lang) {
   const homeOutRel = lang === "nl" ? "index.html" : `${lang}/index.html`;
   return pages.find((page) => page.lang === lang && page.outRel === homeOutRel) || pages.find((page) => page.lang === lang) || pages[0];
+}
+
+function installPageForLang(lang) {
+  const installOutRel = lang === "nl" ? "install/index.html" : `${lang}/install/index.html`;
+  return pages.find((page) => page.lang === lang && page.outRel === installOutRel) || homePageForLang(lang);
 }
 
 function alternatePage(page) {
