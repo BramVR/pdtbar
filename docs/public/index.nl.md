@@ -38,6 +38,16 @@ samenvatting tonen
 
 Als er iets ontbreekt, toont PDTBar `Log in with Claude` en `Check again`. In normaal gebruik hoef je de terminal niet te openen.
 
+## Installeren
+
+Homebrew wordt nog niet ondersteund. Er is ook nog geen publieke appdownload, dus testers gebruiken voorlopig een gedeelde `PDTBar.app.zip` build.
+
+1. Pak `PDTBar.app.zip` uit.
+2. Sleep `PDTBar.app` naar Programma's.
+3. Open PDTBar en gebruik het icoon in de menubalk.
+
+Bekijk de [installatiegids](install.nl.md) voor de eerste stappen en setupmeldingen.
+
 ## Privacy
 
 PDTBar draait lokaal en verandert niets aan je portefeuille. De app plaatst geen orders, verplaatst geen geld, stuurt je portefeuille niet naar een eigen backend en geeft geen financieel advies. De app zet feiten en veranderingen op volgorde; jij bepaalt wat belangrijk is.

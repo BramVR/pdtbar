@@ -36,6 +36,16 @@ show the portfolio pulse
 
 When setup is missing, PDTBar offers `Log in with Claude` and `Check again`. Daily use does not require terminal commands.
 
+## Install
+
+Homebrew is not supported yet. A public app download is not posted yet either, so testers should use a shared `PDTBar.app.zip` build for now.
+
+1. Unzip `PDTBar.app.zip`.
+2. Drag `PDTBar.app` into Applications.
+3. Open PDTBar and use the menu-bar icon.
+
+See the [install guide](install.en.md) for first-use steps and setup messages.
+
 ## Trust And Privacy
 
 PDTBar is local and read-only by default. It does not place trades, move money, upload your portfolio to its own backend, or give financial advice. The pressure engine ranks facts and changes; you decide what they mean.

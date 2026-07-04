@@ -26,22 +26,28 @@ Fixture mode exists for development only and must be launched explicitly.
 
 ## Install
 
-Homebrew cask distribution is the primary install path after a public release has passed release-time Homebrew proof:
+Homebrew is not supported yet. There is also no public app download attached to GitHub releases yet.
 
-```bash
-brew install --cask bramvr/tap/pdtbar
-open -a PDTBar
-```
+For now, use a shared `PDTBar.app.zip` build from the project maintainer. When public downloads are ready, they will appear on the [PDTBar releases page](https://github.com/BramVR/pdtbar/releases).
 
-Update and uninstall through Homebrew:
+Once you have the zip:
 
-```bash
-brew update
-brew upgrade --cask bramvr/tap/pdtbar
-brew uninstall --cask bramvr/tap/pdtbar
-```
+1. Double-click the zip if your Mac does not unzip it automatically.
+2. Drag `PDTBar.app` into Applications.
+3. Open PDTBar from Applications.
 
-Homebrew owns updates for cask installs. PDTBar does not include an in-app updater yet.
+If macOS says the app was downloaded from the internet, right-click `PDTBar.app`, choose `Open`, then choose `Open` again. You should only need to do this once.
+
+PDTBar currently needs your existing Claude CLI + PDT MCP setup. If you do not have that yet, ask the person who gave you PDTBar to help set up the PDT connection. If the menu says `Add the PDT MCP server to Claude`, the app is installed correctly but the PDT connection still needs setup.
+
+## Use
+
+After launch, look for the small Concentration Stack icon in the macOS menu bar.
+
+- Click the icon to see the portfolio pulse.
+- Use `Refresh now` to fetch fresh PDT data.
+- Use `Open PDT` when you want the full dashboard.
+- Use `Log in with Claude` if PDTBar asks for Claude login, then follow the browser steps and click `Check again`.
 
 ## Product Principles
 

@@ -151,6 +151,9 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
     assert.match(index, /data-theme-toggle/);
     assert.match(index, /class="nav-toggle"/);
     assert.match(index, /class="home-hero"/);
+    assert.match(index, /Installeer PDTBar/);
+    assert.match(index, /Homebrew wordt nog niet ondersteund/);
+    assert.match(index, /PDTBar\.app\.zip/);
     assert.match(index, /class="pulse-art"/);
     assert.match(index, /<rect x="0" y="0" width="360" height="200" rx="16" fill="url\(#pulse-card\)" stroke="#1e293b" stroke-width="1"\/>/);
     assert.match(index, /class="pulse-fill pulse-fill-one"/);
@@ -169,6 +172,9 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
     assert.match(english, /<html lang="en"/);
     assert.match(english, /quiet macOS menu bar/);
     assert.match(english, /local and read-only by default/);
+    assert.match(english, /Install PDTBar/);
+    assert.match(english, /Homebrew is not supported yet/);
+    assert.match(english, /PDTBar\.app\.zip/);
     assert.match(english, /href="\.\.\/"/);
     assert.match(english, /aria-label="Bekijk deze pagina in het Nederlands"/);
     assert.match(english, /<link rel="canonical" href="https:\/\/bramvr\.github\.io\/pdtbar\/en\/">/);
@@ -177,14 +183,16 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
     assert.match(nestedDutch, /<link rel="icon" href="\.\.\/favicon\.svg"/);
     assert.match(nestedDutch, /<a class="brand" href="\.\.\/">/);
     assert.match(nestedDutch, /<a class="btn" href="\.\.\/en\/guide\/" aria-label="View this page in English">English<\/a>/);
-    assert.match(nestedDutch, /<a class="nav-link" href="\.\.\/">Nederlands<\/a>/);
-    assert.match(nestedDutch, /<a class="nav-link" href="\.\.\/en\/">English<\/a>/);
+    assert.match(nestedDutch, /<a class="nav-link" href="\.\.\/">PDTBar<\/a>/);
+    assert.match(nestedDutch, /<a class="nav-link active" href=".\/">Gids<\/a>/);
+    assert.doesNotMatch(nestedDutch, /<a class="nav-link" href="\.\.\/en\/">English<\/a>/);
 
     assert.match(nestedEnglish, /<link rel="icon" href="\.\.\/\.\.\/favicon\.svg"/);
     assert.match(nestedEnglish, /<a class="brand" href="\.\.\/\.\.\/">/);
     assert.match(nestedEnglish, /<a class="btn" href="\.\.\/\.\.\/gids\/" aria-label="Bekijk deze pagina in het Nederlands">Nederlands<\/a>/);
-    assert.match(nestedEnglish, /<a class="nav-link" href="\.\.\/\.\.\/">Nederlands<\/a>/);
-    assert.match(nestedEnglish, /<a class="nav-link" href="\.\.\/">English<\/a>/);
+    assert.match(nestedEnglish, /<a class="nav-link" href="\.\.\/">PDTBar<\/a>/);
+    assert.match(nestedEnglish, /<a class="nav-link active" href=".\/">Guide<\/a>/);
+    assert.doesNotMatch(nestedEnglish, /<a class="nav-link" href="\.\.\/\.\.\/">Nederlands<\/a>/);
 
     const combined = `${index}\n${english}\n${llms}\n${llmsFull}`;
     assert.doesNotMatch(combined, /INTERNAL_ONLY_SENTINEL_PDT_PORTFOLIO_PATH/);
