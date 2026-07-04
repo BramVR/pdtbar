@@ -38,7 +38,7 @@ Na het openen staat er een klein stapel-icoon in de macOS-menubalk.
 
 - Zie je je portefeuilleoverzicht, dan ben je klaar.
 - Zie je `Log in with Claude`, klik daarop, volg de browserstappen en klik daarna op `Check again`.
-- Zie je `Add the PDT MCP server to Claude`, dan is PDTBar geinstalleerd, maar is de PDT-koppeling nog niet klaar.
+- Zie je `Add the PDT MCP server to Claude`, dan is PDTBar geïnstalleerd, maar is de PDT-koppeling nog niet klaar.
 
 ## Dagelijks Gebruik
 
