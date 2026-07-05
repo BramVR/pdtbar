@@ -5,8 +5,10 @@
       "pages": [
         "public/index.nl.md",
         "public/install.nl.md",
+        "public/features.nl.md",
         "public/index.en.md",
-        "public/install.en.md"
+        "public/install.en.md",
+        "public/features.en.md"
       ]
     }
   ]

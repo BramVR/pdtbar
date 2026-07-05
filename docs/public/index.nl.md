@@ -48,6 +48,8 @@ Homebrew wordt nog niet ondersteund. Er is ook nog geen publieke appdownload, du
 
 Bekijk de [installatiegids](install.nl.md) voor de eerste stappen en setupmeldingen.
 
+Bekijk de [functionaliteitengids](features.nl.md) voor meer detail over Pulse, Allocation, Income, Big movers, Data en Actions.
+
 ## Privacy
 
 PDTBar draait lokaal en verandert niets aan je portefeuille. De app plaatst geen orders, verplaatst geen geld, stuurt je portefeuille niet naar een eigen backend en geeft geen financieel advies. De app zet feiten en veranderingen op volgorde; jij bepaalt wat belangrijk is.

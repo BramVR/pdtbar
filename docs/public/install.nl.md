@@ -47,3 +47,5 @@ Na het openen staat er een klein stapel-icoon in de macOS-menubalk.
 - Gebruik `Open PDT` als je het volledige Portfolio Dividend Tracker-dashboard wilt openen.
 
 PDTBar is standaard alleen-lezen. De app plaatst geen orders, verplaatst geen geld, uploadt je portefeuille niet naar een eigen backend en geeft geen financieel advies.
+
+Bekijk de [functionaliteitengids](features.nl.md) voor wat elk menuonderdeel doet.

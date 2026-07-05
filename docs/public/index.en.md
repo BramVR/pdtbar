@@ -46,6 +46,8 @@ Homebrew is not supported yet. A public app download is not posted yet either, s
 
 See the [install guide](install.en.md) for first-use steps and setup messages.
 
+See the [features guide](features.en.md) for a deeper walkthrough of Pulse, Allocation, Income, Big movers, Data, and Actions.
+
 ## Trust And Privacy
 
 PDTBar is local and read-only by default. It does not place trades, move money, upload your portfolio to its own backend, or give financial advice. The pressure engine ranks facts and changes; you decide what they mean.

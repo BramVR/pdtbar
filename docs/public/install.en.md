@@ -47,3 +47,5 @@ After PDTBar opens, look for the small stack icon in the macOS menu bar.
 - Use `Open PDT` when you want the full Portfolio Dividend Tracker dashboard.
 
 PDTBar is read-only by default. It does not place trades, move money, upload your portfolio to its own backend, or give financial advice.
+
+See the [features guide](features.en.md) for what each menu section does.
