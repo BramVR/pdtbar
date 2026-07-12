@@ -182,7 +182,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         // enumeration; the old explicit ToolSearch preflight lost PDT servers in
         // live local runs. Each read call below hydrates deferred MCP tools, denies
         // non-requested PDT tools, and accepts only the exact requested result.
-        let requiredReadTools = PDTReadTools.requiredV1.filter { required.contains($0) }
+        let requiredReadTools = PDTReadTools.allowedV1.filter { required.contains($0) }
         return Set(requiredReadTools)
     }
 
@@ -195,15 +195,25 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         }
         try ensureMCPToolPrefixesCached()
         let toolName = resolvedToolName(for: name)
+        let isOptionalPerformanceTool = PDTReadTools.performance.contains(name)
+        let maxAttempts = isOptionalPerformanceTool ? 1 : configuration.toolCallRetryPolicy.maxAttempts
+        let timeout = isOptionalPerformanceTool ? min(configuration.toolTimeout, 15) : configuration.toolTimeout
         var attempts = 0
         var lastError: Error?
         repeat {
             attempts += 1
             do {
-                return try callReadToolOnce(name, resolvedToolName: toolName, arguments: arguments)
+                return try callReadToolOnce(
+                    name,
+                    resolvedToolName: toolName,
+                    arguments: arguments,
+                    timeout: timeout
+                )
             } catch {
                 lastError = error
-                guard configuration.toolCallRetryPolicy.shouldRetry(error, afterAttempt: attempts) else {
+                guard attempts < maxAttempts,
+                      configuration.toolCallRetryPolicy.shouldRetry(error, afterAttempt: attempts)
+                else {
                     throw error
                 }
                 // Each attempt is a full Claude CLI run; give transient
@@ -213,7 +223,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
                     retryDelay(backoff)
                 }
             }
-        } while attempts < configuration.toolCallRetryPolicy.maxAttempts
+        } while attempts < maxAttempts
         throw lastError ?? PDTMCPConnectorError.transientFailure("Claude \(name) call failed")
     }
 
@@ -319,7 +329,8 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     private func callReadToolOnce(
         _ name: String,
         resolvedToolName toolName: String,
-        arguments: [String: String]
+        arguments: [String: String],
+        timeout: TimeInterval
     ) throws -> Data {
         let sessionID = UUID().uuidString
         var readEnvironment = configuration.environment
@@ -341,7 +352,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
                 "--verbose",
                 "--no-session-persistence",
             ],
-            timeout: configuration.toolTimeout,
+            timeout: timeout,
             environment: readEnvironment
         )
         let currentSessionFiles = currentSessionToolResultFiles(readToolNames: [name], sessionID: sessionID)

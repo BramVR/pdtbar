@@ -146,6 +146,20 @@ Copy holding identifier action proof:
 swift run pdtbar-smoke copy-holding-identifier-action
 ```
 
+Portfolio summary real-menu proof:
+
+```bash
+swift build --product pdtbar
+swift run pdtbar-smoke portfolio-summary-proof --peekaboo /opt/homebrew/bin/peekaboo
+```
+
+This launches freshly built fixture-mode PDTBar with isolated state, opens the
+actual menu through Accessibility, verifies the Summary selectors precede the
+portfolio overview, and requires a visible PNG screenshot. Fixture values are
+synthetic; no live portfolio values enter the artifact. Missing Accessibility,
+Screen Recording, or Peekaboo permission is reported instead of substituting a
+generated image.
+
 This uses descriptor/app-support action plumbing only. It verifies the holding
 identifier copy action resolves to the expected sanitized identifier payload
 without launching the app or touching the user's pasteboard; the smoke reads

@@ -27,6 +27,7 @@ private struct FirstFetchConnectorConfiguration: @unchecked Sendable {
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let options: PDTBarLaunchOptions
     private let environment: [String: String]
+    private let menuTextScale: CGFloat
     private let loginHandoff: ClaudeLoginHandoff
     private let launchRuntime = PDTLaunchRuntime()
     private var statusItem: NSStatusItem?
@@ -45,6 +46,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         self.options = options
         let environment = ClaudeLocalEnvironment.removingScriptedHandoffHook(ProcessInfo.processInfo.environment)
         self.environment = environment
+        // Deterministic accessibility proof override; ordinary launches use 1x menu typography.
+        self.menuTextScale = environment["PDTBAR_MENU_TEXT_SCALE"]
+            .flatMap(Double.init)
+            .map { CGFloat(min(max($0, 1), 2)) }
+            ?? 1
         self.loginHandoff = ClaudeCLILoginHandoff(
             environment: environment,
             binaryOverride: options.claudeLoginBinaryOverride
@@ -565,7 +571,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             item.submenu = submenu
         }
-        if let barChart = row.barChart {
+        if let portfolioSummary = row.portfolioSummary {
+            item.view = makePortfolioSummaryGridView(
+                summary: portfolioSummary,
+                accessibilityIdentifier: row.accessibilityIdentifier
+            )
+            item.isEnabled = false
+        } else if let barChart = row.barChart {
             item.view = makePortfolioAllocationChartRowView(
                 title: row.title,
                 detail: row.detail,
@@ -586,6 +598,82 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             applyDetailSubtitle(row.detail, to: item, title: row.title)
         }
         return item
+    }
+
+    private func makePortfolioSummaryGridView(
+        summary: MenuRowPortfolioSummary,
+        accessibilityIdentifier: String
+    ) -> NSView {
+        let textScale = menuTextScale
+        let layout = PortfolioSummaryGridLayout(width: menuItemViewWidth, textScale: textScale)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: layout.rowHeight))
+        container.autoresizingMask = [.width]
+        configureStaticMenuViewAccessibility(
+            container,
+            accessibilityIdentifier: accessibilityIdentifier,
+            label: summary.accessibilityLabel
+        )
+
+        let total = makeSummaryMetric(
+            label: "Total portfolio value",
+            value: summary.totalValue,
+            textScale: textScale
+        )
+        let cagr = makeSummaryMetric(label: "CAGR", value: summary.cagr, textScale: textScale)
+        let increase = makeSummaryMetric(label: "Total increase", value: summary.totalIncrease, textScale: textScale)
+        let performance = NSStackView(views: [cagr, increase])
+        performance.orientation = layout.mode == .columns ? .horizontal : .vertical
+        performance.alignment = .top
+        performance.distribution = .fillEqually
+        performance.spacing = layout.mode == .columns
+            ? PortfolioSummaryGridLayout.columnGap
+            : 4
+
+        let grid = NSStackView(views: [total, performance])
+        grid.orientation = .vertical
+        grid.alignment = .leading
+        grid.distribution = .fill
+        grid.spacing = 6
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(grid)
+
+        NSLayoutConstraint.activate([
+            grid.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: PortfolioSummaryGridLayout.horizontalPadding),
+            grid.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -PortfolioSummaryGridLayout.horizontalPadding),
+            grid.topAnchor.constraint(equalTo: container.topAnchor, constant: 4),
+            grid.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -4),
+            total.widthAnchor.constraint(equalTo: grid.widthAnchor),
+            performance.widthAnchor.constraint(equalTo: grid.widthAnchor),
+        ])
+        return container
+    }
+
+    private func makeSummaryMetric(
+        label: String,
+        value: String,
+        textScale: CGFloat
+    ) -> NSStackView {
+        let labelField = NSTextField(labelWithString: label)
+        labelField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize * textScale)
+        labelField.textColor = NSColor.secondaryLabelColor
+        labelField.lineBreakMode = .byWordWrapping
+        labelField.maximumNumberOfLines = 2
+
+        let valueField = NSTextField(labelWithString: value)
+        valueField.font = NSFont.monospacedDigitSystemFont(
+            ofSize: NSFont.systemFontSize * textScale,
+            weight: .regular
+        )
+        valueField.textColor = NSColor.labelColor
+        valueField.lineBreakMode = .byClipping
+        valueField.maximumNumberOfLines = 1
+        valueField.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let stack = NSStackView(views: [labelField, valueField])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 2
+        return stack
     }
 
     @objc private func openPDT(_ sender: NSMenuItem) {

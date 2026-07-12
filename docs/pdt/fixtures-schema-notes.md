@@ -105,6 +105,19 @@ exchangeId, exchangeName, currencyId, currencyCode
 `id, firstname, lastname, email, locale, timezone, currency, emailVerified,
 twoFactorEnabled, createdAt`. Redacted everywhere.
 
+## Portfolio performance tools
+
+`pdt-get-portfolio-performance` supplies the portfolio bounds as
+`oldestPortfolioDate` and `latestPortfolioDate`, plus money-valued performance
+components. It does not supply CAGR or a percentage return.
+
+`pdt-get-portfolio-gains?date_from=...&date_to=...` supplies
+`totalGains: Money` and `totalGainsPercentage: Number` for that explicit report
+period. PDTBar uses the percentage directly as total increase. It derives CAGR
+only when both bounds are valid and increasing, using
+`(1 + totalGainsPercentage)^(1 / elapsedYears) - 1`, with elapsed years based
+on Gregorian days / 365.2425. Missing or invalid inputs stay unavailable.
+
 ## pdt-list-portfolios → `{ data: [{holdings:[], summary:{...}}], meta }`
 Summary-only; in live data `holdings` was empty and summary fields were
 zeroed/stale (see gap #4 in portfolio-data-source.md). Use `pdt-get-portfolio?date=`
