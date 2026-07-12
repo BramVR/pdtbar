@@ -2924,10 +2924,19 @@ private struct OpenMenuResult {
 private struct AccessibilityEvidence: Codable {
     var statusIdentifier: String
     var statusText: [String]
+    var displayMode: DisplayModeEvidence?
     var expected: [PulseTargetEvidence]
     var observedIdentifiers: [String]
     var observedFramesByIdentifier: [String: AccessibilityFrame]
     var observedTexts: [String]
+}
+
+private struct DisplayModeEvidence: Codable {
+    var logicalWidth: Int
+    var logicalHeight: Int
+    var pixelWidth: Int
+    var pixelHeight: Int
+    var refreshRate: Double
 }
 
 private struct LivePDTPulseProof: Codable {
@@ -4049,6 +4058,15 @@ private func writeAccessibilityEvidence(
     let evidence = AccessibilityEvidence(
         statusIdentifier: statusIdentifier,
         statusText: statusText.sorted(),
+        displayMode: CGDisplayCopyDisplayMode(CGMainDisplayID()).map {
+            DisplayModeEvidence(
+                logicalWidth: $0.width,
+                logicalHeight: $0.height,
+                pixelWidth: $0.pixelWidth,
+                pixelHeight: $0.pixelHeight,
+                refreshRate: $0.refreshRate
+            )
+        },
         expected: expected.map {
             PulseTargetEvidence(
                 accessibilityIdentifier: $0.accessibilityIdentifier,

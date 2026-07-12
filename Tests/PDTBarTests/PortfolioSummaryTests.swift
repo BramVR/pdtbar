@@ -101,12 +101,18 @@ struct PortfolioSummaryTests {
         #expect(!row.accessibilityIdentifier.isEmpty)
     }
 
-    @Test("Grid keeps two columns and grows vertically for larger system text")
+    @Test("Grid supplies exact two-column widths and grows for larger system text")
     func gridAdaptsWithoutOverlap() {
-        #expect(PortfolioSummaryGridLayout(width: 280).columnWidth == 120)
-        #expect(PortfolioSummaryGridLayout(width: 400).columnWidth == 180)
-        #expect(PortfolioSummaryGridLayout(width: 280, systemFontSize: 20.8).columnWidth == 120)
-        #expect(PortfolioSummaryGridLayout(width: 400).rowHeight < PortfolioSummaryGridLayout(width: 280, systemFontSize: 20.8).rowHeight)
+        let compact = PortfolioSummaryGridLayout(width: 280)
+        let production = PortfolioSummaryGridLayout(width: 400)
+        let largerText = PortfolioSummaryGridLayout(width: 280, systemFontSize: 20.8)
+
+        #expect(compact.columnWidth == 120)
+        #expect(production.columnWidth == 180)
+        #expect(compact.columnWidth * 2 + PortfolioSummaryGridLayout.columnGap + PortfolioSummaryGridLayout.horizontalPadding * 2 == compact.width)
+        #expect(production.columnWidth * 2 + PortfolioSummaryGridLayout.columnGap + PortfolioSummaryGridLayout.horizontalPadding * 2 == production.width)
+        #expect(largerText.columnWidth == compact.columnWidth)
+        #expect(production.rowHeight < largerText.rowHeight)
     }
 }
 

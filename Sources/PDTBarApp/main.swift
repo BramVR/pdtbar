@@ -619,7 +619,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let performance = NSStackView(views: [cagr, increase])
         performance.orientation = .horizontal
         performance.alignment = .top
-        performance.distribution = .fillEqually
+        performance.distribution = .fill
         performance.spacing = PortfolioSummaryGridLayout.columnGap
 
         let grid = NSStackView(views: [total, performance])
@@ -637,6 +637,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             grid.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -4),
             total.widthAnchor.constraint(equalTo: grid.widthAnchor),
             performance.widthAnchor.constraint(equalTo: grid.widthAnchor),
+            cagr.widthAnchor.constraint(equalToConstant: layout.columnWidth),
+            increase.widthAnchor.constraint(equalToConstant: layout.columnWidth),
         ])
         return container
     }
