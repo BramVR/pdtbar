@@ -5,8 +5,8 @@ import PDTBarAppSupport
 
 @Suite("Portfolio performance summary")
 struct PortfolioSummaryTests {
-    @Test("Performance summary keeps direct total return separate from derived CAGR")
-    func performanceSummarySeparatesReturnAndCAGR() throws {
+    @Test("Performance summary keeps direct total return and does not infer CAGR from dates")
+    func performanceSummaryKeepsCAGRUnavailable() {
         let summary = PortfolioPerformanceSummary.build(
             totalGainPercentage: 0.21,
             periodStart: "2024-01-01",
@@ -14,7 +14,7 @@ struct PortfolioSummaryTests {
         )
 
         #expect(summary.totalPercentageIncrease == 0.21)
-        #expect(abs(try #require(summary.cagr) - 0.10) < 0.0001)
+        #expect(summary.cagr == nil)
         #expect(summary.periodStart == "2024-01-01")
         #expect(summary.periodEnd == "2026-01-01")
     }
@@ -22,10 +22,10 @@ struct PortfolioSummaryTests {
     @Test(arguments: [
         (0.21, nil, "2026-01-01"),
         (0.21, "bad-date", "2026-01-01"),
-        (0.21, "2026-01-01", "2025-01-01"),
+        (0.21, "2024-01-01", "2026-01-01"),
         (-1.01, "2025-01-01", "2026-01-01"),
     ] as [(Double, String?, String?)])
-    func incompleteOrInvalidPeriodsNeverFabricateCAGR(_ total: Double, _ start: String?, _ end: String?) {
+    func datesNeverFabricateCAGR(_ total: Double, _ start: String?, _ end: String?) {
         let summary = PortfolioPerformanceSummary.build(
             totalGainPercentage: total,
             periodStart: start,
@@ -36,15 +36,16 @@ struct PortfolioSummaryTests {
         #expect(summary.cagr == nil)
     }
 
-    @Test("Exact total loss annualizes to negative one hundred percent")
-    func exactTotalLossAnnualizes() {
+    @Test("Exact total loss remains a direct total increase without CAGR")
+    func exactTotalLossDoesNotAnnualize() {
         let summary = PortfolioPerformanceSummary.build(
             totalGainPercentage: -1,
             periodStart: "2025-01-01",
             periodEnd: "2026-01-01"
         )
 
-        #expect(summary.cagr == -1)
+        #expect(summary.totalPercentageIncrease == -1)
+        #expect(summary.cagr == nil)
     }
 
     @Test(arguments: [0.25, -0.25, 0.0])
@@ -100,12 +101,12 @@ struct PortfolioSummaryTests {
         #expect(!row.accessibilityIdentifier.isEmpty)
     }
 
-    @Test("Grid keeps columns in compact and larger menus and stacks for large text")
+    @Test("Grid keeps two columns and grows vertically for larger system text")
     func gridAdaptsWithoutOverlap() {
-        #expect(PortfolioSummaryGridLayout(width: 280).mode == .columns)
-        #expect(PortfolioSummaryGridLayout(width: 400).mode == .columns)
-        #expect(PortfolioSummaryGridLayout(width: 280, textScale: 1.6).mode == .stacked)
-        #expect(PortfolioSummaryGridLayout(width: 400).rowHeight < PortfolioSummaryGridLayout(width: 280, textScale: 1.6).rowHeight)
+        #expect(PortfolioSummaryGridLayout(width: 280).columnWidth == 120)
+        #expect(PortfolioSummaryGridLayout(width: 400).columnWidth == 180)
+        #expect(PortfolioSummaryGridLayout(width: 280, systemFontSize: 20.8).columnWidth == 120)
+        #expect(PortfolioSummaryGridLayout(width: 400).rowHeight < PortfolioSummaryGridLayout(width: 280, systemFontSize: 20.8).rowHeight)
     }
 }
 

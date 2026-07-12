@@ -163,7 +163,9 @@ actual menu through Accessibility, verifies the Summary selectors precede the
 portfolio overview, and requires a visible PNG screenshot. Fixture values are
 synthetic; no live portfolio values enter the artifact. Missing Accessibility,
 Screen Recording, or Peekaboo permission is reported instead of substituting a
-generated image.
+generated image. PDTBar's supported macOS menu is fixed-width and has no
+orientation or separate compact/large presentation; layout tests cover narrower
+widths and larger system-font metrics while preserving the two-column grid.
 
 Manual Claude `-p` PDT reachability smoke:
 

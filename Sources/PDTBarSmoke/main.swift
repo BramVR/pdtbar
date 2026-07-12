@@ -2598,9 +2598,11 @@ private func peekabooSmoke(arguments: [String]) throws -> SmokeReport {
     )
 }
 
-private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
+private func realUserPulseSmoke(
+    arguments: [String],
+    captureDetailScreenshots: Bool = true
+) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
-    let proofSuffix = options.summaryTextScale > 1 ? "-large-text" : ""
     guard AXIsProcessTrusted() else {
         return SmokeReport(
             name: "real-user-pulse",
@@ -2643,7 +2645,6 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
     process.arguments = ["--fixture", fixture.path, "--snapshot-dir", snapshotDirectory.path]
     process.environment = ProcessInfo.processInfo.environment.merging([
         "PDTBAR_FIXTURE_MODE": "1",
-        "PDTBAR_MENU_TEXT_SCALE": String(options.summaryTextScale),
     ]) { _, new in new }
     try process.run()
     defer {
@@ -2687,7 +2688,7 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         in: appElement,
         timeout: options.timeout
     )
-    let evidence = artifacts.appending(path: "pdtbar-real-user-pulse\(proofSuffix)-ax.json")
+    let evidence = artifacts.appending(path: "pdtbar-real-user-pulse-ax.json")
     try writeAccessibilityEvidence(
         snapshot: menuSnapshot,
         expected: expectedTargets,
@@ -2710,12 +2711,12 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
 
     movePointerToNeutralMenuArea(in: menuSnapshot)
     let screenshot = (try? captureNativeMenuScreenshot(
-        name: "pdtbar-real-user-pulse\(proofSuffix)",
+        name: "pdtbar-real-user-pulse",
         snapshot: menuSnapshot,
         expectedMenuIdentifiers: expectedMenuIdentifiers,
         artifacts: artifacts
     )) ?? (try? captureRealUserMenuScreenshot(
-        name: "pdtbar-real-user-pulse\(proofSuffix)",
+        name: "pdtbar-real-user-pulse",
         snapshot: menuSnapshot,
         expectedMenuIdentifiers: expectedMenuIdentifiers,
         artifacts: artifacts,
@@ -2725,26 +2726,26 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         artifacts: artifacts,
         peekaboo: screenshotPeekaboo
     )
-    let allocationScreenshot = try? captureAllocationDetailScreenshot(
+    let allocationScreenshot = captureDetailScreenshots ? try? captureAllocationDetailScreenshot(
         snapshot: menuSnapshot,
         artifacts: artifacts,
         peekaboo: screenshotPeekaboo
-    )
-    let pricesScreenshot = try? capturePricesDetailScreenshot(
+    ) : nil
+    let pricesScreenshot = captureDetailScreenshots ? try? capturePricesDetailScreenshot(
         snapshot: menuSnapshot,
         artifacts: artifacts,
         peekaboo: screenshotPeekaboo
-    )
-    let attentionScreenshot = try? captureAttentionExplanationScreenshot(
+    ) : nil
+    let attentionScreenshot = captureDetailScreenshots ? try? captureAttentionExplanationScreenshot(
         snapshot: menuSnapshot,
         artifacts: artifacts,
         peekaboo: screenshotPeekaboo
-    )
-    let dataHealthScreenshot = try? captureDataHealthDetailScreenshot(
+    ) : nil
+    let dataHealthScreenshot = captureDetailScreenshots ? try? captureDataHealthDetailScreenshot(
         snapshot: menuSnapshot,
         artifacts: artifacts,
         peekaboo: screenshotPeekaboo
-    )
+    ) : nil
     let priorDetail = expectedScenario.seededPrior.map { "; seeded prior snapshot \($0.asOf)" } ?? ""
     let screenshotDetail = screenshot == nil ? "" : "; captured menu screenshot"
     let allocationScreenshotDetail = allocationScreenshot == nil ? "" : "; captured allocation detail screenshot"
@@ -2776,26 +2777,20 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
 }
 
 private func portfolioSummaryProof(arguments: [String]) throws -> SmokeReport {
-    var report = try realUserPulseSmoke(arguments: arguments)
+    var report = try realUserPulseSmoke(arguments: arguments, captureDetailScreenshots: false)
     report.name = "portfolio-summary-proof"
     guard report.status == SmokeStatus.passed else {
         return report
     }
-    let largeText = try realUserPulseSmoke(arguments: arguments + ["--summary-text-scale", "1.25"])
     let hasActualMenuScreenshot = report.artifacts.contains {
         $0.hasSuffix("pdtbar-real-user-pulse-menu.png")
     }
-    let hasLargeTextScreenshot = largeText.status == SmokeStatus.passed
-        && largeText.artifacts.contains {
-            $0.hasSuffix("pdtbar-real-user-pulse-large-text-menu.png")
-        }
-    guard hasActualMenuScreenshot, hasLargeTextScreenshot else {
+    guard hasActualMenuScreenshot else {
         report.status = SmokeStatus.failed
-        report.detail = "summary selectors were visible through Accessibility, but default or large-text actual menu screenshot capture was unavailable"
+        report.detail = "summary selectors were visible through Accessibility, but actual menu screenshot capture was unavailable"
         return report
     }
-    report.artifacts.append(contentsOf: largeText.artifacts)
-    report.detail = "fresh fixture app rendered the accessible Summary grid above Portfolio in default and large-text actual menu screenshots"
+    report.detail = "fresh fixture app rendered the accessible two-column Summary grid above Portfolio in an actual menu screenshot"
     return report
 }
 
@@ -4643,7 +4638,6 @@ private struct SmokeOptions {
     var model: String?
     var timeout: TimeInterval = 2.0
     var timeoutWasProvided = false
-    var summaryTextScale = 1.0
 
     init(arguments: [String]) throws {
         var index = 0
@@ -4685,9 +4679,6 @@ private struct SmokeOptions {
             case "--timeout" where index + 1 < arguments.count:
                 timeout = TimeInterval(arguments[index + 1]) ?? 2.0
                 timeoutWasProvided = true
-                index += 2
-            case "--summary-text-scale" where index + 1 < arguments.count:
-                summaryTextScale = min(max(Double(arguments[index + 1]) ?? 1, 1), 2)
                 index += 2
             default:
                 throw CommandError.usage

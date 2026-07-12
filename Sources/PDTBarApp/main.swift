@@ -27,7 +27,6 @@ private struct FirstFetchConnectorConfiguration: @unchecked Sendable {
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let options: PDTBarLaunchOptions
     private let environment: [String: String]
-    private let menuTextScale: CGFloat
     private let loginHandoff: ClaudeLoginHandoff
     private let launchRuntime = PDTLaunchRuntime()
     private var statusItem: NSStatusItem?
@@ -46,11 +45,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         self.options = options
         let environment = ClaudeLocalEnvironment.removingScriptedHandoffHook(ProcessInfo.processInfo.environment)
         self.environment = environment
-        // Deterministic accessibility proof override; ordinary launches use 1x menu typography.
-        self.menuTextScale = environment["PDTBAR_MENU_TEXT_SCALE"]
-            .flatMap(Double.init)
-            .map { CGFloat(min(max($0, 1), 2)) }
-            ?? 1
         self.loginHandoff = ClaudeCLILoginHandoff(
             environment: environment,
             binaryOverride: options.claudeLoginBinaryOverride
@@ -604,8 +598,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         summary: MenuRowPortfolioSummary,
         accessibilityIdentifier: String
     ) -> NSView {
-        let textScale = menuTextScale
-        let layout = PortfolioSummaryGridLayout(width: menuItemViewWidth, textScale: textScale)
+        let layout = PortfolioSummaryGridLayout(
+            width: menuItemViewWidth,
+            systemFontSize: NSFont.systemFontSize
+        )
         let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: layout.rowHeight))
         container.autoresizingMask = [.width]
         configureStaticMenuViewAccessibility(
@@ -616,18 +612,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let total = makeSummaryMetric(
             label: "Total portfolio value",
-            value: summary.totalValue,
-            textScale: textScale
+            value: summary.totalValue
         )
-        let cagr = makeSummaryMetric(label: "CAGR", value: summary.cagr, textScale: textScale)
-        let increase = makeSummaryMetric(label: "Total increase", value: summary.totalIncrease, textScale: textScale)
+        let cagr = makeSummaryMetric(label: "CAGR", value: summary.cagr)
+        let increase = makeSummaryMetric(label: "Total increase", value: summary.totalIncrease)
         let performance = NSStackView(views: [cagr, increase])
-        performance.orientation = layout.mode == .columns ? .horizontal : .vertical
+        performance.orientation = .horizontal
         performance.alignment = .top
         performance.distribution = .fillEqually
-        performance.spacing = layout.mode == .columns
-            ? PortfolioSummaryGridLayout.columnGap
-            : 4
+        performance.spacing = PortfolioSummaryGridLayout.columnGap
 
         let grid = NSStackView(views: [total, performance])
         grid.orientation = .vertical
@@ -650,24 +643,19 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func makeSummaryMetric(
         label: String,
-        value: String,
-        textScale: CGFloat
+        value: String
     ) -> NSStackView {
         let labelField = NSTextField(labelWithString: label)
-        labelField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize * textScale)
+        labelField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize)
         labelField.textColor = NSColor.secondaryLabelColor
         labelField.lineBreakMode = .byWordWrapping
         labelField.maximumNumberOfLines = 2
 
         let valueField = NSTextField(labelWithString: value)
-        valueField.font = NSFont.monospacedDigitSystemFont(
-            ofSize: NSFont.systemFontSize * textScale,
-            weight: .regular
-        )
+        valueField.font = NSFont.menuFont(ofSize: NSFont.systemFontSize)
         valueField.textColor = NSColor.labelColor
-        valueField.lineBreakMode = .byClipping
-        valueField.maximumNumberOfLines = 1
-        valueField.setContentCompressionResistancePriority(.required, for: .horizontal)
+        valueField.lineBreakMode = .byWordWrapping
+        valueField.maximumNumberOfLines = 2
 
         let stack = NSStackView(views: [labelField, valueField])
         stack.orientation = .vertical

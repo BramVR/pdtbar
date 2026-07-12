@@ -107,8 +107,9 @@ Normalization the seam owns (all pure logic, no UI):
 - **Portfolio performance stays period-explicit.** Total value continues to use
   normalized holdings/PDT's reported total source. Total increase comes directly
   from `pdt-get-portfolio-gains.totalGainsPercentage` requested for PDT's
-  `oldestPortfolioDate...latestPortfolioDate` bounds. CAGR is a separate derived
-  value and is omitted unless the cumulative return and increasing bounds are valid.
+  `oldestPortfolioDate...latestPortfolioDate` bounds. Those tools do not supply
+  CAGR or establish a compatible return basis for deriving it, so CAGR remains
+  unavailable rather than being inferred from dates alone.
 - **Join keys differ across tools** — see §3.
 
 ## 3. Gaps / missing PDT fields (impact on v1)

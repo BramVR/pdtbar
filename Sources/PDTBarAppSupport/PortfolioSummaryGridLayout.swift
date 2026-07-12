@@ -1,29 +1,23 @@
 import CoreGraphics
 
 public struct PortfolioSummaryGridLayout: Equatable, Sendable {
-    public enum Mode: Equatable, Sendable {
-        case columns
-        case stacked
-    }
-
-    public static let minimumColumnWidth: CGFloat = 110
     public static let horizontalPadding: CGFloat = 14
     public static let columnGap: CGFloat = 12
+    public static let baseSystemFontSize: CGFloat = 13
 
     public var width: CGFloat
-    public var textScale: CGFloat
+    public var systemFontSize: CGFloat
 
-    public init(width: CGFloat, textScale: CGFloat = 1) {
+    public init(width: CGFloat, systemFontSize: CGFloat = Self.baseSystemFontSize) {
         self.width = width
-        self.textScale = max(1, textScale)
+        self.systemFontSize = max(Self.baseSystemFontSize, systemFontSize)
     }
 
-    public var mode: Mode {
-        let contentWidth = width - Self.horizontalPadding * 2 - Self.columnGap
-        return contentWidth / 2 >= Self.minimumColumnWidth * textScale ? .columns : .stacked
+    public var columnWidth: CGFloat {
+        max(0, (width - Self.horizontalPadding * 2 - Self.columnGap) / 2)
     }
 
     public var rowHeight: CGFloat {
-        mode == .columns ? 86 * textScale : 126 * textScale
+        86 * systemFontSize / Self.baseSystemFontSize
     }
 }
