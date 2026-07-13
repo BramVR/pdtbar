@@ -9,7 +9,7 @@ import PDTBarCore
 // 240-second price-history budget.
 @Suite("Background detail refresh", .serialized)
 struct BackgroundDetailRefreshTests {
-    @Test("Background refresh sources total return and leaves unsupported CAGR unavailable")
+    @Test("Background refresh sources total return and calculates CAGR from its explicit period")
     func backgroundRefreshBuildsPortfolioPerformanceSummary() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-performance-summary-test")
         defer { try? FileManager.default.removeItem(at: store.directory) }
@@ -26,7 +26,7 @@ struct BackgroundDetailRefreshTests {
         ).refresh()
 
         #expect(result.model.portfolioPerformance.totalPercentageIncrease == 0.21)
-        #expect(result.model.portfolioPerformance.cagr == nil)
+        #expect(result.model.portfolioPerformance.cagr != nil)
         #expect(connector.calls.contains("pdt-get-portfolio-performance"))
         #expect(connector.calls.contains("pdt-get-portfolio-gains"))
     }

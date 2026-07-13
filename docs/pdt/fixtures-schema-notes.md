@@ -113,10 +113,10 @@ components. It does not supply CAGR or a percentage return.
 
 `pdt-get-portfolio-gains?date_from=...&date_to=...` supplies
 `totalGains: Money` and `totalGainsPercentage: Number` for that explicit report
-period. PDTBar uses the percentage directly as total increase. Neither response
-establishes that percentage as a return basis compatible with CAGR, so PDTBar
-does not annualize it. CAGR stays unavailable unless PDT supplies an explicit
-compatible value in the future.
+period. PDTBar uses the percentage directly as total increase and follows PDT's
+documented CAGR method by annualizing the same selected-method full-period return:
+`(1 + totalGainsPercentage)^(1 / (elapsedDays / 365.25)) - 1`. Invalid periods,
+non-finite returns, and returns below -100% remain unavailable.
 
 ## pdt-list-portfolios → `{ data: [{holdings:[], summary:{...}}], meta }`
 Summary-only; in live data `holdings` was empty and summary fields were

@@ -5,27 +5,28 @@ import PDTBarAppSupport
 
 @Suite("Portfolio performance summary")
 struct PortfolioSummaryTests {
-    @Test("Performance summary keeps direct total return and does not infer CAGR from dates")
-    func performanceSummaryKeepsCAGRUnavailable() {
+    @Test("Performance summary annualizes PDT's selected full-period return")
+    func performanceSummaryCalculatesCAGR() throws {
         let summary = PortfolioPerformanceSummary.build(
-            totalGainPercentage: 0.21,
-            periodStart: "2024-01-01",
-            periodEnd: "2026-01-01"
+            totalGainPercentage: 0.4641,
+            periodStart: "2020-01-01",
+            periodEnd: "2024-01-01"
         )
 
-        #expect(summary.totalPercentageIncrease == 0.21)
-        #expect(summary.cagr == nil)
-        #expect(summary.periodStart == "2024-01-01")
-        #expect(summary.periodEnd == "2026-01-01")
+        #expect(summary.totalPercentageIncrease == 0.4641)
+        #expect(abs(try #require(summary.cagr) - 0.10) < 0.000_000_1)
+        #expect(summary.periodStart == "2020-01-01")
+        #expect(summary.periodEnd == "2024-01-01")
     }
 
     @Test(arguments: [
         (0.21, nil, "2026-01-01"),
         (0.21, "bad-date", "2026-01-01"),
-        (0.21, "2024-01-01", "2026-01-01"),
+        (0.21, "2026-01-01", "2024-01-01"),
+        (0.21, "2026-01-01", "2026-01-01"),
         (-1.01, "2025-01-01", "2026-01-01"),
     ] as [(Double, String?, String?)])
-    func datesNeverFabricateCAGR(_ total: Double, _ start: String?, _ end: String?) {
+    func invalidInputsKeepCAGRUnavailable(_ total: Double, _ start: String?, _ end: String?) {
         let summary = PortfolioPerformanceSummary.build(
             totalGainPercentage: total,
             periodStart: start,
@@ -36,8 +37,8 @@ struct PortfolioSummaryTests {
         #expect(summary.cagr == nil)
     }
 
-    @Test("Exact total loss remains a direct total increase without CAGR")
-    func exactTotalLossDoesNotAnnualize() {
+    @Test("Exact total loss annualizes to an exact total loss")
+    func exactTotalLossAnnualizes() {
         let summary = PortfolioPerformanceSummary.build(
             totalGainPercentage: -1,
             periodStart: "2025-01-01",
@@ -45,7 +46,7 @@ struct PortfolioSummaryTests {
         )
 
         #expect(summary.totalPercentageIncrease == -1)
-        #expect(summary.cagr == nil)
+        #expect(summary.cagr == -1)
     }
 
     @Test(arguments: [0.25, -0.25, 0.0])
