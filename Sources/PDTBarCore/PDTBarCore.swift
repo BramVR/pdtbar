@@ -4485,6 +4485,9 @@ private enum PortfolioValueDescriptorRedactor {
         {
             return replacingTrailingMoneyDetail(in: detail)
         }
+        if containsMoneyToken(detail) {
+            return redactedMoneyBearingDetail(detail)
+        }
         return detail
     }
 
@@ -4550,6 +4553,23 @@ private enum PortfolioValueDescriptorRedactor {
             return placeholder
         }
         return "\(detail[..<range.upperBound])\(placeholder)"
+    }
+
+    private static func redactedMoneyBearingDetail(_ detail: String) -> String {
+        let parts = detail.components(separatedBy: "; ")
+        guard parts.count > 1 else {
+            return placeholder
+        }
+        return parts
+            .map { containsMoneyToken($0) ? placeholder : $0 }
+            .joined(separator: "; ")
+    }
+
+    private static func containsMoneyToken(_ text: String) -> Bool {
+        text.range(of: #"\b[A-Z]{3}\s+[-+]?[0-9]"#, options: .regularExpression) != nil
+            || text.contains("€")
+            || text.contains("$")
+            || text.contains("£")
     }
 }
 

@@ -49,6 +49,7 @@ struct PortfolioValueVisibilityTests {
         #expect(!text.contains("EUR 22.40"))
         #expect(!text.contains("EUR 3.10"))
         #expect(!text.contains("EUR 2.90"))
+        #expect(currencyLeaks(in: text).isEmpty)
     }
 
     @Test("Toggling visibility re-renders the same in-memory pulse without refetching")
@@ -202,6 +203,17 @@ private func renderedText(in surface: MenuBarSurface) -> String {
     values.append(contentsOf: surface.sections.map(\.title))
     values.append(contentsOf: surface.sections.flatMap { $0.rows.flatMap(renderedTextValues) })
     return values.compactMap { $0 }.joined(separator: "\n")
+}
+
+private func currencyLeaks(in text: String) -> [String] {
+    text.split(separator: "\n")
+        .map(String.init)
+        .filter { line in
+            line.range(of: #"\b[A-Z]{3}\s+[-+]?[0-9]"#, options: .regularExpression) != nil
+                || line.contains("€")
+                || line.contains("$")
+                || line.contains("£")
+        }
 }
 
 private func renderedTextValues(in row: MenuBarRowSurface) -> [String] {
