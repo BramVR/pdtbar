@@ -1,8 +1,10 @@
 import AppKit
+import Combine
 import Darwin
 import Foundation
 import PDTBarAppSupport
 import PDTBarCore
+import SwiftUI
 
 private struct PortfolioFetchOutcome: @unchecked Sendable {
     var pulse: PulseLifecycleResult? = nil
@@ -39,6 +41,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let claudeLoginAttemptGate = ClaudeLoginAttemptGate()
     private let menuActionDispatcher = MenuActionDispatcher()
     private let statusMenuHost = StatusMenuHost()
+    private let settingsStore: PDTBarSettingsStore
+    private var settingsCancellable: AnyCancellable?
+    private var settingsWindow: NSWindow?
+    private var currentRawDescriptor: MenuDescriptor?
     private let menuItemViewWidth: CGFloat = 400
 
     init(options: PDTBarLaunchOptions) {
@@ -49,6 +55,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             environment: environment,
             binaryOverride: options.claudeLoginBinaryOverride
         )
+        self.settingsStore = PDTBarSettingsStore(userDefaults: PDTBarSettingsStore.userDefaults(environment: environment))
+        super.init()
+        self.settingsCancellable = settingsStore.$showPortfolioValues
+            .dropFirst()
+            .sink { [weak self] _ in
+                DispatchQueue.main.async {
+                    self?.rerenderCurrentMenuForSettings()
+                }
+            }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -443,7 +458,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func installMenuBarItem(_ descriptor: MenuDescriptor, cancelOpenMenu: Bool = true) {
-        let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
+        currentRawDescriptor = descriptor
+        let surface = MenuBarSurfaceRenderer.render(
+            descriptor: descriptor.applying(settings: settingsStore.displaySettings)
+        )
         let item: NSStatusItem
         if let statusItem {
             item = statusItem
@@ -556,6 +574,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             if row.role == .openPDT {
                 item.target = self
                 item.action = #selector(openPDT(_:))
+            }
+            if row.role == .settings {
+                item.target = self
+                item.action = #selector(showSettings(_:))
             }
         } else {
             let submenu = NSMenu()
@@ -671,6 +693,39 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         NSWorkspace.shared.open(url)
+    }
+
+    @objc private func showSettings(_ sender: NSMenuItem) {
+        openSettingsWindow()
+    }
+
+    private func openSettingsWindow() {
+        let window: NSWindow
+        if let settingsWindow {
+            window = settingsWindow
+        } else {
+            let created = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 300, height: 92),
+                styleMask: [.titled, .closable],
+                backing: .buffered,
+                defer: false
+            )
+            created.title = "Settings"
+            created.isReleasedWhenClosed = false
+            created.contentView = NSHostingView(rootView: PDTBarSettingsView(settingsStore: settingsStore))
+            settingsWindow = created
+            window = created
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func rerenderCurrentMenuForSettings() {
+        guard let currentRawDescriptor else {
+            return
+        }
+        installMenuBarItem(currentRawDescriptor, cancelOpenMenu: false)
     }
 
     private func makePortfolioAllocationChartRowView(
@@ -1027,6 +1082,16 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         image.isTemplate = true
         return image
+    }
+}
+
+private struct PDTBarSettingsView: View {
+    @ObservedObject var settingsStore: PDTBarSettingsStore
+
+    var body: some View {
+        Toggle("Show portfolio values", isOn: $settingsStore.showPortfolioValues)
+            .padding(20)
+            .frame(width: 300, alignment: .leading)
     }
 }
 

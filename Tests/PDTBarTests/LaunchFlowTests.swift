@@ -1060,6 +1060,8 @@ struct LaunchSurfaceTests {
         #expect(healthRow(in: descriptor) == nil)
         #expect(actionRow("actions.refreshNow", in: descriptor)?.role == .fetchRetry)
         #expect(actionRow("actions.openPDT", in: descriptor)?.role == .openPDT)
+        #expect(actionRow("actions.settings", in: descriptor)?.title == "Settings...")
+        #expect(actionRow("actions.settings", in: descriptor)?.role == .settings)
         #expect(surface.status.title == "All quiet")
         #expect(surface.status.menuBarTitle.isEmpty)
         #expect(surface.status.visual == descriptor.statusVisual)

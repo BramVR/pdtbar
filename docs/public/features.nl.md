@@ -89,6 +89,7 @@ Het onderdeel `Actions` houdt dagelijks gebruik kort.
 
 - `Refresh now` vraagt PDTBar om verse PDT-data op te halen en details aan te vullen.
 - `Open PDT` opent het volledige Portfolio Dividend Tracker-dashboard.
+- `Settings...` opent het native instellingenvenster, waar `Show portfolio values` getoonde geldwaarden kan verbergen of herstellen.
 - `Log in with Claude` verschijnt alleen wanneer Claude-login ontbreekt.
 - `Check again` controleert de setup opnieuw na login of wijzigingen aan de PDT MCP-koppeling.
 
@@ -101,6 +102,8 @@ Als het feit later inhoudelijk verandert, kan het opnieuw verschijnen. Een conce
 ## Privacy En Grenzen
 
 PDTBar leest via je lokale Claude CLI + PDT MCP-koppeling. De app draait lokaal en is standaard alleen-lezen.
+
+De instelling `Show portfolio values` verbergt geldwaarden in het menu, statustekst, tooltips, toegankelijkheidslabels, grafiekdetails en submenu's. De instelling verwijdert geen opgehaalde snapshots of lokaal gecachte portefeuilledata; wanneer je haar weer aanzet, herstelt PDTBar de getoonde waarden uit de huidige Pulse in het geheugen.
 
 PDTBar plaatst geen orders, verplaatst geen geld, uploadt je portefeuille niet naar een eigen backend en geeft geen financieel advies. De app zet feiten en veranderingen op volgorde; jij bepaalt wat belangrijk is.
 

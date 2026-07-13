@@ -47,6 +47,7 @@ After launch, look for the small Concentration Stack icon in the macOS menu bar.
 - Click the icon to see the portfolio pulse.
 - Use `Refresh now` to fetch fresh PDT data.
 - Use `Open PDT` when you want the full dashboard.
+- Use `Settings...` to show or hide displayed portfolio values.
 - Use `Log in with Claude` if PDTBar asks for Claude login, then follow the browser steps and click `Check again`.
 
 ## Product Principles

@@ -66,6 +66,8 @@ do {
         report = try realUserPulseSmoke(arguments: Array(arguments.dropFirst()))
     case "portfolio-summary-proof":
         report = try portfolioSummaryProof(arguments: Array(arguments.dropFirst()))
+    case "portfolio-values-settings-proof":
+        report = try portfolioValuesSettingsProof(arguments: Array(arguments.dropFirst()))
     case "fixture-proof":
         report = try fixtureProof(arguments: Array(arguments.dropFirst()))
     case "menu-polish-proof":
@@ -97,6 +99,7 @@ do {
       pdtbar-smoke peekaboo [--peekaboo <path>] [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>]
       pdtbar-smoke real-user-pulse [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
       pdtbar-smoke portfolio-summary-proof [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
+      pdtbar-smoke portfolio-values-settings-proof [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
       pdtbar-smoke fixture-proof [--fixture <path>] [--output <path>]
       pdtbar-smoke menu-polish-proof [--output <path>]
 
@@ -2794,6 +2797,428 @@ private func portfolioSummaryProof(arguments: [String]) throws -> SmokeReport {
     return report
 }
 
+private func settingsProofMenuIdentifiers(for surface: MenuBarSurface) -> Set<String> {
+    Set(requiredPulseMenuTargets(in: surface).map(\.accessibilityIdentifier))
+        .union(["pdtbar.section.actions", "pdtbar.row.actions.settings"])
+}
+
+private func sensitivePortfolioTexts(in surface: MenuBarSurface) -> Set<String> {
+    var texts: Set<String> = []
+    for section in surface.sections {
+        for row in section.rows {
+            collectSensitivePortfolioTexts(from: row, into: &texts)
+        }
+    }
+    return texts.filter(isSensitivePortfolioText)
+}
+
+private func collectSensitivePortfolioTexts(from row: MenuBarRowSurface, into texts: inout Set<String>) {
+    texts.insert(row.title)
+    if let detail = row.detail {
+        texts.insert(detail)
+        texts.insert("\(row.title) - \(detail)")
+    }
+    if let summary = row.portfolioSummary {
+        texts.insert(summary.totalValue)
+        texts.insert(summary.accessibilityLabel)
+    }
+    if let chart = row.barChart {
+        for bar in chart.bars {
+            texts.insert(bar.detail)
+        }
+    }
+    for child in row.children {
+        collectSensitivePortfolioTexts(from: child, into: &texts)
+    }
+}
+
+private func isSensitivePortfolioText(_ text: String) -> Bool {
+    let currencyTokens = ["EUR ", "USD ", "GBP ", "CHF ", "CAD ", "AUD ", "€", "$", "£"]
+    return currencyTokens.contains { text.contains($0) }
+}
+
+private func portfolioValuesProofArtifacts(
+    evidence: URL? = nil,
+    settingsScreenshot: URL?,
+    hiddenMenuScreenshot: URL?
+) -> [String] {
+    [evidence, settingsScreenshot, hiddenMenuScreenshot].compactMap { url in
+        url.map(artifactPath)
+    }
+}
+
+private func portfolioValuesSettingsProof(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
+    guard AXIsProcessTrusted() else {
+        return SmokeReport(
+            name: "portfolio-values-settings-proof",
+            status: SmokeStatus.skipped,
+            detail: "macOS Accessibility permission missing for Settings/menu proof; no authorization prompt requested",
+            artifacts: []
+        )
+    }
+
+    let screenshotPeekaboo = peekabooScreenshotTool(
+        options.peekaboo ?? URL(fileURLWithPath: "/opt/homebrew/bin/peekaboo")
+    )
+    guard let screenshotPeekaboo else {
+        return SmokeReport(
+            name: "portfolio-values-settings-proof",
+            status: SmokeStatus.skipped,
+            detail: "Peekaboo screenshot permission unavailable for public PNG proof; no authorization prompt requested",
+            artifacts: []
+        )
+    }
+
+    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
+    let fixture = options.fixture ?? defaultFixture
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let expectedSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "portfolio-values-settings-expected")
+    let expectedScenario = try fixturePulseScenario(fixture: fixture, snapshotDirectory: expectedSnapshotDirectory)
+    let visibleSurface = MenuBarSurfaceRenderer.render(descriptor: expectedScenario.run.descriptor)
+    let hiddenSurface = MenuBarSurfaceRenderer.render(
+        descriptor: expectedScenario.run.descriptor.applying(
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+    )
+    let visibleSensitiveTexts = sensitivePortfolioTexts(in: visibleSurface)
+    guard !visibleSensitiveTexts.isEmpty else {
+        return SmokeReport(
+            name: "portfolio-values-settings-proof",
+            status: SmokeStatus.failed,
+            detail: "fixture surface did not expose any monetary values to prove hiding",
+            artifacts: []
+        )
+    }
+
+    let suiteName = "pdtbar-smoke-\(UUID().uuidString)"
+    if let defaults = UserDefaults(suiteName: suiteName) {
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+    defer {
+        if let defaults = UserDefaults(suiteName: suiteName) {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+    }
+
+    let snapshotDirectory = try options.isolatedSnapshotDirectory(prefix: "portfolio-values-settings-app")
+    let firstLaunch = try launchFixtureApp(
+        app: app,
+        fixture: fixture,
+        snapshotDirectory: snapshotDirectory,
+        userDefaultsSuite: suiteName
+    )
+    defer {
+        terminate(firstLaunch)
+    }
+
+    let appElement = AXUIElementCreateApplication(firstLaunch.processIdentifier)
+    guard let statusElement = waitForAccessibilityElement(
+        in: appElement,
+        identifier: visibleSurface.status.accessibilityIdentifier,
+        timeout: options.timeout
+    ) else {
+        return SmokeReport(
+            name: "portfolio-values-settings-proof",
+            status: SmokeStatus.failed,
+            detail: "fixture app launched, but Accessibility could not find status item \(visibleSurface.status.accessibilityIdentifier)",
+            artifacts: []
+        )
+    }
+
+    let expectedMenuIdentifiers = settingsProofMenuIdentifiers(for: visibleSurface)
+    let visibleMenu = openStatusMenu(
+        statusElement,
+        appElement: appElement,
+        expectedMenuIdentifiers: expectedMenuIdentifiers,
+        timeout: options.timeout
+    )
+    guard let visibleSnapshot = visibleMenu.snapshot,
+          visibleSensitiveTexts.contains(where: visibleSnapshot.texts.contains)
+    else {
+        return SmokeReport(
+            name: "portfolio-values-settings-proof",
+            status: SmokeStatus.failed,
+            detail: "visible menu did not expose expected fixture monetary text before toggling",
+            artifacts: []
+        )
+    }
+
+    guard let settingsOpenAttempt = pressMenuRow(
+        statusElement: statusElement,
+        appElement: appElement,
+        rowIdentifier: "pdtbar.row.actions.settings",
+        expectedMenuIdentifiers: expectedMenuIdentifiers,
+        timeout: options.timeout
+    ) else {
+        return SmokeReport(
+            name: "portfolio-values-settings-proof",
+            status: SmokeStatus.failed,
+            detail: "could not press Settings menu row",
+            artifacts: []
+        )
+    }
+    guard let checkbox = waitForAccessibilityElement(
+        in: appElement,
+        matchingText: "Show portfolio values",
+        timeout: options.timeout
+    ) else {
+        return SmokeReport(
+            name: "portfolio-values-settings-proof",
+            status: SmokeStatus.failed,
+            detail: "Settings window opened via \(settingsOpenAttempt), but checkbox was not accessible",
+            artifacts: []
+        )
+    }
+
+    let settingsScreenshot = try captureElementScreenshot(
+        name: "pdtbar-settings-show-portfolio-values",
+        element: checkbox,
+        artifacts: artifacts,
+        peekaboo: screenshotPeekaboo
+    )
+    let snapshot = snapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
+    let snapshotModifiedBeforeToggle = modificationDate(of: snapshot)
+    let toggleOffResult = AXUIElementPerformAction(checkbox, kAXPressAction as CFString)
+    guard toggleOffResult == .success else {
+        return SmokeReport(
+            name: "portfolio-values-settings-proof",
+            status: SmokeStatus.failed,
+            detail: "Settings checkbox was found, but AXPress failed with \(toggleOffResult)",
+            artifacts: settingsScreenshot.map { [artifactPath($0)] } ?? []
+        )
+    }
+    Thread.sleep(forTimeInterval: 0.4)
+
+    let hiddenIdentifiers = settingsProofMenuIdentifiers(for: hiddenSurface)
+    let hiddenMenu = openStatusMenu(
+        statusElement,
+        appElement: appElement,
+        expectedMenuIdentifiers: hiddenIdentifiers,
+        timeout: options.timeout
+    )
+    guard let hiddenSnapshot = hiddenMenu.snapshot else {
+        return SmokeReport(
+            name: "portfolio-values-settings-proof",
+            status: SmokeStatus.failed,
+            detail: "menu did not reopen after values were hidden",
+            artifacts: settingsScreenshot.map { [artifactPath($0)] } ?? []
+        )
+    }
+    guard hiddenSnapshot.texts.contains(PortfolioValueDisplaySettings.hiddenPlaceholder),
+          visibleSensitiveTexts.allSatisfy({ !hiddenSnapshot.texts.contains($0) })
+    else {
+        let evidence = try writePortfolioValuesSettingsEvidence(
+            artifacts: artifacts,
+            suiteName: suiteName,
+            visibleSensitiveTexts: visibleSensitiveTexts,
+            hiddenTexts: hiddenSnapshot.texts,
+            relaunchHiddenTexts: [],
+            restoredTexts: [],
+            snapshotModifiedBeforeToggle: snapshotModifiedBeforeToggle,
+            snapshotModifiedAfterToggle: modificationDate(of: snapshot)
+        )
+        return SmokeReport(
+            name: "portfolio-values-settings-proof",
+            status: SmokeStatus.failed,
+            detail: "hidden menu did not replace every fixture monetary text with the placeholder",
+            artifacts: [artifactPath(evidence)] + (settingsScreenshot.map { [artifactPath($0)] } ?? [])
+        )
+    }
+    let snapshotModifiedAfterToggle = modificationDate(of: snapshot)
+    guard snapshotModifiedAfterToggle == snapshotModifiedBeforeToggle else {
+        return SmokeReport(
+            name: "portfolio-values-settings-proof",
+            status: SmokeStatus.failed,
+            detail: "settings toggle rewrote the fixture snapshot, so no-refetch proof failed",
+            artifacts: settingsScreenshot.map { [artifactPath($0)] } ?? []
+        )
+    }
+
+    let hiddenMenuScreenshot = try captureNativeMenuScreenshot(
+        name: "pdtbar-values-hidden",
+        snapshot: hiddenSnapshot,
+        expectedMenuIdentifiers: hiddenIdentifiers,
+        artifacts: artifacts
+    )
+
+    terminate(firstLaunch)
+    let relaunch = try launchFixtureApp(
+        app: app,
+        fixture: fixture,
+        snapshotDirectory: snapshotDirectory,
+        userDefaultsSuite: suiteName
+    )
+    defer {
+        terminate(relaunch)
+    }
+    let relaunchAppElement = AXUIElementCreateApplication(relaunch.processIdentifier)
+    guard let relaunchStatus = waitForAccessibilityElement(
+        in: relaunchAppElement,
+        identifier: hiddenSurface.status.accessibilityIdentifier,
+        timeout: options.timeout
+    ) else {
+        return SmokeReport(
+            name: "portfolio-values-settings-proof",
+            status: SmokeStatus.failed,
+            detail: "relaunch did not expose fixture status item",
+            artifacts: portfolioValuesProofArtifacts(
+                settingsScreenshot: settingsScreenshot,
+                hiddenMenuScreenshot: hiddenMenuScreenshot
+            )
+        )
+    }
+    let relaunchMenu = openStatusMenu(
+        relaunchStatus,
+        appElement: relaunchAppElement,
+        expectedMenuIdentifiers: hiddenIdentifiers,
+        timeout: options.timeout
+    )
+    guard let relaunchSnapshot = relaunchMenu.snapshot,
+          relaunchSnapshot.texts.contains(PortfolioValueDisplaySettings.hiddenPlaceholder),
+          visibleSensitiveTexts.allSatisfy({ !relaunchSnapshot.texts.contains($0) })
+    else {
+        return SmokeReport(
+            name: "portfolio-values-settings-proof",
+            status: SmokeStatus.failed,
+            detail: "hidden portfolio value preference did not persist across relaunch",
+            artifacts: portfolioValuesProofArtifacts(
+                settingsScreenshot: settingsScreenshot,
+                hiddenMenuScreenshot: hiddenMenuScreenshot
+            )
+        )
+    }
+
+    guard pressMenuRow(
+        statusElement: relaunchStatus,
+        appElement: relaunchAppElement,
+        rowIdentifier: "pdtbar.row.actions.settings",
+        expectedMenuIdentifiers: hiddenIdentifiers,
+        timeout: options.timeout
+    ) != nil,
+          let relaunchCheckbox = waitForAccessibilityElement(
+              in: relaunchAppElement,
+              matchingText: "Show portfolio values",
+              timeout: options.timeout
+          )
+    else {
+        return SmokeReport(
+            name: "portfolio-values-settings-proof",
+            status: SmokeStatus.failed,
+            detail: "could not reopen Settings after relaunch",
+            artifacts: portfolioValuesProofArtifacts(
+                settingsScreenshot: settingsScreenshot,
+                hiddenMenuScreenshot: hiddenMenuScreenshot
+            )
+        )
+    }
+    let snapshotModifiedBeforeRestore = modificationDate(of: snapshot)
+    let toggleOnResult = AXUIElementPerformAction(relaunchCheckbox, kAXPressAction as CFString)
+    guard toggleOnResult == .success else {
+        return SmokeReport(
+            name: "portfolio-values-settings-proof",
+            status: SmokeStatus.failed,
+            detail: "Settings checkbox restore AXPress failed with \(toggleOnResult)",
+            artifacts: portfolioValuesProofArtifacts(
+                settingsScreenshot: settingsScreenshot,
+                hiddenMenuScreenshot: hiddenMenuScreenshot
+            )
+        )
+    }
+    Thread.sleep(forTimeInterval: 0.4)
+    let restoredMenu = openStatusMenu(
+        relaunchStatus,
+        appElement: relaunchAppElement,
+        expectedMenuIdentifiers: expectedMenuIdentifiers,
+        timeout: options.timeout
+    )
+    guard let restoredSnapshot = restoredMenu.snapshot,
+          visibleSensitiveTexts.contains(where: restoredSnapshot.texts.contains),
+          !restoredSnapshot.texts.contains(PortfolioValueDisplaySettings.hiddenPlaceholder),
+          modificationDate(of: snapshot) == snapshotModifiedBeforeRestore
+    else {
+        return SmokeReport(
+            name: "portfolio-values-settings-proof",
+            status: SmokeStatus.failed,
+            detail: "turning values back on did not restore fixture monetary text from in-memory state without rewriting the snapshot",
+            artifacts: portfolioValuesProofArtifacts(
+                settingsScreenshot: settingsScreenshot,
+                hiddenMenuScreenshot: hiddenMenuScreenshot
+            )
+        )
+    }
+
+    let evidence = try writePortfolioValuesSettingsEvidence(
+        artifacts: artifacts,
+        suiteName: suiteName,
+        visibleSensitiveTexts: visibleSensitiveTexts,
+        hiddenTexts: hiddenSnapshot.texts,
+        relaunchHiddenTexts: relaunchSnapshot.texts,
+        restoredTexts: restoredSnapshot.texts,
+        snapshotModifiedBeforeToggle: snapshotModifiedBeforeToggle,
+        snapshotModifiedAfterToggle: snapshotModifiedAfterToggle
+    )
+    return SmokeReport(
+        name: "portfolio-values-settings-proof",
+        status: SmokeStatus.passed,
+        detail: "packaged fixture app opened native Settings, toggled portfolio values off without snapshot rewrite, persisted hidden values across relaunch, then restored formatted values from current state",
+        artifacts: portfolioValuesProofArtifacts(
+            evidence: evidence,
+            settingsScreenshot: settingsScreenshot,
+            hiddenMenuScreenshot: hiddenMenuScreenshot
+        )
+    )
+}
+
+private func launchFixtureApp(
+    app: URL,
+    fixture: URL,
+    snapshotDirectory: URL,
+    userDefaultsSuite: String
+) throws -> Process {
+    let process = Process()
+    process.executableURL = app
+    process.arguments = ["--fixture", fixture.path, "--snapshot-dir", snapshotDirectory.path]
+    process.environment = ProcessInfo.processInfo.environment.merging([
+        "PDTBAR_FIXTURE_MODE": "1",
+        PDTBarSettingsStore.userDefaultsSuiteEnvironmentKey: userDefaultsSuite,
+    ]) { _, new in new }
+    try process.run()
+    Thread.sleep(forTimeInterval: 0.8)
+    return process
+}
+
+private func writePortfolioValuesSettingsEvidence(
+    artifacts: URL,
+    suiteName: String,
+    visibleSensitiveTexts: Set<String>,
+    hiddenTexts: Set<String>,
+    relaunchHiddenTexts: Set<String>,
+    restoredTexts: Set<String>,
+    snapshotModifiedBeforeToggle: Date?,
+    snapshotModifiedAfterToggle: Date?
+) throws -> URL {
+    let evidence = PortfolioValuesSettingsEvidence(
+        userDefaultsSuite: suiteName,
+        visibleSensitiveTexts: visibleSensitiveTexts.sorted(),
+        hiddenPlaceholder: PortfolioValueDisplaySettings.hiddenPlaceholder,
+        hiddenTexts: hiddenTexts.sorted(),
+        relaunchHiddenTexts: relaunchHiddenTexts.sorted(),
+        restoredTexts: restoredTexts.sorted(),
+        snapshotModifiedBeforeToggle: snapshotModifiedBeforeToggle,
+        snapshotModifiedAfterToggle: snapshotModifiedAfterToggle,
+        snapshotUnchangedOnToggle: snapshotModifiedBeforeToggle == snapshotModifiedAfterToggle
+    )
+    let output = artifacts.appending(path: "pdtbar-portfolio-values-settings-proof.json")
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    try encoder.encode(evidence).write(to: output, options: .atomic)
+    return output
+}
+
+
 private func fixtureProof(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
     let fixture = options.fixture ?? defaultFixture
@@ -2929,6 +3354,18 @@ private struct AccessibilityEvidence: Codable {
     var observedIdentifiers: [String]
     var observedFramesByIdentifier: [String: AccessibilityFrame]
     var observedTexts: [String]
+}
+
+private struct PortfolioValuesSettingsEvidence: Codable {
+    var userDefaultsSuite: String
+    var visibleSensitiveTexts: [String]
+    var hiddenPlaceholder: String
+    var hiddenTexts: [String]
+    var relaunchHiddenTexts: [String]
+    var restoredTexts: [String]
+    var snapshotModifiedBeforeToggle: Date?
+    var snapshotModifiedAfterToggle: Date?
+    var snapshotUnchangedOnToggle: Bool
 }
 
 private struct DisplayModeEvidence: Codable {
@@ -3222,6 +3659,21 @@ private func waitForAccessibilityElement(
     return nil
 }
 
+private func waitForAccessibilityElement(
+    in root: AXUIElement,
+    matchingText expectedText: String,
+    timeout: TimeInterval
+) -> AXUIElement? {
+    let deadline = Date().addingTimeInterval(timeout)
+    repeat {
+        if let element = findAccessibilityElement(in: root, matchingText: expectedText) {
+            return element
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+    } while Date() < deadline
+    return findAccessibilityElement(in: root, matchingText: expectedText)
+}
+
 private func waitForAccessibilityIdentifiers(
     _ identifiers: Set<String>,
     in root: AXUIElement,
@@ -3354,6 +3806,20 @@ private func findAccessibilityElement(in root: AXUIElement, identifier: String) 
     return nil
 }
 
+private func findAccessibilityElement(in root: AXUIElement, matchingText expectedText: String) -> AXUIElement? {
+    var stack = [root]
+    var visited = 0
+    while let element = stack.popLast(), visited < 800 {
+        visited += 1
+        let texts = accessibilityTexts(in: element)
+        if texts.contains(expectedText) || texts.contains(where: { $0.contains(expectedText) }) {
+            return element
+        }
+        stack.append(contentsOf: accessibilityChildren(of: element))
+    }
+    return nil
+}
+
 private func accessibilitySnapshot(in root: AXUIElement) -> AccessibilitySnapshot {
     var snapshot = AccessibilitySnapshot(identifiers: [], texts: [], framesByIdentifier: [:])
     var stack = [root]
@@ -3448,18 +3914,7 @@ private func captureAllocationDetailScreenshot(
 
     let screenshot = artifacts.appending(path: "pdtbar-real-user-pulse-allocation-detail.png")
     try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-    _ = try run(
-        peekaboo,
-        arguments: [
-            "image",
-            "--mode", "area",
-            "--region", "\(Int(padded.minX)),\(Int(padded.minY)),\(Int(padded.width)),\(Int(padded.height))",
-            "--path", screenshot.path,
-            "--json",
-            "--no-remote",
-        ],
-        timeout: 20
-    )
+    try captureAreaScreenshot(to: screenshot, bounds: padded, peekaboo: peekaboo)
     guard imageHasVisiblePixels(screenshot) else {
         try? FileManager.default.removeItem(at: screenshot)
         return nil
@@ -3545,6 +4000,67 @@ private func captureSubmenuScreenshot(
     return screenshot
 }
 
+private func captureElementScreenshot(
+    name: String,
+    element: AXUIElement,
+    artifacts: URL,
+    peekaboo: URL
+) throws -> URL? {
+    guard let elementRect = accessibilityFrame(of: element),
+          !elementRect.isNull,
+          !elementRect.isEmpty
+    else {
+        return nil
+    }
+    let display = displayBounds(containing: elementRect)
+    let padded = CGRect(
+        x: max(display.minX, elementRect.minX - 32),
+        y: max(display.minY, elementRect.minY - 28),
+        width: min(display.width, max(300, elementRect.width + 96)),
+        height: min(display.height, max(96, elementRect.height + 64))
+    ).intersection(display).integral
+    guard !padded.isNull, !padded.isEmpty else {
+        return nil
+    }
+
+    let screenshot = artifacts.appending(path: "\(name).png")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    try captureAreaScreenshot(to: screenshot, bounds: padded, peekaboo: peekaboo)
+    guard imageHasVisiblePixels(screenshot) else {
+        try? FileManager.default.removeItem(at: screenshot)
+        return nil
+    }
+    return screenshot
+}
+
+private func captureAreaScreenshot(to screenshot: URL, bounds: CGRect, peekaboo: URL) throws {
+    let region = "\(Int(bounds.minX)),\(Int(bounds.minY)),\(Int(bounds.width)),\(Int(bounds.height))"
+    do {
+        _ = try run(
+            peekaboo,
+            arguments: [
+                "image",
+                "--mode", "area",
+                "--region", region,
+                "--path", screenshot.path,
+                "--json",
+                "--no-remote",
+            ],
+            timeout: 20
+        )
+    } catch {
+        _ = try run(
+            URL(fileURLWithPath: "/usr/sbin/screencapture"),
+            arguments: [
+                "-x",
+                "-R\(region)",
+                screenshot.path,
+            ],
+            timeout: 10
+        )
+    }
+}
+
 private func captureAttentionExplanationScreenshot(
     snapshot: AccessibilitySnapshot,
     artifacts: URL,
@@ -3621,19 +4137,7 @@ private func captureMenuScreenshot(
         return nil
     }
     let captureBounds = screenshotCaptureBounds(containing: menuBounds)
-    let displayRegion = "\(Int(captureBounds.minX)),\(Int(captureBounds.minY)),\(Int(captureBounds.width)),\(Int(captureBounds.height))"
-    _ = try run(
-        peekaboo,
-        arguments: [
-            "image",
-            "--mode", "area",
-            "--region", displayRegion,
-            "--path", rawScreenshot.path,
-            "--json",
-            "--no-remote",
-        ],
-        timeout: 20
-    )
+    try captureAreaScreenshot(to: rawScreenshot, bounds: captureBounds, peekaboo: peekaboo)
     defer {
         try? FileManager.default.removeItem(at: rawScreenshot)
     }

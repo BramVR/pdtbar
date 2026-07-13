@@ -2512,6 +2512,7 @@ public enum MenuRowRole: String, Codable, Equatable {
     case dataHealthDiagnosticCopy
     case holdingIdentifierCopy
     case openPDT
+    case settings
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -2633,6 +2634,16 @@ public struct MenuRowPortfolioSummary: Codable, Equatable {
 
     public var accessibilityLabel: String {
         "Total portfolio value, \(totalValue); CAGR, \(cagr); Total increase, \(totalIncrease)"
+    }
+}
+
+public struct PortfolioValueDisplaySettings: Codable, Equatable, Sendable {
+    public static let hiddenPlaceholder = "######"
+
+    public var showPortfolioValues: Bool
+
+    public init(showPortfolioValues: Bool = true) {
+        self.showPortfolioValues = showPortfolioValues
     }
 }
 
@@ -4384,10 +4395,175 @@ public enum MenuBarSurfaceRenderer {
     }
 }
 
+public extension MenuDescriptor {
+    func applying(settings: PortfolioValueDisplaySettings) -> MenuDescriptor {
+        guard !settings.showPortfolioValues else {
+            return self
+        }
+        return PortfolioValueDescriptorRedactor.redacted(self)
+    }
+}
+
+private enum PortfolioValueDescriptorRedactor {
+    private static let placeholder = PortfolioValueDisplaySettings.hiddenPlaceholder
+
+    static func redacted(_ descriptor: MenuDescriptor) -> MenuDescriptor {
+        var descriptor = descriptor
+        descriptor.sections = descriptor.sections.map { section in
+            var section = section
+            section.rows = section.rows.map(redactedRow)
+            return section
+        }
+        return descriptor
+    }
+
+    private static func redactedRow(_ row: MenuRow) -> MenuRow {
+        var row = row
+        if var summary = row.portfolioSummary {
+            summary.totalValue = placeholder
+            row.portfolioSummary = summary
+        }
+        if var chart = row.barChart {
+            chart.bars = chart.bars.map { bar in
+                var bar = bar
+                bar.detail = replacingTrailingMoneyDetail(in: bar.detail)
+                return bar
+            }
+            row.barChart = chart
+        }
+        row.detail = redactedDetail(for: row)
+        row.children = row.children.map(redactedRow)
+        return row
+    }
+
+    private static func redactedDetail(for row: MenuRow) -> String? {
+        guard let detail = row.detail else {
+            return nil
+        }
+        switch row.role {
+        case .incomeEventAmount:
+            return placeholder
+        case .incomeEventChange:
+            return replacingMoneyAfterKeyword(in: detail, keyword: " from ")
+        case .incomeNext, .incomeEvent:
+            return redactedIncomeEventDetail(detail)
+        case .portfolioOverviewCash:
+            return replacingLeadingMoneyDetail(in: detail)
+        default:
+            break
+        }
+
+        if row.id.hasSuffix(".worth")
+            || row.id.hasSuffix(".price")
+            || row.id.hasSuffix(".nextIncome")
+            || row.id.hasSuffix(".averageBuyPrice")
+            || row.id.hasSuffix(".gainLoss")
+        {
+            if row.id.hasSuffix(".nextIncome") {
+                return redactedIncomeEventDetail(detail)
+            }
+            return placeholder
+        }
+        if row.id.contains(".chart.") {
+            return replacingTrailingMoneyDetail(in: detail)
+        }
+        if row.id.hasPrefix("bigMovers.move.") {
+            return redactedBigMoverDetail(detail)
+        }
+        if row.id.hasPrefix("income.ex-dividend.") && row.role == .pulseAttention {
+            return redactedIncomeAttentionDetail(detail)
+        }
+        if row.id.hasPrefix("income.") && row.id.hasSuffix(".priorValue") {
+            return placeholder
+        }
+        if row.id.hasPrefix("allocation.cashDrag") {
+            return replacingTrailingMoneyDetail(in: detail)
+        }
+        if row.id.hasPrefix("allocation.portfolio.sectors.")
+            || row.id.hasPrefix("allocation.portfolio.assetTypes.")
+            || row.id.hasPrefix("allocation.portfolio.holdings.")
+        {
+            return replacingTrailingMoneyDetail(in: detail)
+        }
+        return detail
+    }
+
+    private static func redactedIncomeEventDetail(_ detail: String) -> String {
+        detail
+            .components(separatedBy: "; ")
+            .map { part in
+                if part.contains(" from ") {
+                    return replacingMoneyAfterKeyword(in: part, keyword: " from ")
+                }
+                if part.range(of: #"^[A-Z]{3} "#, options: .regularExpression) != nil {
+                    return placeholder
+                }
+                return part
+            }
+            .joined(separator: "; ")
+    }
+
+    private static func redactedIncomeAttentionDetail(_ detail: String) -> String {
+        guard let dividendRange = detail.range(of: "latest recorded dividend ") else {
+            return redactedIncomeEventDetail(detail)
+        }
+        let prefix = detail[..<dividendRange.upperBound]
+        guard let changeRange = detail.range(of: ", up ")
+            ?? detail.range(of: ", down ")
+        else {
+            return "\(prefix)\(placeholder)."
+        }
+        let change = detail[changeRange.lowerBound...]
+        return "\(prefix)\(placeholder)\(replacingMoneyAfterKeyword(in: String(change), keyword: " from prior "))"
+    }
+
+    private static func redactedBigMoverDetail(_ detail: String) -> String {
+        guard let fromRange = detail.range(of: " from "),
+              let suffixRange = detail.range(of: " while portfolio weight changed ")
+                ?? detail.range(of: " over price history window.")
+        else {
+            return placeholder
+        }
+        let prefix = detail[..<fromRange.upperBound]
+        let suffix = detail[suffixRange.lowerBound...]
+        return "\(prefix)\(placeholder) to \(placeholder)\(suffix)"
+    }
+
+    private static func replacingLeadingMoneyDetail(in detail: String) -> String {
+        let parts = detail.components(separatedBy: "; ")
+        guard !parts.isEmpty else {
+            return placeholder
+        }
+        return ([placeholder] + parts.dropFirst()).joined(separator: "; ")
+    }
+
+    private static func replacingTrailingMoneyDetail(in detail: String) -> String {
+        let parts = detail.components(separatedBy: "; ")
+        guard parts.count > 1 else {
+            return placeholder
+        }
+        return (parts.dropLast() + [placeholder]).joined(separator: "; ")
+    }
+
+    private static func replacingMoneyAfterKeyword(in detail: String, keyword: String) -> String {
+        guard let range = detail.range(of: keyword) else {
+            return placeholder
+        }
+        return "\(detail[..<range.upperBound])\(placeholder)"
+    }
+}
+
 public enum MenuDescriptorRenderer {
     private static let maxPulseAttentionItems = 3
 
     public static func render(model: PortfolioPulseModel) -> MenuDescriptor {
+        render(model: model, settings: PortfolioValueDisplaySettings())
+    }
+
+    public static func render(
+        model: PortfolioPulseModel,
+        settings: PortfolioValueDisplaySettings
+    ) -> MenuDescriptor {
         let allocation = model.facetSnapshots.allocation
         let income = model.facetSnapshots.income
         let bigMovers = model.facetSnapshots.bigMovers
@@ -4441,7 +4617,7 @@ public enum MenuDescriptorRenderer {
         let statusTitle = statusSignal
         let statusVisual = statusVisual(for: model)
 
-        return MenuDescriptor(
+        let descriptor = MenuDescriptor(
             statusTitle: statusTitle,
             statusBadge: model.rankedAttentionItems.isEmpty ? nil : "\(model.rankedAttentionItems.count)",
             statusVisual: statusVisual,
@@ -4498,6 +4674,7 @@ public enum MenuDescriptorRenderer {
                 topLevelActionsSection(refreshState: .available),
             ]
         )
+        return descriptor.applying(settings: settings)
     }
 
     private static func portfolioSummaryRow(for model: PortfolioPulseModel) -> MenuRow {
@@ -4557,6 +4734,11 @@ public enum MenuDescriptorRenderer {
                     id: "actions.openPDT",
                     role: .openPDT,
                     title: "Open PDT"
+                ),
+                MenuRow(
+                    id: "actions.settings",
+                    role: .settings,
+                    title: "Settings..."
                 ),
             ]
         )
@@ -6228,6 +6410,18 @@ public struct PulseLifecycleResult: Codable, Equatable {
             model: model,
             snapshotCommit: snapshotCommit,
             descriptor: MenuDescriptorRenderer.render(model: model),
+            readState: readState,
+            source: source,
+            priorSnapshotLoadStatus: priorSnapshotLoadStatus ?? .notRequested
+        )
+    }
+
+    public func rendered(settings: PortfolioValueDisplaySettings) -> PulseLifecycleResult {
+        PulseLifecycleResult(
+            unfilteredModel: unfilteredModel,
+            model: model,
+            snapshotCommit: snapshotCommit,
+            descriptor: MenuDescriptorRenderer.render(model: model, settings: settings),
             readState: readState,
             source: source,
             priorSnapshotLoadStatus: priorSnapshotLoadStatus ?? .notRequested
