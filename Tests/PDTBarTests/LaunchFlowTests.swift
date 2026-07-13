@@ -235,7 +235,7 @@ struct ClaudeLaunchFlowTests {
         #expect(descriptor.sections.first?.id == "portfolioFetch")
         #expect(rowTitles(in: descriptor).contains("Filling details"))
         #expect(rowTitles(in: descriptor).contains("Cached data visible"))
-        #expect(rowTitles(in: descriptor).contains("Step 5/5: Price history"))
+        #expect(rowTitles(in: descriptor).contains("Step 5/6: Price history"))
         #expect(!rowTitles(in: descriptor).contains("Calling pdt-list-symbol-prices"))
         #expect(descriptor.sections.first?.rows.first { $0.id == "portfolioFetch.backgroundProgress.phase" }?.detail == "Calling pdt-list-symbol-prices")
         #expect(rowTitles(in: descriptor).contains("12/19 price histories checked"))
@@ -371,7 +371,7 @@ struct PDTOnboardingRunnerTests {
         #expect(rowTitles(in: launch.descriptor).contains("Checking Claude setup"))
         #expect(ready.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
         #expect(rowTitles(in: ready.descriptor).contains("Filling details"))
-        #expect(rowTitles(in: ready.descriptor).contains("Step 1/5: Base holdings"))
+        #expect(rowTitles(in: ready.descriptor).contains("Step 1/6: Base holdings"))
     }
 
     @Test("Launch runtime can install cached pulse after initial probing paint")
@@ -471,7 +471,7 @@ struct PDTOnboardingRunnerTests {
         #expect(ready.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
         #expect(rowTitles(in: ready.descriptor).contains("Filling details"))
         #expect(progress.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: progress.descriptor).contains("Step 5/5: Price history"))
+        #expect(rowTitles(in: progress.descriptor).contains("Step 5/6: Price history"))
         #expect(rowTitles(in: progress.descriptor).contains("12/19 price histories checked"))
         #expect(!rowTitles(in: progress.descriptor).contains("Details fill failed"))
     }
@@ -1048,10 +1048,10 @@ struct LaunchSurfaceTests {
         let descriptor = try quietFixtureDescriptor()
         let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
 
-        #expect(descriptor.statusTitle == "EUR 51,200.00 - All quiet")
+        #expect(descriptor.statusTitle == "All quiet")
         #expect(descriptor.statusVisual.filledBarCount == 0)
         #expect(!descriptor.statusVisual.isDimmed)
-        #expect(descriptor.sections.map(\.id) == ["pulse", "allocation", "income", "bigMovers", "freshness", "actions"])
+        #expect(descriptor.sections.map(\.id) == ["summary", "pulse", "allocation", "income", "bigMovers", "freshness", "actions"])
         let dataSection = try #require(descriptor.sections.first { $0.id == "freshness" })
         let prices = try #require(dataSection.rows.first { $0.id == "freshness.summary" })
         #expect(dataSection.title == "Data")
@@ -1060,11 +1060,11 @@ struct LaunchSurfaceTests {
         #expect(healthRow(in: descriptor) == nil)
         #expect(actionRow("actions.refreshNow", in: descriptor)?.role == .fetchRetry)
         #expect(actionRow("actions.openPDT", in: descriptor)?.role == .openPDT)
-        #expect(surface.status.title == "EUR 51,200.00 - All quiet")
+        #expect(surface.status.title == "All quiet")
         #expect(surface.status.menuBarTitle.isEmpty)
         #expect(surface.status.visual == descriptor.statusVisual)
         #expect(surface.status.accessibilityIdentifier == "pdtbar.status")
-        #expect(surface.sections.first { $0.id == "pulse" }?.rows.first?.title == "EUR 51,200.00 - All quiet")
+        #expect(surface.sections.first { $0.id == "pulse" }?.rows.first?.title == "All quiet")
     }
 }
 

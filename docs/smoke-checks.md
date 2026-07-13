@@ -151,6 +151,25 @@ identifier copy action resolves to the expected sanitized identifier payload
 without launching the app or touching the user's pasteboard; the smoke reads
 back from an isolated named pasteboard.
 
+Portfolio summary real-menu proof:
+
+```bash
+swift build --product pdtbar
+swift run pdtbar-smoke portfolio-summary-proof --peekaboo /opt/homebrew/bin/peekaboo
+```
+
+This launches freshly built fixture-mode PDTBar with isolated state, opens the
+actual menu through Accessibility, verifies the Summary selectors precede the
+portfolio overview, and requires a visible PNG screenshot. Fixture values are
+synthetic; no live portfolio values enter the artifact. Missing Accessibility,
+Screen Recording, or Peekaboo permission is reported instead of substituting a
+generated image. PDTBar's supported macOS menu is fixed-width and has no
+orientation-specific presentation. For a supported whole-UI larger-scale proof,
+select **System Settings → Displays → Larger Text**, run the same command, then
+restore the prior display setting. The AX evidence records the active logical and
+pixel display dimensions. Layout tests also cover narrower widths and larger
+system-font metrics while preserving the two-column grid.
+
 Manual Claude `-p` PDT reachability smoke:
 
 ```bash

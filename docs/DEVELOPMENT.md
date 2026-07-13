@@ -106,6 +106,7 @@ swift run pdtbar-smoke scripted-login-handoff
 swift run pdtbar-smoke scripted-setup-retry
 swift run pdtbar-smoke scripted-pulse-mark-read
 swift run pdtbar-smoke copy-holding-identifier-action
+swift run pdtbar-smoke portfolio-summary-proof --peekaboo /opt/homebrew/bin/peekaboo
 swift run pdtbar-smoke scripted-first-fetch
 swift run pdtbar-smoke scripted-returning-launch
 ```

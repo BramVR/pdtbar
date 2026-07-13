@@ -9,6 +9,53 @@ import PDTBarCore
 // 240-second price-history budget.
 @Suite("Background detail refresh", .serialized)
 struct BackgroundDetailRefreshTests {
+    @Test("Background refresh sources total return and calculates CAGR from its explicit period")
+    func backgroundRefreshBuildsPortfolioPerformanceSummary() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-performance-summary-test")
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let connector = ScriptedPDTMCPConnector(
+            availableTools: Set(PDTReadTools.requiredV1 + PDTReadTools.performance),
+            responses: try detailRefreshResponses()
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        #expect(result.model.portfolioPerformance.totalPercentageIncrease == 0.21)
+        #expect(result.model.portfolioPerformance.cagr != nil)
+        #expect(connector.calls.contains("pdt-get-portfolio-performance"))
+        #expect(connector.calls.contains("pdt-get-portfolio-gains"))
+    }
+
+    @Test("Missing optional performance tool does not block established detail refresh")
+    func missingPerformanceToolDoesNotDegradeRefresh() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-performance-unavailable-test")
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        var responses = try detailRefreshResponses()
+        responses.removeValue(forKey: "pdt-get-portfolio-performance")
+        let connector = ScriptedPDTMCPConnector(
+            availableTools: Set(PDTReadTools.requiredV1 + PDTReadTools.performance),
+            responses: responses
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        #expect(result.outcome == .completed)
+        #expect(result.model.portfolioPerformance == PortfolioPerformanceSummary())
+        #expect(connector.calls.contains("pdt-get-portfolio-distributions"))
+        #expect(connector.calls.contains("pdt-list-symbol-prices"))
+    }
+
+
     @Test("Default price-history budget covers Claude CLI batches")
     func defaultPriceHistoryBudgetCoversClaudeCLIBatches() {
         let defaults = PDTBackgroundDetailRefreshOptions()
@@ -1145,6 +1192,12 @@ private func detailRefreshResponses(
             }
     """ : ""
     var responses: [String: Data] = [
+        "pdt-get-portfolio-performance": try mcpContent("""
+        { "oldestPortfolioDate": "2024-03-29", "latestPortfolioDate": "2026-03-29" }
+        """),
+        "pdt-get-portfolio-gains?date_from=2024-03-29&date_to=2026-03-29": try mcpContent("""
+        { "totalGains": { "value": "84.00", "currency": "EUR" }, "totalGainsPercentage": 0.21 }
+        """),
         "pdt-get-portfolio-holdings": try mcpContent("""
         {
           "holdings": [

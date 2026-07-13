@@ -28,6 +28,7 @@ public struct PDTSnapshotNormalizationInput: Equatable {
     public var calendarEvents: [PDTCalendarEventInput]
     public var dividends: [PDTDividendInput]
     public var priceRows: [PDTPriceInput]
+    public var performance: PortfolioPerformanceSummary?
     public var latestCompleteDetailFillAsOf: String?
     public var latestDetailFillOutcome: PDTBackgroundDetailRefreshOutcome?
 
@@ -42,6 +43,7 @@ public struct PDTSnapshotNormalizationInput: Equatable {
         calendarEvents: [PDTCalendarEventInput] = [],
         dividends: [PDTDividendInput] = [],
         priceRows: [PDTPriceInput] = [],
+        performance: PortfolioPerformanceSummary? = nil,
         latestCompleteDetailFillAsOf: String? = nil,
         latestDetailFillOutcome: PDTBackgroundDetailRefreshOutcome? = nil
     ) {
@@ -55,6 +57,7 @@ public struct PDTSnapshotNormalizationInput: Equatable {
         self.calendarEvents = calendarEvents
         self.dividends = dividends
         self.priceRows = priceRows
+        self.performance = performance
         self.latestCompleteDetailFillAsOf = latestCompleteDetailFillAsOf
         self.latestDetailFillOutcome = latestDetailFillOutcome
     }
@@ -93,6 +96,7 @@ public enum PDTSnapshotNormalizer {
             incomeEvents: optionalDetails.incomeEvents,
             dividendRowCount: optionalDetails.dividendRowCount,
             priceSeries: optionalDetails.priceSeries,
+            performance: input.performance,
             latestCompleteDetailFillAsOf: input.latestCompleteDetailFillAsOf,
             latestDetailFillOutcome: input.latestDetailFillOutcome
         )

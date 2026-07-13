@@ -64,6 +64,8 @@ do {
         report = try peekabooSmoke(arguments: Array(arguments.dropFirst()))
     case "real-user-pulse":
         report = try realUserPulseSmoke(arguments: Array(arguments.dropFirst()))
+    case "portfolio-summary-proof":
+        report = try portfolioSummaryProof(arguments: Array(arguments.dropFirst()))
     case "fixture-proof":
         report = try fixtureProof(arguments: Array(arguments.dropFirst()))
     case "menu-polish-proof":
@@ -94,6 +96,7 @@ do {
       pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]
       pdtbar-smoke peekaboo [--peekaboo <path>] [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>]
       pdtbar-smoke real-user-pulse [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
+      pdtbar-smoke portfolio-summary-proof [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
       pdtbar-smoke fixture-proof [--fixture <path>] [--output <path>]
       pdtbar-smoke menu-polish-proof [--output <path>]
 
@@ -1953,7 +1956,7 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
                 || statusText.contains(refreshingSurface.status.title)
             backgroundProgressVisible = staleMenuVisible
                 && snapshot.texts.contains { $0.hasPrefix("Filling details") }
-                && snapshot.texts.contains("Step 1/5: Base holdings")
+                && snapshot.texts.contains("Step 1/6: Base holdings")
                 && !snapshot.texts.contains("Details fill failed")
             stalePulseVisible = backgroundProgressVisible
                 || staleMenuVisible
@@ -2595,7 +2598,10 @@ private func peekabooSmoke(arguments: [String]) throws -> SmokeReport {
     )
 }
 
-private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
+private func realUserPulseSmoke(
+    arguments: [String],
+    captureDetailScreenshots: Bool = true
+) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
     guard AXIsProcessTrusted() else {
         return SmokeReport(
@@ -2637,7 +2643,9 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
     let process = Process()
     process.executableURL = app
     process.arguments = ["--fixture", fixture.path, "--snapshot-dir", snapshotDirectory.path]
-    process.environment = ProcessInfo.processInfo.environment.merging(["PDTBAR_FIXTURE_MODE": "1"]) { _, new in new }
+    process.environment = ProcessInfo.processInfo.environment.merging([
+        "PDTBAR_FIXTURE_MODE": "1",
+    ]) { _, new in new }
     try process.run()
     defer {
         if process.isRunning {
@@ -2702,32 +2710,42 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
     }
 
     movePointerToNeutralMenuArea(in: menuSnapshot)
-    let screenshot = try? captureRealUserMenuScreenshot(
+    let screenshot = (try? captureNativeMenuScreenshot(
+        name: "pdtbar-real-user-pulse",
+        snapshot: menuSnapshot,
+        expectedMenuIdentifiers: expectedMenuIdentifiers,
+        artifacts: artifacts
+    )) ?? (try? captureRealUserMenuScreenshot(
+        name: "pdtbar-real-user-pulse",
         snapshot: menuSnapshot,
         expectedMenuIdentifiers: expectedMenuIdentifiers,
         artifacts: artifacts,
         peekaboo: screenshotPeekaboo
-    )
-    let allocationScreenshot = try? captureAllocationDetailScreenshot(
-        snapshot: menuSnapshot,
+    )) ?? captureFullScreenScreenshot(
+        name: "pdtbar-real-user-pulse-screen-fallback",
         artifacts: artifacts,
         peekaboo: screenshotPeekaboo
     )
-    let pricesScreenshot = try? capturePricesDetailScreenshot(
+    let allocationScreenshot = captureDetailScreenshots ? try? captureAllocationDetailScreenshot(
         snapshot: menuSnapshot,
         artifacts: artifacts,
         peekaboo: screenshotPeekaboo
-    )
-    let attentionScreenshot = try? captureAttentionExplanationScreenshot(
+    ) : nil
+    let pricesScreenshot = captureDetailScreenshots ? try? capturePricesDetailScreenshot(
         snapshot: menuSnapshot,
         artifacts: artifacts,
         peekaboo: screenshotPeekaboo
-    )
-    let dataHealthScreenshot = try? captureDataHealthDetailScreenshot(
+    ) : nil
+    let attentionScreenshot = captureDetailScreenshots ? try? captureAttentionExplanationScreenshot(
         snapshot: menuSnapshot,
         artifacts: artifacts,
         peekaboo: screenshotPeekaboo
-    )
+    ) : nil
+    let dataHealthScreenshot = captureDetailScreenshots ? try? captureDataHealthDetailScreenshot(
+        snapshot: menuSnapshot,
+        artifacts: artifacts,
+        peekaboo: screenshotPeekaboo
+    ) : nil
     let priorDetail = expectedScenario.seededPrior.map { "; seeded prior snapshot \($0.asOf)" } ?? ""
     let screenshotDetail = screenshot == nil ? "" : "; captured menu screenshot"
     let allocationScreenshotDetail = allocationScreenshot == nil ? "" : "; captured allocation detail screenshot"
@@ -2756,6 +2774,24 @@ private func realUserPulseSmoke(arguments: [String]) throws -> SmokeReport {
         detail: "launched fixture-mode app with isolated state\(priorDetail), opened menu-bar pulse through \(openedMenu.successfulAttempt ?? "Accessibility"), verified status plus pulse/allocation/income/big-mover/Data selectors for \(fixture.lastPathComponent)\(screenshotDetail)\(allocationScreenshotDetail)\(pricesScreenshotDetail)\(attentionScreenshotDetail)\(dataHealthScreenshotDetail)",
         artifacts: reportArtifacts
     )
+}
+
+private func portfolioSummaryProof(arguments: [String]) throws -> SmokeReport {
+    var report = try realUserPulseSmoke(arguments: arguments, captureDetailScreenshots: false)
+    report.name = "portfolio-summary-proof"
+    guard report.status == SmokeStatus.passed else {
+        return report
+    }
+    let hasActualMenuScreenshot = report.artifacts.contains {
+        $0.hasSuffix("pdtbar-real-user-pulse-menu.png")
+    }
+    guard hasActualMenuScreenshot else {
+        report.status = SmokeStatus.failed
+        report.detail = "summary selectors were visible through Accessibility, but actual menu screenshot capture was unavailable"
+        return report
+    }
+    report.detail = "fresh fixture app rendered the accessible two-column Summary grid above Portfolio in an actual menu screenshot"
+    return report
 }
 
 private func fixtureProof(arguments: [String]) throws -> SmokeReport {
@@ -2828,7 +2864,7 @@ private struct PulseTarget {
 
 private func requiredPulseMenuTargets(in surface: MenuBarSurface) -> [PulseTarget] {
     var targets: [PulseTarget] = []
-    let requiredSectionIDs = ["pulse", "allocation", "income", "bigMovers", "freshness"]
+    let requiredSectionIDs = ["summary", "pulse", "allocation", "income", "bigMovers", "freshness"]
     for sectionID in requiredSectionIDs {
         guard let section = surface.sections.first(where: { $0.id == sectionID }) else {
             targets.append(PulseTarget(accessibilityIdentifier: "missing.section.\(sectionID)", title: sectionID))
@@ -2888,10 +2924,19 @@ private struct OpenMenuResult {
 private struct AccessibilityEvidence: Codable {
     var statusIdentifier: String
     var statusText: [String]
+    var displayMode: DisplayModeEvidence?
     var expected: [PulseTargetEvidence]
     var observedIdentifiers: [String]
     var observedFramesByIdentifier: [String: AccessibilityFrame]
     var observedTexts: [String]
+}
+
+private struct DisplayModeEvidence: Codable {
+    var logicalWidth: Int
+    var logicalHeight: Int
+    var pixelWidth: Int
+    var pixelHeight: Int
+    var refreshRate: Double
 }
 
 private struct LivePDTPulseProof: Codable {
@@ -3329,14 +3374,45 @@ private func accessibilitySnapshot(in root: AXUIElement) -> AccessibilitySnapsho
     return snapshot
 }
 
+private func captureNativeMenuScreenshot(
+    name: String,
+    snapshot: AccessibilitySnapshot,
+    expectedMenuIdentifiers: Set<String>,
+    artifacts: URL
+) throws -> URL? {
+    guard let menuBounds = menuFrameBounds(snapshot: snapshot, expectedMenuIdentifiers: expectedMenuIdentifiers)
+        ?? statusMenuFallbackBounds(snapshot: snapshot)
+    else {
+        return nil
+    }
+    let bounds = menuBounds.insetBy(dx: 2, dy: 2).integral
+    let screenshot = artifacts.appending(path: "\(name)-menu.png")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    _ = try run(
+        URL(fileURLWithPath: "/usr/sbin/screencapture"),
+        arguments: [
+            "-x",
+            "-R\(Int(bounds.minX)),\(Int(bounds.minY)),\(Int(bounds.width)),\(Int(bounds.height))",
+            screenshot.path,
+        ],
+        timeout: 10
+    )
+    guard imageHasVisiblePixels(screenshot) else {
+        try? FileManager.default.removeItem(at: screenshot)
+        return nil
+    }
+    return screenshot
+}
+
 private func captureRealUserMenuScreenshot(
+    name: String,
     snapshot: AccessibilitySnapshot,
     expectedMenuIdentifiers: Set<String>,
     artifacts: URL,
     peekaboo: URL?
 ) throws -> URL? {
     try captureMenuScreenshot(
-        name: "pdtbar-real-user-pulse",
+        name: name,
         snapshot: snapshot,
         expectedMenuIdentifiers: expectedMenuIdentifiers,
         artifacts: artifacts,
@@ -3576,23 +3652,36 @@ private func captureMenuScreenshot(
 }
 
 private func captureFullScreenScreenshot(name: String, artifacts: URL, peekaboo: URL?) -> URL? {
-    guard let peekaboo else {
-        return nil
-    }
     let screenshot = artifacts.appending(path: "\(name).png")
     do {
         try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-        _ = try run(
-            peekaboo,
-            arguments: [
-                "image",
-                "--mode", "screen",
-                "--path", screenshot.path,
-                "--json",
-                "--no-remote",
-            ],
-            timeout: 20
-        )
+        if let peekaboo {
+            do {
+                _ = try run(
+                    peekaboo,
+                    arguments: [
+                        "image",
+                        "--mode", "screen",
+                        "--path", screenshot.path,
+                        "--json",
+                        "--no-remote",
+                    ],
+                    timeout: 20
+                )
+            } catch {
+                _ = try run(
+                    URL(fileURLWithPath: "/usr/sbin/screencapture"),
+                    arguments: ["-x", screenshot.path],
+                    timeout: 10
+                )
+            }
+        } else {
+            _ = try run(
+                URL(fileURLWithPath: "/usr/sbin/screencapture"),
+                arguments: ["-x", screenshot.path],
+                timeout: 10
+            )
+        }
         guard imageHasVisiblePixels(screenshot) else {
             try? FileManager.default.removeItem(at: screenshot)
             return nil
@@ -3969,6 +4058,15 @@ private func writeAccessibilityEvidence(
     let evidence = AccessibilityEvidence(
         statusIdentifier: statusIdentifier,
         statusText: statusText.sorted(),
+        displayMode: CGDisplayCopyDisplayMode(CGMainDisplayID()).map {
+            DisplayModeEvidence(
+                logicalWidth: $0.width,
+                logicalHeight: $0.height,
+                pixelWidth: $0.pixelWidth,
+                pixelHeight: $0.pixelHeight,
+                refreshRate: $0.refreshRate
+            )
+        },
         expected: expected.map {
             PulseTargetEvidence(
                 accessibilityIdentifier: $0.accessibilityIdentifier,

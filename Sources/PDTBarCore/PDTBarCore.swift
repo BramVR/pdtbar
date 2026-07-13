@@ -19,6 +19,7 @@ public struct PortfolioPulseModel: Codable, Equatable {
     public var attentionItems: [AttentionItem]
     public var rankedAttentionItems: [AttentionItem]
     public var portfolioGlance: PortfolioGlanceContext
+    public var portfolioPerformance: PortfolioPerformanceSummary
     public var facetSnapshots: FacetSnapshots
     public var supportingDataSlots: [SupportingDataSlot]
 
@@ -29,6 +30,7 @@ public struct PortfolioPulseModel: Codable, Equatable {
         allQuietSignal: AllQuietSignal,
         rankedAttentionItems: [AttentionItem],
         portfolioGlance: PortfolioGlanceContext,
+        portfolioPerformance: PortfolioPerformanceSummary = PortfolioPerformanceSummary(),
         facetSnapshots: FacetSnapshots,
         supportingDataSlots: [SupportingDataSlot]
     ) {
@@ -39,6 +41,7 @@ public struct PortfolioPulseModel: Codable, Equatable {
         self.attentionItems = rankedAttentionItems
         self.rankedAttentionItems = rankedAttentionItems
         self.portfolioGlance = portfolioGlance
+        self.portfolioPerformance = portfolioPerformance
         self.facetSnapshots = facetSnapshots
         self.supportingDataSlots = supportingDataSlots
     }
@@ -63,6 +66,7 @@ public struct PortfolioPulseModel: Codable, Equatable {
                 openHoldingCount: facetSnapshots.allocation.openHoldingCount,
                 worstPriceAsOf: facetSnapshots.freshness.worstPriceAsOf
             ),
+            portfolioPerformance: PortfolioPerformanceSummary(),
             facetSnapshots: facetSnapshots,
             supportingDataSlots: supportingDataSlots
         )
@@ -76,6 +80,7 @@ public struct PortfolioPulseModel: Codable, Equatable {
         case attentionItems
         case rankedAttentionItems
         case portfolioGlance
+        case portfolioPerformance
         case facetSnapshots
         case supportingDataSlots
     }
@@ -98,6 +103,8 @@ public struct PortfolioPulseModel: Codable, Equatable {
                 openHoldingCount: facetSnapshots.allocation.openHoldingCount,
                 worstPriceAsOf: facetSnapshots.freshness.worstPriceAsOf
             )
+        portfolioPerformance = try container.decodeIfPresent(PortfolioPerformanceSummary.self, forKey: .portfolioPerformance)
+            ?? PortfolioPerformanceSummary()
     }
 }
 
@@ -2467,6 +2474,7 @@ public enum MenuRowRole: String, Codable, Equatable {
     case pulseAttention
     case pulseAttentionExpansion
     case pulseMarkRead
+    case portfolioSummary
     case portfolioOverview
     case portfolioOverviewChart
     case portfolioOverviewDetails
@@ -2612,6 +2620,22 @@ public struct MenuRowBarChart: Codable, Equatable {
     }
 }
 
+public struct MenuRowPortfolioSummary: Codable, Equatable {
+    public var totalValue: String
+    public var cagr: String
+    public var totalIncrease: String
+
+    public init(totalValue: String, cagr: String, totalIncrease: String) {
+        self.totalValue = totalValue
+        self.cagr = cagr
+        self.totalIncrease = totalIncrease
+    }
+
+    public var accessibilityLabel: String {
+        "Total portfolio value, \(totalValue); CAGR, \(cagr); Total increase, \(totalIncrease)"
+    }
+}
+
 public struct MenuRow: Codable, Equatable {
     public var id: String
     public var role: MenuRowRole
@@ -2620,6 +2644,7 @@ public struct MenuRow: Codable, Equatable {
     public var title: String
     public var detail: String?
     public var barChart: MenuRowBarChart?
+    public var portfolioSummary: MenuRowPortfolioSummary?
     public var actionPayload: String?
     public var children: [MenuRow]
 
@@ -2631,6 +2656,7 @@ public struct MenuRow: Codable, Equatable {
         title: String,
         detail: String? = nil,
         barChart: MenuRowBarChart? = nil,
+        portfolioSummary: MenuRowPortfolioSummary? = nil,
         actionPayload: String? = nil,
         children: [MenuRow] = []
     ) {
@@ -2641,6 +2667,7 @@ public struct MenuRow: Codable, Equatable {
         self.title = title
         self.detail = detail
         self.barChart = barChart
+        self.portfolioSummary = portfolioSummary
         self.actionPayload = actionPayload
         self.children = children
     }
@@ -2653,6 +2680,7 @@ public struct MenuRow: Codable, Equatable {
         case title
         case detail
         case barChart
+        case portfolioSummary
         case actionPayload
         case children
     }
@@ -2668,6 +2696,7 @@ public struct MenuRow: Codable, Equatable {
         title = try container.decode(String.self, forKey: .title)
         detail = try container.decodeIfPresent(String.self, forKey: .detail)
         barChart = try container.decodeIfPresent(MenuRowBarChart.self, forKey: .barChart)
+        portfolioSummary = try container.decodeIfPresent(MenuRowPortfolioSummary.self, forKey: .portfolioSummary)
         actionPayload = try container.decodeIfPresent(String.self, forKey: .actionPayload)
         children = try container.decodeIfPresent([MenuRow].self, forKey: .children) ?? []
     }
@@ -2737,6 +2766,7 @@ public struct MenuBarRowSurface: Codable, Equatable {
     public var accessibilityIdentifier: String
     public var actionTarget: MenuRowActionTarget?
     public var barChart: MenuRowBarChart?
+    public var portfolioSummary: MenuRowPortfolioSummary?
     public var actionPayload: String?
     public var children: [MenuBarRowSurface]
 
@@ -2748,6 +2778,7 @@ public struct MenuBarRowSurface: Codable, Equatable {
         accessibilityIdentifier: String,
         actionTarget: MenuRowActionTarget? = nil,
         barChart: MenuRowBarChart? = nil,
+        portfolioSummary: MenuRowPortfolioSummary? = nil,
         actionPayload: String? = nil,
         children: [MenuBarRowSurface] = []
     ) {
@@ -2758,6 +2789,7 @@ public struct MenuBarRowSurface: Codable, Equatable {
         self.accessibilityIdentifier = accessibilityIdentifier
         self.actionTarget = actionTarget
         self.barChart = barChart
+        self.portfolioSummary = portfolioSummary
         self.actionPayload = actionPayload
         self.children = children
     }
@@ -2979,6 +3011,7 @@ public enum BackgroundDetailRefreshPhase: String, Codable, Equatable, Sendable, 
     case xRay
     case income
     case priceHistory
+    case performance
 
     public var stepIndex: Int {
         switch self {
@@ -2992,6 +3025,8 @@ public enum BackgroundDetailRefreshPhase: String, Codable, Equatable, Sendable, 
             4
         case .priceHistory:
             5
+        case .performance:
+            6
         }
     }
 
@@ -3007,6 +3042,8 @@ public enum BackgroundDetailRefreshPhase: String, Codable, Equatable, Sendable, 
             "Income"
         case .priceHistory:
             "Price history"
+        case .performance:
+            "Performance"
         }
     }
 }
@@ -4340,6 +4377,7 @@ public enum MenuBarSurfaceRenderer {
             accessibilityIdentifier: row.accessibilityIdentifier,
             actionTarget: row.actionTarget,
             barChart: row.barChart,
+            portfolioSummary: row.portfolioSummary,
             actionPayload: row.actionPayload,
             children: row.children.map(renderRow)
         )
@@ -4365,11 +4403,6 @@ public enum MenuDescriptorRenderer {
                     title: model.allQuietSignal.title,
                     detail: model.allQuietSignal.detail,
                     children: [
-                        MenuRow(
-                            id: "pulse.quiet.value",
-                            title: "Value",
-                            detail: display(model.portfolioGlance.totalValue)
-                        ),
                         MenuRow(
                             id: "pulse.quiet.holdings",
                             title: "Open holdings",
@@ -4405,7 +4438,7 @@ public enum MenuDescriptorRenderer {
         let statusSignal = model.allQuiet
             ? model.allQuietSignal.title
             : model.rankedAttentionItems.first?.title ?? "Attention"
-        let statusTitle = "\(display(model.allQuietSignal.totalValue)) - \(statusSignal)"
+        let statusTitle = statusSignal
         let statusVisual = statusVisual(for: model)
 
         return MenuDescriptor(
@@ -4413,6 +4446,11 @@ public enum MenuDescriptorRenderer {
             statusBadge: model.rankedAttentionItems.isEmpty ? nil : "\(model.rankedAttentionItems.count)",
             statusVisual: statusVisual,
             sections: [
+                MenuSection(
+                    id: "summary",
+                    title: "Summary",
+                    rows: [portfolioSummaryRow(for: model)]
+                ),
                 MenuSection(
                     id: "pulse",
                     title: "Pulse",
@@ -4460,6 +4498,29 @@ public enum MenuDescriptorRenderer {
                 topLevelActionsSection(refreshState: .available),
             ]
         )
+    }
+
+    private static func portfolioSummaryRow(for model: PortfolioPulseModel) -> MenuRow {
+        MenuRow(
+            id: "summary.performance",
+            role: .portfolioSummary,
+            title: "Portfolio summary",
+            portfolioSummary: MenuRowPortfolioSummary(
+                totalValue: display(model.portfolioGlance.totalValue),
+                cagr: portfolioSummaryPercent(model.portfolioPerformance.cagr),
+                totalIncrease: portfolioSummaryPercent(model.portfolioPerformance.totalPercentageIncrease)
+            )
+        )
+    }
+
+    private static func portfolioSummaryPercent(_ value: Double?) -> String {
+        guard let value = finite(value) else {
+            return "Unavailable"
+        }
+        if value > 0 {
+            return "+\(percent(value))"
+        }
+        return percent(value)
     }
 
     private static func bigMoverTitle(for move: PriceMoveSummary?, allocation: AllocationSnapshot) -> String {
@@ -5255,6 +5316,7 @@ public enum PressureEngine {
                 worstPriceAsOf: freshness.worstPriceAsOf,
                 priorSnapshotAsOf: priorSnapshot?.asOf
             ),
+            portfolioPerformance: snapshot.performance ?? PortfolioPerformanceSummary(),
             facetSnapshots: FacetSnapshots(
                 allocation: AllocationSnapshot(
                     totalValue: totalValue,
@@ -6221,7 +6283,11 @@ public enum PDTReadTools {
         "pdt-list-symbol-prices",
         "pdt-get-symbol-quote",
     ]
-    public static let allowedV1 = requiredV1 + ["pdt-get-symbol"]
+    public static let performance = [
+        "pdt-get-portfolio-performance",
+        "pdt-get-portfolio-gains",
+    ]
+    public static let allowedV1 = requiredV1 + ["pdt-get-symbol"] + performance
 
     public static func missingRequiredV1Tools(in availableTools: Set<String>) -> [String] {
         requiredV1.filter { !availableTools.contains($0) }
@@ -6821,7 +6887,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             "pdt-get-symbol-quote",
         ]
         let availableTools = try availableReadTools(
-            required: Set(requiredTools),
+            required: Set(requiredTools + PDTReadTools.performance),
             progress: progress
         )
         let missing = requiredTools.filter { !availableTools.contains($0) }
@@ -6863,20 +6929,22 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             }
         }
 
-        do {
-            progress(BackgroundDetailRefreshProgress(phase: .allocation))
-            let distributions: LiveDistributionsEnvelope = try callDecodedWithRetry(
-                "pdt-get-portfolio-distributions",
-                phase: .allocation,
-                arguments: [:],
-                progress: progress
-            )
-            let normalized = PDTOptionalDetailNormalizer.normalizeDistributions(distributions.optionalDetailInput)
-            snapshot.sectors = normalized.sectors
-            snapshot.assetTypes = normalized.assetTypes
-            _ = try snapshotStore.commitCurrentSnapshot(snapshot)
-        } catch {
-            recordOptionalPhaseFailure(error, tool: "pdt-get-portfolio-distributions", phase: .allocation)
+        if !skipRemainingPhasesForUnavailableSetup {
+            do {
+                progress(BackgroundDetailRefreshProgress(phase: .allocation))
+                let distributions: LiveDistributionsEnvelope = try callDecodedWithRetry(
+                    "pdt-get-portfolio-distributions",
+                    phase: .allocation,
+                    arguments: [:],
+                    progress: progress
+                )
+                let normalized = PDTOptionalDetailNormalizer.normalizeDistributions(distributions.optionalDetailInput)
+                snapshot.sectors = normalized.sectors
+                snapshot.assetTypes = normalized.assetTypes
+                _ = try snapshotStore.commitCurrentSnapshot(snapshot)
+            } catch {
+                recordOptionalPhaseFailure(error, tool: "pdt-get-portfolio-distributions", phase: .allocation)
+            }
         }
 
         if !skipRemainingPhasesForUnavailableSetup {
@@ -6933,6 +7001,23 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 return $0.date < $1.date
             }
             diagnostics.append(contentsOf: priceHistory.diagnostics)
+        }
+        if !skipRemainingPhasesForUnavailableSetup,
+           Set(PDTReadTools.performance).isSubset(of: availableTools)
+        {
+            do {
+                progress(BackgroundDetailRefreshProgress(phase: .performance))
+                snapshot.performance = try performanceSummary(progress: progress)
+                _ = try snapshotStore.commitCurrentSnapshot(snapshot)
+            } catch {
+                // Deferred MCP schemas cannot be enumerated reliably. A
+                // missing optional performance tool stays unavailable after
+                // all established detail phases have completed.
+                snapshot.performance = nil
+                progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Performance unavailable"))
+            }
+        } else {
+            progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Performance unavailable"))
         }
         let outcome: PDTBackgroundDetailRefreshOutcome = diagnostics.isEmpty ? .completed : .degraded
         let pulse = try PressureRunner.refreshedPulse(
@@ -7004,7 +7089,34 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         snapshot.incomeEvents = priorSnapshot.incomeEvents
         snapshot.dividendRowCount = priorSnapshot.dividendRowCount
         snapshot.priceSeries = priorSnapshot.priceSeries.filter { currentQuoteIDs.contains($0.quoteId) }
+        // Performance is period-bound to the latest report date. Do not carry
+        // an older period forward as if it described the refreshed portfolio.
         snapshot.latestCompleteDetailFillAsOf = priorSnapshot.latestCompleteDetailFillAsOf
+    }
+
+    private func performanceSummary(
+        progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
+    ) throws -> PortfolioPerformanceSummary {
+        progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Calling pdt-get-portfolio-performance"))
+        let performance: LivePortfolioPerformanceEnvelope = try callDecoded(
+            "pdt-get-portfolio-performance",
+            arguments: [:]
+        )
+        guard let periodStart = performance.oldestPortfolioDate,
+              let periodEnd = performance.latestPortfolioDate
+        else {
+            return PortfolioPerformanceSummary()
+        }
+        progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Calling pdt-get-portfolio-gains"))
+        let gains: LivePortfolioGainsEnvelope = try callDecoded(
+            "pdt-get-portfolio-gains",
+            arguments: ["date_from": periodStart, "date_to": periodEnd]
+        )
+        return PortfolioPerformanceSummary.build(
+            totalGainPercentage: gains.totalGainsPercentage,
+            periodStart: periodStart,
+            periodEnd: periodEnd
+        )
     }
 
     private func priceSeriesWithPriorFallback(
@@ -8230,6 +8342,7 @@ public struct PortfolioSnapshot: Codable, Equatable {
     public var incomeEvents: [IncomeEventSummary]
     public var dividendRowCount: Int
     public var priceSeries: [PricePoint]
+    public var performance: PortfolioPerformanceSummary?
     public var latestCompleteDetailFillAsOf: String?
     public var latestDetailFillOutcome: PDTBackgroundDetailRefreshOutcome?
 
@@ -8243,6 +8356,7 @@ public struct PortfolioSnapshot: Codable, Equatable {
         incomeEvents: [IncomeEventSummary],
         dividendRowCount: Int,
         priceSeries: [PricePoint],
+        performance: PortfolioPerformanceSummary? = nil,
         latestCompleteDetailFillAsOf: String? = nil,
         latestDetailFillOutcome: PDTBackgroundDetailRefreshOutcome? = nil
     ) {
@@ -8255,6 +8369,7 @@ public struct PortfolioSnapshot: Codable, Equatable {
         self.incomeEvents = incomeEvents
         self.dividendRowCount = dividendRowCount
         self.priceSeries = priceSeries
+        self.performance = performance
         self.latestCompleteDetailFillAsOf = latestCompleteDetailFillAsOf
         self.latestDetailFillOutcome = latestDetailFillOutcome
     }
@@ -8376,7 +8491,12 @@ public struct PDTFixtureDataSource: PortfolioDataSource, PortfolioPriorSnapshotD
                 xRayHoldings: payload.listXRayHoldings?.items.map(\.optionalDetailInput),
                 calendarEvents: payload.listCalendarEvents?.data.map(\.optionalDetailInput) ?? [],
                 dividends: payload.listDividends?.data.map(\.optionalDetailInput) ?? [],
-                priceRows: payload.listSymbolPrices?.data.map(\.optionalDetailInput) ?? []
+                priceRows: payload.listSymbolPrices?.data.map(\.optionalDetailInput) ?? [],
+                performance: PortfolioPerformanceSummary.build(
+                    totalGainPercentage: payload.getPortfolioGains?.totalGainsPercentage,
+                    periodStart: payload.getPortfolioPerformance?.oldestPortfolioDate,
+                    periodEnd: payload.getPortfolioPerformance?.latestPortfolioDate
+                )
             )
         )
     }
@@ -8404,6 +8524,8 @@ private struct PDTFixturePayload: Decodable {
     var listSymbolPrices: PricesEnvelope?
     var getSymbolQuote: SymbolQuoteEnvelope?
     var getSymbolQuotes: [SymbolQuoteEnvelope]?
+    var getPortfolioPerformance: LivePortfolioPerformanceEnvelope?
+    var getPortfolioGains: LivePortfolioGainsEnvelope?
 
     var symbolQuotes: [SymbolQuoteEnvelope] {
         (getSymbolQuote.map { [$0] } ?? []) + (getSymbolQuotes ?? [])
@@ -8428,7 +8550,18 @@ private struct PDTFixturePayload: Decodable {
         case listSymbolPrices
         case getSymbolQuote
         case getSymbolQuotes
+        case getPortfolioPerformance
+        case getPortfolioGains
     }
+}
+
+private struct LivePortfolioPerformanceEnvelope: Decodable {
+    var oldestPortfolioDate: String?
+    var latestPortfolioDate: String?
+}
+
+private struct LivePortfolioGainsEnvelope: Decodable {
+    var totalGainsPercentage: Double?
 }
 
 private struct LiveHoldingsEnvelope: Decodable {

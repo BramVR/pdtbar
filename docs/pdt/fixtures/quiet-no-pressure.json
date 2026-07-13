@@ -6,6 +6,8 @@
     "sourceTools": [
       "pdt-get-portfolio-holdings",
       "pdt-get-portfolio-distributions",
+      "pdt-get-portfolio-performance",
+      "pdt-get-portfolio-gains",
       "pdt-list-calendar-events",
       "pdt-list-symbol-prices"
     ],
@@ -223,6 +225,16 @@
       { "categoryName": "etf", "totalValue": { "value": "5500.00", "currency": "EUR" }, "percentage": 10.7421875 },
       { "categoryName": "cash", "totalValue": { "value": "1895.00", "currency": "EUR" }, "percentage": 3.701171875 }
     ]
+  },
+
+  "getPortfolioPerformance": {
+    "oldestPortfolioDate": "2024-06-22",
+    "latestPortfolioDate": "2026-06-22"
+  },
+
+  "getPortfolioGains": {
+    "totalGains": { "value": "10752.00", "currency": "EUR" },
+    "totalGainsPercentage": 0.21
   },
 
   "listCalendarEvents": {
