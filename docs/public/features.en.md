@@ -89,6 +89,7 @@ The `Actions` section keeps daily use short.
 
 - `Refresh now` asks PDTBar to fetch fresh PDT data and fill latest details.
 - `Open PDT` opens the full Portfolio Dividend Tracker dashboard.
+- `Settings...` opens the native Settings window, where `Show portfolio values` can hide or restore displayed monetary portfolio values.
 - `Log in with Claude` appears only when Claude login is missing.
 - `Check again` retries setup after login or PDT MCP setup changes.
 
@@ -101,6 +102,8 @@ If the material fact changes later, it can surface again. For example, a concent
 ## Privacy And Limits
 
 PDTBar reads through your local Claude CLI + PDT MCP setup. It is local and read-only by default.
+
+The `Show portfolio values` setting hides monetary values in the menu, status copy, tooltips, accessibility labels, chart details, and submenus. It does not delete fetched snapshots or cached local portfolio data; turning it back on restores the displayed values from the current in-memory pulse.
 
 PDTBar does not place trades, move money, upload your portfolio to its own backend, or give financial advice. It ranks facts and changes; you decide what they mean.
 
