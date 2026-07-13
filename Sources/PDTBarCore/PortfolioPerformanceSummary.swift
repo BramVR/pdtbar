@@ -62,11 +62,7 @@ private func performanceCAGR(
 
 private func performanceDate(_ value: String?) -> Date? {
     guard let value else { return nil }
-    let formatter = DateFormatter()
-    formatter.calendar = Calendar(identifier: .gregorian)
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.timeZone = TimeZone(secondsFromGMT: 0)
-    formatter.dateFormat = "yyyy-MM-dd"
+    let formatter = dayFormatter()
     formatter.isLenient = false
     guard let date = formatter.date(from: value), formatter.string(from: date) == value else {
         return nil
