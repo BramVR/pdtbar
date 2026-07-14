@@ -1,7 +1,16 @@
 import AppKit
 import Foundation
 import Testing
-import PDTBarAppSupport
+@testable import PDTBarAppSupport
+
+private final class TrackingMenu: NSMenu {
+    private(set) var didCancelTrackingWithoutAnimation = false
+
+    override func cancelTrackingWithoutAnimation() {
+        didCancelTrackingWithoutAnimation = true
+        super.cancelTrackingWithoutAnimation()
+    }
+}
 
 @Suite("Status menu host")
 struct StatusMenuHostTests {
@@ -41,5 +50,16 @@ struct StatusMenuHostTests {
 
         #expect(menu.autoenablesItems == false)
         #expect(menu.items.isEmpty)
+    }
+
+    @MainActor
+    @Test("Window presentation dismisses the live menu without animation")
+    func windowPresentationDismissesLiveMenuWithoutAnimation() {
+        let menu = TrackingMenu()
+        let host = StatusMenuHost(menu: menu)
+
+        host.dismissWithoutAnimation()
+
+        #expect(menu.didCancelTrackingWithoutAnimation)
     }
 }

@@ -17,6 +17,15 @@ public final class StatusMenuHost {
 
     public init() {}
 
+    init(menu: NSMenu) {
+        self.menu = menu
+    }
+
+    /// Ends menu tracking before presenting a separate key window.
+    public func dismissWithoutAnimation() {
+        menu?.cancelTrackingWithoutAnimation()
+    }
+
     /// Replaces the live menu's items, creating the menu on first use.
     ///
     /// - Parameter cancelOpenMenu: dismisses the menu when it is currently
