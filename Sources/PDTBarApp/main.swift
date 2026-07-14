@@ -696,6 +696,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showSettings(_ sender: NSMenuItem) {
+        // Activating a key window while the view-backed menu is still closing
+        // can strand its allocation-chart host window on screen.
+        statusMenuHost.dismissWithoutAnimation()
         openSettingsWindow()
     }
 
