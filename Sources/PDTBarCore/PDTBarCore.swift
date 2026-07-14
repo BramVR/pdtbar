@@ -7224,9 +7224,11 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 snapshot.performance = try performanceSummary(progress: progress)
                 _ = try snapshotStore.commitCurrentSnapshot(snapshot)
             } catch {
-                // Deferred MCP schemas cannot be enumerated reliably. A
-                // missing optional performance tool stays unavailable after
-                // all established detail phases have completed.
+                recordOptionalPhaseFailure(
+                    error,
+                    tool: "pdt-get-portfolio-performance",
+                    phase: .performance
+                )
                 snapshot.performance = nil
                 progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Performance unavailable"))
             }
@@ -7311,20 +7313,23 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
     private func performanceSummary(
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) throws -> PortfolioPerformanceSummary {
-        progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Calling pdt-get-portfolio-performance"))
-        let performance: LivePortfolioPerformanceEnvelope = try callDecoded(
+        let performance: LivePortfolioPerformanceEnvelope = try callDecodedWithRetry(
             "pdt-get-portfolio-performance",
-            arguments: [:]
+            phase: .performance,
+            arguments: [:],
+            progress: progress
         )
         guard let periodStart = performance.oldestPortfolioDate,
               let periodEnd = performance.latestPortfolioDate
         else {
             return PortfolioPerformanceSummary()
         }
-        progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Calling pdt-get-portfolio-gains"))
-        let gains: LivePortfolioGainsEnvelope = try callDecoded(
+        let gainsArguments = ["date_from": periodStart, "date_to": periodEnd]
+        let gains: LivePortfolioGainsEnvelope = try callDecodedWithRetry(
             "pdt-get-portfolio-gains",
-            arguments: ["date_from": periodStart, "date_to": periodEnd]
+            phase: .performance,
+            arguments: gainsArguments,
+            progress: progress
         )
         return PortfolioPerformanceSummary.build(
             totalGainPercentage: gains.totalGainsPercentage,

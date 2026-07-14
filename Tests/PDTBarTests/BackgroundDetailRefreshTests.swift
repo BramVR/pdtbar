@@ -25,14 +25,16 @@ struct BackgroundDetailRefreshTests {
             options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
         ).refresh()
 
+        #expect(result.outcome == .completed)
         #expect(result.model.portfolioPerformance.totalPercentageIncrease == 0.21)
         #expect(result.model.portfolioPerformance.cagr != nil)
         #expect(connector.calls.contains("pdt-get-portfolio-performance"))
         #expect(connector.calls.contains("pdt-get-portfolio-gains"))
+        #expect(try store.loadLastDetailRefreshDiagnostic() == nil)
     }
 
-    @Test("Missing optional performance tool does not block established detail refresh")
-    func missingPerformanceToolDoesNotDegradeRefresh() throws {
+    @Test("Performance failure degrades refresh and persists its diagnostic")
+    func performanceFailureDegradesRefreshAndPersistsDiagnostic() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-performance-unavailable-test")
         defer { try? FileManager.default.removeItem(at: store.directory) }
         var responses = try detailRefreshResponses()
@@ -49,10 +51,66 @@ struct BackgroundDetailRefreshTests {
             options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
         ).refresh()
 
-        #expect(result.outcome == .completed)
+        #expect(result.outcome == .degraded)
         #expect(result.model.portfolioPerformance == PortfolioPerformanceSummary())
         #expect(connector.calls.contains("pdt-get-portfolio-distributions"))
         #expect(connector.calls.contains("pdt-list-symbol-prices"))
+        let diagnostic = try #require(try store.loadLastDetailRefreshDiagnostic())
+        #expect(diagnostic.toolName == "pdt-get-portfolio-performance")
+        #expect(diagnostic.phase == .performance)
+        #expect(diagnostic.attemptCount == 1)
+        #expect(diagnostic.category == .missingScriptedResponse)
+        #expect(diagnostic.argumentShape.isEmpty)
+    }
+
+    @Test("Gains failure identifies the failing performance tool and argument shape")
+    func gainsFailureIdentifiesFailingToolAndArguments() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-gains-unavailable-test")
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        var responses = try detailRefreshResponses()
+        responses.removeValue(forKey: "pdt-get-portfolio-gains?date_from=2024-03-29&date_to=2026-03-29")
+        let connector = ScriptedPDTMCPConnector(
+            availableTools: Set(PDTReadTools.requiredV1 + PDTReadTools.performance),
+            responses: responses
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        #expect(result.outcome == .degraded)
+        let diagnostic = try #require(try store.loadLastDetailRefreshDiagnostic())
+        #expect(diagnostic.toolName == "pdt-get-portfolio-gains")
+        #expect(diagnostic.phase == .performance)
+        #expect(diagnostic.category == .missingScriptedResponse)
+        #expect(diagnostic.argumentShape == ["date_from", "date_to"])
+    }
+
+    @Test("Transient performance failure retries exactly once in the detail layer")
+    func transientPerformanceFailureRetriesExactlyOnce() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-performance-retry-test")
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let connector = OneShotFailingPDTConnector(
+            responses: try detailRefreshResponses(),
+            failures: [
+                "pdt-get-portfolio-performance": .transientFailure("Claude performance call timed out"),
+            ],
+            availableTools: Set(PDTReadTools.requiredV1 + PDTReadTools.performance)
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        #expect(result.outcome == .completed)
+        #expect(connector.calls.filter { $0 == "pdt-get-portfolio-performance" }.count == 2)
+        #expect(result.diagnostics.isEmpty)
     }
 
 
@@ -1064,16 +1122,22 @@ private final class SelectiveFailingPDTConnector: PDTMCPConnector, @unchecked Se
 private final class OneShotFailingPDTConnector: PDTMCPConnector, @unchecked Sendable {
     let responses: [String: Data]
     private var failures: [String: PDTMCPConnectorError]
+    private let availableTools: Set<String>
     private let lock = NSLock()
     private(set) var calls: [String] = []
 
-    init(responses: [String: Data], failures: [String: PDTMCPConnectorError]) {
+    init(
+        responses: [String: Data],
+        failures: [String: PDTMCPConnectorError],
+        availableTools: Set<String> = Set(PDTReadTools.requiredV1)
+    ) {
         self.responses = responses
         self.failures = failures
+        self.availableTools = availableTools
     }
 
     func availableReadTools() throws -> Set<String> {
-        Set(PDTReadTools.requiredV1)
+        availableTools
     }
 
     func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
