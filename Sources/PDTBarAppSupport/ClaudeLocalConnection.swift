@@ -195,9 +195,12 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         }
         try ensureMCPToolPrefixesCached()
         let toolName = resolvedToolName(for: name)
-        let isOptionalPerformanceTool = PDTReadTools.performance.contains(name)
-        let maxAttempts = isOptionalPerformanceTool ? 1 : configuration.toolCallRetryPolicy.maxAttempts
-        let timeout = isOptionalPerformanceTool ? min(configuration.toolTimeout, 15) : configuration.toolTimeout
+        // Background performance refresh owns its retry so one transient
+        // failure cannot multiply full Claude runs across both layers.
+        let maxAttempts = PDTReadTools.performance.contains(name)
+            ? 1
+            : configuration.toolCallRetryPolicy.maxAttempts
+        let timeout = configuration.toolTimeout
         var attempts = 0
         var lastError: Error?
         repeat {

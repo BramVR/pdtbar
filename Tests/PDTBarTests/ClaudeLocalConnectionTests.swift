@@ -401,6 +401,28 @@ struct ClaudeLocalConnectionTests {
         #expect(delays.values == [2.0, 2.0])
     }
 
+    @Test("Performance reads use the configured timeout without a nested connector retry")
+    func performanceReadsUseConfiguredTimeoutWithoutNestedRetry() throws {
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: "pdt (portfoliodividendtracker.com) connected", stderr: "", exitCode: 0),
+            .init(stdout: "", stderr: "", exitCode: -1),
+        ])
+        let delays = DelayRecorder()
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(toolTimeout: 30, retryCount: 1, retryBackoffSeconds: 0.25),
+            commandRunner: runner,
+            retryDelay: { delays.append($0) }
+        )
+
+        #expect(throws: PDTMCPConnectorError.transientFailure("Claude pdt-get-portfolio-performance call timed out")) {
+            try connection.callReadTool("pdt-get-portfolio-performance", arguments: [:])
+        }
+
+        #expect(runner.requests.count == 2)
+        #expect(runner.requests.dropFirst().map(\.timeout) == [30])
+        #expect(delays.values.isEmpty)
+    }
+
     @Test("Transient nonzero exits recover after a backed-off retry")
     func transientNonzeroExitsRecoverAfterBackedOffRetry() throws {
         let runner = RecordingClaudeCommandRunner(results: [
@@ -472,6 +494,7 @@ struct ClaudeLocalConnectionTests {
     }
 
     private func configuration(
+        toolTimeout: TimeInterval = 10,
         retryCount: Int = 1,
         retryBackoffSeconds: Double = 0,
         environment: [String: String] = [:],
@@ -480,7 +503,7 @@ struct ClaudeLocalConnectionTests {
         ClaudeLocalConnectionConfiguration(
             claudePath: "claude",
             model: "opus",
-            toolTimeout: 10,
+            toolTimeout: toolTimeout,
             readinessTimeout: 10,
             toolCallRetryPolicy: ClaudeToolCallRetryPolicy(
                 retryCount: retryCount,
@@ -519,6 +542,7 @@ private final class RecordingClaudeCommandRunner: ClaudeLocalCommandRunning, @un
     struct Request: Equatable {
         var executable: String
         var arguments: [String]
+        var timeout: TimeInterval
         var environment: [String: String]
     }
 
@@ -555,7 +579,12 @@ private final class RecordingClaudeCommandRunner: ClaudeLocalCommandRunning, @un
         environment: [String: String]
     ) throws -> ClaudeLocalProcessResult {
         lock.lock()
-        recordedRequests.append(Request(executable: executable, arguments: arguments, environment: environment))
+        recordedRequests.append(Request(
+            executable: executable,
+            arguments: arguments,
+            timeout: timeout,
+            environment: environment
+        ))
         let result = queuedResults.isEmpty
             ? ClaudeLocalProcessResult(stdout: "", stderr: "", exitCode: 0)
             : queuedResults.removeFirst()
