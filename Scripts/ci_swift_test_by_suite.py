@@ -4,11 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import os
 import re
 import signal
 import subprocess
 import sys
+import tempfile
+import xml.etree.ElementTree as ET
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -56,7 +60,7 @@ def kill_process_group(pid: int, sig: int) -> None:
         pass
 
 
-def swift_test_list(swift_command: list[str]) -> list[TestSelection]:
+def swift_test_list(swift_command: list[str]) -> tuple[list[TestSelection], dict[str, int]]:
     command = [*swift_command, "test", "list"]
     try:
         result = subprocess.run(command, check=True, capture_output=True, text=True)
@@ -68,6 +72,7 @@ def swift_test_list(swift_command: list[str]) -> list[TestSelection]:
             print(error.stderr, end="" if error.stderr.endswith("\n") else "\n", file=sys.stderr, flush=True)
         raise
     selections: set[TestSelection] = set()
+    counts: Counter[str] = Counter()
     unknown: list[str] = []
     for raw_line in result.stdout.splitlines():
         line = raw_line.strip()
@@ -85,6 +90,7 @@ def swift_test_list(swift_command: list[str]) -> list[TestSelection]:
                     filter_pattern=rf"^{re.escape(module)}\..*{re.escape(test_name)}\(\)$",
                 )
             )
+            counts[line] += 1
             continue
 
         if "/" in line:
@@ -97,6 +103,7 @@ def swift_test_list(swift_command: list[str]) -> list[TestSelection]:
                         suite_name=suite,
                     )
                 )
+                counts[suite] += 1
                 continue
 
         if re.fullmatch(r"[^.]+\.[^()/]+", line):
@@ -107,6 +114,7 @@ def swift_test_list(swift_command: list[str]) -> list[TestSelection]:
                     suite_name=line,
                 )
             )
+            counts[line] += 1
             continue
 
         unknown.append(line)
@@ -116,7 +124,7 @@ def swift_test_list(swift_command: list[str]) -> list[TestSelection]:
         raise RuntimeError(f"Unrecognized `swift test list` output:\n{rendered}")
     if not selections:
         raise RuntimeError("No test selections found in `swift test list` output")
-    return sorted(selections, key=lambda selection: selection.name)
+    return sorted(selections, key=lambda selection: selection.name), dict(counts)
 
 
 def is_swiftpm_chatter(line: str) -> bool:
@@ -149,11 +157,79 @@ def filter_for(suites: list[TestSelection]) -> str:
     return rf"({'|'.join(suite.filter_pattern for suite in suites)})"
 
 
-def run_group(suites: list[TestSelection], timeout: int, swift_command: list[str]) -> int:
-    return run_command(
-        [*swift_command, "test", "--no-parallel", "--filter", filter_for(suites)],
-        timeout=timeout,
-    )
+def run_group(
+    suites: list[TestSelection],
+    timeout: int,
+    swift_command: list[str],
+) -> tuple[int, int | None, int | None]:
+    with tempfile.TemporaryDirectory(prefix="pdtbar-swift-test-") as temporary_directory:
+        output_path = os.path.join(temporary_directory, "results.xml")
+        code = run_command(
+            [
+                *swift_command,
+                "test",
+                "--no-parallel",
+                "--filter",
+                filter_for(suites),
+                "--xunit-output",
+                output_path,
+            ],
+            timeout=timeout,
+        )
+        # Invariant: this package is Swift Testing only (no XCTest, one test target),
+        # and SwiftPM writes the Swift Testing report to the requested path under
+        # `--no-parallel`. `--no-parallel` is deliberate — see .github/workflows/ci.yml:
+        # raw parallel `swift test` is flaky on shared runners. If XCTest is ever added
+        # here, revisit reporting: SwiftPM emits XCTest xUnit only via its parallel
+        # runner, so counts would come up short and shards would fail loudly with the
+        # mismatch error below. That is fail-closed, but it needs a real fix, not a
+        # relaxed assertion.
+        #
+        # Collect every report the run produced rather than only `output_path`.
+        # SwiftPM writes Swift Testing results straight to the requested path here,
+        # but when XCTest and Swift Testing both report it splits them across
+        # `results.xml` and a `results-swift-testing.xml` sibling so the two cannot
+        # collide. The directory is per-run and otherwise empty, so summing every
+        # report in it is correct under either contract.
+        report_paths = sorted(glob.glob(os.path.join(temporary_directory, "*.xml")))
+        if not report_paths:
+            return code, None, None
+        try:
+            test_suites = [
+                test_suite
+                for report_path in report_paths
+                for test_suite in ET.parse(report_path).findall(".//testsuite")
+            ]
+            tests = sum(int(test_suite.attrib["tests"]) for test_suite in test_suites)
+            skipped = sum(int(test_suite.attrib["skipped"]) for test_suite in test_suites)
+        except (ET.ParseError, KeyError, OSError, TypeError, ValueError):
+            return code, None, None
+        return code, tests, skipped
+
+
+def validated_test_count(
+    shard_index: int,
+    group: list[TestSelection],
+    counts: dict[str, int],
+    tests: int | None,
+    skipped: int | None,
+) -> int | None:
+    suite_names = ", ".join(selection.name for selection in group)
+    expected = sum(counts[selection.name] for selection in group)
+    if tests is None or skipped is None:
+        print(f"::error::Shard {shard_index} did not produce parseable xUnit test counts ({suite_names})", flush=True)
+        return None
+    if tests + skipped != expected:
+        print(
+            f"::error::Shard {shard_index} executed {tests} tests, expected {expected} ({suite_names})",
+            flush=True,
+        )
+        return None
+    # Return the accounted total (executed + skipped), not just executed, so the
+    # whole-run assertion in main() stays consistent with this per-shard check.
+    # Otherwise a single `.disabled` test passes every shard and then trips the
+    # final total with a misleading message.
+    return tests + skipped
 
 
 def main() -> int:
@@ -163,7 +239,7 @@ def main() -> int:
         return 2
 
     swift_command = [args.swift_command, *args.swift_command_arg]
-    suites = swift_test_list(swift_command)
+    suites, counts = swift_test_list(swift_command)
     suite_groups = list(chunks(suites, args.group_size))
     try:
         suite_groups = shard_groups(suite_groups, args.shard_index, args.shard_count)
@@ -187,33 +263,54 @@ def main() -> int:
         print("No test groups selected.", flush=True)
         return 0
 
+    accounted_total = 0
     for group_index, group in enumerate(suite_groups, start=1):
+        expected = sum(counts[selection.name] for selection in group)
         print(
             f"::group::Swift test shard {group_index}/{len(suite_groups)} "
-            f"({len(group)} selections)",
+            f"({len(group)} selections, {expected} expected tests)",
             flush=True,
         )
-        result = run_group(group, args.timeout, swift_command)
+        result, tests, skipped = run_group(group, args.timeout, swift_command)
         print("::endgroup::", flush=True)
         if result == 0:
+            accounted = validated_test_count(group_index, group, counts, tests, skipped)
+            if accounted is None:
+                return 1
+            accounted_total += accounted
             continue
         if len(group) == 1:
             return result
 
         if result != 124:
             print(f"Shard {group_index} failed with exit code {result}; retrying shard once", flush=True)
-            retry_result = run_group(group, args.timeout, swift_command)
+            retry_result, retry_tests, retry_skipped = run_group(group, args.timeout, swift_command)
             if retry_result == 0:
+                accounted = validated_test_count(group_index, group, counts, retry_tests, retry_skipped)
+                if accounted is None:
+                    return 1
+                accounted_total += accounted
                 continue
             return retry_result
 
         print(f"Shard {group_index} timed out; retrying suites one at a time", flush=True)
         for suite in group:
             print(f"::group::Swift test retry {suite.name}", flush=True)
-            retry_result = run_group([suite], args.timeout, swift_command)
+            retry_result, retry_tests, retry_skipped = run_group([suite], args.timeout, swift_command)
             print("::endgroup::", flush=True)
             if retry_result != 0:
                 return retry_result
+            accounted = validated_test_count(group_index, [suite], counts, retry_tests, retry_skipped)
+            if accounted is None:
+                return 1
+            accounted_total += accounted
+
+    print(f"Accounted for {accounted_total} discovered tests across {len(suite_groups)} groups", flush=True)
+    if args.shard_index is None and args.shard_count is None and args.limit_groups is None:
+        expected_total = sum(counts.values())
+        if accounted_total != expected_total:
+            print(f"::error::Accounted for {accounted_total} tests, expected {expected_total} across the full run", flush=True)
+            return 1
 
     return 0
 
