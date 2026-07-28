@@ -1,3 +1,5 @@
+// swiftlint:disable file_length
+// Tracked debt: finding 20 will split this smoke harness.
 import ApplicationServices
 import AppKit
 import Foundation
