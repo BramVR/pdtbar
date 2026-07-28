@@ -421,7 +421,11 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         ) {
             return inlineData
         }
-        currentSessionFiles = currentSessionToolResultFiles(readToolNames: [name], sessionID: sessionID)
+        currentSessionFiles = currentSessionToolResultFiles(
+            readToolNames: [name],
+            sessionID: sessionID,
+            output: result.stdout
+        )
         return try toolResultData(
             for: toolName,
             readToolName: name,
@@ -587,16 +591,15 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         }
     }
 
-    private func claudeToolResultFiles(
-        sessionID: String,
-        discoverIfNeeded: Bool = true,
-        excluding excludedDirectory: URL? = nil
-    ) -> (projectDirectory: URL?, files: Set<URL>) {
-        guard let projectDirectory = claudeProjectDirectoryCache.directory(
-            containing: sessionID,
-            discoverIfNeeded: discoverIfNeeded,
-            excluding: excludedDirectory
-        ) else { return (nil, []) }
+    private func claudeToolResultFiles(sessionID: String, discoverIfNeeded: Bool = true)
+        -> (projectDirectory: URL?, files: Set<URL>)
+    {
+        guard let projectDirectory = claudeProjectDirectoryCache.directory(containing: sessionID, discoverIfNeeded: discoverIfNeeded)
+        else { return (nil, []) }
+        return (projectDirectory, claudeToolResultFiles(sessionID: sessionID, in: projectDirectory))
+    }
+
+    private func claudeToolResultFiles(sessionID: String, in projectDirectory: URL) -> Set<URL> {
         let toolResults = projectDirectory
             .appending(path: sessionID)
             .appending(path: "tool-results")
@@ -605,49 +608,61 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         )) ?? []
-        return (projectDirectory, Set(toolFiles.filter { $0.pathExtension == "txt" }))
+        return Set(toolFiles.filter { $0.pathExtension == "txt" })
     }
 
-    private func currentSessionToolResultFiles(readToolNames: [String], sessionID: String) -> Set<URL> {
+    private func currentSessionToolResultFiles(readToolNames: [String], sessionID: String, output: String) -> Set<URL> {
         let deadline = Date().addingTimeInterval(1.0)
         var pollingDelay = 0.01
         var rediscoveryAttempted = false
+        var candidateDirectories = [URL]()
         var sessionFiles = Set<URL>()
         while true {
-            let lookup = claudeToolResultFiles(sessionID: sessionID, discoverIfNeeded: !rediscoveryAttempted)
-            sessionFiles = lookup.files
-            if sessionFiles.contains(where: { file in
-                readToolNames.contains { file.lastPathComponent.contains($0) }
-            }) {
+            if candidateDirectories.isEmpty {
+                let lookup = claudeToolResultFiles(sessionID: sessionID, discoverIfNeeded: !rediscoveryAttempted)
+                sessionFiles = lookup.files
+                candidateDirectories = [lookup.projectDirectory].compactMap { $0 }
+            } else {
+                sessionFiles = Set(candidateDirectories.flatMap {
+                    claudeToolResultFiles(sessionID: sessionID, in: $0)
+                })
+            }
+            if expectedToolResultFile(in: sessionFiles, readToolNames: readToolNames, output: output) != nil {
                 break
             }
             if !rediscoveryAttempted {
                 rediscoveryAttempted = true
-                if let projectDirectory = lookup.projectDirectory {
-                    claudeProjectDirectoryCache.invalidate(projectDirectory)
-                    let rediscovered = claudeToolResultFiles(
-                        sessionID: sessionID,
-                        excluding: projectDirectory
-                    )
-                    sessionFiles = rediscovered.files
-                    if sessionFiles.contains(where: { file in
-                        readToolNames.contains { file.lastPathComponent.contains($0) }
-                    }) {
-                        break
-                    }
-                    if rediscovered.projectDirectory == nil {
-                        claudeProjectDirectoryCache.rememberIfEmpty(projectDirectory)
-                    }
+                candidateDirectories = Array(Set(
+                    candidateDirectories
+                        + claudeProjectDirectoryCache.rediscoverDirectories(containing: sessionID)
+                ))
+                sessionFiles = Set(candidateDirectories.flatMap {
+                    claudeToolResultFiles(sessionID: sessionID, in: $0)
+                })
+                if let expectedFile = expectedToolResultFile(in: sessionFiles, readToolNames: readToolNames, output: output) {
+                    rememberClaudeProjectDirectory(containing: expectedFile, sessionID: sessionID)
+                    break
                 }
             }
             let remaining = deadline.timeIntervalSinceNow
-            guard remaining > 0 else {
-                break
-            }
+            guard remaining > 0 else { break }
             Thread.sleep(forTimeInterval: min(pollingDelay, remaining))
             pollingDelay *= 2
         }
         return sessionFiles
+    }
+
+    private func expectedToolResultFile(in files: Set<URL>, readToolNames: [String], output: String) -> URL? {
+        let matchingFiles = files.filter { file in
+            readToolNames.contains { file.lastPathComponent.contains($0) }
+        }
+        return toolResultParser.referencedResultFile(in: output, among: matchingFiles)
+    }
+
+    private func rememberClaudeProjectDirectory(containing file: URL, sessionID: String) {
+        let sessionDirectory = file.deletingLastPathComponent().deletingLastPathComponent()
+        guard sessionDirectory.lastPathComponent == sessionID else { return }
+        claudeProjectDirectoryCache.remember(sessionDirectory.deletingLastPathComponent())
     }
 
     var claudeProjectDirectoryDiscoveryCountForTesting: Int {

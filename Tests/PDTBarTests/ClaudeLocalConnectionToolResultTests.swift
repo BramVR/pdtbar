@@ -151,6 +151,40 @@ struct ClaudeLocalConnectionToolResultTests {
         #expect(try firstHoldingName(in: fileData) == "File Public Co")
     }
 
+    @Test("Rediscovery keeps polling all duplicate session directories")
+    func rediscoveryKeepsPollingAllDuplicateSessionDirectories() throws {
+        let fixture = try ToolResultFixture(delivery: .cachedDelayedFileWithEmptyDuplicate)
+        defer { fixture.remove() }
+
+        _ = try fixture.connection.callReadTool(
+            "pdt-get-portfolio-holdings",
+            arguments: [:]
+        )
+        let fileData = try fixture.connection.callReadTool(
+            "pdt-get-portfolio-holdings",
+            arguments: [:]
+        )
+
+        #expect(try firstHoldingName(in: fileData) == "File Public Co")
+    }
+
+    @Test("A stale matching file does not suppress rediscovery")
+    func staleMatchingFileDoesNotSuppressRediscovery() throws {
+        let fixture = try ToolResultFixture(delivery: .staleMatchingFileThenMovedFile)
+        defer { fixture.remove() }
+
+        _ = try fixture.connection.callReadTool(
+            "pdt-get-portfolio-holdings",
+            arguments: [:]
+        )
+        let fileData = try fixture.connection.callReadTool(
+            "pdt-get-portfolio-holdings",
+            arguments: [:]
+        )
+
+        #expect(try firstHoldingName(in: fileData) == "File Public Co")
+    }
+
     @Test("A fallback read rediscovers a stale project directory at most once")
     func fallbackReadRediscoversStaleProjectDirectoryAtMostOnce() throws {
         let fixture = try ToolResultFixture(delivery: .staleCachedDirectoryThenMissingFile)
@@ -219,6 +253,8 @@ private final class ToolResultClaudeCommandRunner: ClaudeLocalCommandRunning, @u
         case inlineWithoutSessionThenImmediateFile
         case staleCachedDirectoryThenMovedFile
         case staleDuplicateThenMovedFile
+        case cachedDelayedFileWithEmptyDuplicate
+        case staleMatchingFileThenMovedFile
         case staleCachedDirectoryThenMissingFile
     }
 
@@ -341,6 +377,66 @@ private final class ToolResultClaudeCommandRunner: ClaudeLocalCommandRunning, @u
                     at: toolResults,
                     withIntermediateDirectories: true
                 )
+                let movedToolResults = root
+                    .appending(path: "moved-project")
+                    .appending(path: sessionID)
+                    .appending(path: "tool-results")
+                try FileManager.default.createDirectory(
+                    at: movedToolResults,
+                    withIntermediateDirectories: true
+                )
+                let file = resultFile(in: movedToolResults, ordinal: ordinal)
+                try filePayload.write(to: file)
+                remember(resultFile: file)
+                resultLine = fileResultLine(file)
+            }
+        case .cachedDelayedFileWithEmptyDuplicate:
+            if ordinal == 1 {
+                try FileManager.default.createDirectory(
+                    at: toolResults,
+                    withIntermediateDirectories: true
+                )
+                resultLine = """
+                {"type":"tool_result","tool_use_id":"call_1","structuredContent":{"holdings":[{"symbolName":"Inline Public Co"}]}}
+                """
+            } else {
+                try FileManager.default.createDirectory(
+                    at: toolResults,
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.createDirectory(
+                    at: root
+                        .appending(path: "moved-project")
+                        .appending(path: sessionID)
+                        .appending(path: "tool-results"),
+                    withIntermediateDirectories: true
+                )
+                let file = resultFile(in: toolResults, ordinal: ordinal)
+                remember(resultFile: file)
+                let payload = filePayload
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
+                    try? payload.write(to: file)
+                }
+                resultLine = fileResultLine(file)
+            }
+        case .staleMatchingFileThenMovedFile:
+            if ordinal == 1 {
+                try FileManager.default.createDirectory(
+                    at: toolResults,
+                    withIntermediateDirectories: true
+                )
+                resultLine = """
+                {"type":"tool_result","tool_use_id":"call_1","structuredContent":{"holdings":[{"symbolName":"Inline Public Co"}]}}
+                """
+            } else {
+                try FileManager.default.createDirectory(
+                    at: toolResults,
+                    withIntermediateDirectories: true
+                )
+                let staleFile = resultFile(in: toolResults, ordinal: ordinal)
+                try Data(#"{"holdings":[{"symbolName":"Stale Public Co"}]}"#.utf8)
+                    .write(to: staleFile)
+                remember(resultFile: staleFile)
                 let movedToolResults = root
                     .appending(path: "moved-project")
                     .appending(path: sessionID)

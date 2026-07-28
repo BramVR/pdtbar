@@ -12,25 +12,44 @@ final class ClaudeProjectDirectoryCache: @unchecked Sendable {
 
     func directory(
         containing sessionID: String,
-        discoverIfNeeded: Bool = true,
-        excluding excludedDirectory: URL? = nil
+        discoverIfNeeded: Bool = true
     ) -> URL? {
         lock.lock()
         defer { lock.unlock() }
-        if let rememberedDirectory, rememberedDirectory != excludedDirectory {
+        if let rememberedDirectory {
             return rememberedDirectory
         }
         guard discoverIfNeeded else { return nil }
         discoveryCount += 1
+        let discoveredDirectories = projectDirectories(containing: sessionID)
+        if let discoveredDirectory = discoveredDirectories.first {
+            rememberedDirectory = discoveredDirectory
+        }
+        return discoveredDirectories.first
+    }
+
+    func rediscoverDirectories(containing sessionID: String) -> [URL] {
+        lock.lock()
+        defer { lock.unlock() }
+        discoveryCount += 1
+        return projectDirectories(containing: sessionID)
+    }
+
+    func remember(_ directory: URL) {
+        lock.lock()
+        rememberedDirectory = directory
+        lock.unlock()
+    }
+
+    private func projectDirectories(containing sessionID: String) -> [URL] {
         guard let projects = try? FileManager.default.contentsOfDirectory(
             at: projectsDirectory,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else {
-            return nil
+            return []
         }
-        let discoveredDirectory = projects.first { project in
-            guard project != excludedDirectory else { return false }
+        return projects.filter { project in
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: project.path, isDirectory: &isDirectory),
                   isDirectory.boolValue
@@ -41,22 +60,6 @@ final class ClaudeProjectDirectoryCache: @unchecked Sendable {
                 isDirectory: &isSessionDirectory
             ) && isSessionDirectory.boolValue
         }
-        if let discoveredDirectory {
-            rememberedDirectory = discoveredDirectory
-        }
-        return discoveredDirectory
-    }
-
-    func invalidate(_ expectedDirectory: URL) {
-        lock.lock()
-        defer { lock.unlock() }
-        if rememberedDirectory == expectedDirectory { rememberedDirectory = nil }
-    }
-
-    func rememberIfEmpty(_ directory: URL) {
-        lock.lock()
-        defer { lock.unlock() }
-        if rememberedDirectory == nil { rememberedDirectory = directory }
     }
 
     var discoveryCountForTesting: Int {
