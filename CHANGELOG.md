@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed first portfolio fetches discarding completed holdings when an optional PDT facet fails.
 - Fixed optional PDT performance reads timing out below observed production latency, which left CAGR and total increase permanently unavailable.
 - Fixed a blank allocation-chart panel remaining visible after opening and closing Settings.
 - Added a native Settings window with a `Show portfolio values` checkbox that hides displayed monetary portfolio values without deleting cached local data.
