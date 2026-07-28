@@ -6594,6 +6594,7 @@ public enum PDTMCPConnectorError: Error, CustomStringConvertible, Equatable {
     case missingRequiredReadTools([String])
     case setupUnavailable(String)
     case transientFailure(String)
+    case timeout(String)
     case nonReadTool(String)
     case missingScriptedResponse(String)
 
@@ -6605,6 +6606,8 @@ public enum PDTMCPConnectorError: Error, CustomStringConvertible, Equatable {
             "PDT MCP connector setup unavailable: \(message)"
         case .transientFailure(let message):
             "PDT MCP connector transient failure: \(message)"
+        case .timeout(let message):
+            "PDT MCP connector timeout: \(message)"
         case .nonReadTool(let tool):
             "PDT MCP connector refused non-v1 read tool: \(tool)"
         case .missingScriptedResponse(let key):
@@ -7226,10 +7229,15 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 snapshot.performance = try performanceSummary(progress: progress)
                 _ = try snapshotStore.commitCurrentSnapshot(snapshot)
             } catch {
-                // Deferred MCP schemas cannot be enumerated reliably. A
-                // missing optional performance tool stays unavailable after
-                // all established detail phases have completed.
                 snapshot.performance = nil
+                let failure = diagnostic(
+                    for: error,
+                    tool: "pdt-get-portfolio-performance",
+                    phase: .performance
+                )
+                if failure.category == .timeout {
+                    diagnostics.append(failure)
+                }
                 progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Performance unavailable"))
             }
         } else {
@@ -7314,7 +7322,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) throws -> PortfolioPerformanceSummary {
         progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Calling pdt-get-portfolio-performance"))
-        let performance: LivePortfolioPerformanceEnvelope = try callDecoded(
+        let performance: LivePortfolioPerformanceEnvelope = try callPerformanceDecoded(
             "pdt-get-portfolio-performance",
             arguments: [:]
         )
@@ -7324,7 +7332,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             return PortfolioPerformanceSummary()
         }
         progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Calling pdt-get-portfolio-gains"))
-        let gains: LivePortfolioGainsEnvelope = try callDecoded(
+        let gains: LivePortfolioGainsEnvelope = try callPerformanceDecoded(
             "pdt-get-portfolio-gains",
             arguments: ["date_from": periodStart, "date_to": periodEnd]
         )
@@ -7333,6 +7341,22 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             periodStart: periodStart,
             periodEnd: periodEnd
         )
+    }
+
+    private func callPerformanceDecoded<T: Decodable>(
+        _ tool: String,
+        arguments: [String: String]
+    ) throws -> T {
+        do {
+            return try callDecoded(tool, arguments: arguments)
+        } catch {
+            throw PDTDetailRefreshToolError(diagnostic: diagnostic(
+                for: error,
+                tool: tool,
+                phase: .performance,
+                arguments: arguments
+            ))
+        }
     }
 
     private func priceSeriesWithPriorFallback(
@@ -7756,6 +7780,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             .setupUnavailable
         case PDTMCPConnectorError.transientFailure:
             .transientFailure
+        case PDTMCPConnectorError.timeout:
+            .timeout
         case PDTMCPConnectorError.missingScriptedResponse:
             .missingScriptedResponse
         case PDTLiveDataSourceError.malformedToolResult:

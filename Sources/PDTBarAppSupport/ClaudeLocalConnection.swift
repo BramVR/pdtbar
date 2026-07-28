@@ -41,6 +41,7 @@ public struct ClaudeLocalConnectionConfiguration: Sendable {
     public var claudePath: String
     public var model: String
     public var toolTimeout: TimeInterval
+    public var performanceToolTimeout: TimeInterval
     public var readinessTimeout: TimeInterval
     public var toolCallRetryPolicy: ClaudeToolCallRetryPolicy
     public var environment: [String: String]
@@ -50,6 +51,7 @@ public struct ClaudeLocalConnectionConfiguration: Sendable {
         claudePath: String,
         model: String,
         toolTimeout: TimeInterval,
+        performanceToolTimeout: TimeInterval = 60,
         readinessTimeout: TimeInterval,
         toolCallRetryPolicy: ClaudeToolCallRetryPolicy,
         environment: [String: String],
@@ -58,6 +60,7 @@ public struct ClaudeLocalConnectionConfiguration: Sendable {
         self.claudePath = claudePath
         self.model = model
         self.toolTimeout = toolTimeout
+        self.performanceToolTimeout = performanceToolTimeout
         self.readinessTimeout = readinessTimeout
         self.toolCallRetryPolicy = toolCallRetryPolicy
         self.environment = environment
@@ -69,6 +72,7 @@ public struct ClaudeLocalConnectionConfiguration: Sendable {
             claudePath: environment["PDTBAR_CLAUDE_BIN"].flatMap { $0.nilIfEmpty } ?? "claude",
             model: environment["PDTBAR_CLAUDE_MODEL"].flatMap { $0.nilIfEmpty } ?? "opus",
             toolTimeout: environment["PDTBAR_CLAUDE_TOOL_TIMEOUT"].flatMap(Double.init) ?? 120.0,
+            performanceToolTimeout: environment["PDTBAR_CLAUDE_PERFORMANCE_TOOL_TIMEOUT"].flatMap(Double.init) ?? 60.0,
             readinessTimeout: environment["PDTBAR_CLAUDE_READINESS_TIMEOUT"].flatMap(Double.init) ?? 20.0,
             toolCallRetryPolicy: ClaudeToolCallRetryPolicy(
                 retryCount: environment["PDTBAR_CLAUDE_TOOL_RETRY_COUNT"].flatMap(Int.init) ?? 1,
@@ -197,8 +201,18 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         try ensureMCPToolPrefixesCached()
         let toolName = resolvedToolName(for: name)
         let isOptionalPerformanceTool = PDTReadTools.performance.contains(name)
+        // The default is 60 seconds because a real call was measured at about
+        // 23 seconds, giving roughly 3x headroom. The performance budget stays
+        // bounded by the overall tool budget so these optional tools cannot
+        // stall a sync. It is configurable because the right value depends on
+        // the environment, and a hardcoded constant caused the original
+        // 15-second bug. Keep one attempt: retrying a call that merely exceeded
+        // its budget would only time out again and double its worst-case
+        // contribution to an already long sync.
         let maxAttempts = isOptionalPerformanceTool ? 1 : configuration.toolCallRetryPolicy.maxAttempts
-        let timeout = isOptionalPerformanceTool ? min(configuration.toolTimeout, 15) : configuration.toolTimeout
+        let timeout = isOptionalPerformanceTool
+            ? min(configuration.performanceToolTimeout, configuration.toolTimeout)
+            : configuration.toolTimeout
         var attempts = 0
         var lastError: Error?
         repeat {
@@ -406,7 +420,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
 
     /// Classifies a failed Claude CLI read-tool run so the retry policy only
     /// re-spawns full CLI runs for true transients: timeouts and unexplained
-    /// nonzero exits stay `transientFailure` (retryable), while a missing
+    /// nonzero exits stay retryable, while a missing
     /// binary or output that reports a missing login or unavailable access
     /// becomes `setupUnavailable` (never retried, and short-circuits later
     /// detail phases).
@@ -418,7 +432,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         case .executableMissing:
             return .setupUnavailable("Claude CLI is unavailable")
         case .timedOut:
-            return .transientFailure("Claude \(name) call timed out")
+            return .timeout("Claude \(name) call timed out")
         case nil:
             break
         }

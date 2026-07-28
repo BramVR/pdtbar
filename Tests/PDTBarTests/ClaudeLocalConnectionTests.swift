@@ -193,6 +193,40 @@ struct ClaudeLocalConnectionTests {
         #expect(configured.claudePath == "/usr/local/bin/claude-wrapper")
     }
 
+    @Test("Environment configuration defaults the performance timeout to sixty seconds")
+    func environmentConfigurationDefaultsPerformanceTimeout() {
+        let configured = ClaudeLocalConnectionConfiguration(environment: [:])
+
+        #expect(configured.performanceToolTimeout == 60)
+    }
+
+    @Test("Environment configuration honors the performance timeout override")
+    func environmentConfigurationHonorsPerformanceTimeoutOverride() throws {
+        var configured = ClaudeLocalConnectionConfiguration(environment: [
+            "PDTBAR_CLAUDE_PERFORMANCE_TOOL_TIMEOUT": "95.5",
+        ])
+        configured.claudeProjectsDirectory = temporaryClaudeProjectsDirectory()
+        let runner = RecordingClaudeCommandRunner(
+            results: [
+                .init(stdout: "pdt (portfoliodividendtracker.com) connected", stderr: "", exitCode: 0),
+                performanceResult(),
+            ],
+            simulatedDelays: [0, 96]
+        )
+        let connection = ClaudeLocalConnection(
+            configuration: configured,
+            commandRunner: runner
+        )
+
+        #expect(configured.performanceToolTimeout == 95.5)
+        #expect(throws: PDTMCPConnectorError.timeout(
+            "Claude pdt-get-portfolio-performance call timed out"
+        )) {
+            try connection.callReadTool("pdt-get-portfolio-performance", arguments: [:])
+        }
+        #expect(runner.requests.last?.timeout == 95.5)
+    }
+
     @Test("Missing PDT MCP blocks readiness and read-tool availability")
     func missingPDTMCPBlocksReadinessAndAvailability() throws {
         let runner = RecordingClaudeCommandRunner(results: [
@@ -608,13 +642,142 @@ struct ClaudeLocalConnectionTests {
             retryDelay: { delays.append($0) }
         )
 
-        #expect(throws: PDTMCPConnectorError.transientFailure("Claude pdt-get-portfolio-holdings call timed out")) {
+        #expect(throws: PDTMCPConnectorError.timeout("Claude pdt-get-portfolio-holdings call timed out")) {
             try connection.callReadTool("pdt-get-portfolio-holdings", arguments: [:])
         }
         // Three attempts (mcp list + three read runs) with a backoff before
         // each retry: N-1 delays for N attempts.
         #expect(runner.requests.count == 4)
         #expect(delays.values == [2.0, 2.0])
+    }
+
+    @Test("Performance calls beyond the bounded budget time out without data")
+    func performanceCallBeyondBudgetTimesOutWithoutData() throws {
+        let runner = RecordingClaudeCommandRunner(
+            results: [
+                .init(stdout: "pdt (portfoliodividendtracker.com) connected", stderr: "", exitCode: 0),
+                performanceResult(),
+            ],
+            simulatedDelays: [0, 18.5]
+        )
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(
+                retryCount: 2,
+                toolTimeout: 120,
+                performanceToolTimeout: 18
+            ),
+            commandRunner: runner
+        )
+        let connector = PerformanceRoutingPDTConnector(performanceConnector: connection)
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-performance-timeout-test")
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(retryBackoffSeconds: 0)
+        ).refresh()
+
+        #expect(result.outcome == .degraded)
+        #expect(result.model.portfolioPerformance == PortfolioPerformanceSummary())
+        #expect(result.model.facetSnapshots.dataHealth.diagnostic?.detail
+            == "pdt-get-portfolio-performance; performance; timeout")
+        #expect(result.diagnostics == [
+            PDTDetailRefreshFailureDiagnostic(
+                toolName: "pdt-get-portfolio-performance",
+                phase: .performance,
+                attemptCount: 1,
+                category: .timeout,
+                argumentShape: []
+            ),
+        ])
+        #expect(runner.requests.filter { $0.arguments.first == "--model" }.count == 1)
+        #expect(runner.requests.last?.timeout == 18)
+    }
+
+    @Test("Measured-latency performance calls fit the bounded budget and populate data")
+    func measuredLatencyPerformanceCallsPopulateData() throws {
+        let runner = RecordingClaudeCommandRunner(
+            results: [
+                .init(stdout: "pdt (portfoliodividendtracker.com) connected", stderr: "", exitCode: 0),
+                performanceResult(),
+                performanceGainsResult(),
+            ],
+            simulatedDelays: [0, 18.5, 18.5]
+        )
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 2, toolTimeout: 120),
+            commandRunner: runner
+        )
+        let connector = PerformanceRoutingPDTConnector(performanceConnector: connection)
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-performance-latency-test")
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(retryBackoffSeconds: 0)
+        ).refresh()
+
+        #expect(result.outcome == .completed)
+        #expect(result.model.portfolioPerformance.totalPercentageIncrease == 0.21)
+        #expect(result.model.portfolioPerformance.cagr != nil)
+        #expect(runner.requests.filter { $0.arguments.first == "--model" }.map(\.timeout) == [60, 60])
+    }
+
+    @Test("Performance timeout is clamped by the overall tool timeout")
+    func performanceTimeoutIsClampedByOverallToolTimeout() throws {
+        let runner = RecordingClaudeCommandRunner(
+            results: [
+                .init(stdout: "pdt (portfoliodividendtracker.com) connected", stderr: "", exitCode: 0),
+                performanceResult(),
+            ],
+            simulatedDelays: [0, 120.5]
+        )
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(
+                retryCount: 2,
+                toolTimeout: 120,
+                performanceToolTimeout: 180
+            ),
+            commandRunner: runner
+        )
+
+        #expect(throws: PDTMCPConnectorError.timeout(
+            "Claude pdt-get-portfolio-performance call timed out"
+        )) {
+            try connection.callReadTool("pdt-get-portfolio-performance", arguments: [:])
+        }
+        #expect(runner.requests.filter { $0.arguments.first == "--model" }.count == 1)
+        #expect(runner.requests.last?.timeout == 120)
+    }
+
+    @Test("Non-performance reads retain the configured tool budget")
+    func nonPerformanceReadsRetainConfiguredToolBudget() throws {
+        let runner = RecordingClaudeCommandRunner(
+            results: [
+                .init(stdout: "pdt (portfoliodividendtracker.com) connected", stderr: "", exitCode: 0),
+                .init(
+                    stdout: streamJSON(
+                        toolName: "mcp__pdt__pdt-get-portfolio-holdings",
+                        result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"holdings":[]}}"#
+                    ),
+                    stderr: "",
+                    exitCode: 0
+                ),
+            ],
+            simulatedDelays: [0, 90]
+        )
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 0, toolTimeout: 120),
+            commandRunner: runner
+        )
+
+        _ = try connection.callReadTool("pdt-get-portfolio-holdings", arguments: [:])
+
+        #expect(runner.requests.last?.timeout == 120)
     }
 
     @Test("Transient nonzero exits recover after a backed-off retry")
@@ -690,13 +853,16 @@ struct ClaudeLocalConnectionTests {
     private func configuration(
         retryCount: Int = 1,
         retryBackoffSeconds: Double = 0,
+        toolTimeout: Double = 10,
+        performanceToolTimeout: Double = 60,
         environment: [String: String] = [:],
         claudeProjectsDirectory: URL? = nil
     ) -> ClaudeLocalConnectionConfiguration {
         ClaudeLocalConnectionConfiguration(
             claudePath: "claude",
             model: "opus",
-            toolTimeout: 10,
+            toolTimeout: toolTimeout,
+            performanceToolTimeout: performanceToolTimeout,
             readinessTimeout: 10,
             toolCallRetryPolicy: ClaudeToolCallRetryPolicy(
                 retryCount: retryCount,
@@ -729,26 +895,52 @@ struct ClaudeLocalConnectionTests {
         let holdings = object?["holdings"] as? [[String: Any]]
         return holdings?.first?["symbolName"] as? String
     }
+
+    private func performanceResult() -> ClaudeLocalProcessResult {
+        ClaudeLocalProcessResult(
+            stdout: streamJSON(
+                toolName: "mcp__pdt__pdt-get-portfolio-performance",
+                result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"oldestPortfolioDate":"2024-03-29","latestPortfolioDate":"2026-03-29"}}"#
+            ),
+            stderr: "",
+            exitCode: 0
+        )
+    }
+
+    private func performanceGainsResult() -> ClaudeLocalProcessResult {
+        ClaudeLocalProcessResult(
+            stdout: streamJSON(
+                toolName: "mcp__pdt__pdt-get-portfolio-gains",
+                result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"totalGainsPercentage":0.21}}"#
+            ),
+            stderr: "",
+            exitCode: 0
+        )
+    }
 }
 
 private final class RecordingClaudeCommandRunner: ClaudeLocalCommandRunning, @unchecked Sendable {
     struct Request: Equatable {
         var executable: String
         var arguments: [String]
+        var timeout: TimeInterval
         var environment: [String: String]
     }
 
     private let lock = NSLock()
     private var queuedResults: [ClaudeLocalProcessResult]
+    private var queuedSimulatedDelays: [TimeInterval]
     private let executableAvailable: Bool
     private var recordedRequests: [Request] = []
 
     init(
         executableAvailable: Bool = true,
-        results: [ClaudeLocalProcessResult] = []
+        results: [ClaudeLocalProcessResult] = [],
+        simulatedDelays: [TimeInterval] = []
     ) {
         self.executableAvailable = executableAvailable
         self.queuedResults = results
+        self.queuedSimulatedDelays = simulatedDelays
     }
 
     var requests: [Request] {
@@ -771,13 +963,54 @@ private final class RecordingClaudeCommandRunner: ClaudeLocalCommandRunning, @un
         environment: [String: String]
     ) throws -> ClaudeLocalProcessResult {
         lock.lock()
-        recordedRequests.append(Request(executable: executable, arguments: arguments, environment: environment))
+        recordedRequests.append(Request(
+            executable: executable,
+            arguments: arguments,
+            timeout: timeout,
+            environment: environment
+        ))
+        let simulatedDelay = queuedSimulatedDelays.isEmpty ? 0 : queuedSimulatedDelays.removeFirst()
         let result = queuedResults.isEmpty
             ? ClaudeLocalProcessResult(stdout: "", stderr: "", exitCode: 0)
             : queuedResults.removeFirst()
         lock.unlock()
+        if simulatedDelay > timeout {
+            // Match DefaultClaudeLocalCommandRunner: -1 with no missing-binary
+            // stderr is classified by ClaudeLocalConnection as a timeout.
+            return ClaudeLocalProcessResult(stdout: "", stderr: "", exitCode: -1)
+        }
         return result
     }
+}
+
+private final class PerformanceRoutingPDTConnector: PDTMCPConnector {
+    private let performanceConnector: any PDTMCPConnector
+
+    init(performanceConnector: any PDTMCPConnector) {
+        self.performanceConnector = performanceConnector
+    }
+
+    func availableReadTools() throws -> Set<String> {
+        Set(PDTReadTools.requiredV1 + PDTReadTools.performance)
+    }
+
+    func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
+        if PDTReadTools.performance.contains(name) {
+            return try performanceConnector.callReadTool(name, arguments: arguments)
+        }
+        guard let response = Self.responses[name] else {
+            throw PDTMCPConnectorError.missingScriptedResponse(name)
+        }
+        return Data(response.utf8)
+    }
+
+    private static let responses = [
+        "pdt-get-portfolio-holdings": #"{"holdings":[]}"#,
+        "pdt-get-portfolio-distributions": #"{"sectors":[],"assetTypes":[]}"#,
+        "pdt-list-x-ray-holdings": #"{"items":[],"hasMore":false}"#,
+        "pdt-list-calendar-events": #"{"data":[],"meta":{"last_page":1}}"#,
+        "pdt-list-dividends": #"{"data":[],"meta":{"last_page":1}}"#,
+    ]
 }
 
 private final class StringProgressRecorder: @unchecked Sendable {
