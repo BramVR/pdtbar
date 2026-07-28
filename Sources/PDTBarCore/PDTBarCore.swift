@@ -6619,13 +6619,16 @@ public enum PDTMCPConnectorError: Error, CustomStringConvertible, Equatable {
 public struct PDTMCPConnectorDataSource: PortfolioDataSource {
     public var connector: any PDTMCPConnector
     public var liveOptions: PDTLiveDataSourceOptions
+    public var onOptionalFacetFailure: (@Sendable (PDTDetailRefreshFailureDiagnostic) -> Void)?
 
     public init(
         connector: any PDTMCPConnector,
-        liveOptions: PDTLiveDataSourceOptions = PDTLiveDataSourceOptions()
+        liveOptions: PDTLiveDataSourceOptions = PDTLiveDataSourceOptions(),
+        onOptionalFacetFailure: (@Sendable (PDTDetailRefreshFailureDiagnostic) -> Void)? = nil
     ) {
         self.connector = connector
         self.liveOptions = liveOptions
+        self.onOptionalFacetFailure = onOptionalFacetFailure
     }
 
     public func snapshot(asOf: String? = nil) throws -> PortfolioSnapshot {
@@ -6637,7 +6640,8 @@ public struct PDTMCPConnectorDataSource: PortfolioDataSource {
         }
         return try PDTLiveDataSource(
             toolClient: PDTMCPConnectorToolClient(connector: connector),
-            options: liveOptions
+            options: liveOptions,
+            onOptionalFacetFailure: onOptionalFacetFailure
         ).snapshot(asOf: asOf)
     }
 }
@@ -7028,6 +7032,27 @@ public struct PDTDetailRefreshFailureDiagnostic: Codable, Equatable, Sendable {
         self.attemptCount = attemptCount
         self.category = category
         self.argumentShape = argumentShape.sorted()
+    }
+}
+
+func pdtDetailRefreshFailureCategory(for error: Error) -> PDTDetailRefreshFailureCategory {
+    switch error {
+    case PDTMCPConnectorError.setupUnavailable:
+        .setupUnavailable
+    case PDTMCPConnectorError.transientFailure:
+        .transientFailure
+    case PDTMCPConnectorError.timeout:
+        .timeout
+    case PDTMCPConnectorError.missingScriptedResponse:
+        .missingScriptedResponse
+    case PDTLiveDataSourceError.malformedToolResult:
+        .decode
+    case PDTLiveDataSourceError.unavailableToolResult:
+        .unavailable
+    case PDTLiveDataSourceError.transientUnavailableToolResult:
+        .transientFailure
+    default:
+        .exit
     }
 }
 
@@ -7769,30 +7794,9 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             toolName: tool,
             phase: phase,
             attemptCount: attempts,
-            category: failureCategory(error),
+            category: pdtDetailRefreshFailureCategory(for: error),
             argumentShape: arguments.keys.sorted()
         )
-    }
-
-    private func failureCategory(_ error: Error) -> PDTDetailRefreshFailureCategory {
-        switch error {
-        case PDTMCPConnectorError.setupUnavailable:
-            .setupUnavailable
-        case PDTMCPConnectorError.transientFailure:
-            .transientFailure
-        case PDTMCPConnectorError.timeout:
-            .timeout
-        case PDTMCPConnectorError.missingScriptedResponse:
-            .missingScriptedResponse
-        case PDTLiveDataSourceError.malformedToolResult:
-            .decode
-        case PDTLiveDataSourceError.unavailableToolResult:
-            .unavailable
-        case PDTLiveDataSourceError.transientUnavailableToolResult:
-            .transientFailure
-        default:
-            .exit
-        }
     }
 }
 
@@ -7985,13 +7989,16 @@ public struct PDTLiveDataSourceOptions: Equatable, Sendable {
 public struct PDTLiveDataSource: PortfolioDataSource {
     public var toolClient: any PDTLiveToolClient
     public var options: PDTLiveDataSourceOptions
+    public var onOptionalFacetFailure: (@Sendable (PDTDetailRefreshFailureDiagnostic) -> Void)?
 
     public init(
         toolClient: any PDTLiveToolClient,
-        options: PDTLiveDataSourceOptions = PDTLiveDataSourceOptions()
+        options: PDTLiveDataSourceOptions = PDTLiveDataSourceOptions(),
+        onOptionalFacetFailure: (@Sendable (PDTDetailRefreshFailureDiagnostic) -> Void)? = nil
     ) {
         self.toolClient = toolClient
         self.options = options
+        self.onOptionalFacetFailure = onOptionalFacetFailure
     }
 
     public func snapshot(asOf: String? = nil) throws -> PortfolioSnapshot {
@@ -8008,20 +8015,86 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             "pdt-get-portfolio-holdings",
             data: toolClient.callReadTool("pdt-get-portfolio-holdings", arguments: [:])
         )
-        let distributionsEnvelope: LiveDistributionsEnvelope? = options.includeDistributions
-            ? try decodeLiveTool(
-                "pdt-get-portfolio-distributions",
-                data: toolClient.callReadTool("pdt-get-portfolio-distributions", arguments: [:])
+
+        var optionalFacetFailed = false
+        var skipRemainingOptionalFacets = false
+        func recordOptionalFacetFailure(
+            _ error: Error,
+            tool: String,
+            phase: BackgroundDetailRefreshPhase,
+            argumentShape: [String] = []
+        ) {
+            optionalFacetFailed = true
+            let diagnostic = PDTDetailRefreshFailureDiagnostic(
+                toolName: tool,
+                phase: phase,
+                attemptCount: 1,
+                category: pdtDetailRefreshFailureCategory(for: error),
+                argumentShape: argumentShape
             )
-            : nil
-        let xRayHoldings = options.includeXRayHoldings ? try liveXRayHoldings() : []
-        let calendarEvents: [LiveCalendarEvent]
-        if options.includeIncomeEvents {
-            calendarEvents = try liveCalendarEvents(arguments: incomeDateRange)
-        } else {
-            calendarEvents = []
+            onOptionalFacetFailure?(diagnostic)
+            if diagnostic.category.indicatesUnavailableSetup {
+                skipRemainingOptionalFacets = true
+            }
         }
-        let dividends = options.includeDividends ? try liveDividends(arguments: dividendDateRange) : []
+
+        var distributionsEnvelope: LiveDistributionsEnvelope?
+        if options.includeDistributions, !skipRemainingOptionalFacets {
+            do {
+                distributionsEnvelope = try decodeLiveTool(
+                    "pdt-get-portfolio-distributions",
+                    data: toolClient.callReadTool("pdt-get-portfolio-distributions", arguments: [:])
+                )
+            } catch {
+                recordOptionalFacetFailure(
+                    error,
+                    tool: "pdt-get-portfolio-distributions",
+                    phase: .allocation
+                )
+            }
+        }
+
+        var xRayHoldings: [PDTXRayHoldingInput]?
+        if options.includeXRayHoldings, !skipRemainingOptionalFacets {
+            do {
+                xRayHoldings = try liveXRayHoldings()
+            } catch {
+                recordOptionalFacetFailure(
+                    error,
+                    tool: "pdt-list-x-ray-holdings",
+                    phase: .xRay,
+                    argumentShape: ["limit", "offset"]
+                )
+            }
+        }
+
+        var calendarEvents: [LiveCalendarEvent] = []
+        if options.includeIncomeEvents, !skipRemainingOptionalFacets {
+            do {
+                calendarEvents = try liveCalendarEvents(arguments: incomeDateRange)
+            } catch {
+                recordOptionalFacetFailure(
+                    error,
+                    tool: "pdt-list-calendar-events",
+                    phase: .income,
+                    argumentShape: Array(incomeDateRange.keys) + ["page", "per_page"]
+                )
+            }
+        }
+
+        var dividends: [LiveDividend] = []
+        if options.includeDividends, !skipRemainingOptionalFacets {
+            do {
+                dividends = try liveDividends(arguments: dividendDateRange)
+            } catch {
+                recordOptionalFacetFailure(
+                    error,
+                    tool: "pdt-list-dividends",
+                    phase: .income,
+                    argumentShape: Array(dividendDateRange.keys) + ["page", "per_page"]
+                )
+            }
+        }
 
         let holdingInputs = holdingsEnvelope.holdings.map(\.baseHoldingInput)
         let portfolioCurrency = PDTBaseHoldingNormalizer.portfolioCurrency(from: holdingInputs, fallback: "EUR")
@@ -8033,10 +8106,10 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             )
         )
         let neededCalendarSymbolIDs = Set(calendarEvents.filter { $0.type != "no-events-today" }.compactMap(\.symbolId))
-        let quoteMetadata = options.includeIncomeQuoteLookups
+        let quoteMetadata = options.includeIncomeQuoteLookups && !skipRemainingOptionalFacets
             ? try liveSymbolQuoteMetadata(for: baseSnapshot.openHoldings, neededCalendarSymbolIDs: neededCalendarSymbolIDs)
             : SymbolQuoteMetadata()
-        let priceSeries = options.includePriceSeries
+        let priceSeries = options.includePriceSeries && !skipRemainingOptionalFacets
             ? try livePriceRows(for: baseSnapshot.openHoldings, asOf: snapshotAsOf)
             : []
         return PDTSnapshotNormalizer.normalize(
@@ -8049,7 +8122,8 @@ public struct PDTLiveDataSource: PortfolioDataSource {
                 xRayHoldings: xRayHoldings,
                 calendarEvents: calendarEvents.map(\.optionalDetailInput),
                 dividends: dividends.map(\.optionalDetailInput),
-                priceRows: priceSeries
+                priceRows: priceSeries,
+                latestDetailFillOutcome: optionalFacetFailed ? .degraded : nil
             )
         )
     }

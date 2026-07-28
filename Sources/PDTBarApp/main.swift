@@ -25,6 +25,17 @@ private struct FirstFetchConnectorConfiguration: @unchecked Sendable {
     var shouldStartBackgroundRefresh = false
 }
 
+private func firstFetchDataSource(
+    configuration: FirstFetchConnectorConfiguration,
+    snapshotStore: SnapshotStore
+) -> PDTMCPConnectorDataSource {
+    PDTMCPConnectorDataSource(
+        connector: configuration.connector,
+        liveOptions: configuration.liveOptions,
+        onOptionalFacetFailure: { try? snapshotStore.saveLastDetailRefreshDiagnostic($0) }
+    )
+}
+
 @MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let options: PDTBarLaunchOptions
@@ -173,10 +184,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 let outcome: PortfolioFetchOutcome
                 do {
                     let fetch = PDTCoalescedFirstPortfolioFetch(
-                        dataSource: PDTMCPConnectorDataSource(
-                            connector: configuration.connector,
-                            liveOptions: configuration.liveOptions
-                        ),
+                        dataSource: firstFetchDataSource(configuration: configuration, snapshotStore: snapshotStore),
                         snapshotStore: snapshotStore,
                         asOf: configuration.asOf,
                         pulseReadStore: pulseReadStore
