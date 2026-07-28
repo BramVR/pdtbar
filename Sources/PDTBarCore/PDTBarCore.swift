@@ -1,3 +1,5 @@
+// swiftlint:disable file_length
+// Tracked debt: finding 05 will split this monolith.
 import Darwin
 import Foundation
 

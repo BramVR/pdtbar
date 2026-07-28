@@ -25,13 +25,18 @@ check_package_manifest() {
 }
 
 run_swiftlint() {
-  "${ROOT_DIR}/Scripts/install_lint_tools.sh" swiftlint
-  if [[ -f "${ROOT_DIR}/.swiftlint.yml" ]]; then
-    (cd "$ROOT_DIR" && "${BIN_DIR}/swiftlint" --strict)
-  else
-    "${BIN_DIR}/swiftlint" version >/dev/null
-    printf 'swiftlint installed; no .swiftlint.yml configured\n'
+  # Check the config before downloading the tool: no point fetching ~10MB to then bail.
+  if [[ ! -f "${ROOT_DIR}/.swiftlint.yml" ]]; then
+    printf 'ERROR: .swiftlint.yml is required; SwiftLint cannot run without the repo configuration.\n' >&2
+    exit 1
   fi
+  "${ROOT_DIR}/Scripts/install_lint_tools.sh" swiftlint
+  # CLT-only installs need this SourceKit framework path; full-Xcode CI supplies its own.
+  if [[ "$(uname -s)" == "Darwin" ]] \
+    && [[ "$(xcode-select -p 2>/dev/null || true)" == "/Library/Developer/CommandLineTools" ]]; then
+    export DYLD_FRAMEWORK_PATH="/Library/Developer/CommandLineTools/usr/lib${DYLD_FRAMEWORK_PATH:+:${DYLD_FRAMEWORK_PATH}}"
+  fi
+  (cd "$ROOT_DIR" && "${BIN_DIR}/swiftlint" lint --strict --config .swiftlint.yml)
 }
 
 run_portable_checks() {

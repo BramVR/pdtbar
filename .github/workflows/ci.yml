@@ -46,6 +46,12 @@ jobs:
           /usr/bin/xcodebuild -version
           swift --version
 
+      - name: Lint
+        run: ./Scripts/lint.sh
+
+      - name: Script syntax
+        run: ./Scripts/check.sh scripts
+
       - name: Build
         run: swift build
 

@@ -9,6 +9,7 @@ BIN_DIR="${TOOLS_DIR}/bin"
 SWIFTLINT_VERSION="0.63.2"
 SWIFTLINT_SHA256_DARWIN="c59a405c85f95b92ced677a500804e081596a4cae4a6a485af76065557d6ed29"
 SWIFTLINT_SHA256_LINUX_X86_64="dd1017cfd20a1457f264590bcb5875a6ee06cd75b9a9d4f77cd43a552499143b"
+SWIFTLINT_SHA256_LINUX_ARM64="104dedff762157f5cff7752f1cc2a289b60f3ea677e72d651c6f3a3287fdd948"
 
 log() { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -58,6 +59,8 @@ install_zip_binary() {
   local expected_sha="$3"
   local binary_name="$4"
 
+  [[ -n "$expected_sha" ]] || fail "${label} has no configured SHA256; refusing unverified install"
+
   local tmp_zip
   tmp_zip="$(mktemp -t "${label}.XXXX")"
   local tmp_dir
@@ -68,11 +71,12 @@ install_zip_binary() {
 
   local actual_sha
   actual_sha="$(sha256_value "$tmp_zip")"
-  if [[ -n "$expected_sha" && "$actual_sha" != "$expected_sha" ]]; then
+  if [[ "$actual_sha" != "$expected_sha" ]]; then
     rm -f "$tmp_zip"
     rm -rf "$tmp_dir"
     fail "${label} SHA256 mismatch (expected ${expected_sha}, got ${actual_sha})"
   fi
+  log "==> Verified ${label} SHA256 ${actual_sha}"
 
   unzip -q "$tmp_zip" -d "$tmp_dir"
 
@@ -123,8 +127,7 @@ case "$OS" in
         ;;
       aarch64|arm64)
         SWIFTLINT_URL="https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/swiftlint_linux_arm64.zip"
-        SWIFTLINT_SHA256=""
-        log "WARN: Linux SHA256 verification not configured for ${ARCH}; installing anyway."
+        SWIFTLINT_SHA256="$SWIFTLINT_SHA256_LINUX_ARM64"
         ;;
       *)
         fail "Unsupported Linux arch: ${ARCH}"
