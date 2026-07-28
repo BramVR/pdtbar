@@ -402,7 +402,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             timeout: timeout,
             environment: readEnvironment
         )
-        var currentSessionFiles = claudeToolResultFiles(sessionID: sessionID)
+        var currentSessionFiles = claudeToolResultFiles(sessionID: sessionID).files
         defer {
             deleteClaudeToolResultFiles(pdtToolResultFiles(
                 referencedBy: result.stdout,
@@ -586,12 +586,13 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         }
     }
 
-    private func claudeProjectDirectory(sessionID: String) -> URL? {
+    private func claudeProjectDirectory(sessionID: String, discoverIfNeeded: Bool = true) -> URL? {
         claudeProjectDirectoryLock.lock()
         defer { claudeProjectDirectoryLock.unlock() }
         if let rememberedClaudeProjectDirectory {
             return rememberedClaudeProjectDirectory
         }
+        guard discoverIfNeeded else { return nil }
         claudeProjectDirectoryDiscoveryCount += 1
         guard let projects = try? FileManager.default.contentsOfDirectory(
             at: configuration.claudeProjectsDirectory,
@@ -617,10 +618,14 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         return discoveredProjectDirectory
     }
 
-    private func claudeToolResultFiles(sessionID: String) -> Set<URL> {
-        guard let projectDirectory = claudeProjectDirectory(sessionID: sessionID) else {
-            return []
-        }
+    private func invalidateClaudeProjectDirectory(_ expectedDirectory: URL) {
+        claudeProjectDirectoryLock.lock()
+        defer { claudeProjectDirectoryLock.unlock() }
+        if rememberedClaudeProjectDirectory == expectedDirectory { rememberedClaudeProjectDirectory = nil }
+    }
+
+    private func claudeToolResultFiles(sessionID: String, discoverIfNeeded: Bool = true) -> (projectDirectory: URL?, files: Set<URL>) {
+        guard let projectDirectory = claudeProjectDirectory(sessionID: sessionID, discoverIfNeeded: discoverIfNeeded) else { return (nil, []) }
         let toolResults = projectDirectory
             .appending(path: sessionID)
             .appending(path: "tool-results")
@@ -629,19 +634,33 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         )) ?? []
-        return Set(toolFiles.filter { $0.pathExtension == "txt" })
+        return (projectDirectory, Set(toolFiles.filter { $0.pathExtension == "txt" }))
     }
 
     private func currentSessionToolResultFiles(readToolNames: [String], sessionID: String) -> Set<URL> {
         let deadline = Date().addingTimeInterval(1.0)
         var pollingDelay = 0.01
+        var rediscoveryAttempted = false
         var sessionFiles = Set<URL>()
         while true {
-            sessionFiles = claudeToolResultFiles(sessionID: sessionID)
+            let lookup = claudeToolResultFiles(sessionID: sessionID, discoverIfNeeded: !rediscoveryAttempted)
+            sessionFiles = lookup.files
             if sessionFiles.contains(where: { file in
                 readToolNames.contains { file.lastPathComponent.contains($0) }
             }) {
                 break
+            }
+            if !rediscoveryAttempted {
+                rediscoveryAttempted = true
+                if let projectDirectory = lookup.projectDirectory {
+                    invalidateClaudeProjectDirectory(projectDirectory)
+                    sessionFiles = claudeToolResultFiles(sessionID: sessionID).files
+                    if sessionFiles.contains(where: { file in
+                        readToolNames.contains { file.lastPathComponent.contains($0) }
+                    }) {
+                        break
+                    }
+                }
             }
             let remaining = deadline.timeIntervalSinceNow
             guard remaining > 0 else {

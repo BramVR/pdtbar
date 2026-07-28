@@ -100,6 +100,64 @@ struct ClaudeLocalConnectionToolResultTests {
         #expect(fixture.connection.claudeProjectDirectoryDiscoveryCountForTesting == 1)
     }
 
+    @Test("A stale cached project directory is rediscovered for file delivery")
+    func staleCachedProjectDirectoryIsRediscoveredForFileDelivery() throws {
+        let fixture = try ToolResultFixture(delivery: .staleCachedDirectoryThenMovedFile)
+        defer { fixture.remove() }
+
+        let inlineData = try fixture.connection.callReadTool(
+            "pdt-get-portfolio-holdings",
+            arguments: [:]
+        )
+        let fileData = try fixture.connection.callReadTool(
+            "pdt-get-portfolio-holdings",
+            arguments: [:]
+        )
+
+        #expect(try firstHoldingName(in: inlineData) == "Inline Public Co")
+        #expect(try firstHoldingName(in: fileData) == "File Public Co")
+    }
+
+    @Test("Repeated inline results do not repeat project directory discovery")
+    func repeatedInlineResultsDoNotRepeatProjectDirectoryDiscovery() throws {
+        let fixture = try ToolResultFixture(delivery: .inline(createLeftover: false))
+        defer { fixture.remove() }
+
+        for _ in 0..<4 {
+            let data = try fixture.connection.callReadTool(
+                "pdt-get-portfolio-holdings",
+                arguments: [:]
+            )
+            #expect(try firstHoldingName(in: data) == "Inline Public Co")
+        }
+
+        #expect(fixture.connection.claudeProjectDirectoryDiscoveryCountForTesting == 1)
+    }
+
+    @Test("A fallback read rediscovers a stale project directory at most once")
+    func fallbackReadRediscoversStaleProjectDirectoryAtMostOnce() throws {
+        let fixture = try ToolResultFixture(delivery: .staleCachedDirectoryThenMissingFile)
+        defer { fixture.remove() }
+
+        _ = try fixture.connection.callReadTool(
+            "pdt-get-portfolio-holdings",
+            arguments: [:]
+        )
+        let discoveryCountBeforeFallback =
+            fixture.connection.claudeProjectDirectoryDiscoveryCountForTesting
+
+        #expect(throws: Error.self) {
+            _ = try fixture.connection.callReadTool(
+                "pdt-get-portfolio-holdings",
+                arguments: [:]
+            )
+        }
+        #expect(
+            fixture.connection.claudeProjectDirectoryDiscoveryCountForTesting
+                == discoveryCountBeforeFallback + 1
+        )
+    }
+
     private func firstHoldingName(in data: Data) throws -> String? {
         let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         let holdings = object?["holdings"] as? [[String: Any]]
@@ -142,6 +200,8 @@ private final class ToolResultClaudeCommandRunner: ClaudeLocalCommandRunning, @u
         case immediateFile
         case delayedFile(TimeInterval)
         case inlineWithoutSessionThenImmediateFile
+        case staleCachedDirectoryThenMovedFile
+        case staleCachedDirectoryThenMissingFile
     }
 
     private let root: URL
@@ -224,6 +284,48 @@ private final class ToolResultClaudeCommandRunner: ClaudeLocalCommandRunning, @u
                 try filePayload.write(to: file)
                 remember(resultFile: file)
                 resultLine = fileResultLine(file)
+            }
+        case .staleCachedDirectoryThenMovedFile:
+            if ordinal == 1 {
+                try FileManager.default.createDirectory(
+                    at: toolResults,
+                    withIntermediateDirectories: true
+                )
+                resultLine = """
+                {"type":"tool_result","tool_use_id":"call_1","structuredContent":{"holdings":[{"symbolName":"Inline Public Co"}]}}
+                """
+            } else {
+                try FileManager.default.removeItem(at: root.appending(path: "fixed-project"))
+                let movedToolResults = root
+                    .appending(path: "moved-project")
+                    .appending(path: sessionID)
+                    .appending(path: "tool-results")
+                try FileManager.default.createDirectory(
+                    at: movedToolResults,
+                    withIntermediateDirectories: true
+                )
+                let file = resultFile(in: movedToolResults, ordinal: ordinal)
+                try filePayload.write(to: file)
+                remember(resultFile: file)
+                resultLine = fileResultLine(file)
+            }
+        case .staleCachedDirectoryThenMissingFile:
+            if ordinal == 1 {
+                try FileManager.default.createDirectory(
+                    at: toolResults,
+                    withIntermediateDirectories: true
+                )
+                resultLine = """
+                {"type":"tool_result","tool_use_id":"call_1","structuredContent":{"holdings":[{"symbolName":"Inline Public Co"}]}}
+                """
+            } else {
+                try FileManager.default.removeItem(at: root.appending(path: "fixed-project"))
+                let missingFile = root
+                    .appending(path: "missing-project")
+                    .appending(path: sessionID)
+                    .appending(path: "tool-results")
+                    .appending(path: "pdt-get-portfolio-holdings-\(ordinal).txt")
+                resultLine = fileResultLine(missingFile)
             }
         }
         return ClaudeLocalProcessResult(
