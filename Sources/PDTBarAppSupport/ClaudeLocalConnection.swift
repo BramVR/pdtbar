@@ -101,6 +101,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     private let mcpToolPrefixLock = NSLock()
     private var rememberedPDTToolPrefixes: [String] = []
     private var rememberedNonPDTToolPrefixes: [String] = []
+    private let claudeProjectDirectoryCache: ClaudeProjectDirectoryCache
 
     public convenience init(environment: [String: String]) {
         self.init(configuration: ClaudeLocalConnectionConfiguration(environment: environment))
@@ -116,6 +117,9 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         self.commandRunner = commandRunner
         self.toolResultParser = toolResultParser
         self.retryDelay = retryDelay
+        claudeProjectDirectoryCache = ClaudeProjectDirectoryCache(
+            projectsDirectory: configuration.claudeProjectsDirectory
+        )
     }
 
     public func checkReadiness() -> ClaudeReadinessProbeResult {
@@ -399,7 +403,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             timeout: timeout,
             environment: readEnvironment
         )
-        let currentSessionFiles = currentSessionToolResultFiles(readToolNames: [name], sessionID: sessionID)
+        var currentSessionFiles = claudeToolResultFiles(sessionID: sessionID).files
         defer {
             deleteClaudeToolResultFiles(pdtToolResultFiles(
                 referencedBy: result.stdout,
@@ -410,6 +414,18 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         guard result.exitCode == 0 else {
             throw readToolCallFailure(name, result: result)
         }
+        if let inlineData = try inlineToolResultData(
+            for: toolName,
+            readToolName: name,
+            in: result.stdout
+        ) {
+            return inlineData
+        }
+        currentSessionFiles = currentSessionToolResultFiles(
+            readToolNames: [name],
+            sessionID: sessionID,
+            output: result.stdout
+        )
         return try toolResultData(
             for: toolName,
             readToolName: name,
@@ -554,58 +570,103 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         }
     }
 
-    private func claudeToolResultFiles(sessionID: String? = nil) -> Set<URL> {
-        guard let projects = try? FileManager.default.contentsOfDirectory(
-            at: configuration.claudeProjectsDirectory,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return []
+    private func inlineToolResultData(
+        for toolName: String,
+        readToolName: String,
+        in output: String
+    ) throws -> Data? {
+        do {
+            return try toolResultParser.resultData(
+                for: toolName,
+                readToolName: readToolName,
+                output: output,
+                currentSessionResultFiles: []
+            )
+        } catch ClaudeToolResultParserError.missingToolResult {
+            return nil
+        } catch ClaudeToolResultParserError.missingToolCall {
+            throw PDTMCPConnectorError.transientFailure("Claude did not call \(toolName)")
+        } catch {
+            throw PDTMCPConnectorError.transientFailure("Claude did not return structured data for \(toolName)")
         }
-        var files = Set<URL>()
-        for project in projects {
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: project.path, isDirectory: &isDirectory),
-                  isDirectory.boolValue
-            else { continue }
-            let sessionDirectories: [URL]
-            if let sessionID {
-                sessionDirectories = [project.appending(path: sessionID)]
-            } else {
-                sessionDirectories = (try? FileManager.default.contentsOfDirectory(
-                    at: project,
-                    includingPropertiesForKeys: [.isDirectoryKey],
-                    options: [.skipsHiddenFiles]
-                )) ?? []
-            }
-            for sessionDirectory in sessionDirectories {
-                let toolResults = sessionDirectory.appending(path: "tool-results")
-                guard let toolFiles = try? FileManager.default.contentsOfDirectory(
-                    at: toolResults,
-                    includingPropertiesForKeys: nil,
-                    options: [.skipsHiddenFiles]
-                ) else {
-                    continue
-                }
-                files.formUnion(toolFiles.filter { $0.pathExtension == "txt" })
-            }
-        }
-        return files
     }
 
-    private func currentSessionToolResultFiles(readToolNames: [String], sessionID: String) -> Set<URL> {
+    private func claudeToolResultFiles(sessionID: String, discoverIfNeeded: Bool = true)
+        -> (projectDirectory: URL?, files: Set<URL>)
+    {
+        guard let projectDirectory = claudeProjectDirectoryCache.directory(containing: sessionID, discoverIfNeeded: discoverIfNeeded)
+        else { return (nil, []) }
+        return (projectDirectory, claudeToolResultFiles(sessionID: sessionID, in: projectDirectory))
+    }
+
+    private func claudeToolResultFiles(sessionID: String, in projectDirectory: URL) -> Set<URL> {
+        let toolResults = projectDirectory
+            .appending(path: sessionID)
+            .appending(path: "tool-results")
+        let toolFiles = (try? FileManager.default.contentsOfDirectory(
+            at: toolResults,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        return Set(toolFiles.filter { $0.pathExtension == "txt" })
+    }
+
+    private func currentSessionToolResultFiles(readToolNames: [String], sessionID: String, output: String) -> Set<URL> {
         let deadline = Date().addingTimeInterval(1.0)
+        var pollingDelay = 0.01
+        var rediscoveryAttempted = false
+        var candidateDirectories = [URL]()
         var sessionFiles = Set<URL>()
-        repeat {
-            sessionFiles = claudeToolResultFiles(sessionID: sessionID)
-            if sessionFiles.contains(where: { file in
-                readToolNames.contains { file.lastPathComponent.contains($0) }
-            }) {
+        while true {
+            if candidateDirectories.isEmpty {
+                let lookup = claudeToolResultFiles(sessionID: sessionID, discoverIfNeeded: !rediscoveryAttempted)
+                sessionFiles = lookup.files
+                candidateDirectories = [lookup.projectDirectory].compactMap { $0 }
+            } else {
+                sessionFiles = Set(candidateDirectories.flatMap {
+                    claudeToolResultFiles(sessionID: sessionID, in: $0)
+                })
+            }
+            if expectedToolResultFile(in: sessionFiles, readToolNames: readToolNames, output: output) != nil {
                 break
             }
-            Thread.sleep(forTimeInterval: 0.1)
-        } while Date() < deadline
+            if !rediscoveryAttempted {
+                rediscoveryAttempted = true
+                candidateDirectories = Array(Set(
+                    candidateDirectories
+                        + claudeProjectDirectoryCache.rediscoverDirectories(containing: sessionID)
+                ))
+                sessionFiles = Set(candidateDirectories.flatMap {
+                    claudeToolResultFiles(sessionID: sessionID, in: $0)
+                })
+                if let expectedFile = expectedToolResultFile(in: sessionFiles, readToolNames: readToolNames, output: output) {
+                    rememberClaudeProjectDirectory(containing: expectedFile, sessionID: sessionID)
+                    break
+                }
+            }
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { break }
+            Thread.sleep(forTimeInterval: min(pollingDelay, remaining))
+            pollingDelay *= 2
+        }
         return sessionFiles
+    }
+
+    private func expectedToolResultFile(in files: Set<URL>, readToolNames: [String], output: String) -> URL? {
+        let matchingFiles = files.filter { file in
+            readToolNames.contains { file.lastPathComponent.contains($0) }
+        }
+        return toolResultParser.referencedResultFile(in: output, among: matchingFiles)
+    }
+
+    private func rememberClaudeProjectDirectory(containing file: URL, sessionID: String) {
+        let sessionDirectory = file.deletingLastPathComponent().deletingLastPathComponent()
+        guard sessionDirectory.lastPathComponent == sessionID else { return }
+        claudeProjectDirectoryCache.remember(sessionDirectory.deletingLastPathComponent())
+    }
+
+    var claudeProjectDirectoryDiscoveryCountForTesting: Int {
+        claudeProjectDirectoryCache.discoveryCountForTesting
     }
 
     private func pdtToolResultFiles(

@@ -77,6 +77,13 @@ public struct ClaudeToolResultParser: Sendable {
         return Array(referenced.union(sessionMatches)).sorted { $0.path < $1.path }
     }
 
+    func referencedResultFile(in output: String, among files: Set<URL>) -> URL? {
+        guard let values = try? streamValues(from: output) else { return nil }
+        return values.lazy.compactMap {
+            savedToolResultFile(in: $0, currentSessionResultFiles: files)
+        }.first
+    }
+
     private func streamValues(from output: String) throws -> [ClaudeStreamJSONValue] {
         let decoder = JSONDecoder()
         var values: [ClaudeStreamJSONValue] = []
@@ -164,10 +171,14 @@ public struct ClaudeToolResultParser: Sendable {
             return nil
         }
         if case .string(let text) = content {
-            return currentSessionResultFiles.sorted { $0.path < $1.path }.first { text.contains($0.path) }
+            return currentSessionResultFiles.sorted { $0.path < $1.path }.first {
+                textReferencesFile(text, file: $0)
+            }
         }
         if let text = content.string(for: "text") {
-            return currentSessionResultFiles.sorted { $0.path < $1.path }.first { text.contains($0.path) }
+            return currentSessionResultFiles.sorted { $0.path < $1.path }.first {
+                textReferencesFile(text, file: $0)
+            }
         }
         for child in content.children {
             if let file = savedToolResultFile(in: child, currentSessionResultFiles: currentSessionResultFiles) {
@@ -175,6 +186,14 @@ public struct ClaudeToolResultParser: Sendable {
             }
         }
         return nil
+    }
+
+    private func textReferencesFile(_ text: String, file: URL) -> Bool {
+        if text.contains(file.path) {
+            return true
+        }
+        let projectSessionFileSuffix = file.pathComponents.suffix(4).joined(separator: "/")
+        return text.contains(projectSessionFileSuffix)
     }
 
     private func sessionToolResultFile(
