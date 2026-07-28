@@ -200,8 +200,12 @@ def run_group(
                 for report_path in report_paths
                 for test_suite in ET.parse(report_path).findall(".//testsuite")
             ]
-            tests = sum(int(test_suite.attrib["tests"]) for test_suite in test_suites)
-            skipped = sum(int(test_suite.attrib["skipped"]) for test_suite in test_suites)
+            # Tolerate a missing attribute rather than treating the report as
+            # unparseable: some xUnit writers omit a count when it is zero, and
+            # failing a shard whose tests actually passed is the wrong direction.
+            # An absent `tests` still surfaces loudly via the mismatch check below.
+            tests = sum(int(test_suite.attrib.get("tests", "0")) for test_suite in test_suites)
+            skipped = sum(int(test_suite.attrib.get("skipped", "0")) for test_suite in test_suites)
         except (ET.ParseError, KeyError, OSError, TypeError, ValueError):
             return code, None, None
         return code, tests, skipped
@@ -221,7 +225,8 @@ def validated_test_count(
         return None
     if tests + skipped != expected:
         print(
-            f"::error::Shard {shard_index} executed {tests} tests, expected {expected} ({suite_names})",
+            f"::error::Shard {shard_index} accounted for {tests + skipped} tests "
+            f"({tests} executed, {skipped} skipped), expected {expected} ({suite_names})",
             flush=True,
         )
         return None
