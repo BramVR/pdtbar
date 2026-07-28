@@ -8106,12 +8106,36 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             )
         )
         let neededCalendarSymbolIDs = Set(calendarEvents.filter { $0.type != "no-events-today" }.compactMap(\.symbolId))
-        let quoteMetadata = options.includeIncomeQuoteLookups && !skipRemainingOptionalFacets
-            ? try liveSymbolQuoteMetadata(for: baseSnapshot.openHoldings, neededCalendarSymbolIDs: neededCalendarSymbolIDs)
-            : SymbolQuoteMetadata()
-        let priceSeries = options.includePriceSeries && !skipRemainingOptionalFacets
-            ? try livePriceRows(for: baseSnapshot.openHoldings, asOf: snapshotAsOf)
-            : []
+        var quoteMetadata = SymbolQuoteMetadata()
+        if options.includeIncomeQuoteLookups, !skipRemainingOptionalFacets {
+            do {
+                quoteMetadata = try liveSymbolQuoteMetadata(
+                    for: baseSnapshot.openHoldings,
+                    neededCalendarSymbolIDs: neededCalendarSymbolIDs
+                )
+            } catch {
+                recordOptionalFacetFailure(
+                    error,
+                    tool: "pdt-get-symbol-quote",
+                    phase: .income,
+                    argumentShape: ["id"]
+                )
+            }
+        }
+
+        var priceSeries: [PDTPriceInput] = []
+        if options.includePriceSeries, !skipRemainingOptionalFacets {
+            do {
+                priceSeries = try livePriceRows(for: baseSnapshot.openHoldings, asOf: snapshotAsOf)
+            } catch {
+                recordOptionalFacetFailure(
+                    error,
+                    tool: "pdt-list-symbol-prices",
+                    phase: .priceHistory,
+                    argumentShape: ["date_from", "date_to", "symbol_quote_id"]
+                )
+            }
+        }
         return PDTSnapshotNormalizer.normalize(
             PDTSnapshotNormalizationInput(
                 asOf: snapshotAsOf,

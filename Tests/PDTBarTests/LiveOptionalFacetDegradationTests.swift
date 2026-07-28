@@ -33,6 +33,45 @@ struct LiveOptionalFacetDegradationTests {
         #expect(diagnostics.values.map(\.toolName) == ["pdt-list-x-ray-holdings"])
     }
 
+    @Test("Quote metadata failure preserves holdings and emits one degraded diagnostic")
+    func quoteMetadataFailurePreservesHoldings() throws {
+        let client = OptionalFacetToolClient(failures: [
+            "pdt-get-symbol-quote": PDTMCPConnectorError.transientFailure("quote metadata unavailable"),
+        ])
+        let diagnostics = OptionalFacetDiagnosticRecorder()
+
+        let snapshot = try liveDataSource(
+            client: client,
+            diagnostics: diagnostics,
+            includeIncomeQuoteLookups: true
+        ).snapshot(asOf: "2026-07-28")
+
+        #expect(snapshot.openHoldings.map(\.quoteId) == [9101])
+        #expect(snapshot.latestDetailFillOutcome == .degraded)
+        #expect(diagnostics.values.count == 1)
+        #expect(diagnostics.values.first?.toolName == "pdt-get-symbol-quote")
+    }
+
+    @Test("Price series failure preserves holdings and emits one degraded diagnostic")
+    func priceSeriesFailurePreservesHoldings() throws {
+        let client = OptionalFacetToolClient(failures: [
+            "pdt-list-symbol-prices": PDTMCPConnectorError.transientFailure("price series unavailable"),
+        ])
+        let diagnostics = OptionalFacetDiagnosticRecorder()
+
+        let snapshot = try liveDataSource(
+            client: client,
+            diagnostics: diagnostics,
+            includePriceSeries: true
+        ).snapshot(asOf: "2026-07-28")
+
+        #expect(snapshot.openHoldings.map(\.quoteId) == [9101])
+        #expect(snapshot.priceSeries.isEmpty)
+        #expect(snapshot.latestDetailFillOutcome == .degraded)
+        #expect(diagnostics.values.count == 1)
+        #expect(diagnostics.values.first?.toolName == "pdt-list-symbol-prices")
+    }
+
     @Test("Successful optional facets do not force a degraded outcome")
     func successfulOptionalFacetsRemainHealthy() throws {
         let client = OptionalFacetToolClient()
@@ -63,6 +102,32 @@ struct LiveOptionalFacetDegradationTests {
         #expect(diagnostics.values.map(\.category) == [.setupUnavailable])
     }
 
+    @Test("Quote setup outage skips price series")
+    func quoteSetupOutageSkipsPriceSeries() throws {
+        let client = OptionalFacetToolClient(failures: [
+            "pdt-get-symbol-quote": PDTMCPConnectorError.setupUnavailable("PDT setup unavailable"),
+        ])
+        let diagnostics = OptionalFacetDiagnosticRecorder()
+
+        let snapshot = try liveDataSource(
+            client: client,
+            diagnostics: diagnostics,
+            includeIncomeQuoteLookups: true,
+            includePriceSeries: true
+        ).snapshot(asOf: "2026-07-28")
+
+        #expect(snapshot.latestDetailFillOutcome == .degraded)
+        #expect(client.recordedCalls == [
+            "pdt-get-portfolio-holdings",
+            "pdt-get-portfolio-distributions",
+            "pdt-list-x-ray-holdings",
+            "pdt-list-calendar-events",
+            "pdt-list-dividends",
+            "pdt-get-symbol-quote",
+        ])
+        #expect(diagnostics.values.map(\.category) == [.setupUnavailable])
+    }
+
     @Test("Holdings failure remains fatal")
     func holdingsFailureRemainsFatal() {
         let client = OptionalFacetToolClient(failures: [
@@ -78,7 +143,9 @@ struct LiveOptionalFacetDegradationTests {
 
     private func liveDataSource(
         client: OptionalFacetToolClient,
-        diagnostics: OptionalFacetDiagnosticRecorder
+        diagnostics: OptionalFacetDiagnosticRecorder,
+        includeIncomeQuoteLookups: Bool = false,
+        includePriceSeries: Bool = false
     ) -> PDTLiveDataSource {
         PDTLiveDataSource(
             toolClient: client,
@@ -87,8 +154,8 @@ struct LiveOptionalFacetDegradationTests {
                 includeXRayHoldings: true,
                 includeIncomeEvents: true,
                 includeDividends: true,
-                includeIncomeQuoteLookups: false,
-                includePriceSeries: false
+                includeIncomeQuoteLookups: includeIncomeQuoteLookups,
+                includePriceSeries: includePriceSeries
             ),
             onOptionalFacetFailure: diagnostics.append
         )
@@ -119,7 +186,10 @@ private final class OptionalFacetToolClient: PDTLiveToolClient, @unchecked Senda
         if let failure = failures[name] {
             throw failure
         }
-        return Self.responses[name] ?? Data()
+        guard let response = Self.responses[name] else {
+            throw PDTMCPConnectorError.missingScriptedResponse(name)
+        }
+        return response
     }
 
     private static let responses: [String: Data] = [
