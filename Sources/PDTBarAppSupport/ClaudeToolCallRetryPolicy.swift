@@ -5,10 +5,10 @@ import PDTBarCore
 ///
 /// Every attempt is a full `claude -p` CLI/LLM run (up to the configured tool
 /// timeout), so only errors classified as true transients are retryable:
-/// `ClaudeLocalConnection` maps timeouts, transient-looking nonzero exits, and
-/// missing/unparseable tool results to `transientFailure`. Setup and auth
-/// outages (`setupUnavailable`) and deterministic shape errors repeat
-/// identically on retry and are never retried here.
+/// `ClaudeLocalConnection` maps timeouts to `timeout`, and transient-looking
+/// nonzero exits plus missing/unparseable tool results to `transientFailure`.
+/// Setup and auth outages (`setupUnavailable`) and deterministic shape errors
+/// repeat identically on retry and are never retried here.
 public struct ClaudeToolCallRetryPolicy: Equatable, Sendable {
     public var retryCount: Int
     public var retryBackoffSeconds: Double
@@ -28,7 +28,7 @@ public struct ClaudeToolCallRetryPolicy: Equatable, Sendable {
 
     public func isRetryable(_ error: Error) -> Bool {
         switch error {
-        case PDTMCPConnectorError.transientFailure:
+        case PDTMCPConnectorError.transientFailure, PDTMCPConnectorError.timeout:
             true
         default:
             false

@@ -18,7 +18,7 @@ struct ClaudeToolCallRetryPolicyTests {
         let policy = ClaudeToolCallRetryPolicy(retryCount: 2)
 
         #expect(policy.isRetryable(PDTMCPConnectorError.transientFailure("Claude did not call mcp__pdt__tool")))
-        #expect(policy.isRetryable(PDTMCPConnectorError.transientFailure("Claude pdt-get-portfolio-holdings call timed out")))
+        #expect(policy.isRetryable(PDTMCPConnectorError.timeout("Claude pdt-get-portfolio-holdings call timed out")))
         #expect(!policy.isRetryable(PDTMCPConnectorError.setupUnavailable("Claude did not call mcp__pdt__tool")))
         #expect(!policy.isRetryable(PDTMCPConnectorError.setupUnavailable("Claude PDT MCP server is not connected")))
         #expect(!policy.isRetryable(PDTMCPConnectorError.setupUnavailable("Claude pdt-get-portfolio-holdings reported missing auth or unavailable access")))
