@@ -84,7 +84,6 @@ struct ClaudeLocalConnectionTests {
             renamedReadArguments[renamedAllowedToolsIndex + 1]
                 == "ToolSearch,mcp__PDT_Prod__pdt-list-x-ray-holdings"
         )
-        print("RESOLVED_PDT_PREFIX_ORDER: \(expectedOrder)")
     }
 
     @Test("MCP list parsing derives non-PDT prefixes across names and states")
@@ -162,14 +161,11 @@ struct ClaudeLocalConnectionTests {
         let output = cases.map(\.0).joined(separator: "\n")
         let deniedPrefixes = Set(ClaudeLocalConnection.nonPDTToolPrefixes(fromMCPListOutput: output))
 
-        print("| MCP list line | Detected as PDT | Denied |")
-        print("|---|---:|---:|")
         for (line, prefix, expectedPDT, expectedDenied) in cases {
             let detectedAsPDT = ClaudeLocalConnection.pdtServerIsConnected(in: line)
             let denied = deniedPrefixes.contains(prefix)
             #expect(detectedAsPDT == expectedPDT)
             #expect(denied == expectedDenied)
-            print("| \(line) | \(detectedAsPDT ? "yes" : "no") | \(denied ? "yes" : "no") |")
         }
     }
 
@@ -388,8 +384,6 @@ struct ClaudeLocalConnectionTests {
         #expect(!disallowed.contains("mcp__pdt__pdt-list-x-ray-holdings"))
         #expect(!disallowed.contains("mcp__*"))
 
-        let argvJSON = try JSONSerialization.data(withJSONObject: readArguments)
-        print("GENERATED_READ_ARGV_JSON: \(String(decoding: argvJSON, as: UTF8.self))")
     }
 
     @Test("Availability reports PDT server check progress")
