@@ -85,7 +85,18 @@ jobs:
               echo "Skipped"
               return
             fi
-            git log --oneline "$ref" --since="7 days ago" 2>/dev/null | head -10 || echo "No commits"
+            # --max-count instead of `| head`: head closing the pipe can SIGPIPE git, and
+            # under `pipefail` that inverted the fallback so a BUSY upstream reported
+            # "No commits". Test the captured output instead of the pipeline status.
+            # tr -d '\r': a CR in an upstream subject would otherwise look like a line
+            # break to the $GITHUB_OUTPUT parser.
+            local out
+            out="$(git log --oneline "$ref" --since='7 days ago' --max-count=10 2>/dev/null | tr -d '\r')" || true
+            if [[ -z "$out" ]]; then
+              echo "No commits"
+            else
+              printf '%s\n' "$out"
+            fi
           }
 
           CODEXBAR_BRANCH=$(remote_default_branch codexbar)
@@ -100,27 +111,45 @@ jobs:
           echo "codexbar_commits=$CODEXBAR_NEW" >> "$GITHUB_OUTPUT"
           echo "repobar_commits=$REPOBAR_NEW" >> "$GITHUB_OUTPUT"
 
-          echo "codexbar_summary<<EOF" >> "$GITHUB_OUTPUT"
-          summarize_recent codexbar "$CODEXBAR_REF" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-
-          echo "repobar_summary<<EOF" >> "$GITHUB_OUTPUT"
-          summarize_recent repobar "$REPOBAR_REF" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          DELIM="EOF_$(openssl rand -hex 16)"
+          {
+            echo "codexbar_summary<<${DELIM}"
+            summarize_recent codexbar "$CODEXBAR_REF"
+            echo "${DELIM}"
+            echo "repobar_summary<<${DELIM}"
+            summarize_recent repobar "$REPOBAR_REF"
+            echo "${DELIM}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create or update issue
         if: steps.check.outputs.codexbar_commits > 0 || steps.check.outputs.repobar_commits > 0
         uses: actions/github-script@v9.0.0
+        env:
+          CODEXBAR_COMMITS: ${{ steps.check.outputs.codexbar_commits }}
+          REPOBAR_COMMITS: ${{ steps.check.outputs.repobar_commits }}
+          CODEXBAR_REF: ${{ steps.check.outputs.codexbar_ref }}
+          REPOBAR_REF: ${{ steps.check.outputs.repobar_ref }}
+          CODEXBAR_SUMMARY: ${{ steps.check.outputs.codexbar_summary }}
+          REPOBAR_SUMMARY: ${{ steps.check.outputs.repobar_summary }}
         with:
           script: |
-            const codexbarCommits = '${{ steps.check.outputs.codexbar_commits }}';
-            const repobarCommits = '${{ steps.check.outputs.repobar_commits }}';
-            const codexbarRef = '${{ steps.check.outputs.codexbar_ref }}';
-            const repobarRef = '${{ steps.check.outputs.repobar_ref }}';
+            // Upstream commit text and branch names are third-party data. Read them from
+            // env at runtime. Never interpolate them into this script with workflow
+            // expression syntax: that substitution happens before the script is parsed,
+            // so the value would become program source rather than data.
+            // (Deliberately not writing that syntax literally here -- an expression in a
+            // `with:` value is evaluated by Actions even inside a JS comment.)
+            const codexbarCommits = process.env.CODEXBAR_COMMITS ?? '0';
+            const repobarCommits = process.env.REPOBAR_COMMITS ?? '0';
+            const codexbarRef = process.env.CODEXBAR_REF ?? '';
+            const repobarRef = process.env.REPOBAR_REF ?? '';
             const codexbarBranch = codexbarRef.replace('codexbar/', '');
             const repobarBranch = repobarRef.replace('repobar/', '');
-            const codexbarSummary = `${{ steps.check.outputs.codexbar_summary }}`;
-            const repobarSummary = `${{ steps.check.outputs.repobar_summary }}`;
+            // The summaries are rendered inside a ``` fence in the issue body; neutralise
+            // any fence in upstream text so it cannot break out of the code block.
+            const fenced = (s) => String(s ?? '').replace(/`{3,}/g, "'''");
+            const codexbarSummary = fenced(process.env.CODEXBAR_SUMMARY);
+            const repobarSummary = fenced(process.env.REPOBAR_SUMMARY);
 
             const body = `## Upstream Changes Detected
 
