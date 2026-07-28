@@ -975,8 +975,8 @@ private final class RecordingClaudeCommandRunner: ClaudeLocalCommandRunning, @un
             : queuedResults.removeFirst()
         lock.unlock()
         if simulatedDelay > timeout {
-            // Match DefaultClaudeLocalCommandRunner: -1 with no missing-binary
-            // stderr is classified by ClaudeLocalConnection as a timeout.
+            // Match DefaultClaudeLocalCommandRunner: ClaudeLocalConnection treats
+            // exit code -1 as a timeout unless stderr is the missing-binary message.
             return ClaudeLocalProcessResult(stdout: "", stderr: "", exitCode: -1)
         }
         return result
