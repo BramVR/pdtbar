@@ -134,6 +134,23 @@ struct ClaudeLocalConnectionToolResultTests {
         #expect(fixture.connection.claudeProjectDirectoryDiscoveryCountForTesting == 1)
     }
 
+    @Test("Rediscovery skips an empty duplicate session directory")
+    func rediscoverySkipsEmptyDuplicateSessionDirectory() throws {
+        let fixture = try ToolResultFixture(delivery: .staleDuplicateThenMovedFile)
+        defer { fixture.remove() }
+
+        _ = try fixture.connection.callReadTool(
+            "pdt-get-portfolio-holdings",
+            arguments: [:]
+        )
+        let fileData = try fixture.connection.callReadTool(
+            "pdt-get-portfolio-holdings",
+            arguments: [:]
+        )
+
+        #expect(try firstHoldingName(in: fileData) == "File Public Co")
+    }
+
     @Test("A fallback read rediscovers a stale project directory at most once")
     func fallbackReadRediscoversStaleProjectDirectoryAtMostOnce() throws {
         let fixture = try ToolResultFixture(delivery: .staleCachedDirectoryThenMissingFile)
@@ -201,6 +218,7 @@ private final class ToolResultClaudeCommandRunner: ClaudeLocalCommandRunning, @u
         case delayedFile(TimeInterval)
         case inlineWithoutSessionThenImmediateFile
         case staleCachedDirectoryThenMovedFile
+        case staleDuplicateThenMovedFile
         case staleCachedDirectoryThenMissingFile
     }
 
@@ -296,6 +314,33 @@ private final class ToolResultClaudeCommandRunner: ClaudeLocalCommandRunning, @u
                 """
             } else {
                 try FileManager.default.removeItem(at: root.appending(path: "fixed-project"))
+                let movedToolResults = root
+                    .appending(path: "moved-project")
+                    .appending(path: sessionID)
+                    .appending(path: "tool-results")
+                try FileManager.default.createDirectory(
+                    at: movedToolResults,
+                    withIntermediateDirectories: true
+                )
+                let file = resultFile(in: movedToolResults, ordinal: ordinal)
+                try filePayload.write(to: file)
+                remember(resultFile: file)
+                resultLine = fileResultLine(file)
+            }
+        case .staleDuplicateThenMovedFile:
+            if ordinal == 1 {
+                try FileManager.default.createDirectory(
+                    at: toolResults,
+                    withIntermediateDirectories: true
+                )
+                resultLine = """
+                {"type":"tool_result","tool_use_id":"call_1","structuredContent":{"holdings":[{"symbolName":"Inline Public Co"}]}}
+                """
+            } else {
+                try FileManager.default.createDirectory(
+                    at: toolResults,
+                    withIntermediateDirectories: true
+                )
                 let movedToolResults = root
                     .appending(path: "moved-project")
                     .appending(path: sessionID)

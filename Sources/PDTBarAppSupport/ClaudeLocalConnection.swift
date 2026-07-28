@@ -101,9 +101,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     private let mcpToolPrefixLock = NSLock()
     private var rememberedPDTToolPrefixes: [String] = []
     private var rememberedNonPDTToolPrefixes: [String] = []
-    private let claudeProjectDirectoryLock = NSLock()
-    private var rememberedClaudeProjectDirectory: URL?
-    private var claudeProjectDirectoryDiscoveryCount = 0
+    private let claudeProjectDirectoryCache: ClaudeProjectDirectoryCache
 
     public convenience init(environment: [String: String]) {
         self.init(configuration: ClaudeLocalConnectionConfiguration(environment: environment))
@@ -119,6 +117,9 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         self.commandRunner = commandRunner
         self.toolResultParser = toolResultParser
         self.retryDelay = retryDelay
+        claudeProjectDirectoryCache = ClaudeProjectDirectoryCache(
+            projectsDirectory: configuration.claudeProjectsDirectory
+        )
     }
 
     public func checkReadiness() -> ClaudeReadinessProbeResult {
@@ -586,46 +587,16 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         }
     }
 
-    private func claudeProjectDirectory(sessionID: String, discoverIfNeeded: Bool = true) -> URL? {
-        claudeProjectDirectoryLock.lock()
-        defer { claudeProjectDirectoryLock.unlock() }
-        if let rememberedClaudeProjectDirectory {
-            return rememberedClaudeProjectDirectory
-        }
-        guard discoverIfNeeded else { return nil }
-        claudeProjectDirectoryDiscoveryCount += 1
-        guard let projects = try? FileManager.default.contentsOfDirectory(
-            at: configuration.claudeProjectsDirectory,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return nil
-        }
-        let discoveredProjectDirectory = projects.first { project in
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: project.path, isDirectory: &isDirectory),
-                  isDirectory.boolValue
-            else { return false }
-            var isSessionDirectory: ObjCBool = false
-            return FileManager.default.fileExists(
-                atPath: project.appending(path: sessionID).path,
-                isDirectory: &isSessionDirectory
-            ) && isSessionDirectory.boolValue
-        }
-        if let discoveredProjectDirectory {
-            rememberedClaudeProjectDirectory = discoveredProjectDirectory
-        }
-        return discoveredProjectDirectory
-    }
-
-    private func invalidateClaudeProjectDirectory(_ expectedDirectory: URL) {
-        claudeProjectDirectoryLock.lock()
-        defer { claudeProjectDirectoryLock.unlock() }
-        if rememberedClaudeProjectDirectory == expectedDirectory { rememberedClaudeProjectDirectory = nil }
-    }
-
-    private func claudeToolResultFiles(sessionID: String, discoverIfNeeded: Bool = true) -> (projectDirectory: URL?, files: Set<URL>) {
-        guard let projectDirectory = claudeProjectDirectory(sessionID: sessionID, discoverIfNeeded: discoverIfNeeded) else { return (nil, []) }
+    private func claudeToolResultFiles(
+        sessionID: String,
+        discoverIfNeeded: Bool = true,
+        excluding excludedDirectory: URL? = nil
+    ) -> (projectDirectory: URL?, files: Set<URL>) {
+        guard let projectDirectory = claudeProjectDirectoryCache.directory(
+            containing: sessionID,
+            discoverIfNeeded: discoverIfNeeded,
+            excluding: excludedDirectory
+        ) else { return (nil, []) }
         let toolResults = projectDirectory
             .appending(path: sessionID)
             .appending(path: "tool-results")
@@ -653,12 +624,19 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             if !rediscoveryAttempted {
                 rediscoveryAttempted = true
                 if let projectDirectory = lookup.projectDirectory {
-                    invalidateClaudeProjectDirectory(projectDirectory)
-                    sessionFiles = claudeToolResultFiles(sessionID: sessionID).files
+                    claudeProjectDirectoryCache.invalidate(projectDirectory)
+                    let rediscovered = claudeToolResultFiles(
+                        sessionID: sessionID,
+                        excluding: projectDirectory
+                    )
+                    sessionFiles = rediscovered.files
                     if sessionFiles.contains(where: { file in
                         readToolNames.contains { file.lastPathComponent.contains($0) }
                     }) {
                         break
+                    }
+                    if rediscovered.projectDirectory == nil {
+                        claudeProjectDirectoryCache.rememberIfEmpty(projectDirectory)
                     }
                 }
             }
@@ -673,9 +651,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     }
 
     var claudeProjectDirectoryDiscoveryCountForTesting: Int {
-        claudeProjectDirectoryLock.lock()
-        defer { claudeProjectDirectoryLock.unlock() }
-        return claudeProjectDirectoryDiscoveryCount
+        claudeProjectDirectoryCache.discoveryCountForTesting
     }
 
     private func pdtToolResultFiles(
