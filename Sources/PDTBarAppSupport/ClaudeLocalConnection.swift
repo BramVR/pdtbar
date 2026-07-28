@@ -96,6 +96,7 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     private let retryDelay: @Sendable (TimeInterval) -> Void
     private let mcpToolPrefixLock = NSLock()
     private var rememberedPDTToolPrefixes: [String] = []
+    private var rememberedNonPDTToolPrefixes: [String] = []
 
     public convenience init(environment: [String: String]) {
         self.init(configuration: ClaudeLocalConnectionConfiguration(environment: environment))
@@ -244,18 +245,44 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     }
 
     public static func pdtToolPrefixes(fromMCPListOutput output: String) -> [String] {
-        var pdt: [String] = []
+        mcpToolPrefixes(fromMCPListOutput: output).pdt
+    }
+
+    public static func nonPDTToolPrefixes(fromMCPListOutput output: String) -> [String] {
+        mcpToolPrefixes(fromMCPListOutput: output).nonPDT
+    }
+
+    private static func mcpToolPrefixes(fromMCPListOutput output: String) -> (pdt: [String], nonPDT: [String]) {
+        var canonicalPDT: [String] = []
+        var loosePDT: [String] = []
+        var nonPDT: [String] = []
         for line in output.split(separator: "\n") {
+            let lowercasedLine = line.lowercased()
+            guard line.contains(" - ") || lowercasedLine.contains("connected") else {
+                continue
+            }
             let displayName = mcpDisplayName(from: line)
             guard !displayName.isEmpty else {
                 continue
             }
             let prefix = mcpToolPrefix(fromMCPDisplayName: displayName)
             if pdtServerIsConnected(in: String(line)) {
-                pdt.append(prefix)
+                if lowercasedLine.contains("portfolio dividend tracker")
+                    || lowercasedLine.contains("portfoliodividendtracker.com") {
+                    canonicalPDT.append(prefix)
+                } else {
+                    // Prefer the canonical connector regardless of list order, but
+                    // retain loose PDT matches so renamed installs keep working.
+                    // Over-including is fail-open; under-including is fail-broken.
+                    loosePDT.append(prefix)
+                }
+            } else if !lowercasedLine.contains("portfolio dividend tracker"),
+                      !lowercasedLine.contains("portfoliodividendtracker.com"),
+                      !lowercasedLine.contains("pdt") {
+                nonPDT.append(prefix)
             }
         }
-        return uniqued(pdt)
+        return (uniqued(canonicalPDT + loosePDT), uniqued(nonPDT))
     }
 
     private static let defaultPDTToolPrefix = "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__"
@@ -344,6 +371,9 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             executable: configuration.claudePath,
             arguments: [
                 "--model", configuration.model,
+                // Pin refusal of unlisted tools instead of inheriting a user's
+                // settings mode, which could otherwise allow or prompt for one.
+                "--permission-mode", "dontAsk",
                 "--allowedTools", "ToolSearch,\(toolName)",
                 "--disallowedTools", disallowedTools(readToolName: name, allowedToolName: toolName).joined(separator: ","),
                 "--session-id", sessionID,
@@ -454,13 +484,14 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     }
 
     private func rememberMCPToolPrefixes(fromMCPListOutput output: String) {
-        let prefixes = Self.pdtToolPrefixes(fromMCPListOutput: output)
-        guard !prefixes.isEmpty else {
+        let prefixes = Self.mcpToolPrefixes(fromMCPListOutput: output)
+        guard !prefixes.pdt.isEmpty else {
             return
         }
         mcpToolPrefixLock.lock()
         defer { mcpToolPrefixLock.unlock() }
-        rememberedPDTToolPrefixes = Self.uniqued(prefixes + rememberedPDTToolPrefixes)
+        rememberedPDTToolPrefixes = Self.uniqued(prefixes.pdt + rememberedPDTToolPrefixes)
+        rememberedNonPDTToolPrefixes = Self.uniqued(prefixes.nonPDT + rememberedNonPDTToolPrefixes)
     }
 
     private func pdtToolPrefixes() -> [String] {
@@ -471,11 +502,20 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
 
     private func disallowedTools(readToolName: String, allowedToolName: String) -> [String] {
         var tools = ClaudePDTReadOnlyToolPolicy.disallowedTools
+        let resolvedPDTToolPrefix = String(allowedToolName.dropLast(readToolName.count))
         // Intentional live-Claude policy: ToolSearch is allowed only so Claude can
         // hydrate deferred remote MCP tools. The requested PDT read tool is exact;
         // built-ins, known non-requested PDT reads, and PDT mutators are denied
         // before the stream parser accepts the result.
         tools.append(contentsOf: PDTReadTools.allowedV1.filter { $0 != readToolName }.map { "mcp__*__\($0)" })
+        mcpToolPrefixLock.lock()
+        let nonPDTDenies = rememberedNonPDTToolPrefixes
+            // Never deny the resolved PDT server: Claude evaluates deny before allow.
+            .filter { $0 != resolvedPDTToolPrefix }
+            .map { "\($0)*" }
+            .sorted()
+        mcpToolPrefixLock.unlock()
+        tools.append(contentsOf: nonPDTDenies)
         tools.removeAll { $0 == allowedToolName }
         return tools
     }

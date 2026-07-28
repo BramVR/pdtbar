@@ -26,6 +26,149 @@ struct ClaudeLocalConnectionTests {
         #expect(prefixes == ["mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__"])
     }
 
+    @Test("Canonical PDT prefix wins regardless of list order with renamed fallback")
+    func canonicalPDTPrefixWinsRegardlessOfListOrderWithRenamedFallback() throws {
+        let output = """
+        pdt-staging: https://staging.example/mcp - ✔ Connected
+        claude.ai Portfolio Dividend Tracker (PDT): https://mcp.portfoliodividendtracker.com - ✔ Connected
+        claude.ai Gmail: https://gmailmcp.googleapis.com/mcp/v1 - ✔ Connected
+        """
+        let expectedOrder = [
+            "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__",
+            "mcp__pdt_staging__",
+        ]
+        #expect(ClaudeLocalConnection.pdtToolPrefixes(fromMCPListOutput: output) == expectedOrder)
+        #expect(ClaudeLocalConnection.pdtToolPrefixes(
+            fromMCPListOutput: "PDT Prod: https://pdt-prod.example/mcp - ✔ Connected"
+        ) == ["mcp__PDT_Prod__"])
+
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: output, stderr: "", exitCode: 0),
+            .init(stdout: streamJSON(
+                toolName: "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-list-x-ray-holdings",
+                result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"items":[]}}"#
+            ), stderr: "", exitCode: 0),
+        ])
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 0, claudeProjectsDirectory: temporaryClaudeProjectsDirectory()),
+            commandRunner: runner
+        )
+
+        _ = try connection.callReadTool("pdt-list-x-ray-holdings", arguments: [:])
+
+        let readArguments = try #require(runner.requests.last?.arguments)
+        let allowedToolsIndex = try #require(readArguments.firstIndex(of: "--allowedTools"))
+        #expect(
+            readArguments[allowedToolsIndex + 1]
+                == "ToolSearch,mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__pdt-list-x-ray-holdings"
+        )
+
+        let renamedOutput = "PDT Prod: https://pdt-prod.example/mcp - ✔ Connected"
+        let renamedRunner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: renamedOutput, stderr: "", exitCode: 0),
+            .init(stdout: streamJSON(
+                toolName: "mcp__PDT_Prod__pdt-list-x-ray-holdings",
+                result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"items":[]}}"#
+            ), stderr: "", exitCode: 0),
+        ])
+        let renamedConnection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 0, claudeProjectsDirectory: temporaryClaudeProjectsDirectory()),
+            commandRunner: renamedRunner
+        )
+
+        _ = try renamedConnection.callReadTool("pdt-list-x-ray-holdings", arguments: [:])
+
+        let renamedReadArguments = try #require(renamedRunner.requests.last?.arguments)
+        let renamedAllowedToolsIndex = try #require(renamedReadArguments.firstIndex(of: "--allowedTools"))
+        #expect(
+            renamedReadArguments[renamedAllowedToolsIndex + 1]
+                == "ToolSearch,mcp__PDT_Prod__pdt-list-x-ray-holdings"
+        )
+    }
+
+    @Test("MCP list parsing derives non-PDT prefixes across names and states")
+    func mcpListParsingDerivesNonPDTPrefixesAcrossNamesAndStates() {
+        let output = """
+        claude.ai Portfolio Dividend Tracker (PDT): https://mcp.portfoliodividendtracker.com - ✔ Connected
+        claude.ai Gmail: https://gmailmcp.googleapis.com/mcp/v1 - ✔ Connected
+        claude.ai Google Drive: https://drivemcp.googleapis.com/mcp/v1 - ! Needs authentication
+        Local Webflow (Design/API): http://127.0.0.1:7331/mcp - ✘ Failed to connect
+        Notion - Workspace [beta]: https://mcp.notion.example - Disconnected
+        PDT Prod: https://pdt-prod.example/mcp - ✔ Connected
+        My PDT Server: https://pdt.example/mcp - ✔ Connected
+        pdt-staging: https://staging.example/mcp - ✔ Connected
+        informational text without a server status
+        """
+
+        let prefixes = ClaudeLocalConnection.nonPDTToolPrefixes(fromMCPListOutput: output)
+
+        #expect(prefixes == [
+            "mcp__claude_ai_Gmail__",
+            "mcp__claude_ai_Google_Drive__",
+            "mcp__Local_Webflow_Design_API__",
+            "mcp__Notion_Workspace_beta__",
+        ])
+        #expect(ClaudeLocalConnection.nonPDTToolPrefixes(fromMCPListOutput: "").isEmpty)
+        #expect(ClaudeLocalConnection.nonPDTToolPrefixes(fromMCPListOutput: "unparseable output").isEmpty)
+    }
+
+    @Test("PDT-ish server names fail open and are never denied")
+    func pdtishServerNamesFailOpenAndAreNeverDenied() throws {
+        let mcpListOutput = """
+        PDT Prod: https://pdt-prod.example/mcp - ✔ Connected
+        My PDT Server: https://pdt.example/mcp - ✔ Connected
+        pdt-staging: https://staging.example/mcp - ✔ Connected
+        claude.ai Gmail: https://gmailmcp.googleapis.com/mcp/v1 - ✔ Connected
+        """
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: mcpListOutput, stderr: "", exitCode: 0),
+            .init(stdout: streamJSON(
+                toolName: "mcp__PDT_Prod__pdt-list-x-ray-holdings",
+                result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"items":[]}}"#
+            ), stderr: "", exitCode: 0),
+        ])
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 0, claudeProjectsDirectory: temporaryClaudeProjectsDirectory()),
+            commandRunner: runner
+        )
+
+        _ = try connection.callReadTool("pdt-list-x-ray-holdings", arguments: [:])
+
+        let readArguments = try #require(runner.requests.last?.arguments)
+        let disallowedFlagIndex = try #require(readArguments.firstIndex(of: "--disallowedTools"))
+        let disallowed = Set(readArguments[disallowedFlagIndex + 1].split(separator: ",").map(String.init))
+        #expect(disallowed.contains("mcp__claude_ai_Gmail__*"))
+        #expect(!disallowed.contains("mcp__PDT_Prod__*"))
+        #expect(!disallowed.contains("mcp__My_PDT_Server__*"))
+        #expect(!disallowed.contains("mcp__pdt_staging__*"))
+    }
+
+    @Test("MCP detection and deny classification matrix")
+    func mcpDetectionAndDenyClassificationMatrix() {
+        let cases = [
+            (
+                "claude.ai Portfolio Dividend Tracker (PDT): ... - Connected",
+                "mcp__claude_ai_Portfolio_Dividend_Tracker_PDT__",
+                true,
+                false
+            ),
+            ("PDT Prod: ... - Connected", "mcp__PDT_Prod__", true, false),
+            ("My PDT Server: ... - Connected", "mcp__My_PDT_Server__", true, false),
+            ("pdt-staging: ... - Connected", "mcp__pdt_staging__", true, false),
+            ("claude.ai Gmail: ... - Connected", "mcp__claude_ai_Gmail__", false, true),
+            ("claude.ai Notion: ... - Connected", "mcp__claude_ai_Notion__", false, true),
+        ]
+        let output = cases.map(\.0).joined(separator: "\n")
+        let deniedPrefixes = Set(ClaudeLocalConnection.nonPDTToolPrefixes(fromMCPListOutput: output))
+
+        for (line, prefix, expectedPDT, expectedDenied) in cases {
+            let detectedAsPDT = ClaudeLocalConnection.pdtServerIsConnected(in: line)
+            let denied = deniedPrefixes.contains(prefix)
+            #expect(detectedAsPDT == expectedPDT)
+            #expect(denied == expectedDenied)
+        }
+    }
+
     @Test("Missing Claude classifies readiness and availability as setup unavailable")
     func missingClaudeClassifiesSetupUnavailable() throws {
         let runner = RecordingClaudeCommandRunner(executableAvailable: false)
@@ -151,6 +294,8 @@ struct ClaudeLocalConnectionTests {
 
         #expect(runner.requests.count == 2)
         let readArguments = runner.requests.last?.arguments ?? []
+        let modelIndex = try #require(readArguments.firstIndex(of: "--model"))
+        #expect(Array(readArguments[(modelIndex + 2)...(modelIndex + 3)]) == ["--permission-mode", "dontAsk"])
         #expect(readArguments.joined(separator: " ").contains("--allowedTools ToolSearch,mcp__pdt__pdt-list-x-ray-holdings"))
         var disallowed = Set<String>()
         if let flagIndex = readArguments.firstIndex(of: "--disallowedTools"), flagIndex + 1 < readArguments.count {
@@ -165,9 +310,80 @@ struct ClaudeLocalConnectionTests {
         #expect(disallowed.contains("mcp__*__pdt-update-*"))
         #expect(disallowed.contains("mcp__*__pdt-get-portfolio-holdings"))
         #expect(disallowed.contains("mcp__*__pdt-get-symbol"))
+        #expect(disallowed.contains("mcp__claude_ai_Gmail__*"))
         #expect(!disallowed.contains("mcp__*__pdt-list-x-ray-holdings"))
         #expect(!disallowed.contains("mcp__pdt__pdt-list-x-ray-holdings"))
+        #expect(!disallowed.contains("mcp__*"))
         #expect(!disallowed.contains("ToolSearch"))
+    }
+
+    @Test("Read argv is exact and never denies the resolved PDT prefix")
+    func readArgvIsExactAndNeverDeniesResolvedPDTPrefix() throws {
+        let mcpListOutput = """
+        pdt (portfoliodividendtracker.com) connected
+        claude.ai Notion - Workspace [beta]: https://mcp.notion.example - ! Needs authentication
+        claude.ai Gmail: https://gmailmcp.googleapis.com/mcp/v1 - ✔ Connected
+        pdt (portfoliodividendtracker.com): https://mcp.portfoliodividendtracker.com - Disconnected
+        """
+        let runner = RecordingClaudeCommandRunner(results: [
+            .init(stdout: mcpListOutput, stderr: "", exitCode: 0),
+            .init(stdout: streamJSON(
+                toolName: "mcp__pdt__pdt-list-x-ray-holdings",
+                result: #"{"type":"tool_result","tool_use_id":"call_1","structuredContent":{"items":[]}}"#
+            ), stderr: "", exitCode: 0),
+        ])
+        let connection = ClaudeLocalConnection(
+            configuration: configuration(retryCount: 0, claudeProjectsDirectory: temporaryClaudeProjectsDirectory()),
+            commandRunner: runner
+        )
+
+        _ = try connection.callReadTool("pdt-list-x-ray-holdings", arguments: [
+            "limit": "1",
+            "offset": "0",
+        ])
+
+        let readArguments = try #require(runner.requests.last?.arguments)
+        let sessionFlagIndex = try #require(readArguments.firstIndex(of: "--session-id"))
+        let sessionID = readArguments[sessionFlagIndex + 1]
+        let dynamicNonPDTDenies = [
+            "mcp__claude_ai_Gmail__*",
+            "mcp__claude_ai_Notion_Workspace_beta__*",
+        ]
+        let expectedDisallowed = (
+            ClaudePDTReadOnlyToolPolicy.disallowedTools
+                + PDTReadTools.allowedV1
+                    .filter { $0 != "pdt-list-x-ray-holdings" }
+                    .map { "mcp__*__\($0)" }
+                + dynamicNonPDTDenies
+        ).joined(separator: ",")
+        let expectedPrompt = """
+        PDTBar needs one local read-only PDT MCP result.
+
+        Rules:
+        - Find and call the read-only PDT MCP tool named pdt-list-x-ray-holdings from the Portfolio Dividend Tracker (PDT) MCP server.
+        - Use exactly these JSON arguments: {"limit":"1","offset":"0"}
+        - Do not call any PDT MCP tool other than pdt-list-x-ray-holdings.
+        - Do not call any write, create, update, delete, remove, post, put, or set tool.
+        - Do not print holdings, values, account identifiers, endpoints, credentials, or raw tool output in your final answer.
+        - After the tool call, return only {"status":"redacted-ok"}.
+        """
+        #expect(readArguments == [
+            "--model", "opus",
+            "--permission-mode", "dontAsk",
+            "--allowedTools", "ToolSearch,mcp__pdt__pdt-list-x-ray-holdings",
+            "--disallowedTools", expectedDisallowed,
+            "--session-id", sessionID,
+            "-p", expectedPrompt,
+            "--output-format", "stream-json",
+            "--verbose",
+            "--no-session-persistence",
+        ])
+
+        let disallowed = Set(expectedDisallowed.split(separator: ",").map(String.init))
+        #expect(!disallowed.contains("mcp__pdt__*"))
+        #expect(!disallowed.contains("mcp__pdt__pdt-list-x-ray-holdings"))
+        #expect(!disallowed.contains("mcp__*"))
+
     }
 
     @Test("Availability reports PDT server check progress")
