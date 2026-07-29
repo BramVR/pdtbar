@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Bounded PDT list pagination with empty-page termination, 50-page caps, phase deadlines, and Data Health diagnostics for partial results.
 - Removed the fixed one-second delay and repeated Claude project scans from inline PDT reads while preserving file-delivered result handling and cleanup.
 - Fixed first portfolio fetches discarding completed holdings when an optional PDT facet fails.
 - Fixed optional PDT performance reads timing out below observed production latency, which left CAGR and total increase permanently unavailable.
