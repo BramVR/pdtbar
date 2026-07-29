@@ -36,12 +36,25 @@ public struct PortfolioPerformanceSummary: Codable, Equatable, Sendable {
             periodEnd: periodEnd
         )
     }
+
+    var hasInsufficientCAGRPeriod: Bool {
+        guard let totalPercentageIncrease = performanceFinite(totalPercentageIncrease),
+              totalPercentageIncrease >= -1,
+              let elapsedDays = performanceElapsedDays(periodStart: periodStart, periodEnd: periodEnd)
+        else {
+            return false
+        }
+        return elapsedDays > 0 && elapsedDays < minimumCAGRElapsedDays
+    }
 }
 
 private func performanceFinite(_ value: Double?) -> Double? {
     guard let value, value.isFinite else { return nil }
     return value
 }
+
+/// Annualizing less than roughly one quarter amplifies ordinary returns into misleading extremes.
+private let minimumCAGRElapsedDays = 90.0
 
 private func performanceCAGR(
     totalGainPercentage: Double?,
@@ -50,14 +63,22 @@ private func performanceCAGR(
 ) -> Double? {
     guard let totalGainPercentage = performanceFinite(totalGainPercentage),
           totalGainPercentage >= -1,
-          let start = performanceDate(periodStart),
+          let elapsedDays = performanceElapsedDays(periodStart: periodStart, periodEnd: periodEnd)
+    else {
+        return nil
+    }
+    guard elapsedDays >= minimumCAGRElapsedDays else { return nil }
+    let elapsedYears = elapsedDays / 365.25
+    return performanceFinite(pow(1 + totalGainPercentage, 1 / elapsedYears) - 1)
+}
+
+private func performanceElapsedDays(periodStart: String?, periodEnd: String?) -> Double? {
+    guard let start = performanceDate(periodStart),
           let end = performanceDate(periodEnd)
     else {
         return nil
     }
-    let elapsedYears = end.timeIntervalSince(start) / (365.25 * 24 * 60 * 60)
-    guard elapsedYears > 0 else { return nil }
-    return performanceFinite(pow(1 + totalGainPercentage, 1 / elapsedYears) - 1)
+    return end.timeIntervalSince(start) / (24 * 60 * 60)
 }
 
 private func performanceDate(_ value: String?) -> Date? {

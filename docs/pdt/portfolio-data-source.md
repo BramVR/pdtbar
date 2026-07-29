@@ -107,11 +107,14 @@ Normalization the seam owns (all pure logic, no UI):
 - **Portfolio performance stays period-explicit.** Total value continues to use
   normalized holdings/PDT's reported total source. Total increase comes directly
   from `pdt-get-portfolio-gains.totalGainsPercentage` requested for PDT's
-  `oldestPortfolioDate...latestPortfolioDate` bounds. [PDT documents portfolio
+  `oldestPortfolioDate...latestPortfolioDate` bounds. Its fraction semantics
+  (for example, `0.31` means 31%) were verified against the live API on
+  **2026-07-29**. [PDT documents portfolio
   CAGR](https://help-en.portfoliodividendtracker.com/article/213-how-does-cagr-work)
   as annualizing that selected-method full-period return, so PDTBar derives
   it as `(1 + totalGainsPercentage)^(1 / elapsedYears) - 1`, with elapsed years
-  measured as exact days divided by 365.25. Missing, invalid, non-increasing, or
+  measured as exact days divided by 365.25. Periods under 90 days are too short
+  to annualize meaningfully. Missing, invalid, non-increasing, short, or
   below-negative-100-percent inputs remain unavailable.
 - **Join keys differ across tools** — see §3.
 

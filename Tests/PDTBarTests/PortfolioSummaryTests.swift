@@ -24,6 +24,9 @@ struct PortfolioSummaryTests {
         (0.21, "bad-date", "2026-01-01"),
         (0.21, "2026-01-01", "2024-01-01"),
         (0.21, "2026-01-01", "2026-01-01"),
+        (0.05, "2026-01-01", "2026-01-02"),
+        (0.05, "2026-01-01", "2026-01-31"),
+        (0.05, "2026-01-01", "2026-03-31"),
         (-1.01, "2025-01-01", "2026-01-01"),
     ] as [(Double, String?, String?)])
     func invalidInputsKeepCAGRUnavailable(_ total: Double, _ start: String?, _ end: String?) {
@@ -47,6 +50,29 @@ struct PortfolioSummaryTests {
 
         #expect(summary.totalPercentageIncrease == -1)
         #expect(summary.cagr == -1)
+    }
+
+    @Test("A period just over one quarter annualizes")
+    func periodJustOverThresholdAnnualizes() throws {
+        let summary = PortfolioPerformanceSummary.build(
+            totalGainPercentage: 0.05,
+            periodStart: "2026-01-01",
+            periodEnd: "2026-04-02"
+        )
+
+        #expect(try #require(summary.cagr).isFinite)
+    }
+
+    @Test("A 365-day CAGR approximately matches the total return")
+    func oneYearCAGRApproximatelyMatchesTotalReturn() throws {
+        let totalReturn = 0.21
+        let summary = PortfolioPerformanceSummary.build(
+            totalGainPercentage: totalReturn,
+            periodStart: "2025-01-01",
+            periodEnd: "2026-01-01"
+        )
+
+        #expect(abs(try #require(summary.cagr) - totalReturn) < 0.000_2)
     }
 
     @Test(arguments: [0.25, -0.25, 0.0])
@@ -100,6 +126,35 @@ struct PortfolioSummaryTests {
         #expect(summary.totalIncrease == "Unavailable")
         #expect(summary.accessibilityLabel == "Total portfolio value, EUR 51,200.00; CAGR, Unavailable; Total increase, Unavailable")
         #expect(!row.accessibilityIdentifier.isEmpty)
+    }
+
+    @Test("Short performance periods explain unavailable CAGR with values shown or hidden")
+    func shortPerformancePeriodExplainsUnavailableCAGR() throws {
+        var snapshot = try quietSnapshotForSummary()
+        snapshot.performance = PortfolioPerformanceSummary.build(
+            totalGainPercentage: 0.05,
+            periodStart: "2026-01-01",
+            periodEnd: "2026-01-31"
+        )
+
+        let model = PressureEngine.buildModel(from: snapshot)
+        let shown = try #require(
+            MenuDescriptorRenderer.render(model: model).sections.first?.rows.first?.portfolioSummary
+        )
+        let hidden = try #require(
+            MenuDescriptorRenderer.render(
+                model: model,
+                settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+            ).sections.first?.rows.first?.portfolioSummary
+        )
+
+        #expect(shown.cagr == "Too short to annualize")
+        #expect(shown.totalIncrease == "+5.0%")
+        #expect(shown.accessibilityLabel.contains("CAGR, Too short to annualize"))
+        #expect(hidden.totalValue == PortfolioValueDisplaySettings.hiddenPlaceholder)
+        #expect(hidden.cagr == "Too short to annualize")
+        #expect(hidden.totalIncrease == "+5.0%")
+        #expect(hidden.accessibilityLabel.contains("CAGR, Too short to annualize"))
     }
 
     @Test("Grid supplies exact two-column widths and grows for larger system text")

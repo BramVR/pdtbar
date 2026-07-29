@@ -4706,10 +4706,17 @@ public enum MenuDescriptorRenderer {
             title: "Portfolio summary",
             portfolioSummary: MenuRowPortfolioSummary(
                 totalValue: display(model.portfolioGlance.totalValue),
-                cagr: portfolioSummaryPercent(model.portfolioPerformance.cagr),
+                cagr: portfolioSummaryCAGR(model.portfolioPerformance),
                 totalIncrease: portfolioSummaryPercent(model.portfolioPerformance.totalPercentageIncrease)
             )
         )
+    }
+
+    private static func portfolioSummaryCAGR(_ performance: PortfolioPerformanceSummary) -> String {
+        guard performance.cagr == nil, performance.hasInsufficientCAGRPeriod else {
+            return portfolioSummaryPercent(performance.cagr)
+        }
+        return "Too short to annualize"
     }
 
     private static func portfolioSummaryPercent(_ value: Double?) -> String {
