@@ -4,39 +4,6 @@ import Darwin
 import Foundation
 import PDTBarCore
 
-public struct ClaudeLocalProcessResult: Equatable, Sendable {
-    public var stdout: String
-    public var stderr: String
-    public var exitCode: Int32
-
-    public init(stdout: String, stderr: String, exitCode: Int32) {
-        self.stdout = stdout
-        self.stderr = stderr
-        self.exitCode = exitCode
-    }
-}
-
-public protocol ClaudeLocalCommandRunning: Sendable {
-    func executableExists(_ executable: String, environment: [String: String]) -> Bool
-    func run(
-        executable: String,
-        arguments: [String],
-        timeout: TimeInterval,
-        environment: [String: String]
-    ) throws -> ClaudeLocalProcessResult
-}
-
-public enum ClaudeLocalEnvironment {
-    public static func removingScriptedHandoffHook(_ environment: [String: String]) -> [String: String] {
-        guard environment.keys.contains(where: { $0.hasPrefix("PDTBAR_CLAUDE_HANDOFF_") }) else {
-            return environment
-        }
-        var sanitized = environment
-        sanitized.removeValue(forKey: "PDTBAR_CLAUDE_BIN")
-        return sanitized
-    }
-}
-
 public struct ClaudeLocalConnectionConfiguration: Sendable {
     public var claudePath: String
     public var model: String
@@ -196,23 +163,32 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     }
 
     public func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
-        guard PDTReadTools.allowedV1.contains(name) else {
-            throw PDTMCPConnectorError.nonReadTool(name)
-        }
+        do {
+            return try callReadToolReportingAttempts(name, arguments: arguments, retryDeadline: nil).data
+        } catch let failure as PDTMCPConnectorCallFailure { throw failure.underlyingError }
+    }
+    public func callReadToolReportingAttempts(
+        _ name: String, arguments: [String: String], retryDeadline: Date?
+    ) throws -> PDTMCPConnectorCallResult {
+        guard PDTReadTools.allowedV1.contains(name) else { throw PDTMCPConnectorCallFailure(
+            underlyingError: PDTMCPConnectorError.nonReadTool(name), attemptCount: 0
+        ) }
         guard commandRunner.executableExists(configuration.claudePath, environment: configuration.environment) else {
-            throw PDTMCPConnectorError.setupUnavailable("Claude CLI is unavailable")
+            let error = PDTMCPConnectorError.setupUnavailable("Claude CLI is unavailable")
+            throw PDTMCPConnectorCallFailure(underlyingError: error, attemptCount: 0)
         }
-        try ensureMCPToolPrefixesCached()
+        if let retryDeadline, Date() >= retryDeadline {
+            let error = PDTMCPConnectorError.timeout("Claude \(name) call deadline expired")
+            throw PDTMCPConnectorCallFailure(underlyingError: error, attemptCount: 0)
+        }
+        do { try ensureMCPToolPrefixesCached(retryDeadline: retryDeadline) }
+        catch { throw PDTMCPConnectorCallFailure(underlyingError: error, attemptCount: 0) }
         let toolName = resolvedToolName(for: name)
         let isOptionalPerformanceTool = PDTReadTools.performance.contains(name)
-        // The default is 60 seconds because a real call was measured at about
-        // 23 seconds, giving roughly 3x headroom. The performance budget stays
-        // bounded by the overall tool budget so these optional tools cannot
-        // stall a sync. It is configurable because the right value depends on
-        // the environment, and a hardcoded constant caused the original
-        // 15-second bug. Keep one attempt: retrying a call that merely exceeded
-        // its budget would only time out again and double its worst-case
-        // contribution to an already long sync.
+        // The 60-second default gives about 3x headroom over an observed
+        // 23-second call. It stays bounded by the overall tool budget and is
+        // configurable. Keep one performance attempt: retrying a call that
+        // exceeded its budget would only double its worst-case contribution.
         let maxAttempts = isOptionalPerformanceTool ? 1 : configuration.toolCallRetryPolicy.maxAttempts
         let timeout = isOptionalPerformanceTool
             ? min(configuration.performanceToolTimeout, configuration.toolTimeout)
@@ -220,32 +196,49 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         var attempts = 0
         var lastError: Error?
         repeat {
+            let remainingBudget = retryDeadline.map { max(0, $0.timeIntervalSinceNow) }
+            let attemptTimeout = min(timeout, remainingBudget ?? timeout)
+            guard attemptTimeout > 0 else {
+                let error = PDTMCPConnectorError.timeout("Claude \(name) call deadline expired")
+                throw PDTMCPConnectorCallFailure(underlyingError: error, attemptCount: attempts)
+            }
             attempts += 1
             do {
-                return try callReadToolOnce(
+                let data = try callReadToolOnce(
                     name,
                     resolvedToolName: toolName,
                     arguments: arguments,
-                    timeout: timeout
+                    timeout: attemptTimeout
                 )
+                if let retryDeadline, Date() >= retryDeadline { throw PDTMCPConnectorError.timeout("Claude \(name) call deadline expired") }
+                return PDTMCPConnectorCallResult(data: data, attemptCount: attempts)
             } catch {
+                if let retryDeadline,
+                   Date() >= retryDeadline,
+                   configuration.toolCallRetryPolicy.isRetryable(error)
+                {
+                    let error = PDTMCPConnectorError.timeout("Claude \(name) call deadline expired")
+                    throw PDTMCPConnectorCallFailure(underlyingError: error, attemptCount: attempts)
+                }
                 lastError = error
                 guard attempts < maxAttempts,
                       configuration.toolCallRetryPolicy.shouldRetry(error, afterAttempt: attempts)
                 else {
-                    throw error
+                    throw PDTMCPConnectorCallFailure(underlyingError: error, attemptCount: attempts)
                 }
-                // Each attempt is a full Claude CLI run; give transient
-                // conditions a moment to clear before spawning the next one.
-                let backoff = configuration.toolCallRetryPolicy.retryBackoffSeconds
+                // Each attempt is a full Claude CLI run; keep retry backoff
+                // inside the caller's remaining deadline budget.
+                let configuredBackoff = configuration.toolCallRetryPolicy.retryBackoffSeconds
+                let remainingBudget = retryDeadline.map { max(0, $0.timeIntervalSinceNow) }
+                let backoff = min(configuredBackoff, remainingBudget ?? configuredBackoff)
                 if backoff > 0 {
                     retryDelay(backoff)
                 }
             }
         } while attempts < maxAttempts
-        throw lastError ?? PDTMCPConnectorError.transientFailure("Claude \(name) call failed")
+        let error = lastError ?? PDTMCPConnectorError.transientFailure("Claude \(name) call failed")
+        throw PDTMCPConnectorCallFailure(underlyingError: error, attemptCount: attempts)
     }
-
     public static func pdtServerIsConnected(in output: String) -> Bool {
         output
             .split(separator: "\n")
@@ -343,18 +336,20 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         )
     }
 
-    private func ensureMCPToolPrefixesCached() throws {
-        guard pdtToolPrefixes().isEmpty else {
-            return
-        }
-        let result = try mcpList(timeout: min(configuration.toolTimeout, 30.0))
+    private func ensureMCPToolPrefixesCached(retryDeadline: Date?) throws {
+        guard pdtToolPrefixes().isEmpty else { return }
+        let configuredTimeout = min(configuration.toolTimeout, 30.0)
+        let timeout = min(configuredTimeout, retryDeadline.map { max(0, $0.timeIntervalSinceNow) } ?? configuredTimeout)
+        guard timeout > 0 else { throw PDTMCPConnectorError.timeout("Claude MCP server check deadline expired") }
+        let result = try mcpList(timeout: timeout)
+        if retryDeadline != nil, abnormalRunExit(result) == .timedOut { throw PDTMCPConnectorError.timeout("Claude MCP server check deadline expired") }
         try throwOnAbnormalMCPListExit(result)
         guard result.exitCode == 0, Self.pdtServerIsConnected(in: result.combinedOutput) else {
             throw PDTMCPConnectorError.setupUnavailable("Claude PDT MCP server is not connected")
         }
+        if let retryDeadline, Date() >= retryDeadline { throw PDTMCPConnectorError.timeout("Claude MCP server check deadline expired") }
         rememberMCPToolPrefixes(fromMCPListOutput: result.combinedOutput)
     }
-
     private func throwOnAbnormalMCPListExit(_ result: ClaudeLocalProcessResult) throws {
         switch abnormalRunExit(result) {
         case .executableMissing:

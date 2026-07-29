@@ -760,7 +760,11 @@ struct BackgroundDetailRefreshTests {
             connector: connector,
             snapshotStore: store,
             asOf: "2026-03-29",
-            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+            options: PDTBackgroundDetailRefreshOptions(
+                priceHistoryConcurrencyLimit: 2,
+                optionalRetryCount: 1,
+                retryBackoffSeconds: 0
+            )
         ).refresh()
 
         #expect(result.outcome == .completed)
@@ -852,7 +856,11 @@ struct BackgroundDetailRefreshTests {
             connector: connector,
             snapshotStore: store,
             asOf: "2026-03-29",
-            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+            options: PDTBackgroundDetailRefreshOptions(
+                priceHistoryConcurrencyLimit: 2,
+                optionalRetryCount: 1,
+                retryBackoffSeconds: 0
+            )
         ).refresh()
 
         #expect(result.outcome == .completed)

@@ -6575,6 +6575,11 @@ public protocol PDTMCPConnector {
     func availableReadTools() throws -> Set<String>
     func availableReadTools(required: Set<String>) throws -> Set<String>
     func callReadTool(_ name: String, arguments: [String: String]) throws -> Data
+    func callReadToolReportingAttempts(
+        _ name: String,
+        arguments: [String: String],
+        retryDeadline: Date?
+    ) throws -> PDTMCPConnectorCallResult
 }
 
 public protocol PDTMCPConnectorProgressReporting {
@@ -6587,6 +6592,50 @@ public protocol PDTMCPConnectorProgressReporting {
 public extension PDTMCPConnector {
     func availableReadTools(required: Set<String>) throws -> Set<String> {
         try availableReadTools().intersection(required)
+    }
+
+    func callReadToolReportingAttempts(
+        _ name: String,
+        arguments: [String: String],
+        retryDeadline: Date?
+    ) throws -> PDTMCPConnectorCallResult {
+        if let retryDeadline, Date() >= retryDeadline {
+            let timeout = PDTMCPConnectorError.timeout("PDT \(name) call deadline expired")
+            throw PDTMCPConnectorCallFailure(underlyingError: timeout, attemptCount: 0)
+        }
+        do {
+            let data = try callReadTool(name, arguments: arguments)
+            if let retryDeadline, Date() >= retryDeadline {
+                throw PDTMCPConnectorError.timeout("PDT \(name) call deadline expired")
+            }
+            return PDTMCPConnectorCallResult(data: data, attemptCount: 1)
+        } catch {
+            let deadlineExpired = retryDeadline.map { Date() >= $0 } ?? false
+            let underlyingError = deadlineExpired && pdtDetailRefreshFailureCategory(for: error).isRetryable
+                ? PDTMCPConnectorError.timeout("PDT \(name) call deadline expired")
+                : error
+            throw PDTMCPConnectorCallFailure(underlyingError: underlyingError, attemptCount: 1)
+        }
+    }
+}
+
+public struct PDTMCPConnectorCallResult: Sendable {
+    public var data: Data
+    public var attemptCount: Int
+
+    public init(data: Data, attemptCount: Int) {
+        self.data = data
+        self.attemptCount = max(0, attemptCount)
+    }
+}
+
+public struct PDTMCPConnectorCallFailure: Error {
+    public var underlyingError: any Error
+    public var attemptCount: Int
+
+    public init(underlyingError: any Error, attemptCount: Int) {
+        self.underlyingError = underlyingError
+        self.attemptCount = max(0, attemptCount)
     }
 }
 
@@ -7036,7 +7085,10 @@ public struct PDTDetailRefreshFailureDiagnostic: Codable, Equatable, Sendable {
 }
 
 func pdtDetailRefreshFailureCategory(for error: Error) -> PDTDetailRefreshFailureCategory {
-    switch error {
+    if let failure = error as? PDTMCPConnectorCallFailure {
+        return pdtDetailRefreshFailureCategory(for: failure.underlyingError)
+    }
+    return switch error {
     case PDTMCPConnectorError.setupUnavailable:
         .setupUnavailable
     case PDTMCPConnectorError.transientFailure:
@@ -7144,6 +7196,9 @@ public struct PDTBackgroundDetailRefreshOptions: Equatable, Sendable {
     public var incomeQuoteLookupTimeoutSeconds: Double
     public var paginationTimeoutSeconds: Double
     public var maxPagesPerList: Int
+    /// Extra refresh-layer retries. Keep this at zero because the connector
+    /// owns retry classification. Setting it to N composes multiplicatively:
+    /// `(N + 1) * connector max attempts` CLI runs, capped by the phase deadline.
     public var optionalRetryCount: Int
     public var retryBackoffSeconds: Double
 
@@ -7153,7 +7208,7 @@ public struct PDTBackgroundDetailRefreshOptions: Equatable, Sendable {
         incomeQuoteLookupTimeoutSeconds: Double = 240,
         paginationTimeoutSeconds: Double = 240,
         maxPagesPerList: Int = 50,
-        optionalRetryCount: Int = 1,
+        optionalRetryCount: Int = 0,
         retryBackoffSeconds: Double = 0.35
     ) {
         self.priceHistoryConcurrencyLimit = max(1, priceHistoryConcurrencyLimit)
@@ -7275,7 +7330,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                     "pdt-get-portfolio-distributions",
                     phase: .allocation,
                     arguments: [:],
-                    progress: progress
+                    progress: progress,
+                    retryDeadline: now().addingTimeInterval(options.effectivePaginationTimeoutSeconds)
                 )
                 let normalized = PDTOptionalDetailNormalizer.normalizeDistributions(distributions.optionalDetailInput)
                 snapshot.sectors = normalized.sectors
@@ -7401,7 +7457,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             "pdt-get-portfolio-holdings",
             phase: .baseHoldings,
             arguments: [:],
-            progress: progress
+            progress: progress,
+            retryDeadline: now().addingTimeInterval(options.effectivePaginationTimeoutSeconds)
         )
         let holdingInputs = holdingsEnvelope.holdings.map(\.baseHoldingInput)
         let portfolioCurrency = PDTBaseHoldingNormalizer.portfolioCurrency(from: holdingInputs, fallback: "EUR")
@@ -7811,7 +7868,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                                     completedUnitCount: accumulator.completedCount(),
                                     totalUnitCount: totalCount
                                 ))
-                            }
+                            },
+                            retryDeadline: deadline
                         )
                         let nextPoints = PDTOptionalDetailNormalizer.normalizePriceSeries(
                             prices.data.map(\.optionalDetailInput)
@@ -7877,8 +7935,27 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         return accumulator.result()
     }
 
-    private func callDecoded<T: Decodable>(_ tool: String, arguments: [String: String]) throws -> T {
-        try decodeLiveTool(tool, data: connector.callReadTool(tool, arguments: arguments))
+    private func callDecoded<T: Decodable>(
+        _ tool: String,
+        arguments: [String: String],
+        retryDeadline: Date? = nil
+    ) throws -> T {
+        let connectorDeadline = retryDeadline.map {
+            Date().addingTimeInterval(max(0, $0.timeIntervalSince(now())))
+        }
+        let result = try connector.callReadToolReportingAttempts(
+            tool,
+            arguments: arguments,
+            retryDeadline: connectorDeadline
+        )
+        do {
+            return try decodeLiveTool(tool, data: result.data)
+        } catch {
+            throw PDTMCPConnectorCallFailure(
+                underlyingError: error,
+                attemptCount: result.attemptCount
+            )
+        }
     }
 
     private func callDecodedWithRetry<T: Decodable>(
@@ -7886,30 +7963,40 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         phase: BackgroundDetailRefreshPhase,
         arguments: [String: String],
         progress: (@Sendable (BackgroundDetailRefreshProgress) -> Void)? = nil,
-        retryDeadline: Date? = nil
+        retryDeadline: Date
     ) throws -> T {
-        var attempts = 0
+        var outerAttempts = 0
+        var totalAttempts = 0
         while true {
-            attempts += 1
-            let detail = attempts == 1 ? "Calling \(tool)" : "Retrying \(tool)"
+            guard now() < retryDeadline else {
+                throw PDTDetailRefreshToolError(diagnostic: PDTDetailRefreshFailureDiagnostic(
+                    toolName: tool,
+                    phase: phase,
+                    attemptCount: totalAttempts,
+                    category: .timeout,
+                    argumentShape: arguments.keys.sorted()
+                ))
+            }
+            outerAttempts += 1
+            let detail = outerAttempts == 1 ? "Calling \(tool)" : "Retrying \(tool)"
             progress?(BackgroundDetailRefreshProgress(phase: phase, detail: detail))
             do {
-                return try callDecoded(tool, arguments: arguments)
+                return try callDecoded(tool, arguments: arguments, retryDeadline: retryDeadline)
             } catch {
+                totalAttempts += (error as? PDTMCPConnectorCallFailure)?.attemptCount ?? 1
                 let failure = diagnostic(
                     for: error,
                     tool: tool,
                     phase: phase,
-                    attempts: attempts,
+                    attempts: totalAttempts,
                     arguments: arguments
                 )
-                // Every retry is another full Claude CLI run, so only true
-                // transients earn one; deterministic decode and auth/setup
-                // unavailable failures fail fast with a single attempt, and no
-                // retry starts after the caller's deadline has passed.
-                guard attempts <= options.optionalRetryCount,
+                // The connector owns retry by default. This optional outer
+                // layer remains available for explicit callers, but never
+                // starts another composed call after the phase deadline.
+                guard outerAttempts <= options.optionalRetryCount,
                       failure.category.isRetryable,
-                      retryDeadline.map({ Date() < $0 }) ?? true
+                      now() < retryDeadline
                 else {
                     throw PDTDetailRefreshToolError(diagnostic: failure)
                 }
@@ -7917,14 +8004,11 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 // backoff that lands on the deadline ends the attempt instead
                 // of launching another full run past the budget.
                 if options.retryBackoffSeconds > 0 {
-                    let remainingBudget = retryDeadline.map { max(0, $0.timeIntervalSinceNow) }
-                    let backoff = min(options.retryBackoffSeconds, remainingBudget ?? options.retryBackoffSeconds)
+                    let remainingBudget = max(0, retryDeadline.timeIntervalSince(now()))
+                    let backoff = min(options.retryBackoffSeconds, remainingBudget)
                     if backoff > 0 {
                         Thread.sleep(forTimeInterval: backoff)
                     }
-                }
-                if let retryDeadline, Date() >= retryDeadline {
-                    throw PDTDetailRefreshToolError(diagnostic: failure)
                 }
             }
         }
@@ -7934,16 +8018,19 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         for error: Error,
         tool: String,
         phase: BackgroundDetailRefreshPhase,
-        attempts: Int = 1,
+        attempts: Int? = nil,
         arguments: [String: String] = [:]
     ) -> PDTDetailRefreshFailureDiagnostic {
         if let wrapped = error as? PDTDetailRefreshToolError {
             return wrapped.diagnostic
         }
+        let reportedAttempts = attempts
+            ?? (error as? PDTMCPConnectorCallFailure)?.attemptCount
+            ?? 1
         return PDTDetailRefreshFailureDiagnostic(
             toolName: tool,
             phase: phase,
-            attemptCount: attempts,
+            attemptCount: reportedAttempts,
             category: pdtDetailRefreshFailureCategory(for: error),
             argumentShape: arguments.keys.sorted()
         )
