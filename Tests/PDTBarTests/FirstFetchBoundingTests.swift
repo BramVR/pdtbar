@@ -8,7 +8,7 @@ struct FirstFetchBoundingTests {
     func calendarIncomeJoinLimitsQuoteLookupsInLargePortfolio() throws {
         let connector = ScriptedPDTMCPConnector(responses: [
             "pdt-get-portfolio-holdings": Data(largePortfolioHoldingsJSON(count: 80).utf8),
-            "pdt-list-calendar-events?date_from=2026-06-26&date_to=2026-07-26&page=1&per_page=250": Data("""
+            "pdt-list-calendar-events?date_from=2026-06-26&date_to=2026-07-26&page=1&per_page=100": Data("""
             {
               "data": [
                 { "date": "2026-06-29", "type": "ex-dividend", "isEstimated": false, "symbolId": 5079, "symbolName": "Synthetic Holding 79" },

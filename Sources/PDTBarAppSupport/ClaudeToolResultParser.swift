@@ -4,6 +4,7 @@ public enum ClaudeToolResultParserError: Error, CustomStringConvertible, Equatab
     case malformedStreamJSON(line: Int)
     case missingToolCall(String)
     case missingToolResult(String)
+    case toolRejected(String)
     case unreadableSavedFile(String)
 
     public var description: String {
@@ -14,6 +15,8 @@ public enum ClaudeToolResultParserError: Error, CustomStringConvertible, Equatab
             "Claude did not call \(tool)"
         case .missingToolResult(let tool):
             "Claude did not return structured data for \(tool)"
+        case .toolRejected(let tool):
+            "\(tool) returned an explicit error result"
         case .unreadableSavedFile(let path):
             "Claude saved a tool result file that could not be read: \(path)"
         }
@@ -37,6 +40,9 @@ public struct ClaudeToolResultParser: Sendable {
             throw ClaudeToolResultParserError.missingToolCall(toolName)
         }
         let matchingResults = values.flatMap { toolResults(in: $0, matching: matchingToolUseIDs) }
+        if matchingResults.contains(where: { $0.bool(for: "is_error") == true || $0.bool(for: "isError") == true }) {
+            throw ClaudeToolResultParserError.toolRejected(toolName)
+        }
         for result in matchingResults {
             if let structured = result.objectValue?["structuredContent"] {
                 return try encodedJSONData(structured)
@@ -310,5 +316,14 @@ private enum ClaudeStreamJSONValue: Codable, Equatable, Sendable {
             return nil
         }
         return string
+    }
+
+    func bool(for key: String) -> Bool? {
+        guard case .object(let value) = self,
+              case .bool(let bool)? = value[key]
+        else {
+            return nil
+        }
+        return bool
     }
 }

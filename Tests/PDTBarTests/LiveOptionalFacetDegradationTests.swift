@@ -4,6 +4,29 @@ import Testing
 
 @Suite("Live optional facet degradation")
 struct LiveOptionalFacetDegradationTests {
+    @Test("Every income list request stays within PDT's documented page-size bound")
+    func incomeListRequestsStayWithinDocumentedPageSizeBound() throws {
+        let documentedMaximumPageSize = 100
+        #expect(PDTListPaginationPolicy.pageSize <= documentedMaximumPageSize)
+        let client = OptionalFacetToolClient()
+        let diagnostics = OptionalFacetDiagnosticRecorder()
+
+        _ = try liveDataSource(client: client, diagnostics: diagnostics).snapshot(asOf: "2026-07-28")
+
+        let incomeRequests = client.recordedRequests.filter {
+            $0.hasPrefix("pdt-list-calendar-events?") || $0.hasPrefix("pdt-list-dividends?")
+        }
+        #expect(incomeRequests.count == 2)
+        #expect(incomeRequests.allSatisfy {
+            URLComponents(string: "https://pdt.invalid/\($0)")?
+                .queryItems?
+                .first(where: { $0.name == "per_page" })?
+                .value
+                .flatMap(Int.init)
+                .map { $0 <= documentedMaximumPageSize } == true
+        })
+    }
+
     @Test("Calendar failure preserves holdings and emits one degraded diagnostic")
     func calendarFailurePreservesHoldings() throws {
         let client = OptionalFacetToolClient(failures: [
@@ -88,7 +111,7 @@ struct LiveOptionalFacetDegradationTests {
     @Test("Empty dividend page terminates despite an absurd server last page")
     func emptyDividendPageTerminatesImmediately() throws {
         let client = OptionalFacetToolClient(responses: [
-            "pdt-list-dividends?date_from=2025-07-23&date_to=2026-08-27&page=1&per_page=250":
+            "pdt-list-dividends?date_from=2025-07-23&date_to=2026-08-27&page=1&per_page=100":
                 Data(#"{"data":[],"meta":{"last_page":999999}}"#.utf8),
         ])
         let diagnostics = OptionalFacetDiagnosticRecorder()
@@ -135,7 +158,7 @@ struct LiveOptionalFacetDegradationTests {
             (2, "2026-07-30", "Page Two"),
             (3, "2026-07-31", "Page Three"),
         ] {
-            responses["pdt-list-calendar-events?date_from=2026-07-28&date_to=2026-08-27&page=\(page)&per_page=250"] = Data("""
+            responses["pdt-list-calendar-events?date_from=2026-07-28&date_to=2026-08-27&page=\(page)&per_page=100"] = Data("""
             {
               "data": [
                 { "date": "\(date)", "type": "ex-dividend", "isEstimated": false, "symbolId": null, "symbolName": "\(name)" }
@@ -299,6 +322,7 @@ private final class OptionalFacetToolClient: PDTLiveToolClient, @unchecked Senda
     private let onRequest: @Sendable (String) -> Void
     private let lock = NSLock()
     private var calls: [String] = []
+    private var requests: [String] = []
 
     init(
         failures: [String: any Error] = [:],
@@ -320,6 +344,14 @@ private final class OptionalFacetToolClient: PDTLiveToolClient, @unchecked Senda
         return calls
     }
 
+    var recordedRequests: [String] {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return requests
+    }
+
     func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
         lock.lock()
         calls.append(name)
@@ -332,6 +364,9 @@ private final class OptionalFacetToolClient: PDTLiveToolClient, @unchecked Senda
             .map { "\($0.key)=\($0.value)" }
             .joined(separator: "&")
         let key = suffix.isEmpty ? name : "\(name)?\(suffix)"
+        lock.lock()
+        requests.append(key)
+        lock.unlock()
         onRequest(key)
         if let failure = failuresByRequest[key] {
             throw failure

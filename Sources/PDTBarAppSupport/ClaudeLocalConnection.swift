@@ -560,6 +560,8 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             )
         } catch ClaudeToolResultParserError.missingToolCall {
             throw PDTMCPConnectorError.transientFailure("Claude did not call \(toolName)")
+        } catch ClaudeToolResultParserError.toolRejected {
+            throw PDTMCPConnectorError.toolRejected("\(toolName) returned an explicit error result")
         } catch {
             throw PDTMCPConnectorError.transientFailure("Claude did not return structured data for \(toolName)")
         }
@@ -581,6 +583,8 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             return nil
         } catch ClaudeToolResultParserError.missingToolCall {
             throw PDTMCPConnectorError.transientFailure("Claude did not call \(toolName)")
+        } catch ClaudeToolResultParserError.toolRejected {
+            throw PDTMCPConnectorError.toolRejected("\(toolName) returned an explicit error result")
         } catch {
             throw PDTMCPConnectorError.transientFailure("Claude did not return structured data for \(toolName)")
         }

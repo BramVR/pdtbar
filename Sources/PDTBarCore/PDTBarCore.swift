@@ -6643,6 +6643,7 @@ public enum PDTMCPConnectorError: Error, CustomStringConvertible, Equatable {
     case missingRequiredReadTools([String])
     case setupUnavailable(String)
     case transientFailure(String)
+    case toolRejected(String)
     case timeout(String)
     case nonReadTool(String)
     case missingScriptedResponse(String)
@@ -6655,6 +6656,8 @@ public enum PDTMCPConnectorError: Error, CustomStringConvertible, Equatable {
             "PDT MCP connector setup unavailable: \(message)"
         case .transientFailure(let message):
             "PDT MCP connector transient failure: \(message)"
+        case .toolRejected(let message):
+            "PDT MCP connector tool rejected the call: \(message)"
         case .timeout(let message):
             "PDT MCP connector timeout: \(message)"
         case .nonReadTool(let tool):
@@ -7029,6 +7032,7 @@ public enum PDTBackgroundDetailRefreshOutcome: String, Codable, Equatable, Senda
 public enum PDTDetailRefreshFailureCategory: String, Codable, Equatable, Sendable {
     case setupUnavailable
     case transientFailure
+    case toolRejected
     case missingScriptedResponse
     case decode
     case unavailable
@@ -7045,7 +7049,7 @@ public extension PDTDetailRefreshFailureCategory {
         switch self {
         case .transientFailure, .timeout, .exit:
             true
-        case .setupUnavailable, .unavailable, .decode, .missingScriptedResponse:
+        case .setupUnavailable, .toolRejected, .unavailable, .decode, .missingScriptedResponse:
             false
         }
     }
@@ -7056,7 +7060,7 @@ public extension PDTDetailRefreshFailureCategory {
         switch self {
         case .setupUnavailable, .unavailable:
             true
-        case .transientFailure, .timeout, .exit, .decode, .missingScriptedResponse:
+        case .transientFailure, .toolRejected, .timeout, .exit, .decode, .missingScriptedResponse:
             false
         }
     }
@@ -7093,6 +7097,8 @@ func pdtDetailRefreshFailureCategory(for error: Error) -> PDTDetailRefreshFailur
         .setupUnavailable
     case PDTMCPConnectorError.transientFailure:
         .transientFailure
+    case PDTMCPConnectorError.toolRejected:
+        .toolRejected
     case PDTMCPConnectorError.timeout:
         .timeout
     case PDTMCPConnectorError.missingScriptedResponse:
@@ -7114,6 +7120,12 @@ private struct PDTListPage<Cursor, Item> {
 }
 
 private let pdtMaximumPagesPerList = 50
+
+public enum PDTListPaginationPolicy {
+    /// Both PDT list-tool schemas document "max: 100" for `per_page`;
+    /// observed live on 2026-07-29.
+    public static let pageSize = 100
+}
 
 private enum PDTListPaginationTruncation {
     case pageCap
@@ -7652,7 +7664,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         ) { page in
             let arguments = baseArguments.merging([
                 "page": String(page),
-                "per_page": "250",
+                "per_page": String(PDTListPaginationPolicy.pageSize),
             ]) { _, new in new }
             progress(BackgroundDetailRefreshProgress(phase: .income, detail: "Fetching pdt-list-calendar-events page \(page)"))
             let envelope: LiveCalendarEventsEnvelope = try callDecodedWithRetry(
@@ -7795,7 +7807,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         ) { page in
             let arguments = baseArguments.merging([
                 "page": String(page),
-                "per_page": "250",
+                "per_page": String(PDTListPaginationPolicy.pageSize),
             ]) { _, new in new }
             progress(BackgroundDetailRefreshProgress(phase: .income, detail: "Fetching pdt-list-dividends page \(page)"))
             let envelope: LiveDividendsEnvelope = try callDecodedWithRetry(
@@ -8544,7 +8556,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         ) { page in
             let arguments = baseArguments.merging([
                 "page": String(page),
-                "per_page": "250",
+                "per_page": String(PDTListPaginationPolicy.pageSize),
             ]) { _, new in new }
             let envelope: LiveCalendarEventsEnvelope = try decodeLiveTool(
                 "pdt-list-calendar-events",
@@ -8579,7 +8591,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         ) { page in
             let arguments = baseArguments.merging([
                 "page": String(page),
-                "per_page": "250",
+                "per_page": String(PDTListPaginationPolicy.pageSize),
             ]) { _, new in new }
             let envelope: LiveDividendsEnvelope = try decodeLiveTool(
                 "pdt-list-dividends",

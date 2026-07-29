@@ -5459,7 +5459,7 @@ private func scriptedPDTConnectorResponses() throws -> [String: Data] {
           "hasMore": false
         }
         """),
-        "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=1&per_page=250": try mcpContent("""
+        "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=1&per_page=100": try mcpContent("""
         {
           "data": [
             { "date": "2026-03-30", "type": "ex-dividend", "isEstimated": false, "symbolId": 5101, "symbolName": "Scripted Adapter Co" }
@@ -5467,7 +5467,7 @@ private func scriptedPDTConnectorResponses() throws -> [String: Data] {
           "meta": { "last_page": 1 }
         }
         """),
-        "pdt-list-dividends?date_from=2025-03-24&date_to=2026-04-28&page=1&per_page=250": try mcpResult("""
+        "pdt-list-dividends?date_from=2025-03-24&date_to=2026-04-28&page=1&per_page=100": try mcpResult("""
         {
           "data": [
             { "date": "2026-03-28T08:13:00+00:00", "amount": { "value": "8.00", "currency": "EUR" }, "symbolQuoteId": 9101 }
@@ -5528,10 +5528,10 @@ private func scriptedQuietPDTConnectorResponses() throws -> [String: Data] {
           "hasMore": false
         }
         """),
-        "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=1&per_page=250": try mcpContent("""
+        "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=1&per_page=100": try mcpContent("""
         { "data": [], "meta": { "last_page": 1 } }
         """),
-        "pdt-list-dividends?date_from=2025-03-24&date_to=2026-04-28&page=1&per_page=250": try mcpResult("""
+        "pdt-list-dividends?date_from=2025-03-24&date_to=2026-04-28&page=1&per_page=100": try mcpResult("""
         {
           "data": [],
           "meta": { "last_page": 1 }
