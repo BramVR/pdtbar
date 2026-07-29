@@ -62,9 +62,201 @@ struct BackgroundDetailRefreshTests {
 
         #expect(defaults.effectivePriceHistoryTimeoutSeconds(holdingCount: 19) >= 240)
         #expect(defaults.effectivePriceHistoryTimeoutSeconds(holdingCount: 50) >= 390)
+        #expect(defaults.maxPagesPerList == 50)
+        #expect(defaults.effectivePaginationTimeoutSeconds == 240)
+        #expect(PDTBackgroundDetailRefreshOptions(maxPagesPerList: 500).maxPagesPerList == 50)
+        #expect(PDTLiveDataSourceOptions(maxPagesPerList: 500).maxPagesPerList == 50)
         #expect(PDTBackgroundDetailRefreshOptions(
             priceHistoryTimeoutSeconds: 0.05
         ).effectivePriceHistoryTimeoutSeconds(holdingCount: 50) == 0.05)
+    }
+
+    @Test("Empty calendar page terminates despite an absurd server last page")
+    func emptyCalendarPageTerminatesImmediately() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-empty-calendar-page-test")
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        var responses = try detailRefreshResponses()
+        responses["pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=1&per_page=250"] = try mcpContent("""
+        {
+          "data": [],
+          "meta": { "last_page": 999999 }
+        }
+        """)
+        let connector = ScriptedPDTMCPConnector(responses: responses)
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        #expect(result.outcome == .completed)
+        #expect(connector.calls.filter { $0 == "pdt-list-calendar-events" }.count == 1)
+        #expect(result.diagnostics.isEmpty)
+    }
+
+    @Test("X-ray pagination cap preserves partial rows and reports truncation")
+    func xRayPaginationCapReportsTruncation() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-xray-page-cap-test")
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        var responses = try detailRefreshResponses()
+        responses["pdt-list-x-ray-holdings?limit=500&offset=0"] = try mcpResult("""
+        { "items": [{ "weight": 25.0 }], "hasMore": true }
+        """)
+        responses["pdt-list-x-ray-holdings?limit=500&offset=500"] = try mcpResult("""
+        { "items": [{ "weight": 15.0 }], "hasMore": true }
+        """)
+        let connector = ScriptedPDTMCPConnector(responses: responses)
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(
+                priceHistoryConcurrencyLimit: 2,
+                maxPagesPerList: 2,
+                retryBackoffSeconds: 0
+            )
+        ).refresh()
+
+        #expect(result.outcome == .degraded)
+        #expect(result.model.facetSnapshots.allocation.xRayHoldings?.map(\.weight) == [0.25, 0.15])
+        #expect(connector.calls.filter { $0 == "pdt-list-x-ray-holdings" }.count == 2)
+        #expect(result.diagnostics.contains {
+            $0.toolName == "pdt-list-x-ray-holdings"
+                && $0.phase == .xRay
+                && $0.category == .timeout
+                && $0.argumentShape == ["limit", "offset"]
+        })
+    }
+
+    @Test("Calendar pagination returns three pages in order without truncation")
+    func calendarPaginationReturnsEveryPageInOrder() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-calendar-pages-test")
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        var responses = try detailRefreshResponses()
+        for (page, date, name) in [
+            (1, "2026-03-30", "Page One"),
+            (2, "2026-03-31", "Page Two"),
+            (3, "2026-04-01", "Page Three"),
+        ] {
+            responses["pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=\(page)&per_page=250"] = try mcpContent("""
+            {
+              "data": [
+                { "date": "\(date)", "type": "ex-dividend", "isEstimated": false, "symbolId": null, "symbolName": "\(name)" }
+              ],
+              "meta": { "last_page": 3 }
+            }
+            """)
+        }
+        let connector = ScriptedPDTMCPConnector(responses: responses)
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        let committed = try #require(try store.loadPriorSnapshot())
+        #expect(result.outcome == .completed)
+        #expect(committed.incomeEvents.map(\.symbolName) == ["Page One", "Page Two", "Page Three"])
+        #expect(connector.calls.filter { $0 == "pdt-list-calendar-events" }.count == 3)
+        #expect(result.diagnostics.isEmpty)
+    }
+
+    @Test("Pagination deadline preserves collected rows and reports truncation")
+    func paginationDeadlinePreservesCollectedRows() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-pagination-deadline-test")
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        var responses = try detailRefreshResponses()
+        responses["pdt-list-x-ray-holdings?limit=500&offset=0"] = try mcpResult("""
+        { "items": [{ "weight": 25.0 }], "hasMore": true }
+        """)
+        responses["pdt-list-x-ray-holdings?limit=500&offset=500"] = try mcpResult("""
+        { "items": [{ "weight": 15.0 }], "hasMore": true }
+        """)
+        let clock = BackgroundPaginationClock()
+        let connector = SelectiveFailingPDTConnector(
+            responses: responses,
+            onCall: { tool in
+                if tool == "pdt-list-x-ray-holdings" {
+                    clock.advance(by: 0.08)
+                }
+            }
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(
+                priceHistoryConcurrencyLimit: 2,
+                paginationTimeoutSeconds: 0.15,
+                maxPagesPerList: 10,
+                retryBackoffSeconds: 0
+            ),
+            now: clock.now
+        ).refresh()
+
+        #expect(result.outcome == .degraded)
+        #expect(result.model.facetSnapshots.allocation.xRayHoldings?.map(\.weight) == [0.25, 0.15])
+        #expect(connector.callCount(of: "pdt-list-x-ray-holdings") == 2)
+        #expect(result.diagnostics.contains {
+            $0.toolName == "pdt-list-x-ray-holdings"
+                && $0.phase == .xRay
+                && $0.category == .timeout
+        })
+    }
+
+    @Test("Calendar and dividends share one income pagination deadline")
+    func incomePaginationUsesOnePhaseDeadline() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-income-pagination-deadline-test")
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        var responses = try detailRefreshResponses()
+        for (page, date) in [(1, "2026-03-30"), (2, "2026-03-31")] {
+            responses["pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=\(page)&per_page=250"] = try mcpContent("""
+            {
+              "data": [
+                { "date": "\(date)", "type": "ex-dividend", "isEstimated": false, "symbolId": null, "symbolName": "Calendar Page \(page)" }
+              ],
+              "meta": { "last_page": 2 }
+            }
+            """)
+        }
+        let clock = BackgroundPaginationClock()
+        let connector = SelectiveFailingPDTConnector(
+            responses: responses,
+            onCall: { tool in
+                if tool == "pdt-list-calendar-events" {
+                    clock.advance(by: 0.08)
+                }
+            }
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(
+                priceHistoryConcurrencyLimit: 2,
+                paginationTimeoutSeconds: 0.15,
+                retryBackoffSeconds: 0
+            ),
+            now: clock.now
+        ).refresh()
+
+        let committed = try #require(try store.loadPriorSnapshot())
+        #expect(result.outcome == .degraded)
+        #expect(committed.incomeEvents.map(\.symbolName) == ["Calendar Page 1", "Calendar Page 2"])
+        #expect(connector.callCount(of: "pdt-list-calendar-events") == 2)
+        #expect(connector.callCount(of: "pdt-list-dividends") == 0)
+        #expect(result.diagnostics.contains {
+            $0.toolName == "pdt-list-dividends"
+                && $0.phase == .income
+                && $0.category == .timeout
+        })
     }
 
     @Test("Background refresh reuses cached income quote mapping")
@@ -1010,21 +1202,41 @@ private final class SlowPriceHistoryPDTConnector: PDTMCPConnector, @unchecked Se
     }
 }
 
+private final class BackgroundPaginationClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current = Date(timeIntervalSinceReferenceDate: 0)
+
+    func now() -> Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return current
+    }
+
+    func advance(by interval: TimeInterval) {
+        lock.lock()
+        current = current.addingTimeInterval(interval)
+        lock.unlock()
+    }
+}
+
 private final class SelectiveFailingPDTConnector: PDTMCPConnector, @unchecked Sendable {
     let responses: [String: Data]
     private let failures: [String: PDTMCPConnectorError]
     private let delaySecondsByTool: [String: TimeInterval]
+    private let onCall: @Sendable (String) -> Void
     private let lock = NSLock()
     private var calls: [String] = []
 
     init(
         responses: [String: Data],
         failures: [String: PDTMCPConnectorError] = [:],
-        delaySecondsByTool: [String: TimeInterval] = [:]
+        delaySecondsByTool: [String: TimeInterval] = [:],
+        onCall: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.responses = responses
         self.failures = failures
         self.delaySecondsByTool = delaySecondsByTool
+        self.onCall = onCall
     }
 
     func callCount(of name: String) -> Int {
@@ -1043,6 +1255,7 @@ private final class SelectiveFailingPDTConnector: PDTMCPConnector, @unchecked Se
         lock.lock()
         calls.append(name)
         lock.unlock()
+        onCall(name)
         if let delay = delaySecondsByTool[name], delay > 0 {
             Thread.sleep(forTimeInterval: delay)
         }

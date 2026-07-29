@@ -85,6 +85,113 @@ struct LiveOptionalFacetDegradationTests {
         #expect(diagnostics.values.isEmpty)
     }
 
+    @Test("Empty dividend page terminates despite an absurd server last page")
+    func emptyDividendPageTerminatesImmediately() throws {
+        let client = OptionalFacetToolClient(responses: [
+            "pdt-list-dividends?date_from=2025-07-23&date_to=2026-08-27&page=1&per_page=250":
+                Data(#"{"data":[],"meta":{"last_page":999999}}"#.utf8),
+        ])
+        let diagnostics = OptionalFacetDiagnosticRecorder()
+
+        let snapshot = try liveDataSource(client: client, diagnostics: diagnostics).snapshot(asOf: "2026-07-28")
+
+        #expect(snapshot.latestDetailFillOutcome != .degraded)
+        #expect(client.recordedCalls.filter { $0 == "pdt-list-dividends" }.count == 1)
+        #expect(diagnostics.values.isEmpty)
+    }
+
+    @Test("X-ray pagination cap preserves partial rows and reports truncation")
+    func xRayPaginationCapReportsTruncation() throws {
+        let client = OptionalFacetToolClient(responses: [
+            "pdt-list-x-ray-holdings?limit=500&offset=0":
+                Data(#"{"items":[{"weight":25.0}],"hasMore":true}"#.utf8),
+            "pdt-list-x-ray-holdings?limit=500&offset=500":
+                Data(#"{"items":[{"weight":15.0}],"hasMore":true}"#.utf8),
+        ])
+        let diagnostics = OptionalFacetDiagnosticRecorder()
+
+        let snapshot = try liveDataSource(
+            client: client,
+            diagnostics: diagnostics,
+            maxPagesPerList: 2
+        ).snapshot(asOf: "2026-07-28")
+
+        #expect(snapshot.xRayHoldings?.map(\.weight) == [0.25, 0.15])
+        #expect(snapshot.latestDetailFillOutcome == .degraded)
+        #expect(client.recordedCalls.filter { $0 == "pdt-list-x-ray-holdings" }.count == 2)
+        #expect(diagnostics.values.contains {
+            $0.toolName == "pdt-list-x-ray-holdings"
+                && $0.phase == .xRay
+                && $0.category == .timeout
+                && $0.argumentShape == ["limit", "offset"]
+        })
+    }
+
+    @Test("Calendar pagination returns three pages in order without truncation")
+    func calendarPaginationReturnsEveryPageInOrder() throws {
+        var responses: [String: Data] = [:]
+        for (page, date, name) in [
+            (1, "2026-07-29", "Page One"),
+            (2, "2026-07-30", "Page Two"),
+            (3, "2026-07-31", "Page Three"),
+        ] {
+            responses["pdt-list-calendar-events?date_from=2026-07-28&date_to=2026-08-27&page=\(page)&per_page=250"] = Data("""
+            {
+              "data": [
+                { "date": "\(date)", "type": "ex-dividend", "isEstimated": false, "symbolId": null, "symbolName": "\(name)" }
+              ],
+              "meta": { "last_page": 3 }
+            }
+            """.utf8)
+        }
+        let client = OptionalFacetToolClient(responses: responses)
+        let diagnostics = OptionalFacetDiagnosticRecorder()
+
+        let snapshot = try liveDataSource(client: client, diagnostics: diagnostics).snapshot(asOf: "2026-07-28")
+
+        #expect(snapshot.incomeEvents.map(\.symbolName) == ["Page One", "Page Two", "Page Three"])
+        #expect(snapshot.latestDetailFillOutcome != .degraded)
+        #expect(client.recordedCalls.filter { $0 == "pdt-list-calendar-events" }.count == 3)
+        #expect(diagnostics.values.isEmpty)
+    }
+
+    @Test("Deadline error preserves completed live pages and reports truncation")
+    func deadlineErrorPreservesCompletedPages() throws {
+        let secondPageKey = "pdt-list-x-ray-holdings?limit=500&offset=500"
+        let clock = LivePaginationClock()
+        let client = OptionalFacetToolClient(
+            failuresByRequest: [
+                secondPageKey: PDTMCPConnectorError.timeout("X-ray page timed out"),
+            ],
+            responses: [
+                "pdt-list-x-ray-holdings?limit=500&offset=0":
+                    Data(#"{"items":[{"weight":25.0}],"hasMore":true}"#.utf8),
+            ],
+            onRequest: { request in
+                if request == secondPageKey {
+                    clock.advance(by: 0.06)
+                }
+            }
+        )
+        let diagnostics = OptionalFacetDiagnosticRecorder()
+
+        let snapshot = try liveDataSource(
+            client: client,
+            diagnostics: diagnostics,
+            paginationTimeoutSeconds: 0.05,
+            now: clock.now
+        ).snapshot(asOf: "2026-07-28")
+
+        #expect(snapshot.xRayHoldings?.map(\.weight) == [0.25])
+        #expect(snapshot.latestDetailFillOutcome == .degraded)
+        #expect(client.recordedCalls.filter { $0 == "pdt-list-x-ray-holdings" }.count == 2)
+        #expect(diagnostics.values.contains {
+            $0.toolName == "pdt-list-x-ray-holdings"
+                && $0.phase == .xRay
+                && $0.category == .timeout
+        })
+    }
+
     @Test("Setup outage skips every later optional request")
     func setupOutageSkipsLaterOptionalRequests() throws {
         let client = OptionalFacetToolClient(failures: [
@@ -145,7 +252,10 @@ struct LiveOptionalFacetDegradationTests {
         client: OptionalFacetToolClient,
         diagnostics: OptionalFacetDiagnosticRecorder,
         includeIncomeQuoteLookups: Bool = false,
-        includePriceSeries: Bool = false
+        includePriceSeries: Bool = false,
+        paginationTimeoutSeconds: Double = 240,
+        maxPagesPerList: Int = 50,
+        now: @escaping @Sendable () -> Date = Date.init
     ) -> PDTLiveDataSource {
         PDTLiveDataSource(
             toolClient: client,
@@ -155,20 +265,51 @@ struct LiveOptionalFacetDegradationTests {
                 includeIncomeEvents: true,
                 includeDividends: true,
                 includeIncomeQuoteLookups: includeIncomeQuoteLookups,
-                includePriceSeries: includePriceSeries
+                includePriceSeries: includePriceSeries,
+                paginationTimeoutSeconds: paginationTimeoutSeconds,
+                maxPagesPerList: maxPagesPerList,
             ),
-            onOptionalFacetFailure: diagnostics.append
+            onOptionalFacetFailure: diagnostics.append,
+            now: now
         )
+    }
+}
+
+private final class LivePaginationClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current = Date(timeIntervalSinceReferenceDate: 0)
+
+    func now() -> Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return current
+    }
+
+    func advance(by interval: TimeInterval) {
+        lock.lock()
+        current = current.addingTimeInterval(interval)
+        lock.unlock()
     }
 }
 
 private final class OptionalFacetToolClient: PDTLiveToolClient, @unchecked Sendable {
     private let failures: [String: any Error]
+    private let failuresByRequest: [String: any Error]
+    private let responses: [String: Data]
+    private let onRequest: @Sendable (String) -> Void
     private let lock = NSLock()
     private var calls: [String] = []
 
-    init(failures: [String: any Error] = [:]) {
+    init(
+        failures: [String: any Error] = [:],
+        failuresByRequest: [String: any Error] = [:],
+        responses: [String: Data] = [:],
+        onRequest: @escaping @Sendable (String) -> Void = { _ in }
+    ) {
         self.failures = failures
+        self.failuresByRequest = failuresByRequest
+        self.responses = responses
+        self.onRequest = onRequest
     }
 
     var recordedCalls: [String] {
@@ -186,7 +327,16 @@ private final class OptionalFacetToolClient: PDTLiveToolClient, @unchecked Senda
         if let failure = failures[name] {
             throw failure
         }
-        guard let response = Self.responses[name] else {
+        let suffix = arguments
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "&")
+        let key = suffix.isEmpty ? name : "\(name)?\(suffix)"
+        onRequest(key)
+        if let failure = failuresByRequest[key] {
+            throw failure
+        }
+        guard let response = responses[key] ?? Self.responses[name] else {
             throw PDTMCPConnectorError.missingScriptedResponse(name)
         }
         return response

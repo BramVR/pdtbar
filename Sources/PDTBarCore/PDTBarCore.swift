@@ -7056,10 +7056,94 @@ func pdtDetailRefreshFailureCategory(for error: Error) -> PDTDetailRefreshFailur
     }
 }
 
+private struct PDTListPage<Cursor, Item> {
+    var items: [Item]
+    var nextCursor: Cursor?
+}
+
+private let pdtMaximumPagesPerList = 50
+
+private enum PDTListPaginationTruncation {
+    case pageCap
+    case deadline
+}
+
+private struct PDTListPaginationResult<Item> {
+    var items: [Item]
+    var pageCount: Int
+    var truncation: PDTListPaginationTruncation?
+
+    func truncationDiagnostic(
+        toolName: String,
+        phase: BackgroundDetailRefreshPhase,
+        argumentShape: [String]
+    ) -> PDTDetailRefreshFailureDiagnostic? {
+        guard truncation != nil else {
+            return nil
+        }
+        return PDTDetailRefreshFailureDiagnostic(
+            toolName: toolName,
+            phase: phase,
+            attemptCount: max(1, pageCount),
+            category: .timeout,
+            argumentShape: argumentShape
+        )
+    }
+}
+
+private func paginatePDTList<Cursor, Item>(
+    initialCursor: Cursor,
+    maxPages: Int,
+    deadline: Date,
+    now: @Sendable () -> Date,
+    treatErrorAsDeadline: (Error) -> Bool = { _ in false },
+    fetchPage: (Cursor) throws -> PDTListPage<Cursor, Item>
+) throws -> PDTListPaginationResult<Item> {
+    var cursor = initialCursor
+    var items: [Item] = []
+    var pageCount = 0
+    while true {
+        guard now() < deadline else {
+            return PDTListPaginationResult(items: items, pageCount: pageCount, truncation: .deadline)
+        }
+        let page: PDTListPage<Cursor, Item>
+        do {
+            page = try fetchPage(cursor)
+        } catch {
+            guard now() >= deadline, treatErrorAsDeadline(error) else {
+                throw error
+            }
+            return PDTListPaginationResult(items: items, pageCount: pageCount, truncation: .deadline)
+        }
+        pageCount += 1
+        items.append(contentsOf: page.items)
+        // Empty pages terminate even when stale server metadata claims more.
+        guard !page.items.isEmpty, let nextCursor = page.nextCursor else {
+            return PDTListPaginationResult(items: items, pageCount: pageCount, truncation: nil)
+        }
+        guard pageCount < maxPages else {
+            return PDTListPaginationResult(items: items, pageCount: pageCount, truncation: .pageCap)
+        }
+        guard now() < deadline else {
+            return PDTListPaginationResult(items: items, pageCount: pageCount, truncation: .deadline)
+        }
+        cursor = nextCursor
+    }
+}
+
+private func pdtPaginationErrorIsRetryable(_ error: Error) -> Bool {
+    if let wrapped = error as? PDTDetailRefreshToolError {
+        return wrapped.diagnostic.category.isRetryable
+    }
+    return pdtDetailRefreshFailureCategory(for: error).isRetryable
+}
+
 public struct PDTBackgroundDetailRefreshOptions: Equatable, Sendable {
     public var priceHistoryConcurrencyLimit: Int
     public var priceHistoryTimeoutSeconds: Double
     public var incomeQuoteLookupTimeoutSeconds: Double
+    public var paginationTimeoutSeconds: Double
+    public var maxPagesPerList: Int
     public var optionalRetryCount: Int
     public var retryBackoffSeconds: Double
 
@@ -7067,12 +7151,16 @@ public struct PDTBackgroundDetailRefreshOptions: Equatable, Sendable {
         priceHistoryConcurrencyLimit: Int = 4,
         priceHistoryTimeoutSeconds: Double = 240,
         incomeQuoteLookupTimeoutSeconds: Double = 240,
+        paginationTimeoutSeconds: Double = 240,
+        maxPagesPerList: Int = 50,
         optionalRetryCount: Int = 1,
         retryBackoffSeconds: Double = 0.35
     ) {
         self.priceHistoryConcurrencyLimit = max(1, priceHistoryConcurrencyLimit)
         self.priceHistoryTimeoutSeconds = max(0.01, priceHistoryTimeoutSeconds)
         self.incomeQuoteLookupTimeoutSeconds = max(0.01, incomeQuoteLookupTimeoutSeconds)
+        self.paginationTimeoutSeconds = max(0.01, paginationTimeoutSeconds)
+        self.maxPagesPerList = min(pdtMaximumPagesPerList, max(1, maxPagesPerList))
         self.optionalRetryCount = max(0, optionalRetryCount)
         self.retryBackoffSeconds = max(0, retryBackoffSeconds)
     }
@@ -7083,6 +7171,10 @@ public struct PDTBackgroundDetailRefreshOptions: Equatable, Sendable {
         }
         let waveCount = Int(ceil(Double(max(0, holdingCount)) / Double(priceHistoryConcurrencyLimit)))
         return max(priceHistoryTimeoutSeconds, Double(waveCount) * 30.0)
+    }
+
+    public var effectivePaginationTimeoutSeconds: Double {
+        paginationTimeoutSeconds
     }
 }
 
@@ -7101,19 +7193,22 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
     private let pulseReadStore: PulseReadStore?
     private let asOf: String?
     private let options: PDTBackgroundDetailRefreshOptions
+    private let now: @Sendable () -> Date
 
     public init(
         connector: any PDTMCPConnector,
         snapshotStore: SnapshotStore,
         pulseReadStore: PulseReadStore? = nil,
         asOf: String? = nil,
-        options: PDTBackgroundDetailRefreshOptions = PDTBackgroundDetailRefreshOptions()
+        options: PDTBackgroundDetailRefreshOptions = PDTBackgroundDetailRefreshOptions(),
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.connector = connector
         self.snapshotStore = snapshotStore
         self.pulseReadStore = pulseReadStore
         self.asOf = asOf
         self.options = options
+        self.now = now
     }
 
     public func refresh(
@@ -7194,8 +7289,12 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         if !skipRemainingPhasesForUnavailableSetup {
             do {
                 progress(BackgroundDetailRefreshProgress(phase: .xRay))
-                snapshot.xRayHoldings = PDTOptionalDetailNormalizer.normalizeXRayHoldings(try xRayHoldings(progress: progress))
+                let xRay = try xRayHoldings(progress: progress)
+                snapshot.xRayHoldings = PDTOptionalDetailNormalizer.normalizeXRayHoldings(xRay.holdings)
                 _ = try snapshotStore.commitCurrentSnapshot(snapshot)
+                if let diagnostic = xRay.diagnostic {
+                    diagnostics.append(diagnostic)
+                }
             } catch {
                 recordOptionalPhaseFailure(error, tool: "pdt-list-x-ray-holdings", phase: .xRay, arguments: [
                     "limit": "",
@@ -7401,25 +7500,40 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         return refreshed + fallback
     }
 
-    private func xRayHoldings(progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void) throws -> [PDTXRayHoldingInput] {
+    private func xRayHoldings(
+        progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
+    ) throws -> (holdings: [PDTXRayHoldingInput], diagnostic: PDTDetailRefreshFailureDiagnostic?) {
         let limit = 500
-        var offset = 0
-        var holdings: [PDTXRayHoldingInput] = []
-        while true {
+        let deadline = now().addingTimeInterval(options.effectivePaginationTimeoutSeconds)
+        let pagination = try paginatePDTList(
+            initialCursor: 0,
+            maxPages: options.maxPagesPerList,
+            deadline: deadline,
+            now: now,
+            treatErrorAsDeadline: pdtPaginationErrorIsRetryable
+        ) { offset in
             let arguments = ["limit": String(limit), "offset": String(offset)]
             progress(BackgroundDetailRefreshProgress(phase: .xRay, detail: "Fetching pdt-list-x-ray-holdings batch \(offset / limit + 1)"))
             let envelope: XRayHoldingsEnvelope = try callDecodedWithRetry(
                 "pdt-list-x-ray-holdings",
                 phase: .xRay,
                 arguments: arguments,
-                progress: progress
+                progress: progress,
+                retryDeadline: deadline
             )
-            holdings.append(contentsOf: envelope.items.map(\.optionalDetailInput))
-            guard envelope.hasMore == true, !envelope.items.isEmpty else {
-                return holdings
-            }
-            offset += limit
+            return PDTListPage(
+                items: envelope.items.map(\.optionalDetailInput),
+                nextCursor: envelope.hasMore == true ? offset + limit : nil
+            )
         }
+        return (
+            pagination.items,
+            pagination.truncationDiagnostic(
+                toolName: "pdt-list-x-ray-holdings",
+                phase: .xRay,
+                argumentShape: ["limit", "offset"]
+            )
+        )
     }
 
     private func incomeEvents(
@@ -7436,9 +7550,18 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             "date_from": dayString(snapshotAsOf, addingDays: -370),
             "date_to": incomeDateRange["date_to"] ?? snapshotAsOf,
         ]
-        let paginatedCalendarEvents = try liveCalendarEvents(arguments: incomeDateRange, progress: progress)
-        let dividends = try liveDividends(arguments: dividendDateRange, progress: progress)
-        let calendarEvents = paginatedCalendarEvents.filter { $0.type != "no-events-today" }
+        let paginationDeadline = now().addingTimeInterval(options.effectivePaginationTimeoutSeconds)
+        let calendarPagination = try liveCalendarEvents(
+            arguments: incomeDateRange,
+            deadline: paginationDeadline,
+            progress: progress
+        )
+        let dividendPagination = try liveDividends(
+            arguments: dividendDateRange,
+            deadline: paginationDeadline,
+            progress: progress
+        )
+        let calendarEvents = calendarPagination.events.filter { $0.type != "no-events-today" }
         let quoteLookup = try incomeQuoteIDsBySymbolID(
             for: calendarEvents,
             holdings: holdings,
@@ -7447,23 +7570,29 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         )
         let normalized = PDTOptionalDetailNormalizer.normalizeIncomeEvents(
             calendarEvents: calendarEvents.map(\.optionalDetailInput),
-            dividends: dividends.map(\.optionalDetailInput),
+            dividends: dividendPagination.dividends.map(\.optionalDetailInput),
             quoteIDsBySymbolID: quoteLookup.quoteIDsBySymbolID
         )
         return (
             events: normalized.events,
             dividendRowCount: normalized.dividendRowCount,
-            diagnostics: quoteLookup.diagnostics
+            diagnostics: [calendarPagination.diagnostic, dividendPagination.diagnostic]
+                .compactMap { $0 } + quoteLookup.diagnostics
         )
     }
 
     private func liveCalendarEvents(
         arguments baseArguments: [String: String],
+        deadline: Date,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
-    ) throws -> [LiveCalendarEvent] {
-        var page = 1
-        var events: [LiveCalendarEvent] = []
-        while true {
+    ) throws -> (events: [LiveCalendarEvent], diagnostic: PDTDetailRefreshFailureDiagnostic?) {
+        let pagination = try paginatePDTList(
+            initialCursor: 1,
+            maxPages: options.maxPagesPerList,
+            deadline: deadline,
+            now: now,
+            treatErrorAsDeadline: pdtPaginationErrorIsRetryable
+        ) { page in
             let arguments = baseArguments.merging([
                 "page": String(page),
                 "per_page": "250",
@@ -7473,15 +7602,23 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 "pdt-list-calendar-events",
                 phase: .income,
                 arguments: arguments,
-                progress: progress
+                progress: progress,
+                retryDeadline: deadline
             )
-            events.append(contentsOf: envelope.data)
             let lastPage = envelope.meta?.lastPage ?? page
-            guard page < lastPage else {
-                return events
-            }
-            page += 1
+            return PDTListPage(
+                items: envelope.data,
+                nextCursor: page < lastPage ? page + 1 : nil
+            )
         }
+        return (
+            pagination.items,
+            pagination.truncationDiagnostic(
+                toolName: "pdt-list-calendar-events",
+                phase: .income,
+                argumentShape: Array(baseArguments.keys) + ["page", "per_page"]
+            )
+        )
     }
 
     private func incomeQuoteIDsBySymbolID(
@@ -7589,11 +7726,16 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
 
     private func liveDividends(
         arguments baseArguments: [String: String],
+        deadline: Date,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
-    ) throws -> [LiveDividend] {
-        var page = 1
-        var dividends: [LiveDividend] = []
-        while true {
+    ) throws -> (dividends: [LiveDividend], diagnostic: PDTDetailRefreshFailureDiagnostic?) {
+        let pagination = try paginatePDTList(
+            initialCursor: 1,
+            maxPages: options.maxPagesPerList,
+            deadline: deadline,
+            now: now,
+            treatErrorAsDeadline: pdtPaginationErrorIsRetryable
+        ) { page in
             let arguments = baseArguments.merging([
                 "page": String(page),
                 "per_page": "250",
@@ -7603,15 +7745,23 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 "pdt-list-dividends",
                 phase: .income,
                 arguments: arguments,
-                progress: progress
+                progress: progress,
+                retryDeadline: deadline
             )
-            dividends.append(contentsOf: envelope.data)
             let lastPage = envelope.meta?.lastPage ?? page
-            guard page < lastPage else {
-                return dividends
-            }
-            page += 1
+            return PDTListPage(
+                items: envelope.data,
+                nextCursor: page < lastPage ? page + 1 : nil
+            )
         }
+        return (
+            pagination.items,
+            pagination.truncationDiagnostic(
+                toolName: "pdt-list-dividends",
+                phase: .income,
+                argumentShape: Array(baseArguments.keys) + ["page", "per_page"]
+            )
+        )
     }
 
     private func priceSeries(
@@ -7930,6 +8080,8 @@ public struct PDTLiveDataSourceOptions: Equatable, Sendable {
     public var includeDividends: Bool
     public var includeIncomeQuoteLookups: Bool
     public var includePriceSeries: Bool
+    public var paginationTimeoutSeconds: Double
+    public var maxPagesPerList: Int
     public var incomeQuoteLookupScope: PDTIncomeQuoteLookupScope
 
     public init(
@@ -7939,6 +8091,8 @@ public struct PDTLiveDataSourceOptions: Equatable, Sendable {
         includeDividends: Bool = true,
         includeIncomeQuoteLookups: Bool = true,
         includePriceSeries: Bool = true,
+        paginationTimeoutSeconds: Double = 240,
+        maxPagesPerList: Int = 50,
         incomeQuoteLookupScope: PDTIncomeQuoteLookupScope = .allOpenHoldings
     ) {
         self.includeDistributions = includeDistributions
@@ -7947,6 +8101,8 @@ public struct PDTLiveDataSourceOptions: Equatable, Sendable {
         self.includeDividends = includeDividends
         self.includeIncomeQuoteLookups = includeIncomeQuoteLookups
         self.includePriceSeries = includePriceSeries
+        self.paginationTimeoutSeconds = max(0.01, paginationTimeoutSeconds)
+        self.maxPagesPerList = min(pdtMaximumPagesPerList, max(1, maxPagesPerList))
         self.incomeQuoteLookupScope = incomeQuoteLookupScope
     }
 
@@ -7960,6 +8116,10 @@ public struct PDTLiveDataSourceOptions: Equatable, Sendable {
             includePriceSeries: false,
             incomeQuoteLookupScope: .calendarSymbolIDs
         )
+    }
+
+    public var effectivePaginationTimeoutSeconds: Double {
+        paginationTimeoutSeconds
     }
 
     public var requiredReadTools: [String] {
@@ -7990,15 +8150,18 @@ public struct PDTLiveDataSource: PortfolioDataSource {
     public var toolClient: any PDTLiveToolClient
     public var options: PDTLiveDataSourceOptions
     public var onOptionalFacetFailure: (@Sendable (PDTDetailRefreshFailureDiagnostic) -> Void)?
+    private let now: @Sendable () -> Date
 
     public init(
         toolClient: any PDTLiveToolClient,
         options: PDTLiveDataSourceOptions = PDTLiveDataSourceOptions(),
-        onOptionalFacetFailure: (@Sendable (PDTDetailRefreshFailureDiagnostic) -> Void)? = nil
+        onOptionalFacetFailure: (@Sendable (PDTDetailRefreshFailureDiagnostic) -> Void)? = nil,
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.toolClient = toolClient
         self.options = options
         self.onOptionalFacetFailure = onOptionalFacetFailure
+        self.now = now
     }
 
     public func snapshot(asOf: String? = nil) throws -> PortfolioSnapshot {
@@ -8037,6 +8200,13 @@ public struct PDTLiveDataSource: PortfolioDataSource {
                 skipRemainingOptionalFacets = true
             }
         }
+        func recordPaginationTruncation(_ diagnostic: PDTDetailRefreshFailureDiagnostic?) {
+            guard let diagnostic else {
+                return
+            }
+            optionalFacetFailed = true
+            onOptionalFacetFailure?(diagnostic)
+        }
 
         var distributionsEnvelope: LiveDistributionsEnvelope?
         if options.includeDistributions, !skipRemainingOptionalFacets {
@@ -8057,7 +8227,9 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         var xRayHoldings: [PDTXRayHoldingInput]?
         if options.includeXRayHoldings, !skipRemainingOptionalFacets {
             do {
-                xRayHoldings = try liveXRayHoldings()
+                let xRay = try liveXRayHoldings()
+                xRayHoldings = xRay.holdings
+                recordPaginationTruncation(xRay.diagnostic)
             } catch {
                 recordOptionalFacetFailure(
                     error,
@@ -8068,10 +8240,16 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             }
         }
 
+        let incomePaginationDeadline = now().addingTimeInterval(options.effectivePaginationTimeoutSeconds)
         var calendarEvents: [LiveCalendarEvent] = []
         if options.includeIncomeEvents, !skipRemainingOptionalFacets {
             do {
-                calendarEvents = try liveCalendarEvents(arguments: incomeDateRange)
+                let calendarPagination = try liveCalendarEvents(
+                    arguments: incomeDateRange,
+                    deadline: incomePaginationDeadline
+                )
+                calendarEvents = calendarPagination.events
+                recordPaginationTruncation(calendarPagination.diagnostic)
             } catch {
                 recordOptionalFacetFailure(
                     error,
@@ -8085,7 +8263,12 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         var dividends: [LiveDividend] = []
         if options.includeDividends, !skipRemainingOptionalFacets {
             do {
-                dividends = try liveDividends(arguments: dividendDateRange)
+                let dividendPagination = try liveDividends(
+                    arguments: dividendDateRange,
+                    deadline: incomePaginationDeadline
+                )
+                dividends = dividendPagination.dividends
+                recordPaginationTruncation(dividendPagination.diagnostic)
             } catch {
                 recordOptionalFacetFailure(
                     error,
@@ -8226,30 +8409,52 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         }
     }
 
-    private func liveXRayHoldings() throws -> [PDTXRayHoldingInput] {
+    private func liveXRayHoldings()
+        throws -> (holdings: [PDTXRayHoldingInput], diagnostic: PDTDetailRefreshFailureDiagnostic?)
+    {
         let limit = 500
-        var offset = 0
-        var holdings: [PDTXRayHoldingInput] = []
-        while true {
+        let deadline = now().addingTimeInterval(options.effectivePaginationTimeoutSeconds)
+        let pagination = try paginatePDTList(
+            initialCursor: 0,
+            maxPages: options.maxPagesPerList,
+            deadline: deadline,
+            now: now,
+            treatErrorAsDeadline: pdtPaginationErrorIsRetryable
+        ) { offset in
+            let arguments = ["limit": String(limit), "offset": String(offset)]
             let envelope: XRayHoldingsEnvelope = try decodeLiveTool(
                 "pdt-list-x-ray-holdings",
                 data: toolClient.callReadTool(
                     "pdt-list-x-ray-holdings",
-                    arguments: ["limit": String(limit), "offset": String(offset)]
+                    arguments: arguments
                 )
             )
-            holdings.append(contentsOf: envelope.items.map(\.optionalDetailInput))
-            guard envelope.hasMore == true, !envelope.items.isEmpty else {
-                return holdings
-            }
-            offset += limit
+            return PDTListPage(
+                items: envelope.items.map(\.optionalDetailInput),
+                nextCursor: envelope.hasMore == true ? offset + limit : nil
+            )
         }
+        return (
+            pagination.items,
+            pagination.truncationDiagnostic(
+                toolName: "pdt-list-x-ray-holdings",
+                phase: .xRay,
+                argumentShape: ["limit", "offset"]
+            )
+        )
     }
 
-    private func liveCalendarEvents(arguments baseArguments: [String: String]) throws -> [LiveCalendarEvent] {
-        var page = 1
-        var events: [LiveCalendarEvent] = []
-        while true {
+    private func liveCalendarEvents(
+        arguments baseArguments: [String: String],
+        deadline: Date
+    ) throws -> (events: [LiveCalendarEvent], diagnostic: PDTDetailRefreshFailureDiagnostic?) {
+        let pagination = try paginatePDTList(
+            initialCursor: 1,
+            maxPages: options.maxPagesPerList,
+            deadline: deadline,
+            now: now,
+            treatErrorAsDeadline: pdtPaginationErrorIsRetryable
+        ) { page in
             let arguments = baseArguments.merging([
                 "page": String(page),
                 "per_page": "250",
@@ -8258,19 +8463,33 @@ public struct PDTLiveDataSource: PortfolioDataSource {
                 "pdt-list-calendar-events",
                 data: toolClient.callReadTool("pdt-list-calendar-events", arguments: arguments)
             )
-            events.append(contentsOf: envelope.data)
             let lastPage = envelope.meta?.lastPage ?? page
-            guard page < lastPage else {
-                return events
-            }
-            page += 1
+            return PDTListPage(
+                items: envelope.data,
+                nextCursor: page < lastPage ? page + 1 : nil
+            )
         }
+        return (
+            pagination.items,
+            pagination.truncationDiagnostic(
+                toolName: "pdt-list-calendar-events",
+                phase: .income,
+                argumentShape: Array(baseArguments.keys) + ["page", "per_page"]
+            )
+        )
     }
 
-    private func liveDividends(arguments baseArguments: [String: String]) throws -> [LiveDividend] {
-        var page = 1
-        var dividends: [LiveDividend] = []
-        while true {
+    private func liveDividends(
+        arguments baseArguments: [String: String],
+        deadline: Date
+    ) throws -> (dividends: [LiveDividend], diagnostic: PDTDetailRefreshFailureDiagnostic?) {
+        let pagination = try paginatePDTList(
+            initialCursor: 1,
+            maxPages: options.maxPagesPerList,
+            deadline: deadline,
+            now: now,
+            treatErrorAsDeadline: pdtPaginationErrorIsRetryable
+        ) { page in
             let arguments = baseArguments.merging([
                 "page": String(page),
                 "per_page": "250",
@@ -8279,13 +8498,20 @@ public struct PDTLiveDataSource: PortfolioDataSource {
                 "pdt-list-dividends",
                 data: toolClient.callReadTool("pdt-list-dividends", arguments: arguments)
             )
-            dividends.append(contentsOf: envelope.data)
             let lastPage = envelope.meta?.lastPage ?? page
-            guard page < lastPage else {
-                return dividends
-            }
-            page += 1
+            return PDTListPage(
+                items: envelope.data,
+                nextCursor: page < lastPage ? page + 1 : nil
+            )
         }
+        return (
+            pagination.items,
+            pagination.truncationDiagnostic(
+                toolName: "pdt-list-dividends",
+                phase: .income,
+                argumentShape: Array(baseArguments.keys) + ["page", "per_page"]
+            )
+        )
     }
 
     private func livePriceRows(for holdings: [NormalizedHolding], asOf: String) throws -> [PDTPriceInput] {
