@@ -7115,6 +7115,12 @@ private struct PDTListPage<Cursor, Item> {
 
 private let pdtMaximumPagesPerList = 50
 
+public enum PDTListPaginationPolicy {
+    /// Both PDT list-tool schemas document "max: 100" for `per_page`;
+    /// observed live on 2026-07-29.
+    public static let pageSize = 100
+}
+
 private enum PDTListPaginationTruncation {
     case pageCap
     case deadline
@@ -7652,7 +7658,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         ) { page in
             let arguments = baseArguments.merging([
                 "page": String(page),
-                "per_page": "250",
+                "per_page": String(PDTListPaginationPolicy.pageSize),
             ]) { _, new in new }
             progress(BackgroundDetailRefreshProgress(phase: .income, detail: "Fetching pdt-list-calendar-events page \(page)"))
             let envelope: LiveCalendarEventsEnvelope = try callDecodedWithRetry(
@@ -7795,7 +7801,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         ) { page in
             let arguments = baseArguments.merging([
                 "page": String(page),
-                "per_page": "250",
+                "per_page": String(PDTListPaginationPolicy.pageSize),
             ]) { _, new in new }
             progress(BackgroundDetailRefreshProgress(phase: .income, detail: "Fetching pdt-list-dividends page \(page)"))
             let envelope: LiveDividendsEnvelope = try callDecodedWithRetry(
@@ -8544,7 +8550,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         ) { page in
             let arguments = baseArguments.merging([
                 "page": String(page),
-                "per_page": "250",
+                "per_page": String(PDTListPaginationPolicy.pageSize),
             ]) { _, new in new }
             let envelope: LiveCalendarEventsEnvelope = try decodeLiveTool(
                 "pdt-list-calendar-events",
@@ -8579,7 +8585,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         ) { page in
             let arguments = baseArguments.merging([
                 "page": String(page),
-                "per_page": "250",
+                "per_page": String(PDTListPaginationPolicy.pageSize),
             ]) { _, new in new }
             let envelope: LiveDividendsEnvelope = try decodeLiveTool(
                 "pdt-list-dividends",

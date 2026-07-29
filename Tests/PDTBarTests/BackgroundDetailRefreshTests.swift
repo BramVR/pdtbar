@@ -76,7 +76,7 @@ struct BackgroundDetailRefreshTests {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-empty-calendar-page-test")
         defer { try? FileManager.default.removeItem(at: store.directory) }
         var responses = try detailRefreshResponses()
-        responses["pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=1&per_page=250"] = try mcpContent("""
+        responses["pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=1&per_page=100"] = try mcpContent("""
         {
           "data": [],
           "meta": { "last_page": 999999 }
@@ -141,7 +141,7 @@ struct BackgroundDetailRefreshTests {
             (2, "2026-03-31", "Page Two"),
             (3, "2026-04-01", "Page Three"),
         ] {
-            responses["pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=\(page)&per_page=250"] = try mcpContent("""
+            responses["pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=\(page)&per_page=100"] = try mcpContent("""
             {
               "data": [
                 { "date": "\(date)", "type": "ex-dividend", "isEstimated": false, "symbolId": null, "symbolName": "\(name)" }
@@ -216,7 +216,7 @@ struct BackgroundDetailRefreshTests {
         defer { try? FileManager.default.removeItem(at: store.directory) }
         var responses = try detailRefreshResponses()
         for (page, date) in [(1, "2026-03-30"), (2, "2026-03-31")] {
-            responses["pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=\(page)&per_page=250"] = try mcpContent("""
+            responses["pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=\(page)&per_page=100"] = try mcpContent("""
             {
               "data": [
                 { "date": "\(date)", "type": "ex-dividend", "isEstimated": false, "symbolId": null, "symbolName": "Calendar Page \(page)" }
@@ -588,7 +588,7 @@ struct BackgroundDetailRefreshTests {
         }
 
         try assertPriorOptionalDetailPreservedWhenRemovingResponse(
-            "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=1&per_page=250",
+            "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=1&per_page=100",
             prefix: "pdtbar-detail-refresh-prior-income-test"
         ) { committed in
             #expect(committed.xRayHoldings == [XRayHoldingSummary(weight: 0.25), XRayHoldingSummary(weight: 0.15)])
@@ -1107,6 +1107,35 @@ struct BackgroundDetailRefreshTests {
 }
 
 extension BackgroundDetailRefreshTests {
+    @Test("Background income list requests stay within PDT's documented page-size bound")
+    func backgroundIncomeListRequestsStayWithinDocumentedPageSizeBound() throws {
+        let documentedMaximumPageSize = 100
+        #expect(PDTListPaginationPolicy.pageSize <= documentedMaximumPageSize)
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-page-size-test")
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let connector = SelectiveFailingPDTConnector(responses: try detailRefreshResponses())
+
+        _ = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+        ).refresh()
+
+        let incomeRequests = connector.recordedRequests.filter {
+            $0.hasPrefix("pdt-list-calendar-events?") || $0.hasPrefix("pdt-list-dividends?")
+        }
+        #expect(incomeRequests.count == 2)
+        #expect(incomeRequests.allSatisfy {
+            URLComponents(string: "https://pdt.invalid/\($0)")?
+                .queryItems?
+                .first(where: { $0.name == "per_page" })?
+                .value
+                .flatMap(Int.init)
+                .map { $0 <= documentedMaximumPageSize } == true
+        })
+    }
+
     @Test("Income quote scan honors an offset virtual clock deadline")
     func incomeQuoteScanHonorsOffsetVirtualClockDeadline() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-income-virtual-deadline-test")
@@ -1309,6 +1338,7 @@ private final class SelectiveFailingPDTConnector: PDTMCPConnector, @unchecked Se
     private let onCall: @Sendable (String) -> Void
     private let lock = NSLock()
     private var calls: [String] = []
+    private var requests: [String] = []
 
     init(
         responses: [String: Data],
@@ -1328,6 +1358,14 @@ private final class SelectiveFailingPDTConnector: PDTMCPConnector, @unchecked Se
             lock.unlock()
         }
         return calls.filter { $0 == name }.count
+    }
+
+    var recordedRequests: [String] {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return requests
     }
 
     func availableReadTools() throws -> Set<String> {
@@ -1350,6 +1388,9 @@ private final class SelectiveFailingPDTConnector: PDTMCPConnector, @unchecked Se
             .map { "\($0.key)=\($0.value)" }
             .joined(separator: "&")
         let key = suffix.isEmpty ? name : "\(name)?\(suffix)"
+        lock.lock()
+        requests.append(key)
+        lock.unlock()
         guard let response = responses[key] ?? responses[name] else {
             throw PDTMCPConnectorError.missingScriptedResponse(key)
         }
@@ -1538,7 +1579,7 @@ private func detailRefreshResponses(
           "hasMore": false
         }
         """),
-        "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=1&per_page=250": try mcpContent("""
+        "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=1&per_page=100": try mcpContent("""
         {
           "data": [
             { "date": "2026-03-30", "type": "ex-dividend", "isEstimated": false, "symbolId": \(calendarSymbolID.map(String.init) ?? "null"), "symbolName": "\(calendarSymbolName)" }
@@ -1546,7 +1587,7 @@ private func detailRefreshResponses(
           "meta": { "last_page": 1 }
         }
         """),
-        "pdt-list-dividends?date_from=2025-03-24&date_to=2026-04-28&page=1&per_page=250": try mcpResult("""
+        "pdt-list-dividends?date_from=2025-03-24&date_to=2026-04-28&page=1&per_page=100": try mcpResult("""
         {
           "data": [
             { "date": "2026-03-28T08:13:00+00:00", "amount": { "value": "8.00", "currency": "EUR" }, "symbolQuoteId": 9101 },

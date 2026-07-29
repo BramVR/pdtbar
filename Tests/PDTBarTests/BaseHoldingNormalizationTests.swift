@@ -533,7 +533,7 @@ struct BaseHoldingNormalizationTests {
     func liveConnectorPaginatesIncomeCalendarEvents() throws {
         let connector = ScriptedPDTMCPConnector(responses: [
             "pdt-get-portfolio-holdings": Data(baseHoldingsJSON.utf8),
-            "pdt-list-calendar-events?date_from=2026-06-26&date_to=2026-07-26&page=1&per_page=250": Data("""
+            "pdt-list-calendar-events?date_from=2026-06-26&date_to=2026-07-26&page=1&per_page=100": Data("""
             {
               "data": [
                 { "date": "2026-06-26", "type": "no-events-today", "isEstimated": false, "symbolId": null, "symbolName": null },
@@ -542,7 +542,7 @@ struct BaseHoldingNormalizationTests {
               "meta": { "last_page": 2 }
             }
             """.utf8),
-            "pdt-list-calendar-events?date_from=2026-06-26&date_to=2026-07-26&page=2&per_page=250": Data("""
+            "pdt-list-calendar-events?date_from=2026-06-26&date_to=2026-07-26&page=2&per_page=100": Data("""
             {
               "data": [
                 { "date": "2026-07-02", "type": "ex-dividend", "isEstimated": false, "symbolId": 5001, "symbolName": "Open Public Co" }
