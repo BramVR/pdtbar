@@ -1577,8 +1577,12 @@ private func scriptedPulseMarkReadSmoke(arguments: [String]) throws -> SmokeRepo
             .first { $0.role == .pulseMarkRead },
         "pressure descriptor should expose Mark as read action"
     )
-    let clickedPayload = try require(markReadAction.actionPayload, "Mark as read action should carry fingerprint")
-    try readStore.markRead(clickedPayload)
+    let clickedPayload = try require(markReadAction.actionPayload, "Mark as read action should carry attention ID")
+    let clickedFingerprint = try require(
+        initialRun.unfilteredModel.rankedAttentionItems.first { $0.id == clickedPayload }?.readFingerprint,
+        "Mark as read action should resolve to an in-memory fingerprint"
+    )
+    try readStore.markRead(clickedFingerprint)
     let afterClickPulse = try require(
         try PressureRunner.cachedPulse(snapshotStore: snapshotStore, pulseReadStore: readStore),
         "cached pulse lifecycle should reload after scripted Mark as read click"
@@ -1596,15 +1600,15 @@ private func scriptedPulseMarkReadSmoke(arguments: [String]) throws -> SmokeRepo
         pulseReadStore: reloadedReadStore
     )
     let resurfacedItem = changedRun.model.rankedAttentionItems.first
-    let payloadMatchesFirstItem = clickedPayload == firstItem.readFingerprint
+    let payloadMatchesFirstItem = clickedPayload == firstItem.id
     let afterClickHidden = !afterClickPulse.model.rankedAttentionItems.contains {
-        $0.readFingerprint == clickedPayload
+        $0.readFingerprint == clickedFingerprint
     } && afterClickPulse.source == .cachedSnapshot
     let relaunchHidden = !relaunchPulse.model.rankedAttentionItems.contains {
-        $0.readFingerprint == clickedPayload
+        $0.readFingerprint == clickedFingerprint
     } && relaunchPulse.source == .cachedSnapshot
     let changedResurfaced = resurfacedItem?.holdingIdentity?.quoteId == firstItem.holdingIdentity?.quoteId
-        && resurfacedItem?.readFingerprint != clickedPayload
+        && resurfacedItem?.readFingerprint != clickedFingerprint
     let proofPayload = ScriptedPulseMarkReadProof(
         stateDirectory: artifactPath(stateDirectory),
         actionTitle: markReadAction.title,

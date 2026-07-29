@@ -1024,25 +1024,33 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func markPulseItemRead(_ sender: NSMenuItem) {
-        guard let fingerprint = sender.representedObject as? String else {
+        guard let attentionID = sender.representedObject as? String else {
             return
         }
         do {
             let directory = currentSnapshotDirectory()
             let readStore = PulseReadStore(directory: directory)
-            try readStore.markRead(fingerprint)
+            let pulse: PulseLifecycleResult
             if let currentPulse = launchRuntime.currentPulse {
-                let refreshedPulse = currentPulse.applyingReadState(try readStore.load())
-                handleLaunchUpdate(launchRuntime.publishPulse(refreshedPulse))
+                pulse = currentPulse
+            } else {
+                guard let cachedPulse = try PressureRunner.cachedPulse(
+                    snapshotStore: SnapshotStore(directory: directory),
+                    pulseReadStore: readStore
+                ) else {
+                    return
+                }
+                pulse = cachedPulse
+            }
+            guard let fingerprint = pulse.unfilteredModel.rankedAttentionItems
+                .first(where: { $0.id == attentionID })?
+                .readFingerprint
+            else {
                 return
             }
-            guard let cachedPulse = try PressureRunner.cachedPulse(
-                snapshotStore: SnapshotStore(directory: directory),
-                pulseReadStore: readStore
-            ) else {
-                return
-            }
-            handleLaunchUpdate(launchRuntime.publishPulse(cachedPulse))
+            try readStore.markRead(fingerprint)
+            let refreshedPulse = pulse.applyingReadState(try readStore.load())
+            handleLaunchUpdate(launchRuntime.publishPulse(refreshedPulse))
         } catch {
             FileHandle.standardError.write(Data("pdtbar: mark read failed: \(error)\n".utf8))
         }

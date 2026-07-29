@@ -5405,7 +5405,7 @@ public enum MenuDescriptorRenderer {
                 id: "\(item.id).markRead",
                 role: .pulseMarkRead,
                 title: "Mark as read",
-                actionPayload: item.readFingerprint
+                actionPayload: item.id
             )
         )
         return rows

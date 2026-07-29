@@ -424,8 +424,7 @@ struct PulseReadTests {
         #expect(concentration.readFingerprint.contains("weight-bucket-bp:2400"))
         #expect(income.readFingerprint.contains("quote:9003"))
         #expect(income.readFingerprint.contains("date:2026-06-24"))
-        #expect(income.readFingerprint.contains("amount:EUR:"))
-        #expect(!income.readFingerprint.contains("78.00"))
+        #expect(income.readFingerprint.contains("amount:EUR:78.00"))
         #expect(income.readFingerprint.contains("change-bp:1818"))
         #expect(bigMover.readFingerprint.contains("quote:9001"))
         #expect(bigMover.readFingerprint.contains("window:2026-06-15..2026-06-19"))
@@ -551,7 +550,7 @@ struct PulseReadTests {
             .first { $0.role == .pulseMarkRead }
 
         #expect(action?.title == "Mark as read")
-        #expect(action?.actionPayload == item.readFingerprint)
+        #expect(action?.actionPayload == item.id)
     }
 }
 

@@ -52,16 +52,7 @@ func moneyFingerprint(_ money: Money?) -> String {
         return "none"
     }
     let value = Decimal(string: money.value).map { canonicalDecimalString($0, places: 2) } ?? money.value
-    return "\(money.currency):\(stableFingerprintDigest("\(money.currency):\(value)"))"
-}
-
-private func stableFingerprintDigest(_ value: String) -> String {
-    var hash: UInt64 = 14_695_981_039_346_656_037
-    for byte in value.utf8 {
-        hash ^= UInt64(byte)
-        hash &*= 1_099_511_628_211
-    }
-    return String(format: "%016llx", hash)
+    return "\(money.currency):\(value)"
 }
 
 func fingerprintBasisPoints(_ value: Double?) -> String {
