@@ -318,6 +318,34 @@ struct PortfolioValueVisibilityTests {
         #expect(renderedText(in: hidden).contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
     }
 
+    @Test("Public section mutation invalidates trusted value metadata")
+    func publicSectionMutationInvalidatesTrustedValueMetadata() throws {
+        let snapshot = try visibilitySnapshot("quiet-no-pressure.json")
+        var descriptor = MenuDescriptorRenderer.render(
+            model: PressureEngine.buildModel(from: snapshot)
+        )
+        descriptor.sections.append(
+            MenuSection(
+                id: "extension",
+                title: "Extension",
+                rows: [
+                    MenuRow(
+                        id: "extension.money",
+                        title: "Extension value",
+                        detail: "GBp 54,321.09"
+                    ),
+                ]
+            )
+        )
+
+        let hidden = descriptor.applying(
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+
+        #expect(!renderedText(in: hidden).contains("54,321.09"))
+        #expect(renderedText(in: hidden).contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
+    }
+
     @Test("Income attention resolves same-name events by quote identity")
     func incomeAttentionResolvesSameNameEventsByQuoteIdentity() throws {
         var snapshot = try visibilitySnapshot("quiet-no-pressure.json")

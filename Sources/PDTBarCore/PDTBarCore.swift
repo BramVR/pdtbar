@@ -2423,7 +2423,11 @@ public struct MenuDescriptor: Codable, Equatable {
     public var statusBadge: String?
     public var statusVisual: StatusVisualState
     public var statusAccessibilityIdentifier: String
-    public internal(set) var sections: [MenuSection]
+    public var sections: [MenuSection] {
+        didSet {
+            portfolioValueProtectionState = nil
+        }
+    }
     fileprivate var portfolioValueProtectionState: PortfolioValueProtectionState?
 
     public init(
@@ -3448,6 +3452,7 @@ public enum ClaudeLaunchFlow {
 
     public static func descriptorWithRefreshDetailsAction(cachedPulse: MenuDescriptor) -> MenuDescriptor {
         var descriptor = cachedPulse.withRefreshAction(.available)
+        let portfolioValueProtectionState = descriptor.portfolioValueProtectionState
         var addedRefreshAction = false
         descriptor.sections = descriptor.sections.map { section in
             guard section.id == "freshness" else {
@@ -3467,6 +3472,7 @@ public enum ClaudeLaunchFlow {
             }
             return section
         }
+        descriptor.portfolioValueProtectionState = portfolioValueProtectionState
         guard addedRefreshAction else {
             return cachedPulseDescriptor(
                 cachedPulse.withRefreshAction(.available),
@@ -3624,6 +3630,7 @@ public enum ClaudeLaunchFlow {
         clearsDiagnostic: Bool = false
     ) -> MenuDescriptor {
         var descriptor = cachedPulse
+        let portfolioValueProtectionState = descriptor.portfolioValueProtectionState
         let sourceDetail = runtimeDataHealthSourceDetail(claudeReadiness: claudeReadiness, pdtMCPReadiness: pdtMCPReadiness)
         let detailFillDetail = runtimeDataHealthDetailFillDetail(detailFill)
         let summaryDetail = runtimeDataHealthSummaryDetail(
@@ -3676,6 +3683,7 @@ public enum ClaudeLaunchFlow {
             }
             return section
         }
+        descriptor.portfolioValueProtectionState = portfolioValueProtectionState
         return descriptor
     }
 
@@ -4513,6 +4521,7 @@ public extension MenuDescriptor {
             return failClosedForLegacyPortfolioValues()
         }
         var descriptor = self
+        let portfolioValueProtectionState = descriptor.portfolioValueProtectionState
         descriptor.sections = descriptor.sections.map { section in
             var section = section
             section.rows = section.rows.map { $0.applying(settings: settings) }
@@ -4520,6 +4529,8 @@ public extension MenuDescriptor {
         }
         if !settings.showPortfolioValues {
             descriptor.portfolioValueProtectionState = .hidden
+        } else {
+            descriptor.portfolioValueProtectionState = portfolioValueProtectionState
         }
         return descriptor
     }
@@ -4889,12 +4900,14 @@ public enum MenuDescriptorRenderer {
         refreshState: MenuRefreshActionState
     ) -> MenuDescriptor {
         var descriptor = descriptor
+        let portfolioValueProtectionState = descriptor.portfolioValueProtectionState
         let actions = topLevelActionsSection(refreshState: refreshState)
         if let index = descriptor.sections.firstIndex(where: { $0.id == actions.id }) {
             descriptor.sections[index] = actions
         } else {
             descriptor.sections.append(actions)
         }
+        descriptor.portfolioValueProtectionState = portfolioValueProtectionState
         return descriptor
     }
 
@@ -5168,6 +5181,7 @@ public enum MenuDescriptorRenderer {
         with health: DataHealthSnapshot
     ) -> MenuDescriptor {
         var descriptor = descriptor
+        let portfolioValueProtectionState = descriptor.portfolioValueProtectionState
         if health.status == .healthy {
             descriptor.sections = descriptor.sections.map { section in
                 guard section.id == "freshness" else {
@@ -5177,6 +5191,7 @@ public enum MenuDescriptorRenderer {
                 section.rows.removeAll { $0.id == "dataHealth" }
                 return section
             }
+            descriptor.portfolioValueProtectionState = portfolioValueProtectionState
             return descriptor
         }
         let replacement = dataHealthRow(for: health)
@@ -5198,6 +5213,7 @@ public enum MenuDescriptorRenderer {
             }
             return section
         }
+        descriptor.portfolioValueProtectionState = portfolioValueProtectionState
         return descriptor
     }
 
