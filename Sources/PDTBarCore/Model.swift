@@ -1248,10 +1248,6 @@ func validMoney(_ money: Money?) -> Money? {
     PDTBaseHoldingNormalizer.validMoney(money)
 }
 
-func posixDecimal(_ value: String) -> Decimal? {
-    Decimal(string: value, locale: Locale(identifier: "en_US_POSIX"))
-}
-
 func finite(_ value: Double?) -> Double? {
     PDTBaseHoldingNormalizer.finite(value)
 }

@@ -131,3 +131,7 @@ func canonicalDecimalString(_ value: Decimal, places: Int) -> String {
     formatter.maximumFractionDigits = places
     return formatter.string(from: value as NSDecimalNumber) ?? (value as NSDecimalNumber).stringValue
 }
+
+func posixDecimal(_ value: String) -> Decimal? {
+    Decimal(string: value, locale: Locale(identifier: "en_US_POSIX"))
+}
