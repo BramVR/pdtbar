@@ -557,6 +557,7 @@ private func renderedTextValues(in row: MenuRow) -> [String] {
         row.portfolioSummary?.cagr,
         row.portfolioSummary?.totalIncrease,
         row.portfolioSummary?.accessibilityLabel,
+        row.actionPayload,
     ]
     values.append(contentsOf: row.barChart?.bars.flatMap {
         [$0.label, $0.axisLabel, $0.percentageLabel, $0.detail]
