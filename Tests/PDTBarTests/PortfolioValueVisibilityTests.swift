@@ -20,8 +20,16 @@ struct PortfolioValueVisibilityTests {
         let hiddenAtAppChoke = shown.applying(
             settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
         )
+        let decodedShown = try JSONDecoder().decode(
+            MenuDescriptor.self,
+            from: stableJSONData(shown)
+        )
+        let hiddenAfterRoundTrip = decodedShown.applying(
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
         let shownText = renderedText(in: shown)
         let hiddenText = renderedText(in: hidden)
+        let hiddenJSON = try #require(String(data: stableJSONData(hiddenAtAppChoke), encoding: .utf8))
         let monetaryDisplays = try monetaryDisplays(in: snapshot)
 
         #expect(
@@ -30,10 +38,14 @@ struct PortfolioValueVisibilityTests {
         )
         #expect(hiddenText.contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
         #expect(hiddenAtAppChoke == hidden)
+        #expect(hiddenAfterRoundTrip == hidden)
         #expect(
             try monetaryDigitGroups(in: snapshot).filter(hiddenText.contains).isEmpty,
             "Hidden \(fixtureName) descriptor leaked snapshot monetary digit groups"
         )
+        #expect(!hiddenJSON.contains("\"portfolioValueDetail\""))
+        #expect(!hiddenJSON.contains("\"portfolioValueBarDetails\""))
+        #expect(!hiddenJSON.contains("\"portfolioValueSummaryTotal\""))
     }
 
     @Test(
@@ -118,6 +130,67 @@ struct PortfolioValueVisibilityTests {
         let leaked = try monetaryDigitGroups(in: snapshot).filter(text.contains)
 
         #expect(leaked.isEmpty, "Hidden GBp descriptor leaked: \(leaked.sorted())")
+    }
+
+    @Test("Unresolved sensitive attention data fails closed")
+    func unresolvedSensitiveAttentionDataFailsClosed() throws {
+        var snapshot = try visibilitySnapshot("quiet-no-pressure.json")
+        snapshot.incomeEvents = [
+            IncomeEventSummary(
+                date: "2026-06-25",
+                kind: "ex-dividend",
+                symbolName: "Unresolved Sterling Holding",
+                estimated: false,
+                symbolId: 778,
+                quoteId: 7778,
+                amount: Money(value: "65432.10", currency: "GBp")
+            ),
+        ]
+        var model = PressureEngine.buildModel(from: snapshot)
+        model.facetSnapshots.income.upcomingEvents = []
+
+        let hidden = MenuDescriptorRenderer.render(
+            model: model,
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+
+        #expect(!renderedText(in: hidden).contains("65,432.10"))
+        #expect(renderedText(in: hidden).contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
+    }
+
+    @Test("Income attention resolves same-name events by quote identity")
+    func incomeAttentionResolvesSameNameEventsByQuoteIdentity() throws {
+        var snapshot = try visibilitySnapshot("quiet-no-pressure.json")
+        snapshot.incomeEvents = [
+            IncomeEventSummary(
+                date: "2026-06-25",
+                kind: "ex-dividend",
+                symbolName: "Dual Listed Holding",
+                estimated: false,
+                symbolId: 701,
+                quoteId: 7001,
+                amount: Money(value: "111.11", currency: "GBp")
+            ),
+            IncomeEventSummary(
+                date: "2026-06-25",
+                kind: "ex-dividend",
+                symbolName: "Dual Listed Holding",
+                estimated: false,
+                symbolId: 702,
+                quoteId: 7002,
+                amount: Money(value: "222.22", currency: "GBp")
+            ),
+        ]
+        let descriptor = MenuDescriptorRenderer.render(
+            model: PressureEngine.buildModel(from: snapshot)
+        )
+        let first = try #require(row(withID: "income.ex-dividend.7001.glance", in: descriptor))
+        let second = try #require(row(withID: "income.ex-dividend.7002.glance", in: descriptor))
+
+        #expect(first.detail?.contains("GBp 111.11") == true)
+        #expect(!((first.detail ?? "").contains("GBp 222.22")))
+        #expect(second.detail?.contains("GBp 222.22") == true)
+        #expect(!((second.detail ?? "").contains("GBp 111.11")))
     }
 
     @Test("App applies portfolio value visibility at one menu installation choke point")
@@ -250,6 +323,20 @@ private func renderedText(in descriptor: MenuDescriptor) -> String {
     values.append(contentsOf: descriptor.sections.map(\.title))
     values.append(contentsOf: descriptor.sections.flatMap { $0.rows.flatMap(renderedTextValues) })
     return values.compactMap { $0 }.joined(separator: "\n")
+}
+
+private func row(withID id: String, in descriptor: MenuDescriptor) -> MenuRow? {
+    descriptor.sections.lazy
+        .flatMap(\.rows)
+        .compactMap { row(withID: id, in: $0) }
+        .first
+}
+
+private func row(withID id: String, in candidate: MenuRow) -> MenuRow? {
+    if candidate.id == id {
+        return candidate
+    }
+    return candidate.children.lazy.compactMap { row(withID: id, in: $0) }.first
 }
 
 private func renderedTextValues(in row: MenuRow) -> [String] {

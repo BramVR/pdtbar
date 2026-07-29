@@ -2688,10 +2688,11 @@ public struct PortfolioValueDisplaySettings: Codable, Equatable, Sendable {
     }
 }
 
-struct PortfolioValueText: Equatable {
-    enum Component: Equatable {
+struct PortfolioValueText: Codable, Equatable {
+    enum Component: Codable, Equatable {
         case literal(String)
         case money(Money)
+        case unresolvedSensitive(String)
     }
 
     var components: [Component]
@@ -2711,6 +2712,10 @@ struct PortfolioValueText: Equatable {
                 return value
             case .money(let money):
                 return display(money, settings: settings)
+            case .unresolvedSensitive(let value):
+                return settings.showPortfolioValues
+                    ? value
+                    : PortfolioValueDisplaySettings.hiddenPlaceholder
             }
         }.joined()
     }
@@ -2728,7 +2733,7 @@ public struct MenuRow: Codable, Equatable {
     public var actionPayload: String?
     public var children: [MenuRow]
     var portfolioValueDetail: PortfolioValueText?
-    var portfolioValueBarDetails: [String: PortfolioValueText]
+    var portfolioValueBarDetails: [String: PortfolioValueText]?
     var portfolioValueSummaryTotal: Money?
 
     public init(
@@ -2754,7 +2759,7 @@ public struct MenuRow: Codable, Equatable {
         self.actionPayload = actionPayload
         self.children = children
         self.portfolioValueDetail = nil
-        self.portfolioValueBarDetails = [:]
+        self.portfolioValueBarDetails = nil
         self.portfolioValueSummaryTotal = nil
     }
 
@@ -2769,6 +2774,9 @@ public struct MenuRow: Codable, Equatable {
         case portfolioSummary
         case actionPayload
         case children
+        case portfolioValueDetail
+        case portfolioValueBarDetails
+        case portfolioValueSummaryTotal
     }
 
     public init(from decoder: Decoder) throws {
@@ -2785,9 +2793,18 @@ public struct MenuRow: Codable, Equatable {
         portfolioSummary = try container.decodeIfPresent(MenuRowPortfolioSummary.self, forKey: .portfolioSummary)
         actionPayload = try container.decodeIfPresent(String.self, forKey: .actionPayload)
         children = try container.decodeIfPresent([MenuRow].self, forKey: .children) ?? []
-        portfolioValueDetail = nil
-        portfolioValueBarDetails = [:]
-        portfolioValueSummaryTotal = nil
+        portfolioValueDetail = try container.decodeIfPresent(
+            PortfolioValueText.self,
+            forKey: .portfolioValueDetail
+        )
+        portfolioValueBarDetails = try container.decodeIfPresent(
+            [String: PortfolioValueText].self,
+            forKey: .portfolioValueBarDetails
+        )
+        portfolioValueSummaryTotal = try container.decodeIfPresent(
+            Money.self,
+            forKey: .portfolioValueSummaryTotal
+        )
     }
 
     private static func defaultAccessibilityIdentifier(for id: String) -> String {
@@ -4495,7 +4512,7 @@ private extension MenuRow {
             summary.totalValue = display(portfolioValueSummaryTotal, settings: settings)
             row.portfolioSummary = summary
         }
-        if !portfolioValueBarDetails.isEmpty, var chart = row.barChart {
+        if let portfolioValueBarDetails, var chart = row.barChart {
             chart.bars = chart.bars.map { bar in
                 var bar = bar
                 if let value = portfolioValueBarDetails[bar.id] {
@@ -4506,6 +4523,11 @@ private extension MenuRow {
             row.barChart = chart
         }
         row.children = row.children.map { $0.applying(settings: settings) }
+        if !settings.showPortfolioValues {
+            row.portfolioValueDetail = nil
+            row.portfolioValueBarDetails = nil
+            row.portfolioValueSummaryTotal = nil
+        }
         return row
     }
 
@@ -4514,8 +4536,8 @@ private extension MenuRow {
         settings: PortfolioValueDisplaySettings
     ) -> MenuRow {
         var row = self
-        row.portfolioValueDetail = value
         row.detail = value.rendered(settings: settings)
+        row.portfolioValueDetail = settings.showPortfolioValues ? value : nil
         return row
     }
 }
@@ -4661,7 +4683,9 @@ public enum MenuDescriptorRenderer {
                 totalIncrease: portfolioSummaryPercent(model.portfolioPerformance.totalPercentageIncrease)
             )
         )
-        row.portfolioValueSummaryTotal = model.portfolioGlance.totalValue
+        row.portfolioValueSummaryTotal = settings.showPortfolioValues
+            ? model.portfolioGlance.totalValue
+            : nil
         return row
     }
 
@@ -4743,6 +4767,12 @@ public enum MenuDescriptorRenderer {
         {
             return incomeAttentionDetail(for: event)
         }
+        if item.id == "allocation.cashDrag"
+            || item.typedFacet == .bigMovers
+            || item.typedFacet == .income
+        {
+            return PortfolioValueText([.unresolvedSensitive(item.detail)])
+        }
         return PortfolioValueText([.literal(item.detail)])
     }
 
@@ -4773,11 +4803,15 @@ public enum MenuDescriptorRenderer {
         model: PortfolioPulseModel
     ) -> IncomeEventSummary? {
         model.facetSnapshots.income.upcomingEvents.first { event in
-            event.date == item.eventDate
-                && (
-                    event.quoteId == item.holdingIdentity?.quoteId
-                        || event.symbolName == item.holdingIdentity?.name
-                )
+            guard event.kind == "ex-dividend",
+                  event.date == item.eventDate
+            else {
+                return false
+            }
+            if let quoteID = item.holdingIdentity?.quoteId {
+                return event.quoteId == quoteID
+            }
+            return event.symbolName == item.holdingIdentity?.name
         }
     }
 
@@ -4866,12 +4900,14 @@ public enum MenuDescriptorRenderer {
             title: "Portfolio",
             barChart: portfolioOverviewBarChart(for: overview, settings: settings)
         )
-        row.portfolioValueBarDetails = Dictionary(
-            uniqueKeysWithValues: overview.topHoldings.map { holding in
-                let id = "allocation.portfolio.chart.\(holding.quoteId)"
-                return (id, holdingBarDetail(for: holding))
-            }
-        )
+        if settings.showPortfolioValues {
+            row.portfolioValueBarDetails = Dictionary(
+                uniqueKeysWithValues: overview.topHoldings.map { holding in
+                    let id = "allocation.portfolio.chart.\(holding.quoteId)"
+                    return (id, holdingBarDetail(for: holding))
+                }
+            )
+        }
         return row
     }
 
