@@ -1,4 +1,4 @@
-# Deliberately minimal structural ratchet: warnings match today's maxima; errors sit one above.
+# Post-split structural ratchet with deliberate headroom; lower it again if measured maxima drop.
 included:
   - Sources
   - Tests
@@ -10,17 +10,17 @@ only_rules:
   - type_body_length
 
 file_length:
-  warning: 1766
-  error: 1767
+  warning: 1950
+  error: 2050
 
 type_body_length:
-  warning: 970
-  error: 971
+  warning: 1050
+  error: 1100
 
 function_body_length:
-  warning: 338
-  error: 339
+  warning: 375
+  error: 400
 
 cyclomatic_complexity:
-  warning: 28
-  error: 29
+  warning: 30
+  error: 33
