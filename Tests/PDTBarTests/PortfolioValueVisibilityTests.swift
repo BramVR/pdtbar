@@ -40,6 +40,11 @@ struct PortfolioValueVisibilityTests {
         #expect(hiddenAtAppChoke == hidden)
         #expect(hiddenAfterRoundTrip == hidden)
         #expect(
+            hidden.applying(
+                settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+            ) == hidden
+        )
+        #expect(
             try monetaryDigitGroups(in: snapshot).filter(hiddenText.contains).isEmpty,
             "Hidden \(fixtureName) descriptor leaked snapshot monetary digit groups"
         )
@@ -212,6 +217,11 @@ struct PortfolioValueVisibilityTests {
         #expect(!text.contains("54,321.09"))
         #expect(
             text.components(separatedBy: PortfolioValueDisplaySettings.hiddenPlaceholder).count >= 4
+        )
+        #expect(
+            hidden.applying(
+                settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+            ) == hidden
         )
     }
 

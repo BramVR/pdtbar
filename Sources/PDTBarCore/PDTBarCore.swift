@@ -2413,12 +2413,18 @@ public struct StatusVisualState: Codable, Equatable {
     }
 }
 
+fileprivate enum PortfolioValueProtectionState: String, Codable, Equatable {
+    case complete
+    case hidden
+}
+
 public struct MenuDescriptor: Codable, Equatable {
     public var statusTitle: String
     public var statusBadge: String?
     public var statusVisual: StatusVisualState
     public var statusAccessibilityIdentifier: String
-    public var sections: [MenuSection]
+    public internal(set) var sections: [MenuSection]
+    fileprivate var portfolioValueProtectionState: PortfolioValueProtectionState?
 
     public init(
         statusTitle: String,
@@ -2436,6 +2442,7 @@ public struct MenuDescriptor: Codable, Equatable {
         self.statusVisual = visual
         self.statusAccessibilityIdentifier = statusAccessibilityIdentifier
         self.sections = sections
+        self.portfolioValueProtectionState = nil
     }
 
     enum CodingKeys: String, CodingKey {
@@ -2444,6 +2451,7 @@ public struct MenuDescriptor: Codable, Equatable {
         case statusVisual
         case statusAccessibilityIdentifier
         case sections
+        case portfolioValueProtectionState
     }
 
     public init(from decoder: Decoder) throws {
@@ -2455,6 +2463,10 @@ public struct MenuDescriptor: Codable, Equatable {
         statusAccessibilityIdentifier = try container.decodeIfPresent(String.self, forKey: .statusAccessibilityIdentifier)
             ?? "pdtbar.status"
         sections = try container.decode([MenuSection].self, forKey: .sections)
+        portfolioValueProtectionState = try container.decodeIfPresent(
+            PortfolioValueProtectionState.self,
+            forKey: .portfolioValueProtectionState
+        )
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -2468,6 +2480,10 @@ public struct MenuDescriptor: Codable, Equatable {
         try container.encode(statusVisual, forKey: .statusVisual)
         try container.encode(statusAccessibilityIdentifier, forKey: .statusAccessibilityIdentifier)
         try container.encode(sections, forKey: .sections)
+        try container.encodeIfPresent(
+            portfolioValueProtectionState,
+            forKey: .portfolioValueProtectionState
+        )
     }
 }
 
@@ -3596,13 +3612,15 @@ public enum ClaudeLaunchFlow {
             title: "Portfolio",
             rows: rows
         )
-        return MenuDescriptor(
+        var descriptor = MenuDescriptor(
             statusTitle: cachedPulse.statusTitle,
             statusBadge: cachedPulse.statusBadge,
             statusVisual: statusVisual ?? cachedPulse.statusVisual,
             statusAccessibilityIdentifier: cachedPulse.statusAccessibilityIdentifier,
             sections: rowsFirst ? [fetchSection] + cachedPulse.sections : cachedPulse.sections + [fetchSection]
         )
+        descriptor.portfolioValueProtectionState = cachedPulse.portfolioValueProtectionState
+        return descriptor
     }
 
     private static func cachedPulseWithRuntimeHealth(
@@ -4493,8 +4511,13 @@ public enum MenuBarSurfaceRenderer {
 public extension MenuDescriptor {
     func applying(settings: PortfolioValueDisplaySettings) -> MenuDescriptor {
         if !settings.showPortfolioValues,
+           portfolioValueProtectionState == .hidden
+        {
+            return self
+        }
+        if !settings.showPortfolioValues,
            containsPortfolioSections,
-           !containsTypedPortfolioValueProtection
+           portfolioValueProtectionState == nil
         {
             return failClosedForLegacyPortfolioValues()
         }
@@ -4503,6 +4526,9 @@ public extension MenuDescriptor {
             var section = section
             section.rows = section.rows.map { $0.applying(settings: settings) }
             return section
+        }
+        if !settings.showPortfolioValues {
+            descriptor.portfolioValueProtectionState = .hidden
         }
         return descriptor
     }
@@ -4515,12 +4541,6 @@ public extension MenuDescriptor {
             || ids.contains("bigMovers")
     }
 
-    private var containsTypedPortfolioValueProtection: Bool {
-        sections.contains { section in
-            section.rows.contains(where: \.containsTypedPortfolioValueProtection)
-        }
-    }
-
     private func failClosedForLegacyPortfolioValues() -> MenuDescriptor {
         var descriptor = self
         descriptor.sections = descriptor.sections.map { section in
@@ -4528,18 +4548,12 @@ public extension MenuDescriptor {
             section.rows = section.rows.map(\.failClosedForLegacyPortfolioValues)
             return section
         }
+        descriptor.portfolioValueProtectionState = .hidden
         return descriptor
     }
 }
 
 private extension MenuRow {
-    var containsTypedPortfolioValueProtection: Bool {
-        portfolioValueDetail != nil
-            || portfolioValueBarDetails != nil
-            || portfolioValueSummaryTotal != nil
-            || children.contains(where: \.containsTypedPortfolioValueProtection)
-    }
-
     var failClosedForLegacyPortfolioValues: MenuRow {
         var row = self
         if row.detail != nil {
@@ -4666,7 +4680,7 @@ public enum MenuDescriptorRenderer {
         let statusTitle = statusSignal
         let statusVisual = statusVisual(for: model)
 
-        let descriptor = MenuDescriptor(
+        var descriptor = MenuDescriptor(
             statusTitle: statusTitle,
             statusBadge: model.rankedAttentionItems.isEmpty ? nil : "\(model.rankedAttentionItems.count)",
             statusVisual: statusVisual,
@@ -4724,6 +4738,9 @@ public enum MenuDescriptorRenderer {
                 topLevelActionsSection(refreshState: .available),
             ]
         )
+        descriptor.portfolioValueProtectionState = settings.showPortfolioValues
+            ? .complete
+            : .hidden
         return descriptor
     }
 
