@@ -142,11 +142,32 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         required: Set<String>,
         progress: @escaping @Sendable (String) -> Void
     ) throws -> Set<String> {
+        try availableReadTools(
+            required: required,
+            cancellation: nil,
+            progress: progress
+        )
+    }
+
+    public func availableReadTools(
+        required: Set<String>,
+        cancellation: PDTCancellation?,
+        progress: @escaping @Sendable (String) -> Void
+    ) throws -> Set<String> {
         guard commandRunner.executableExists(configuration.claudePath, environment: configuration.environment) else {
             throw PDTMCPConnectorError.setupUnavailable("Claude CLI is unavailable")
         }
+        guard cancellation?.isCancelled != true else {
+            throw PDTMCPConnectorError.timeout("Claude MCP server check cancelled")
+        }
         progress("Checking Claude MCP servers")
-        let result = try mcpList(timeout: min(configuration.toolTimeout, 30.0))
+        let result = try mcpList(
+            timeout: min(configuration.toolTimeout, 30.0),
+            cancellation: cancellation
+        )
+        guard cancellation?.isCancelled != true else {
+            throw PDTMCPConnectorError.timeout("Claude MCP server check cancelled")
+        }
         try throwOnAbnormalMCPListExit(result)
         guard result.exitCode == 0, Self.pdtServerIsConnected(in: result.combinedOutput) else {
             throw PDTMCPConnectorError.setupUnavailable("Claude PDT MCP server is not connected")
@@ -170,6 +191,19 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     public func callReadToolReportingAttempts(
         _ name: String, arguments: [String: String], retryDeadline: Date?
     ) throws -> PDTMCPConnectorCallResult {
+        try callReadToolReportingAttempts(
+            name,
+            arguments: arguments,
+            retryDeadline: retryDeadline,
+            cancellation: nil
+        )
+    }
+    public func callReadToolReportingAttempts(
+        _ name: String,
+        arguments: [String: String],
+        retryDeadline: Date?,
+        cancellation: PDTCancellation?
+    ) throws -> PDTMCPConnectorCallResult {
         guard PDTReadTools.allowedV1.contains(name) else { throw PDTMCPConnectorCallFailure(
             underlyingError: PDTMCPConnectorError.nonReadTool(name), attemptCount: 0
         ) }
@@ -177,11 +211,20 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
             let error = PDTMCPConnectorError.setupUnavailable("Claude CLI is unavailable")
             throw PDTMCPConnectorCallFailure(underlyingError: error, attemptCount: 0)
         }
+        if cancellation?.isCancelled == true {
+            let error = PDTMCPConnectorError.timeout("Claude \(name) call cancelled")
+            throw PDTMCPConnectorCallFailure(underlyingError: error, attemptCount: 0)
+        }
         if let retryDeadline, Date() >= retryDeadline {
             let error = PDTMCPConnectorError.timeout("Claude \(name) call deadline expired")
             throw PDTMCPConnectorCallFailure(underlyingError: error, attemptCount: 0)
         }
-        do { try ensureMCPToolPrefixesCached(retryDeadline: retryDeadline) }
+        do {
+            try ensureMCPToolPrefixesCached(
+                retryDeadline: retryDeadline,
+                cancellation: cancellation
+            )
+        }
         catch { throw PDTMCPConnectorCallFailure(underlyingError: error, attemptCount: 0) }
         let toolName = resolvedToolName(for: name)
         let isOptionalPerformanceTool = PDTReadTools.performance.contains(name)
@@ -196,6 +239,10 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         var attempts = 0
         var lastError: Error?
         repeat {
+            if cancellation?.isCancelled == true {
+                let error = PDTMCPConnectorError.timeout("Claude \(name) call cancelled")
+                throw PDTMCPConnectorCallFailure(underlyingError: error, attemptCount: attempts)
+            }
             let remainingBudget = retryDeadline.map { max(0, $0.timeIntervalSinceNow) }
             let attemptTimeout = min(timeout, remainingBudget ?? timeout)
             guard attemptTimeout > 0 else {
@@ -208,8 +255,12 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
                     name,
                     resolvedToolName: toolName,
                     arguments: arguments,
-                    timeout: attemptTimeout
+                    timeout: attemptTimeout,
+                    cancellation: cancellation
                 )
+                if cancellation?.isCancelled == true {
+                    throw PDTMCPConnectorError.timeout("Claude \(name) call cancelled")
+                }
                 if let retryDeadline, Date() >= retryDeadline { throw PDTMCPConnectorError.timeout("Claude \(name) call deadline expired") }
                 return PDTMCPConnectorCallResult(data: data, attemptCount: attempts)
             } catch {
@@ -224,6 +275,10 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
                 guard attempts < maxAttempts,
                       configuration.toolCallRetryPolicy.shouldRetry(error, afterAttempt: attempts)
                 else {
+                    throw PDTMCPConnectorCallFailure(underlyingError: error, attemptCount: attempts)
+                }
+                if cancellation?.isCancelled == true {
+                    let error = PDTMCPConnectorError.timeout("Claude \(name) call cancelled")
                     throw PDTMCPConnectorCallFailure(underlyingError: error, attemptCount: attempts)
                 }
                 // Each attempt is a full Claude CLI run; keep retry backoff
@@ -327,21 +382,34 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         return values.filter { seen.insert($0).inserted }
     }
 
-    private func mcpList(timeout: TimeInterval) throws -> ClaudeLocalProcessResult {
+    private func mcpList(
+        timeout: TimeInterval,
+        cancellation: PDTCancellation? = nil
+    ) throws -> ClaudeLocalProcessResult {
         try commandRunner.run(
             executable: configuration.claudePath,
             arguments: ["mcp", "list"],
             timeout: timeout,
-            environment: configuration.environment
+            environment: configuration.environment,
+            cancellation: cancellation
         )
     }
 
-    private func ensureMCPToolPrefixesCached(retryDeadline: Date?) throws {
+    private func ensureMCPToolPrefixesCached(
+        retryDeadline: Date?,
+        cancellation: PDTCancellation?
+    ) throws {
         guard pdtToolPrefixes().isEmpty else { return }
+        guard cancellation?.isCancelled != true else {
+            throw PDTMCPConnectorError.timeout("Claude MCP server check cancelled")
+        }
         let configuredTimeout = min(configuration.toolTimeout, 30.0)
         let timeout = min(configuredTimeout, retryDeadline.map { max(0, $0.timeIntervalSinceNow) } ?? configuredTimeout)
         guard timeout > 0 else { throw PDTMCPConnectorError.timeout("Claude MCP server check deadline expired") }
-        let result = try mcpList(timeout: timeout)
+        let result = try mcpList(timeout: timeout, cancellation: cancellation)
+        guard cancellation?.isCancelled != true else {
+            throw PDTMCPConnectorError.timeout("Claude MCP server check cancelled")
+        }
         if retryDeadline != nil, abnormalRunExit(result) == .timedOut { throw PDTMCPConnectorError.timeout("Claude MCP server check deadline expired") }
         try throwOnAbnormalMCPListExit(result)
         guard result.exitCode == 0, Self.pdtServerIsConnected(in: result.combinedOutput) else {
@@ -370,7 +438,8 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
         _ name: String,
         resolvedToolName toolName: String,
         arguments: [String: String],
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        cancellation: PDTCancellation?
     ) throws -> Data {
         let sessionID = UUID().uuidString
         var readEnvironment = configuration.environment
@@ -396,7 +465,8 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
                 "--no-session-persistence",
             ],
             timeout: timeout,
-            environment: readEnvironment
+            environment: readEnvironment,
+            cancellation: cancellation
         )
         var currentSessionFiles = claudeToolResultFiles(sessionID: sessionID).files
         defer {
@@ -683,188 +753,18 @@ public final class ClaudeLocalConnection: PDTMCPConnector, PDTMCPConnectorProgre
     }
 }
 
-public struct DefaultClaudeLocalCommandRunner: ClaudeLocalCommandRunning {
-    /// How long a finished (exited or killed) run waits for the pipe drains
-    /// to reach end-of-file before abandoning them.
-    private static let drainGracePeriod: TimeInterval = 1.0
-
-    public init() {}
-
-    public func executableExists(
-        _ executable: String,
-        environment: [String: String] = ProcessInfo.processInfo.environment
-    ) -> Bool {
-        resolvedExecutable(executable, environment: environment) != nil
-    }
-
-    public func run(
-        executable: String,
-        arguments: [String],
-        timeout: TimeInterval,
-        environment: [String: String]
-    ) throws -> ClaudeLocalProcessResult {
-        guard let resolvedExecutable = resolvedExecutable(executable, environment: environment) else {
-            return ClaudeLocalProcessResult(stdout: "", stderr: "\(executable) not found", exitCode: -1)
-        }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: resolvedExecutable)
-        process.arguments = arguments
-        let workingDirectory = FileManager.default.temporaryDirectory.appending(path: "pdtbar-claude-cli")
-        try? FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
-        process.currentDirectoryURL = workingDirectory
-        var processEnvironment = environment
-        processEnvironment["PATH"] = Self.executableSearchDirectories(environment: environment).joined(separator: ":")
-        process.environment = processEnvironment
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-        try process.run()
-        let stdoutDrain = ClaudeLocalPipeDrain(pipe: stdout)
-        let stderrDrain = ClaudeLocalPipeDrain(pipe: stderr)
-        let processGroup = setProcessGroup(process.processIdentifier)
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.1)
-        }
-        if process.isRunning {
-            let descendants = ClaudeLocalProcessTreeTerminator.descendantPIDs(of: process.processIdentifier)
-            process.terminate()
-            ClaudeLocalProcessTreeTerminator.terminateProcessTree(
-                rootPID: process.processIdentifier,
-                processGroup: processGroup,
-                signal: SIGTERM,
-                knownDescendants: descendants
-            )
-            let waitDeadline = Date().addingTimeInterval(2.0)
-            while process.isRunning, Date() < waitDeadline {
-                Thread.sleep(forTimeInterval: 0.1)
-            }
-            ClaudeLocalProcessTreeTerminator.terminateProcessTree(
-                rootPID: process.processIdentifier,
-                processGroup: processGroup,
-                signal: SIGKILL,
-                knownDescendants: descendants
-            )
-            process.waitUntilExit()
-            finishDrains(
-                stdoutDrain,
-                stderrDrain,
-                deadline: Date().addingTimeInterval(Self.drainGracePeriod)
-            )
-            return ClaudeLocalProcessResult(
-                stdout: String(decoding: stdoutDrain.snapshot(), as: UTF8.self),
-                stderr: String(decoding: stderrDrain.snapshot(), as: UTF8.self),
-                exitCode: -1
-            )
-        }
-        process.waitUntilExit()
-        finishDrains(
-            stdoutDrain,
-            stderrDrain,
-            deadline: Date().addingTimeInterval(Self.drainGracePeriod)
-        )
-        return ClaudeLocalProcessResult(
-            stdout: String(decoding: stdoutDrain.snapshot(), as: UTF8.self),
-            stderr: String(decoding: stderrDrain.snapshot(), as: UTF8.self),
-            exitCode: process.terminationStatus
-        )
-    }
-
-    /// Joins the pipe drains without trusting the child's process tree to
-    /// release the pipes. A descendant that survived the process exit or
-    /// escaped the kill sweep (for example one spawned between the descendant
-    /// scan and the signals, or before setpgid took effect) keeps the pipe
-    /// write ends open, so a drain never sees end-of-file and an unbounded
-    /// join would hang `run()` — and the menu's fetch state — forever. The
-    /// exited process already wrote everything it had to say, and buffered
-    /// output is readable immediately, so a short grace period after exit
-    /// keeps healthy runs complete; anything still open at the deadline is
-    /// abandoned with whatever output was captured so far.
-    private func finishDrains(
-        _ stdoutDrain: ClaudeLocalPipeDrain,
-        _ stderrDrain: ClaudeLocalPipeDrain,
-        deadline: Date
-    ) {
-        let stdoutFinished = stdoutDrain.waitUntilFinished(deadline: deadline)
-        let stderrFinished = stderrDrain.waitUntilFinished(deadline: deadline)
-        if !stdoutFinished {
-            stdoutDrain.abandon()
-        }
-        if !stderrFinished {
-            stderrDrain.abandon()
-        }
-    }
-
-    private func resolvedExecutable(
-        _ executable: String,
-        environment: [String: String] = ProcessInfo.processInfo.environment
-    ) -> String? {
-        if executable.contains("/") {
-            return FileManager.default.isExecutableFile(atPath: executable) ? executable : nil
-        }
-        for directory in Self.executableSearchDirectories(environment: environment) {
-            let candidate = "\(directory)/\(executable)"
-            if FileManager.default.isExecutableFile(atPath: candidate) {
-                return candidate
-            }
-        }
-        return nil
-    }
-
-    static func executableSearchDirectories(environment: [String: String]) -> [String] {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let defaults = [
-            "\(home)/.local/bin",
-            "\(home)/bin",
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            "/usr/bin",
-            "/bin",
-            "/usr/sbin",
-            "/sbin",
-        ]
-        let pathDirectories = (environment["PATH"] ?? "")
-            .split(separator: ":")
-            .map(String.init)
-            .filter { !$0.isEmpty }
-        var seen = Set<String>()
-        return (pathDirectories + defaults).filter { directory in
-            seen.insert(directory).inserted
-        }
-    }
-}
-
 public enum ClaudeLocalLoginPhase: Sendable {
     case requesting
     case waitingBrowser
 }
 
+@available(*, deprecated, renamed: "PDTCancellation")
+public typealias ClaudeLocalLoginCancellation = PDTCancellation
+
 public enum ClaudeLocalLoginOutcome: Sendable, Equatable {
     case success
     case failed(ClaudeLoginFailureReason, String)
     case cancelled
-}
-
-public final class ClaudeLocalLoginCancellation: @unchecked Sendable {
-    private let lock = NSLock()
-    private var cancelled = false
-
-    public init() {}
-
-    public func cancel() {
-        lock.lock()
-        cancelled = true
-        lock.unlock()
-    }
-
-    public var isCancelled: Bool {
-        lock.lock()
-        defer {
-            lock.unlock()
-        }
-        return cancelled
-    }
 }
 
 public struct ClaudeLocalLoginRunner: Sendable {
@@ -885,7 +785,7 @@ public struct ClaudeLocalLoginRunner: Sendable {
 
     public func run(
         timeout: TimeInterval = 120,
-        cancellation: ClaudeLocalLoginCancellation = ClaudeLocalLoginCancellation(),
+        cancellation: PDTCancellation = PDTCancellation(),
         onPhaseChange: @escaping @Sendable (ClaudeLocalLoginPhase) -> Void
     ) async -> ClaudeLocalLoginOutcome {
         await withCheckedContinuation { continuation in
@@ -905,7 +805,7 @@ public struct ClaudeLocalLoginRunner: Sendable {
         timeout: TimeInterval,
         environment: [String: String],
         binary: String,
-        cancellation: ClaudeLocalLoginCancellation,
+        cancellation: PDTCancellation,
         onPhaseChange: @escaping @Sendable (ClaudeLocalLoginPhase) -> Void
     ) -> ClaudeLocalLoginOutcome {
         onPhaseChange(.requesting)
@@ -942,7 +842,7 @@ public struct ClaudeLocalLoginRunner: Sendable {
         timeout: TimeInterval,
         environment: [String: String],
         binary: String,
-        cancellation: ClaudeLocalLoginCancellation,
+        cancellation: PDTCancellation,
         onPhaseChange: @escaping @Sendable (ClaudeLocalLoginPhase) -> Void
     ) throws -> TTYCommandRunner.Result {
         guard !cancellation.isCancelled else {
@@ -1019,7 +919,7 @@ public struct ClaudeLocalLoginRunner: Sendable {
 /// `swift test`), crashing the process. Instead the file descriptor is set
 /// non-blocking and polled with a short timeout, so normal runs still read to
 /// end-of-file while a hung drain can be abandoned within one poll interval.
-private final class ClaudeLocalPipeDrain: @unchecked Sendable {
+final class ClaudeLocalPipeDrain: @unchecked Sendable {
     private static let pollIntervalMilliseconds: Int32 = 50
     private static let abandonGracePeriod: TimeInterval = 1.0
     /// How many more chunk reads an abandoned drain may perform. One chunk
@@ -1723,7 +1623,7 @@ private struct TTYCommandRunner {
     }
 }
 
-private struct ClaudeLocalProcessTreeTerminator {
+struct ClaudeLocalProcessTreeTerminator {
     static func descendantPIDs(of rootPID: pid_t) -> [pid_t] {
         guard rootPID > 0 else { return [] }
         var seen: Set<pid_t> = [rootPID]
@@ -1768,7 +1668,7 @@ private struct ClaudeLocalProcessTreeTerminator {
     }
 }
 
-private func setProcessGroup(_ pid: pid_t) -> pid_t? {
+func setProcessGroup(_ pid: pid_t) -> pid_t? {
     setpgid(pid, pid) == 0 ? pid : nil
 }
 

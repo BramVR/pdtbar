@@ -44,6 +44,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let launchRuntime = PDTLaunchRuntime()
     private var statusItem: NSStatusItem?
     private var portfolioRefreshInFlight = false
+    private var activeRefreshCancellation: PDTCancellation?
+    private var activeRefreshCompletion: DispatchGroup?
     private var portfolioFetchStartedAt: Date?
     private var portfolioFetchProgressTimer: Timer?
     private var activeSnapshotDirectory: URL?
@@ -75,15 +77,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.rerenderCurrentMenuForSettings()
                 }
             }
-    }
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        do {
-            try launch()
-        } catch {
-            FileHandle.standardError.write(Data("pdtbar: \(error)\n".utf8))
-            NSApplication.shared.terminate(nil)
-        }
     }
 
     private func launch() throws {
@@ -161,13 +154,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             attemptID: attemptID,
             allowsBackgroundDetailRefresh: returningLaunchBackgroundDetailRefreshEnabled()
         ))
-    }
-
-    private func returningLaunchBackgroundDetailRefreshEnabled() -> Bool {
-        guard launchRuntime.currentPulse != nil else {
-            return false
-        }
-        return (try? firstFetchConnectorConfiguration().shouldStartBackgroundRefresh) ?? false
     }
 
     private func startFirstPortfolioFetch() {
@@ -286,7 +272,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             return
         }
+        let cancellation = PDTCancellation()
+        let completion = DispatchGroup()
+        completion.enter()
+        activeRefreshCancellation = cancellation
+        activeRefreshCompletion = completion
         DispatchQueue.global(qos: .utility).async {
+            defer {
+                completion.leave()
+            }
             let outcome: PortfolioFetchOutcome
             do {
                 let refresh = PDTBackgroundDetailRefresh(
@@ -295,7 +289,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                     pulseReadStore: pulseReadStore,
                     asOf: refreshConfiguration.asOf,
                 )
-                let result = try refresh.refresh { progress in
+                let result = try refresh.refresh(cancellation: cancellation) { progress in
                     DispatchQueue.main.async { [weak self] in
                         guard let self,
                               self.portfolioRefreshInFlight,
@@ -325,6 +319,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func finishBackgroundPortfolioRefresh(_ outcome: PortfolioFetchOutcome) {
         portfolioRefreshInFlight = false
+        activeRefreshCancellation = nil
+        activeRefreshCompletion = nil
         if let pulse = outcome.pulse {
             handleLaunchUpdate(launchRuntime.completeBackgroundDetailRefresh(
                 .succeeded(pulse, outcome: outcome.detailRefreshOutcome ?? .completed)
@@ -1096,6 +1092,29 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+private extension AppDelegate {
+    func returningLaunchBackgroundDetailRefreshEnabled() -> Bool {
+        guard launchRuntime.currentPulse != nil else {
+            return false
+        }
+        return (try? firstFetchConnectorConfiguration().shouldStartBackgroundRefresh) ?? false
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        do {
+            try launch()
+        } catch {
+            FileHandle.standardError.write(Data("pdtbar: \(error)\n".utf8))
+            NSApplication.shared.terminate(nil)
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        activeRefreshCancellation?.cancel()
+        _ = activeRefreshCompletion?.wait(timeout: .now() + 4.0)
+    }
+}
+
 private struct PDTBarSettingsView: View {
     @ObservedObject var settingsStore: PDTBarSettingsStore
 
@@ -1132,7 +1151,7 @@ private final class ClaudeCLILoginHandoff: ClaudeLoginHandoff, @unchecked Sendab
     private let environment: [String: String]
     private let loginBinary: String
     private let lock = NSLock()
-    private var activeCancellation: ClaudeLocalLoginCancellation?
+    private var activeCancellation: PDTCancellation?
 
     init(environment: [String: String], binaryOverride: String? = nil) {
         self.environment = environment
@@ -1145,7 +1164,7 @@ private final class ClaudeCLILoginHandoff: ClaudeLoginHandoff, @unchecked Sendab
     }
 
     func startLogin(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
-        let cancellation = ClaudeLocalLoginCancellation()
+        let cancellation = PDTCancellation()
         lock.lock()
         activeCancellation?.cancel()
         activeCancellation = cancellation
@@ -1171,7 +1190,7 @@ private final class ClaudeCLILoginHandoff: ClaudeLoginHandoff, @unchecked Sendab
         }
     }
 
-    private func clearActiveCancellation(_ cancellation: ClaudeLocalLoginCancellation) {
+    private func clearActiveCancellation(_ cancellation: PDTCancellation) {
         lock.lock()
         if activeCancellation === cancellation {
             activeCancellation = nil
