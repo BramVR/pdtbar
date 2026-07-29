@@ -346,6 +346,28 @@ struct PortfolioValueVisibilityTests {
         #expect(renderedText(in: hidden).contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
     }
 
+    @Test("Duplicate quote IDs retain ordered chart value metadata")
+    func duplicateQuoteIDsRetainOrderedChartValueMetadata() throws {
+        let snapshot = try visibilitySnapshot("quiet-no-pressure.json")
+        var model = PressureEngine.buildModel(from: snapshot)
+        var duplicate = try #require(
+            model.facetSnapshots.allocation.portfolioOverview.topHoldings.first
+        )
+        duplicate.name = "Duplicate quote holding"
+        duplicate.worth = Money(value: "54321.09", currency: "GBp")
+        model.facetSnapshots.allocation.portfolioOverview.topHoldings.append(duplicate)
+
+        let shown = MenuDescriptorRenderer.render(model: model)
+        let hidden = shown.applying(
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+        let chartRow = try #require(row(withID: "allocation.portfolio", in: shown))
+
+        #expect(chartRow.barChart?.bars.count == model.facetSnapshots.allocation.portfolioOverview.topHoldings.count)
+        #expect(renderedText(in: shown).contains("54,321.09"))
+        #expect(!renderedText(in: hidden).contains("54,321.09"))
+    }
+
     @Test("Income attention resolves same-name events by quote identity")
     func incomeAttentionResolvesSameNameEventsByQuoteIdentity() throws {
         var snapshot = try visibilitySnapshot("quiet-no-pressure.json")

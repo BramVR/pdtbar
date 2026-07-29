@@ -2745,7 +2745,7 @@ public struct MenuRow: Codable, Equatable {
     public var actionPayload: String?
     public var children: [MenuRow]
     var portfolioValueDetail: PortfolioValueText?
-    var portfolioValueBarDetails: [String: PortfolioValueText]?
+    var portfolioValueBarDetails: [PortfolioValueText]?
     var portfolioValueSummaryTotal: Money?
 
     public init(
@@ -2810,7 +2810,7 @@ public struct MenuRow: Codable, Equatable {
             forKey: .portfolioValueDetail
         )
         portfolioValueBarDetails = try container.decodeIfPresent(
-            [String: PortfolioValueText].self,
+            [PortfolioValueText].self,
             forKey: .portfolioValueBarDetails
         )
         portfolioValueSummaryTotal = try container.decodeIfPresent(
@@ -4590,10 +4590,10 @@ private extension MenuRow {
             row.portfolioSummary = summary
         }
         if let portfolioValueBarDetails, var chart = row.barChart {
-            chart.bars = chart.bars.map { bar in
+            chart.bars = chart.bars.enumerated().map { index, bar in
                 var bar = bar
-                if let value = portfolioValueBarDetails[bar.id] {
-                    bar.detail = value.rendered(settings: settings)
+                if portfolioValueBarDetails.indices.contains(index) {
+                    bar.detail = portfolioValueBarDetails[index].rendered(settings: settings)
                 }
                 return bar
             }
@@ -4983,12 +4983,9 @@ public enum MenuDescriptorRenderer {
             barChart: portfolioOverviewBarChart(for: overview, settings: settings)
         )
         if settings.showPortfolioValues {
-            row.portfolioValueBarDetails = Dictionary(
-                uniqueKeysWithValues: overview.topHoldings.map { holding in
-                    let id = "allocation.portfolio.chart.\(holding.quoteId)"
-                    return (id, holdingBarDetail(for: holding))
-                }
-            )
+            row.portfolioValueBarDetails = overview.topHoldings.map {
+                holdingBarDetail(for: $0)
+            }
         }
         return row
     }
