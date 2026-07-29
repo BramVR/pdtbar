@@ -73,7 +73,7 @@ make test
 make check
 ./Scripts/check.sh scripts
 swift run pdtbar-dev model --fixture docs/pdt/fixtures/quiet-no-pressure.json
-swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.json
+swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.json --portfolio-values visible
 swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.json --portfolio-values hidden
 swift build --product pdtbar
 ./Scripts/package_app.sh
