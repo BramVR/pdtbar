@@ -29,6 +29,7 @@ struct PortfolioValueVisibilityTests {
         )
         let shownText = renderedText(in: shown)
         let hiddenText = renderedText(in: hidden)
+        let hiddenAfterRoundTripText = renderedText(in: hiddenAfterRoundTrip)
         let hiddenJSON = try #require(String(data: stableJSONData(hiddenAtAppChoke), encoding: .utf8))
         let monetaryDisplays = try monetaryDisplays(in: snapshot)
 
@@ -38,7 +39,11 @@ struct PortfolioValueVisibilityTests {
         )
         #expect(hiddenText.contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
         #expect(hiddenAtAppChoke == hidden)
-        #expect(hiddenAfterRoundTrip == hidden)
+        #expect(hiddenAfterRoundTripText.contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
+        #expect(
+            try monetaryDigitGroups(in: snapshot).filter(hiddenAfterRoundTripText.contains).isEmpty,
+            "Decoded hidden \(fixtureName) descriptor leaked snapshot monetary digit groups"
+        )
         #expect(
             hidden.applying(
                 settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
@@ -51,6 +56,7 @@ struct PortfolioValueVisibilityTests {
         #expect(!hiddenJSON.contains("\"portfolioValueDetail\""))
         #expect(!hiddenJSON.contains("\"portfolioValueBarDetails\""))
         #expect(!hiddenJSON.contains("\"portfolioValueSummaryTotal\""))
+        #expect(!hiddenJSON.contains("\"portfolioValueProtectionState\""))
     }
 
     @Test(
@@ -263,6 +269,39 @@ struct PortfolioValueVisibilityTests {
                 settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
             ) == hidden
         )
+    }
+
+    @Test("Serialized protection markers cannot bypass the app choke point")
+    func serializedProtectionMarkersCannotBypassAppChokePoint() throws {
+        let descriptor = MenuDescriptor(
+            statusTitle: "Untrusted cached portfolio",
+            sections: [
+                MenuSection(
+                    id: "allocation",
+                    title: "Allocation",
+                    rows: [
+                        MenuRow(
+                            id: "untrusted.detail",
+                            title: "Untrusted detail",
+                            detail: "GBp 54,321.09"
+                        ),
+                    ]
+                ),
+            ]
+        )
+        var object = try #require(
+            JSONSerialization.jsonObject(with: stableJSONData(descriptor)) as? [String: Any]
+        )
+        object["portfolioValueProtectionState"] = "hidden"
+        let forgedData = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        let decoded = try JSONDecoder().decode(MenuDescriptor.self, from: forgedData)
+
+        let hidden = decoded.applying(
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+
+        #expect(!renderedText(in: hidden).contains("54,321.09"))
+        #expect(renderedText(in: hidden).contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
     }
 
     @Test("Income attention resolves same-name events by quote identity")

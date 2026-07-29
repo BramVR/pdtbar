@@ -2413,7 +2413,7 @@ public struct StatusVisualState: Codable, Equatable {
     }
 }
 
-fileprivate enum PortfolioValueProtectionState: String, Codable, Equatable {
+fileprivate enum PortfolioValueProtectionState: Equatable {
     case complete
     case hidden
 }
@@ -2451,7 +2451,6 @@ public struct MenuDescriptor: Codable, Equatable {
         case statusVisual
         case statusAccessibilityIdentifier
         case sections
-        case portfolioValueProtectionState
     }
 
     public init(from decoder: Decoder) throws {
@@ -2463,10 +2462,7 @@ public struct MenuDescriptor: Codable, Equatable {
         statusAccessibilityIdentifier = try container.decodeIfPresent(String.self, forKey: .statusAccessibilityIdentifier)
             ?? "pdtbar.status"
         sections = try container.decode([MenuSection].self, forKey: .sections)
-        portfolioValueProtectionState = try container.decodeIfPresent(
-            PortfolioValueProtectionState.self,
-            forKey: .portfolioValueProtectionState
-        )
+        portfolioValueProtectionState = nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -2480,10 +2476,6 @@ public struct MenuDescriptor: Codable, Equatable {
         try container.encode(statusVisual, forKey: .statusVisual)
         try container.encode(statusAccessibilityIdentifier, forKey: .statusAccessibilityIdentifier)
         try container.encode(sections, forKey: .sections)
-        try container.encodeIfPresent(
-            portfolioValueProtectionState,
-            forKey: .portfolioValueProtectionState
-        )
     }
 }
 
