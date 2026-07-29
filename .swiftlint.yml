@@ -1,5 +1,4 @@
-# Deliberately minimal structural ratchet: non-file_length thresholds are pinned at today's
-# maxima to prevent growth and should be lowered once finding 05 splits the monolith.
+# Deliberately minimal structural ratchet: warnings match today's maxima; errors sit one above.
 included:
   - Sources
   - Tests
@@ -11,17 +10,17 @@ only_rules:
   - type_body_length
 
 file_length:
-  warning: 1800
-  error: 2000
+  warning: 1766
+  error: 1767
 
 type_body_length:
   warning: 970
-  error: 1000
+  error: 971
 
 function_body_length:
   warning: 338
-  error: 400
+  error: 339
 
 cyclomatic_complexity:
   warning: 28
-  error: 35
+  error: 29

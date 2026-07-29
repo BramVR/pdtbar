@@ -225,23 +225,6 @@ public enum PDTBaseHoldingNormalizer {
         return tradingValue / rateValue
     }
 
-    private static func posixDecimal(_ value: String) -> Decimal? {
-        Decimal(string: value, locale: Locale(identifier: "en_US_POSIX"))
-    }
-
-    private static func dayPrefix(_ dateTime: String) -> String {
-        String(dateTime.prefix(10))
-    }
-
-    private static func canonicalDecimalString(_ value: Decimal, places: Int) -> String {
-        let formatter = NumberFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.numberStyle = .decimal
-        formatter.usesGroupingSeparator = false
-        formatter.minimumFractionDigits = places
-        formatter.maximumFractionDigits = places
-        return formatter.string(from: value as NSDecimalNumber) ?? (value as NSDecimalNumber).stringValue
-    }
 }
 
 private extension Money {
