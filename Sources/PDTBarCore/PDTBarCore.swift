@@ -4572,6 +4572,9 @@ private extension MenuRow {
             row.barChart = chart
         }
         row.children = row.children.map(\.failClosedForLegacyPortfolioValues)
+        row.portfolioValueDetail = nil
+        row.portfolioValueBarDetails = nil
+        row.portfolioValueSummaryTotal = nil
         return row
     }
 

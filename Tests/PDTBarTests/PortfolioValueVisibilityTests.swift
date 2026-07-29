@@ -225,6 +225,46 @@ struct PortfolioValueVisibilityTests {
         )
     }
 
+    @Test("Legacy fallback clears typed value metadata before encoding")
+    func legacyFallbackClearsTypedValueMetadataBeforeEncoding() throws {
+        let event = IncomeEventSummary(
+            date: "2026-06-25",
+            kind: "ex-dividend",
+            symbolName: "Legacy Typed Holding",
+            estimated: false,
+            symbolId: 779,
+            quoteId: 7779,
+            amount: Money(value: "54321.09", currency: "GBp")
+        )
+        let descriptor = MenuDescriptor(
+            statusTitle: "Legacy typed portfolio",
+            sections: [
+                MenuSection(
+                    id: "income",
+                    title: "Income",
+                    rows: IncomeCalendarDescriptor.rows(
+                        for: IncomeCalendar.build(events: [event], asOf: "2026-06-22")
+                    )
+                ),
+            ]
+        )
+
+        let hidden = descriptor.applying(
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+        let hiddenJSON = try #require(String(data: stableJSONData(hidden), encoding: .utf8))
+
+        #expect(!hiddenJSON.contains("54,321.09"))
+        #expect(!hiddenJSON.contains("\"portfolioValueDetail\""))
+        #expect(!hiddenJSON.contains("\"portfolioValueBarDetails\""))
+        #expect(!hiddenJSON.contains("\"portfolioValueSummaryTotal\""))
+        #expect(
+            hidden.applying(
+                settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+            ) == hidden
+        )
+    }
+
     @Test("Income attention resolves same-name events by quote identity")
     func incomeAttentionResolvesSameNameEventsByQuoteIdentity() throws {
         var snapshot = try visibilitySnapshot("quiet-no-pressure.json")
