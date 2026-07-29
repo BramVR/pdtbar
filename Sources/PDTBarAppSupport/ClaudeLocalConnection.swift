@@ -758,6 +758,9 @@ public enum ClaudeLocalLoginPhase: Sendable {
     case waitingBrowser
 }
 
+@available(*, deprecated, renamed: "PDTCancellation")
+public typealias ClaudeLocalLoginCancellation = PDTCancellation
+
 public enum ClaudeLocalLoginOutcome: Sendable, Equatable {
     case success
     case failed(ClaudeLoginFailureReason, String)
