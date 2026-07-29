@@ -5,10 +5,22 @@ do {
     let arguments = Array(CommandLine.arguments.dropFirst())
     let output: Data
 
-    if arguments.count == 3,
+    if [3, 5].contains(arguments.count),
        ["model", "descriptor"].contains(arguments[0]),
        arguments[1] == "--fixture"
     {
+        let settings: PortfolioValueDisplaySettings
+        if arguments.count == 5 {
+            guard arguments[0] == "descriptor",
+                  arguments[3] == "--portfolio-values",
+                  ["visible", "hidden"].contains(arguments[4])
+            else {
+                throw CommandError.usage
+            }
+            settings = PortfolioValueDisplaySettings(showPortfolioValues: arguments[4] == "visible")
+        } else {
+            settings = PortfolioValueDisplaySettings()
+        }
         let fixtureURL = URL(fileURLWithPath: arguments[2])
         let dataSource = PDTFixtureDataSource(fixture: fixtureURL)
         let snapshot = try dataSource.snapshot()
@@ -16,7 +28,7 @@ do {
         if arguments[0] == "model" {
             output = try stableJSONData(model)
         } else {
-            output = try stableJSONData(MenuDescriptorRenderer.render(model: model))
+            output = try stableJSONData(MenuDescriptorRenderer.render(model: model, settings: settings))
         }
     } else if arguments.count == 5,
               arguments[0] == "run",
@@ -48,7 +60,13 @@ do {
     FileHandle.standardOutput.write(Data("\n".utf8))
 } catch CommandError.usage {
     FileHandle.standardError.write(
-        Data("usage: pdtbar-dev <model|descriptor> --fixture <path>\n       pdtbar-dev <run|seed-prior> --fixture <path> --snapshot-dir <path>\n".utf8)
+        Data(
+            """
+            usage: pdtbar-dev model --fixture <path>
+                   pdtbar-dev descriptor --fixture <path> [--portfolio-values <visible|hidden>]
+                   pdtbar-dev <run|seed-prior> --fixture <path> --snapshot-dir <path>
+            """.utf8
+        )
     )
     Foundation.exit(64)
 } catch {

@@ -550,7 +550,7 @@ struct PulseReadTests {
             .first { $0.role == .pulseMarkRead }
 
         #expect(action?.title == "Mark as read")
-        #expect(action?.actionPayload == item.readFingerprint)
+        #expect(action?.actionPayload == item.id)
     }
 }
 

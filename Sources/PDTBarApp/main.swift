@@ -570,7 +570,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 item.action = #selector(MenuActionDispatcher.copyMenuRowAction(_:))
                 item.representedObject = row.actionTarget
             }
-            if row.role == .pulseMarkRead, let fingerprint = row.actionPayload {
+            if row.role == .pulseMarkRead,
+               let attentionID = row.actionPayload,
+               let fingerprint = launchRuntime.currentPulse?.unfilteredModel.rankedAttentionItems
+                .first(where: { $0.id == attentionID })?
+                .readFingerprint
+            {
                 item.target = self
                 item.action = #selector(markPulseItemRead(_:))
                 item.representedObject = fingerprint

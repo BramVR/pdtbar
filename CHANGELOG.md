@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed portfolio-value privacy masking so money-bearing menu fields render from typed values instead of relying on currency regexes and prose-specific scrubbing.
 - Stopped in-flight Claude process trees when background detail refreshes time out or PDTBar quits, with a bounded worker shutdown grace.
 - Declined to annualize portfolio returns over periods shorter than 90 days and now explains when the reporting period is too short.
 - Fixed invalid PDT income pagination sizes that caused deterministic server rejections and unnecessary Claude CLI retries.

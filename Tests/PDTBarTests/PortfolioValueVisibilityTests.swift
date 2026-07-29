@@ -5,56 +5,87 @@ import PDTBarCore
 
 @Suite("Portfolio value visibility")
 struct PortfolioValueVisibilityTests {
-    @Test("Portfolio values show by default and hide behind one placeholder")
-    func portfolioValuesShowByDefaultAndHideBehindOnePlaceholder() throws {
-        let model = PressureEngine.buildModel(from: try visibilitySnapshot())
+    @Test(
+        "Portfolio values show by default and hide behind one placeholder",
+        arguments: portfolioValueFixtureNames
+    )
+    func portfolioValuesShowByDefaultAndHideBehindOnePlaceholder(_ fixtureName: String) throws {
+        let snapshot = try visibilitySnapshot(fixtureName)
+        let model = PressureEngine.buildModel(from: snapshot)
         let shown = MenuDescriptorRenderer.render(model: model)
         let hidden = MenuDescriptorRenderer.render(
             model: model,
             settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
         )
+        let hiddenAtAppChoke = shown.applying(
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+        let decodedShown = try JSONDecoder().decode(
+            MenuDescriptor.self,
+            from: stableJSONData(shown)
+        )
+        let hiddenAfterRoundTrip = decodedShown.applying(
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+        let shownText = renderedText(in: shown)
+        let hiddenText = renderedText(in: hidden)
+        let hiddenAfterRoundTripText = renderedText(in: hiddenAfterRoundTrip)
+        let hiddenJSON = try #require(String(data: stableJSONData(hiddenAtAppChoke), encoding: .utf8))
+        let monetaryDisplays = try monetaryDisplays(in: snapshot)
 
-        #expect(renderedText(in: shown).contains("EUR 51,200.00"))
-        #expect(renderedText(in: shown).contains("EUR 6,000.00"))
-        #expect(renderedText(in: shown).contains("EUR 189.50"))
-        #expect(renderedText(in: hidden).contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
-        #expect(renderedText(in: hidden).contains("Nova Lithography"))
-        #expect(renderedText(in: hidden).contains("11.7%"))
-        #expect(renderedText(in: hidden).contains("Nova Lithography"))
-
-        let leaked = knownFixtureMoneyText().filter { renderedText(in: hidden).contains($0) }
-        #expect(leaked.isEmpty)
+        #expect(
+            monetaryDisplays.contains(where: shownText.contains),
+            "Visible \(fixtureName) descriptor did not render a snapshot monetary value"
+        )
+        #expect(hiddenText.contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
+        #expect(hiddenAtAppChoke == hidden)
+        #expect(hiddenAfterRoundTripText.contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
+        #expect(
+            try monetaryDigitGroups(in: snapshot).filter(hiddenAfterRoundTripText.contains).isEmpty,
+            "Decoded hidden \(fixtureName) descriptor leaked snapshot monetary digit groups"
+        )
+        #expect(
+            hidden.applying(
+                settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+            ) == hidden
+        )
+        #expect(
+            try monetaryDigitGroups(in: snapshot).filter(hiddenText.contains).isEmpty,
+            "Hidden \(fixtureName) descriptor leaked snapshot monetary digit groups"
+        )
+        #expect(!hiddenJSON.contains("\"portfolioValueDetail\""))
+        #expect(!hiddenJSON.contains("\"portfolioValueBarDetails\""))
+        #expect(!hiddenJSON.contains("\"portfolioValueSummaryTotal\""))
+        #expect(!hiddenJSON.contains("\"portfolioValueProtectionState\""))
     }
 
-    @Test("Hidden descriptor covers nested rows, chart details, summary, and surface accessibility")
-    func hiddenDescriptorCoversEveryRenderedSurface() throws {
-        let model = PressureEngine.buildModel(from: try visibilitySnapshot())
+    @Test(
+        "Hidden descriptor covers nested rows, charts, summaries, labels, and tooltips",
+        arguments: portfolioValueFixtureNames
+    )
+    func hiddenDescriptorCoversEveryRenderedSurface(_ fixtureName: String) throws {
+        let snapshot = try visibilitySnapshot(fixtureName)
+        let model = PressureEngine.buildModel(from: snapshot)
         let descriptor = MenuDescriptorRenderer.render(
             model: model,
             settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
         )
         let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
         let text = renderedText(in: descriptor) + renderedText(in: surface)
+        let leaked = try monetaryDigitGroups(in: snapshot).filter(text.contains)
 
-        #expect(text.contains("Worth"))
-        #expect(text.contains("Price"))
-        #expect(text.contains("Average buy price"))
-        #expect(text.contains("Gain/loss"))
-        #expect(text.contains("Amount"))
-        #expect(text.contains("Change"))
         #expect(text.contains("Total portfolio value"))
         #expect(text.contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
-        #expect(!text.contains("EUR 51,200.00"))
-        #expect(!text.contains("EUR 6,000.00"))
-        #expect(!text.contains("EUR 22.40"))
-        #expect(!text.contains("EUR 3.10"))
-        #expect(!text.contains("EUR 2.90"))
-        #expect(currencyLeaks(in: text).isEmpty)
+        #expect(leaked.isEmpty, "Hidden \(fixtureName) surface leaked: \(leaked.sorted())")
     }
 
-    @Test("Toggling visibility re-renders the same in-memory pulse without refetching")
-    func togglingVisibilityRerendersSamePulseWithoutRefetching() throws {
-        let dataSource = CountingDataSource(snapshot: try visibilitySnapshot())
+    @Test(
+        "Toggling visibility re-renders the same in-memory pulse without refetching",
+        arguments: portfolioValueFixtureNames
+    )
+    func togglingVisibilityRerendersSamePulseWithoutRefetching(_ fixtureName: String) throws {
+        let snapshot = try visibilitySnapshot(fixtureName)
+        let dataSource = CountingDataSource(snapshot: snapshot)
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-value-visibility")
         defer { try? FileManager.default.removeItem(at: store.directory) }
 
@@ -74,9 +105,318 @@ struct PortfolioValueVisibilityTests {
         #expect(pulse.model == hidden.model)
         #expect(hidden.model == restored.model)
         #expect(renderedText(in: hidden.descriptor).contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
-        #expect(!renderedText(in: hidden.descriptor).contains("EUR 51,200.00"))
-        #expect(renderedText(in: restored.descriptor).contains("EUR 51,200.00"))
+        #expect(
+            try monetaryDigitGroups(in: snapshot)
+                .filter(renderedText(in: hidden.descriptor).contains)
+                .isEmpty
+        )
+        #expect(
+            try monetaryDisplays(in: snapshot).contains(where: renderedText(in: restored.descriptor).contains),
+            "Restored \(fixtureName) descriptor did not render a snapshot monetary value"
+        )
         #expect(dataSource.calls == 1)
+    }
+
+    @Test("Hidden mode catches mixed-case currency codes outside the old regex")
+    func hiddenModeCatchesMixedCaseCurrencyCode() throws {
+        var snapshot = try visibilitySnapshot("quiet-no-pressure.json")
+        snapshot.incomeEvents = [
+            IncomeEventSummary(
+                date: "2026-06-25",
+                kind: "ex-dividend",
+                symbolName: "Sterling Test Holding",
+                estimated: false,
+                symbolId: 777,
+                quoteId: 7777,
+                amount: Money(value: "54321.09", currency: "GBp"),
+                priorAmount: Money(value: "43210.98", currency: "GBp"),
+                changePercent: 0.2571
+            ),
+        ]
+        let descriptor = MenuDescriptorRenderer.render(
+            model: PressureEngine.buildModel(from: snapshot),
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+        let text = renderedText(in: descriptor)
+        let leaked = try monetaryDigitGroups(in: snapshot).filter(text.contains)
+
+        #expect(leaked.isEmpty, "Hidden GBp descriptor leaked: \(leaked.sorted())")
+    }
+
+    @Test("Unresolved sensitive attention data fails closed")
+    func unresolvedSensitiveAttentionDataFailsClosed() throws {
+        var snapshot = try visibilitySnapshot("quiet-no-pressure.json")
+        snapshot.incomeEvents = [
+            IncomeEventSummary(
+                date: "2026-06-25",
+                kind: "ex-dividend",
+                symbolName: "Unresolved Sterling Holding",
+                estimated: false,
+                symbolId: 778,
+                quoteId: 7778,
+                amount: Money(value: "65432.10", currency: "GBp"),
+                priorAmount: Money(value: "54321.09", currency: "GBp"),
+                changePercent: 0.2045
+            ),
+        ]
+        var model = PressureEngine.buildModel(from: snapshot)
+        model.facetSnapshots.income.upcomingEvents = []
+
+        let hidden = MenuDescriptorRenderer.render(
+            model: model,
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+
+        #expect(!renderedText(in: hidden).contains("65,432.10"))
+        #expect(!renderedText(in: hidden).contains("54,321.09"))
+        #expect(renderedText(in: hidden).contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
+    }
+
+    @Test(
+        "Metadata-free descriptors fail closed regardless of section ID",
+        arguments: ["pulse", "custom"]
+    )
+    func metadataFreePortfolioDescriptorsFailClosed(_ sectionID: String) throws {
+        let descriptor = MenuDescriptor(
+            statusTitle: "Legacy portfolio",
+            sections: [
+                MenuSection(
+                    id: sectionID,
+                    title: "Legacy",
+                    rows: [
+                        MenuRow(
+                            id: "legacy.detail",
+                            title: "Legacy detail",
+                            detail: "GBp 54,321.09"
+                        ),
+                        MenuRow(
+                            id: "legacy.chart",
+                            title: "Legacy chart",
+                            barChart: MenuRowBarChart(
+                                bars: [
+                                    MenuRowBarChart.Bar(
+                                        id: "legacy.chart.bar",
+                                        label: "Legacy",
+                                        weight: 1,
+                                        percentageLabel: "100.0%",
+                                        detail: "Legacy; GBp 54,321.09"
+                                    ),
+                                ]
+                            )
+                        ),
+                        MenuRow(
+                            id: "legacy.summary",
+                            title: "Legacy summary",
+                            portfolioSummary: MenuRowPortfolioSummary(
+                                totalValue: "GBp 54,321.09",
+                                cagr: "Unavailable",
+                                totalIncrease: "Unavailable"
+                            )
+                        ),
+                    ]
+                ),
+            ]
+        )
+
+        let hidden = descriptor.applying(
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+        let text = renderedText(in: hidden)
+
+        #expect(!text.contains("54,321.09"))
+        #expect(
+            text.components(separatedBy: PortfolioValueDisplaySettings.hiddenPlaceholder).count >= 4
+        )
+        #expect(
+            hidden.applying(
+                settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+            ) == hidden
+        )
+    }
+
+    @Test("Trusted setup descriptors preserve nonfinancial details when values are hidden")
+    func trustedSetupDescriptorsPreserveNonfinancialDetails() throws {
+        let descriptor = ClaudeLaunchFlow.descriptor(for: .probingClaude)
+        let hidden = descriptor.applying(
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+        let setupRow = try #require(row(withID: "claudeSetup.probing", in: hidden))
+
+        #expect(setupRow.detail == "No prompts opened")
+    }
+
+    @Test("Legacy fallback clears typed value metadata before encoding")
+    func legacyFallbackClearsTypedValueMetadataBeforeEncoding() throws {
+        let event = IncomeEventSummary(
+            date: "2026-06-25",
+            kind: "ex-dividend",
+            symbolName: "Legacy Typed Holding",
+            estimated: false,
+            symbolId: 779,
+            quoteId: 7779,
+            amount: Money(value: "54321.09", currency: "GBp")
+        )
+        let descriptor = MenuDescriptor(
+            statusTitle: "Legacy typed portfolio",
+            sections: [
+                MenuSection(
+                    id: "income",
+                    title: "Income",
+                    rows: IncomeCalendarDescriptor.rows(
+                        for: IncomeCalendar.build(events: [event], asOf: "2026-06-22")
+                    )
+                ),
+            ]
+        )
+
+        let hidden = descriptor.applying(
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+        let hiddenJSON = try #require(String(data: stableJSONData(hidden), encoding: .utf8))
+
+        #expect(!hiddenJSON.contains("54,321.09"))
+        #expect(!hiddenJSON.contains("\"portfolioValueDetail\""))
+        #expect(!hiddenJSON.contains("\"portfolioValueBarDetails\""))
+        #expect(!hiddenJSON.contains("\"portfolioValueSummaryTotal\""))
+        #expect(
+            hidden.applying(
+                settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+            ) == hidden
+        )
+    }
+
+    @Test("Serialized protection markers cannot bypass the app choke point")
+    func serializedProtectionMarkersCannotBypassAppChokePoint() throws {
+        let descriptor = MenuDescriptor(
+            statusTitle: "Untrusted cached portfolio",
+            sections: [
+                MenuSection(
+                    id: "allocation",
+                    title: "Allocation",
+                    rows: [
+                        MenuRow(
+                            id: "untrusted.detail",
+                            title: "Untrusted detail",
+                            detail: "GBp 54,321.09"
+                        ),
+                    ]
+                ),
+            ]
+        )
+        var object = try #require(
+            JSONSerialization.jsonObject(with: stableJSONData(descriptor)) as? [String: Any]
+        )
+        object["portfolioValueProtectionState"] = "hidden"
+        let forgedData = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        let decoded = try JSONDecoder().decode(MenuDescriptor.self, from: forgedData)
+
+        let hidden = decoded.applying(
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+
+        #expect(!renderedText(in: hidden).contains("54,321.09"))
+        #expect(renderedText(in: hidden).contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
+    }
+
+    @Test("Public section mutation invalidates trusted value metadata")
+    func publicSectionMutationInvalidatesTrustedValueMetadata() throws {
+        let snapshot = try visibilitySnapshot("quiet-no-pressure.json")
+        var descriptor = MenuDescriptorRenderer.render(
+            model: PressureEngine.buildModel(from: snapshot)
+        )
+        descriptor.sections.append(
+            MenuSection(
+                id: "extension",
+                title: "Extension",
+                rows: [
+                    MenuRow(
+                        id: "extension.money",
+                        title: "Extension value",
+                        detail: "GBp 54,321.09"
+                    ),
+                ]
+            )
+        )
+
+        let hidden = descriptor.applying(
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+
+        #expect(!renderedText(in: hidden).contains("54,321.09"))
+        #expect(renderedText(in: hidden).contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
+    }
+
+    @Test("Duplicate quote IDs retain ordered chart value metadata")
+    func duplicateQuoteIDsRetainOrderedChartValueMetadata() throws {
+        let snapshot = try visibilitySnapshot("quiet-no-pressure.json")
+        var model = PressureEngine.buildModel(from: snapshot)
+        var duplicate = try #require(
+            model.facetSnapshots.allocation.portfolioOverview.topHoldings.first
+        )
+        duplicate.name = "Duplicate quote holding"
+        duplicate.worth = Money(value: "54321.09", currency: "GBp")
+        model.facetSnapshots.allocation.portfolioOverview.topHoldings.append(duplicate)
+
+        let shown = MenuDescriptorRenderer.render(model: model)
+        let hidden = shown.applying(
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+        let chartRow = try #require(row(withID: "allocation.portfolio", in: shown))
+
+        #expect(chartRow.barChart?.bars.count == model.facetSnapshots.allocation.portfolioOverview.topHoldings.count)
+        #expect(renderedText(in: shown).contains("54,321.09"))
+        #expect(!renderedText(in: hidden).contains("54,321.09"))
+    }
+
+    @Test("Income attention resolves same-name events by quote identity")
+    func incomeAttentionResolvesSameNameEventsByQuoteIdentity() throws {
+        var snapshot = try visibilitySnapshot("quiet-no-pressure.json")
+        snapshot.incomeEvents = [
+            IncomeEventSummary(
+                date: "2026-06-25",
+                kind: "ex-dividend",
+                symbolName: "Dual Listed Holding",
+                estimated: false,
+                symbolId: 701,
+                quoteId: 7001,
+                amount: Money(value: "111.11", currency: "GBp")
+            ),
+            IncomeEventSummary(
+                date: "2026-06-25",
+                kind: "ex-dividend",
+                symbolName: "Dual Listed Holding",
+                estimated: false,
+                symbolId: 702,
+                quoteId: 7002,
+                amount: Money(value: "222.22", currency: "GBp")
+            ),
+        ]
+        let descriptor = MenuDescriptorRenderer.render(
+            model: PressureEngine.buildModel(from: snapshot)
+        )
+        let first = try #require(row(withID: "income.ex-dividend.7001.glance", in: descriptor))
+        let second = try #require(row(withID: "income.ex-dividend.7002.glance", in: descriptor))
+
+        #expect(first.detail?.contains("GBp 111.11") == true)
+        #expect(!((first.detail ?? "").contains("GBp 222.22")))
+        #expect(second.detail?.contains("GBp 222.22") == true)
+        #expect(!((second.detail ?? "").contains("GBp 111.11")))
+    }
+
+    @Test("App applies portfolio value visibility at one menu installation choke point")
+    func appHasSinglePortfolioValueVisibilityChokePoint() throws {
+        let source = try String(
+            contentsOf: visibilityPackageRoot.appending(path: "Sources/PDTBarApp/main.swift"),
+            encoding: .utf8
+        )
+        let applications = source.components(separatedBy: ".applying(settings:").count - 1
+
+        #expect(applications == 1)
+        #expect(
+            source.contains(
+                "descriptor: descriptor.applying(settings: settingsStore.displaySettings)"
+            )
+        )
     }
 
     @MainActor
@@ -127,44 +467,62 @@ private final class CountingDataSource: PortfolioDataSource {
     }
 }
 
-private func visibilitySnapshot() throws -> PortfolioSnapshot {
-    var snapshot = try PDTFixtureDataSource.snapshot(
-        from: visibilityPackageRoot.appending(path: "docs/pdt/fixtures/quiet-no-pressure.json")
+private func visibilitySnapshot(_ fixtureName: String) throws -> PortfolioSnapshot {
+    try PDTFixtureDataSource.snapshot(
+        from: visibilityPackageRoot.appending(path: "docs/pdt/fixtures/\(fixtureName)")
     )
-    snapshot.openHoldings[0].averageBuyPrice = Money(value: "189.50", currency: "EUR")
-    snapshot.incomeEvents = [
-        IncomeEventSummary(
-            date: "2026-06-25",
-            kind: "ex-dividend",
-            symbolName: "Nova Lithography",
-            estimated: false,
-            symbolId: 101,
-            quoteId: 9001,
-            amount: Money(value: "3.10", currency: "EUR"),
-            priorAmount: Money(value: "2.90", currency: "EUR"),
-            changePercent: 0.0689655
-        ),
-    ]
-    return snapshot
 }
 
-private func knownFixtureMoneyText() -> [String] {
-    [
-        "EUR 51,200.00",
-        "EUR 6,000.00",
-        "EUR 5,800.00",
-        "EUR 5,500.00",
-        "EUR 5,500.00",
-        "EUR 5,000.00",
-        "EUR 4,900.00",
-        "EUR 1,895.00",
-        "EUR 598.00",
-        "EUR 189.50",
-        "EUR 188.10",
-        "EUR 22.40",
-        "EUR 3.10",
-        "EUR 2.90",
-    ]
+private func monetaryDisplays(in snapshot: PortfolioSnapshot) throws -> Set<String> {
+    Set(try snapshotMoney(in: snapshot).map(formattedMoney))
+}
+
+private func monetaryDigitGroups(in snapshot: PortfolioSnapshot) throws -> Set<String> {
+    var values = try snapshotMoney(in: snapshot).map(\.value)
+    values.append(contentsOf: snapshot.priceSeries.map(\.closeAdjusted))
+    return Set(values.map { decimalStringForTest($0, places: 2) })
+}
+
+private func snapshotMoney(in snapshot: PortfolioSnapshot) throws -> [Money] {
+    var values: [Money] = []
+    collectMoney(
+        in: try JSONSerialization.jsonObject(with: stableJSONData(snapshot)),
+        into: &values
+    )
+    values.append(contentsOf: snapshot.priceSeries.compactMap { point in
+        point.closeCurrency.map { Money(value: point.closeAdjusted, currency: $0) }
+    })
+    return values
+}
+
+private func collectMoney(in object: Any, into values: inout [Money]) {
+    if let dictionary = object as? [String: Any] {
+        if let value = dictionary["value"] as? String,
+           let currency = dictionary["currency"] as? String
+        {
+            values.append(Money(value: value, currency: currency))
+        }
+        dictionary.values.forEach { collectMoney(in: $0, into: &values) }
+    } else if let array = object as? [Any] {
+        array.forEach { collectMoney(in: $0, into: &values) }
+    }
+}
+
+private func formattedMoney(_ money: Money) -> String {
+    "\(money.currency) \(decimalStringForTest(money.value, places: 2))"
+}
+
+private func decimalStringForTest(_ value: String, places: Int) -> String {
+    guard let decimal = Decimal(string: value, locale: Locale(identifier: "en_US_POSIX")) else {
+        return value
+    }
+    let formatter = NumberFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.numberStyle = .decimal
+    formatter.usesGroupingSeparator = true
+    formatter.minimumFractionDigits = places
+    formatter.maximumFractionDigits = places
+    return formatter.string(from: decimal as NSDecimalNumber) ?? value
 }
 
 private func renderedText(in descriptor: MenuDescriptor) -> String {
@@ -177,6 +535,20 @@ private func renderedText(in descriptor: MenuDescriptor) -> String {
     return values.compactMap { $0 }.joined(separator: "\n")
 }
 
+private func row(withID id: String, in descriptor: MenuDescriptor) -> MenuRow? {
+    descriptor.sections.lazy
+        .flatMap(\.rows)
+        .compactMap { row(withID: id, in: $0) }
+        .first
+}
+
+private func row(withID id: String, in candidate: MenuRow) -> MenuRow? {
+    if candidate.id == id {
+        return candidate
+    }
+    return candidate.children.lazy.compactMap { row(withID: id, in: $0) }.first
+}
+
 private func renderedTextValues(in row: MenuRow) -> [String] {
     var values = [
         row.title,
@@ -185,6 +557,7 @@ private func renderedTextValues(in row: MenuRow) -> [String] {
         row.portfolioSummary?.cagr,
         row.portfolioSummary?.totalIncrease,
         row.portfolioSummary?.accessibilityLabel,
+        row.actionPayload,
     ]
     values.append(contentsOf: row.barChart?.bars.flatMap {
         [$0.label, $0.axisLabel, $0.percentageLabel, $0.detail]
@@ -203,17 +576,6 @@ private func renderedText(in surface: MenuBarSurface) -> String {
     values.append(contentsOf: surface.sections.map(\.title))
     values.append(contentsOf: surface.sections.flatMap { $0.rows.flatMap(renderedTextValues) })
     return values.compactMap { $0 }.joined(separator: "\n")
-}
-
-private func currencyLeaks(in text: String) -> [String] {
-    text.split(separator: "\n")
-        .map(String.init)
-        .filter { line in
-            line.range(of: #"\b[A-Z]{3}\s+[-+]?[0-9]"#, options: .regularExpression) != nil
-                || line.contains("€")
-                || line.contains("$")
-                || line.contains("£")
-        }
 }
 
 private func renderedTextValues(in row: MenuBarRowSurface) -> [String] {
@@ -236,3 +598,10 @@ private let visibilityPackageRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
     .deletingLastPathComponent()
+
+private let portfolioValueFixtureNames = [
+    "quiet-no-pressure.json",
+    "big-mover.json",
+    "concentration-pressure.json",
+    "income-event.json",
+]
