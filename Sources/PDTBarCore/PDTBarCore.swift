@@ -7730,12 +7730,12 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         // overshoot it by at most the connector's own budget; that keeps the
         // scan bounded without parking another thread per refresh in a timed
         // group wait.
-        let deadline = Date().addingTimeInterval(options.incomeQuoteLookupTimeoutSeconds)
+        let deadline = now().addingTimeInterval(options.incomeQuoteLookupTimeoutSeconds)
         for holding in holdings {
             guard !unresolvedSymbolIDs.isEmpty else {
                 break
             }
-            guard Date() < deadline else {
+            guard now() < deadline else {
                 return (quoteIDsBySymbolID, [Self.incomeQuoteScanTimeoutDiagnostic()])
             }
             let quote: LiveSymbolQuoteEnvelope
@@ -7754,7 +7754,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 // real diagnostics even past the deadline so the caller can
                 // classify them and short-circuit the remaining phases.
                 let category = (error as? PDTDetailRefreshToolError)?.diagnostic.category
-                if Date() >= deadline, category?.isRetryable == true {
+                if now() >= deadline, category?.isRetryable == true {
                     return (quoteIDsBySymbolID, [Self.incomeQuoteScanTimeoutDiagnostic()])
                 }
                 throw error
@@ -7838,7 +7838,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         let workTracker = PDTPriceHistoryWorkTracker(quoteIDs: quoteIDs)
         let workerCount = min(options.priceHistoryConcurrencyLimit, quoteIDs.count)
         let timeoutSeconds = options.effectivePriceHistoryTimeoutSeconds(holdingCount: totalCount)
-        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        let deadline = now().addingTimeInterval(timeoutSeconds)
 
         for _ in 0 ..< workerCount {
             group.enter()
@@ -7849,7 +7849,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 // Stop pulling new holdings once any price call reports a
                 // Claude/PDT auth or setup outage; the remaining holdings
                 // would each burn another doomed full CLI run.
-                while Date() < deadline,
+                while now() < deadline,
                       accumulator.unavailableSetupCategory() == nil,
                       let quoteID = workTracker.nextQuoteID()
                 {
@@ -7906,7 +7906,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             }
         }
         let timedOut = group.wait(timeout: .now() + timeoutSeconds) == .timedOut
-            || Date() >= deadline
+            || now() >= deadline
         let unavailableSetupCategory = accumulator.unavailableSetupCategory()
         if timedOut || unavailableSetupCategory != nil {
             let abandonedCategory = unavailableSetupCategory ?? .timeout
