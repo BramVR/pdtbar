@@ -172,14 +172,17 @@ struct PortfolioValueVisibilityTests {
         #expect(renderedText(in: hidden).contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
     }
 
-    @Test("Metadata-free portfolio descriptors fail closed")
-    func metadataFreePortfolioDescriptorsFailClosed() throws {
+    @Test(
+        "Metadata-free descriptors fail closed regardless of section ID",
+        arguments: ["pulse", "custom"]
+    )
+    func metadataFreePortfolioDescriptorsFailClosed(_ sectionID: String) throws {
         let descriptor = MenuDescriptor(
             statusTitle: "Legacy portfolio",
             sections: [
                 MenuSection(
-                    id: "allocation",
-                    title: "Allocation",
+                    id: sectionID,
+                    title: "Legacy",
                     rows: [
                         MenuRow(
                             id: "legacy.detail",
@@ -229,6 +232,17 @@ struct PortfolioValueVisibilityTests {
                 settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
             ) == hidden
         )
+    }
+
+    @Test("Trusted setup descriptors preserve nonfinancial details when values are hidden")
+    func trustedSetupDescriptorsPreserveNonfinancialDetails() throws {
+        let descriptor = ClaudeLaunchFlow.descriptor(for: .probingClaude)
+        let hidden = descriptor.applying(
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+        let setupRow = try #require(row(withID: "claudeSetup.probing", in: hidden))
+
+        #expect(setupRow.detail == "No prompts opened")
     }
 
     @Test("Legacy fallback clears typed value metadata before encoding")

@@ -3345,7 +3345,7 @@ public enum ClaudeLaunchFlow {
                         ]
                     ),
                 ]
-            )
+            ).trustingPortfolioValueMetadata()
         case .loggedOut:
             return ClaudeSetupMenuDescriptor.loggedOut()
         case .openingClaude:
@@ -3371,7 +3371,7 @@ public enum ClaudeLaunchFlow {
                         ]
                     ),
                 ]
-            )
+            ).trustingPortfolioValueMetadata()
         case .missingClaude:
             return ClaudeSetupMenuDescriptor.missingClaude()
         case .missingClaudeLogin:
@@ -3401,7 +3401,7 @@ public enum ClaudeLaunchFlow {
                         ]
                     ),
                 ]
-            )
+            ).trustingPortfolioValueMetadata()
         case .fetchingPortfolio:
             let detail = fetchingDetail(
                 elapsedSeconds: fetchingElapsedSeconds,
@@ -3430,7 +3430,7 @@ public enum ClaudeLaunchFlow {
                         ]
                     ),
                 ]
-            )
+            ).trustingPortfolioValueMetadata()
         case .portfolioFetchFailed:
             return MenuDescriptor(
                 statusTitle: "Could not fetch portfolio",
@@ -3442,7 +3442,7 @@ public enum ClaudeLaunchFlow {
                         rows: portfolioFetchFailureRows()
                     ),
                 ]
-            )
+            ).trustingPortfolioValueMetadata()
         }
     }
 
@@ -3590,7 +3590,7 @@ public enum ClaudeLaunchFlow {
                     ]
                 ),
             ]
-        )
+        ).trustingPortfolioValueMetadata()
     }
 
     private static func cachedPulseDescriptor(
@@ -4366,7 +4366,7 @@ public enum ClaudeSetupMenuDescriptor {
                     ]
                 ),
             ]
-        )
+        ).trustingPortfolioValueMetadata()
     }
 
     public static func missingClaude() -> MenuDescriptor {
@@ -4392,7 +4392,7 @@ public enum ClaudeSetupMenuDescriptor {
                     ]
                 ),
             ]
-        )
+        ).trustingPortfolioValueMetadata()
     }
 
     public static func missingClaudeLogin() -> MenuDescriptor {
@@ -4423,7 +4423,7 @@ public enum ClaudeSetupMenuDescriptor {
                     ]
                 ),
             ]
-        )
+        ).trustingPortfolioValueMetadata()
     }
 
     public static func missingPDTMCP() -> MenuDescriptor {
@@ -4454,7 +4454,7 @@ public enum ClaudeSetupMenuDescriptor {
                     ]
                 ),
             ]
-        )
+        ).trustingPortfolioValueMetadata()
     }
 }
 
@@ -4508,7 +4508,6 @@ public extension MenuDescriptor {
             return self
         }
         if !settings.showPortfolioValues,
-           containsPortfolioSections,
            portfolioValueProtectionState == nil
         {
             return failClosedForLegacyPortfolioValues()
@@ -4525,14 +4524,6 @@ public extension MenuDescriptor {
         return descriptor
     }
 
-    private var containsPortfolioSections: Bool {
-        let ids = Set(sections.map(\.id))
-        return ids.contains("summary")
-            || ids.contains("allocation")
-            || ids.contains("income")
-            || ids.contains("bigMovers")
-    }
-
     private func failClosedForLegacyPortfolioValues() -> MenuDescriptor {
         var descriptor = self
         descriptor.sections = descriptor.sections.map { section in
@@ -4541,6 +4532,14 @@ public extension MenuDescriptor {
             return section
         }
         descriptor.portfolioValueProtectionState = .hidden
+        return descriptor
+    }
+}
+
+private extension MenuDescriptor {
+    func trustingPortfolioValueMetadata() -> MenuDescriptor {
+        var descriptor = self
+        descriptor.portfolioValueProtectionState = .complete
         return descriptor
     }
 }
