@@ -50,37 +50,6 @@ struct RetryOwnershipTests {
         #expect(diagnostic.category == .setupUnavailable)
     }
 
-    @Test("Explicit server rejection is non-retryable and consumes 1 CLI run")
-    func explicitServerRejectionConsumesOneCLIRun() throws {
-        let rejectedStream = """
-        {"type":"assistant","message":{"content":[{"type":"tool_use","id":"call_1","name":"mcp__pdt__pdt-get-portfolio-holdings"}]}}
-        {"type":"tool_result","tool_use_id":"call_1","content":"synthetic validation failure","is_error":true}
-        {"type":"result","result":"{\\"status\\":\\"redacted-ok\\"}"}
-        """
-        let runner = RecordingClaudeCommandRunner(results: [
-            .init(stdout: connectedPDT, stderr: "", exitCode: 0),
-            .init(stdout: rejectedStream, stderr: "", exitCode: 0),
-            .init(stdout: emptyHoldingsStream, stderr: "", exitCode: 0),
-        ])
-        let connection = connection(runner: runner, retryCount: 2)
-
-        do {
-            _ = try connection.callReadToolReportingAttempts(
-                "pdt-get-portfolio-holdings",
-                arguments: [:],
-                retryDeadline: nil
-            )
-            Issue.record("Expected the explicit tool rejection")
-        } catch let failure as PDTMCPConnectorCallFailure {
-            #expect(failure.attemptCount == 1)
-            #expect(failure.underlyingError as? PDTMCPConnectorError
-                == .toolRejected("mcp__pdt__pdt-get-portfolio-holdings returned an explicit error result"))
-        }
-
-        #expect(readRuns(in: runner).count == 1)
-        #expect(!PDTDetailRefreshFailureCategory.toolRejected.isRetryable)
-    }
-
     @Test("Already-passed phase deadline spawns 0 Claude CLI runs")
     func alreadyPassedPhaseDeadlineSpawnsZeroClaudeCLIRuns() throws {
         let runner = RecordingClaudeCommandRunner(results: [

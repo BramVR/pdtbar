@@ -6643,7 +6643,6 @@ public enum PDTMCPConnectorError: Error, CustomStringConvertible, Equatable {
     case missingRequiredReadTools([String])
     case setupUnavailable(String)
     case transientFailure(String)
-    case toolRejected(String)
     case timeout(String)
     case nonReadTool(String)
     case missingScriptedResponse(String)
@@ -6656,8 +6655,6 @@ public enum PDTMCPConnectorError: Error, CustomStringConvertible, Equatable {
             "PDT MCP connector setup unavailable: \(message)"
         case .transientFailure(let message):
             "PDT MCP connector transient failure: \(message)"
-        case .toolRejected(let message):
-            "PDT MCP connector tool rejected the call: \(message)"
         case .timeout(let message):
             "PDT MCP connector timeout: \(message)"
         case .nonReadTool(let tool):
@@ -7032,7 +7029,6 @@ public enum PDTBackgroundDetailRefreshOutcome: String, Codable, Equatable, Senda
 public enum PDTDetailRefreshFailureCategory: String, Codable, Equatable, Sendable {
     case setupUnavailable
     case transientFailure
-    case toolRejected
     case missingScriptedResponse
     case decode
     case unavailable
@@ -7049,7 +7045,7 @@ public extension PDTDetailRefreshFailureCategory {
         switch self {
         case .transientFailure, .timeout, .exit:
             true
-        case .setupUnavailable, .toolRejected, .unavailable, .decode, .missingScriptedResponse:
+        case .setupUnavailable, .unavailable, .decode, .missingScriptedResponse:
             false
         }
     }
@@ -7060,7 +7056,7 @@ public extension PDTDetailRefreshFailureCategory {
         switch self {
         case .setupUnavailable, .unavailable:
             true
-        case .transientFailure, .toolRejected, .timeout, .exit, .decode, .missingScriptedResponse:
+        case .transientFailure, .timeout, .exit, .decode, .missingScriptedResponse:
             false
         }
     }
@@ -7097,8 +7093,6 @@ func pdtDetailRefreshFailureCategory(for error: Error) -> PDTDetailRefreshFailur
         .setupUnavailable
     case PDTMCPConnectorError.transientFailure:
         .transientFailure
-    case PDTMCPConnectorError.toolRejected:
-        .toolRejected
     case PDTMCPConnectorError.timeout:
         .timeout
     case PDTMCPConnectorError.missingScriptedResponse:

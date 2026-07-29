@@ -43,24 +43,6 @@ struct ClaudeToolResultParserTests {
         #expect(try firstHoldingName(in: data) == "Text Public Co")
     }
 
-    @Test("Explicit MCP error results are rejected without matching server copy")
-    func explicitMCPErrorResultIsRejected() throws {
-        let output = streamJSON(
-            result: #"""
-            {"type":"tool_result","tool_use_id":"call_1","content":"synthetic validation failure","is_error":true}
-            """#
-        )
-
-        #expect(throws: ClaudeToolResultParserError.toolRejected(toolName)) {
-            _ = try ClaudeToolResultParser().resultData(
-                for: toolName,
-                readToolName: readToolName,
-                output: output,
-                currentSessionResultFiles: []
-            )
-        }
-    }
-
     @Test("Concrete PDT allow rule accepts the requested concrete read tool")
     func concretePDTAllowRuleAcceptsRequestedConcreteReadTool() throws {
         let output = streamJSON(
