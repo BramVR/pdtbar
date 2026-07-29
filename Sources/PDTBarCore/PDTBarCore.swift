@@ -4492,6 +4492,12 @@ public enum MenuBarSurfaceRenderer {
 
 public extension MenuDescriptor {
     func applying(settings: PortfolioValueDisplaySettings) -> MenuDescriptor {
+        if !settings.showPortfolioValues,
+           containsPortfolioSections,
+           !containsTypedPortfolioValueProtection
+        {
+            return failClosedForLegacyPortfolioValues()
+        }
         var descriptor = self
         descriptor.sections = descriptor.sections.map { section in
             var section = section
@@ -4500,9 +4506,61 @@ public extension MenuDescriptor {
         }
         return descriptor
     }
+
+    private var containsPortfolioSections: Bool {
+        let ids = Set(sections.map(\.id))
+        return ids.contains("summary")
+            || ids.contains("allocation")
+            || ids.contains("income")
+            || ids.contains("bigMovers")
+    }
+
+    private var containsTypedPortfolioValueProtection: Bool {
+        sections.contains { section in
+            section.rows.contains(where: \.containsTypedPortfolioValueProtection)
+        }
+    }
+
+    private func failClosedForLegacyPortfolioValues() -> MenuDescriptor {
+        var descriptor = self
+        descriptor.sections = descriptor.sections.map { section in
+            var section = section
+            section.rows = section.rows.map(\.failClosedForLegacyPortfolioValues)
+            return section
+        }
+        return descriptor
+    }
 }
 
 private extension MenuRow {
+    var containsTypedPortfolioValueProtection: Bool {
+        portfolioValueDetail != nil
+            || portfolioValueBarDetails != nil
+            || portfolioValueSummaryTotal != nil
+            || children.contains(where: \.containsTypedPortfolioValueProtection)
+    }
+
+    var failClosedForLegacyPortfolioValues: MenuRow {
+        var row = self
+        if row.detail != nil {
+            row.detail = PortfolioValueDisplaySettings.hiddenPlaceholder
+        }
+        if var summary = row.portfolioSummary {
+            summary.totalValue = PortfolioValueDisplaySettings.hiddenPlaceholder
+            row.portfolioSummary = summary
+        }
+        if var chart = row.barChart {
+            chart.bars = chart.bars.map { bar in
+                var bar = bar
+                bar.detail = PortfolioValueDisplaySettings.hiddenPlaceholder
+                return bar
+            }
+            row.barChart = chart
+        }
+        row.children = row.children.map(\.failClosedForLegacyPortfolioValues)
+        return row
+    }
+
     func applying(settings: PortfolioValueDisplaySettings) -> MenuRow {
         var row = self
         if let portfolioValueDetail {
@@ -5385,6 +5443,12 @@ public enum MenuDescriptorRenderer {
            let priorAmount = incomeEvent(for: item, model: model)?.priorAmount
         {
             return .money(priorAmount)
+        }
+        if (item.id == "allocation.cashDrag" && suffix == "currentValue")
+            || (item.typedFacet == .bigMovers && ["currentValue", "priorValue"].contains(suffix))
+            || (item.typedFacet == .income && suffix == "priorValue")
+        {
+            return PortfolioValueText([.unresolvedSensitive(factDetail(fact))])
         }
         return PortfolioValueText([.literal(factDetail(fact))])
     }

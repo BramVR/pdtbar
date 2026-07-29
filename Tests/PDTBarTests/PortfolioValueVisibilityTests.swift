@@ -143,7 +143,9 @@ struct PortfolioValueVisibilityTests {
                 estimated: false,
                 symbolId: 778,
                 quoteId: 7778,
-                amount: Money(value: "65432.10", currency: "GBp")
+                amount: Money(value: "65432.10", currency: "GBp"),
+                priorAmount: Money(value: "54321.09", currency: "GBp"),
+                changePercent: 0.2045
             ),
         ]
         var model = PressureEngine.buildModel(from: snapshot)
@@ -155,7 +157,62 @@ struct PortfolioValueVisibilityTests {
         )
 
         #expect(!renderedText(in: hidden).contains("65,432.10"))
+        #expect(!renderedText(in: hidden).contains("54,321.09"))
         #expect(renderedText(in: hidden).contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
+    }
+
+    @Test("Metadata-free portfolio descriptors fail closed")
+    func metadataFreePortfolioDescriptorsFailClosed() throws {
+        let descriptor = MenuDescriptor(
+            statusTitle: "Legacy portfolio",
+            sections: [
+                MenuSection(
+                    id: "allocation",
+                    title: "Allocation",
+                    rows: [
+                        MenuRow(
+                            id: "legacy.detail",
+                            title: "Legacy detail",
+                            detail: "GBp 54,321.09"
+                        ),
+                        MenuRow(
+                            id: "legacy.chart",
+                            title: "Legacy chart",
+                            barChart: MenuRowBarChart(
+                                bars: [
+                                    MenuRowBarChart.Bar(
+                                        id: "legacy.chart.bar",
+                                        label: "Legacy",
+                                        weight: 1,
+                                        percentageLabel: "100.0%",
+                                        detail: "Legacy; GBp 54,321.09"
+                                    ),
+                                ]
+                            )
+                        ),
+                        MenuRow(
+                            id: "legacy.summary",
+                            title: "Legacy summary",
+                            portfolioSummary: MenuRowPortfolioSummary(
+                                totalValue: "GBp 54,321.09",
+                                cagr: "Unavailable",
+                                totalIncrease: "Unavailable"
+                            )
+                        ),
+                    ]
+                ),
+            ]
+        )
+
+        let hidden = descriptor.applying(
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+        let text = renderedText(in: hidden)
+
+        #expect(!text.contains("54,321.09"))
+        #expect(
+            text.components(separatedBy: PortfolioValueDisplaySettings.hiddenPlaceholder).count >= 4
+        )
     }
 
     @Test("Income attention resolves same-name events by quote identity")
