@@ -919,7 +919,7 @@ struct ClaudeLocalConnectionTests {
     }
 }
 
-private final class RecordingClaudeCommandRunner: ClaudeLocalCommandRunning, @unchecked Sendable {
+final class RecordingClaudeCommandRunner: ClaudeLocalCommandRunning, @unchecked Sendable {
     struct Request: Equatable {
         var executable: String
         var arguments: [String]
@@ -931,16 +931,19 @@ private final class RecordingClaudeCommandRunner: ClaudeLocalCommandRunning, @un
     private var queuedResults: [ClaudeLocalProcessResult]
     private var queuedSimulatedDelays: [TimeInterval]
     private let executableAvailable: Bool
+    private let honorsTimeout: Bool
     private var recordedRequests: [Request] = []
 
     init(
         executableAvailable: Bool = true,
         results: [ClaudeLocalProcessResult] = [],
-        simulatedDelays: [TimeInterval] = []
+        simulatedDelays: [TimeInterval] = [],
+        honorsTimeout: Bool = true
     ) {
         self.executableAvailable = executableAvailable
         self.queuedResults = results
         self.queuedSimulatedDelays = simulatedDelays
+        self.honorsTimeout = honorsTimeout
     }
 
     var requests: [Request] {
@@ -974,7 +977,9 @@ private final class RecordingClaudeCommandRunner: ClaudeLocalCommandRunning, @un
             ? ClaudeLocalProcessResult(stdout: "", stderr: "", exitCode: 0)
             : queuedResults.removeFirst()
         lock.unlock()
-        if simulatedDelay > timeout {
+        if !honorsTimeout, simulatedDelay > 0 {
+            Thread.sleep(forTimeInterval: simulatedDelay)
+        } else if simulatedDelay > timeout {
             // Match DefaultClaudeLocalCommandRunner: ClaudeLocalConnection treats
             // exit code -1 as a timeout unless stderr is the missing-binary message.
             return ClaudeLocalProcessResult(stdout: "", stderr: "", exitCode: -1)

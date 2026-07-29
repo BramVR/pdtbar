@@ -760,7 +760,11 @@ struct BackgroundDetailRefreshTests {
             connector: connector,
             snapshotStore: store,
             asOf: "2026-03-29",
-            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+            options: PDTBackgroundDetailRefreshOptions(
+                priceHistoryConcurrencyLimit: 2,
+                optionalRetryCount: 1,
+                retryBackoffSeconds: 0
+            )
         ).refresh()
 
         #expect(result.outcome == .completed)
@@ -852,7 +856,11 @@ struct BackgroundDetailRefreshTests {
             connector: connector,
             snapshotStore: store,
             asOf: "2026-03-29",
-            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+            options: PDTBackgroundDetailRefreshOptions(
+                priceHistoryConcurrencyLimit: 2,
+                optionalRetryCount: 1,
+                retryBackoffSeconds: 0
+            )
         ).refresh()
 
         #expect(result.outcome == .completed)
@@ -1094,6 +1102,81 @@ struct BackgroundDetailRefreshTests {
         // Prior price series for the abandoned holdings stay visible.
         let committed = try #require(try store.loadPriorSnapshot())
         #expect(committed.priceSeries.map(\.quoteId) == [9101, 9101, 9102, 9102])
+    }
+
+}
+
+extension BackgroundDetailRefreshTests {
+    @Test("Income quote scan honors an offset virtual clock deadline")
+    func incomeQuoteScanHonorsOffsetVirtualClockDeadline() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-income-virtual-deadline-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let clock = BackgroundPaginationClock()
+        let connector = SelectiveFailingPDTConnector(
+            responses: try detailRefreshResponses(calendarSymbolID: 9999, calendarSymbolName: "Unknown"),
+            onCall: { tool in
+                if tool == "pdt-get-symbol-quote" {
+                    clock.advance(by: 0.06)
+                }
+            }
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(
+                priceHistoryConcurrencyLimit: 1,
+                incomeQuoteLookupTimeoutSeconds: 0.05,
+                retryBackoffSeconds: 0
+            ),
+            now: clock.now
+        ).refresh()
+
+        #expect(result.outcome == .degraded)
+        #expect(connector.callCount(of: "pdt-get-symbol-quote") == 1)
+        #expect(result.diagnostics.contains {
+            $0.toolName == "pdt-get-symbol-quote"
+                && $0.phase == .income
+                && $0.category == .timeout
+        })
+    }
+
+    @Test("Price-history workers honor an offset virtual clock deadline")
+    func priceHistoryWorkersHonorOffsetVirtualClockDeadline() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-price-virtual-deadline-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let clock = BackgroundPaginationClock()
+        let connector = SelectiveFailingPDTConnector(
+            responses: try detailRefreshResponses(includingThirdHolding: true),
+            onCall: { tool in
+                if tool == "pdt-list-symbol-prices" {
+                    clock.advance(by: 0.06)
+                }
+            }
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(
+                priceHistoryConcurrencyLimit: 1,
+                priceHistoryTimeoutSeconds: 0.05,
+                retryBackoffSeconds: 0
+            ),
+            now: clock.now
+        ).refresh()
+
+        #expect(result.outcome == .degraded)
+        #expect(connector.callCount(of: "pdt-list-symbol-prices") == 1)
+        let priceDiagnostics = result.diagnostics.filter { $0.phase == .priceHistory }
+        #expect(priceDiagnostics.count == 2)
+        #expect(priceDiagnostics.allSatisfy { $0.category == .timeout })
     }
 }
 
