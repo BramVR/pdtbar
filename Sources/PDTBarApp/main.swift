@@ -570,7 +570,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 item.action = #selector(MenuActionDispatcher.copyMenuRowAction(_:))
                 item.representedObject = row.actionTarget
             }
-            if row.role == .pulseMarkRead, let fingerprint = row.actionPayload {
+            if row.role == .pulseMarkRead,
+               let attentionID = row.actionPayload,
+               let fingerprint = launchRuntime.currentPulse?.unfilteredModel.rankedAttentionItems
+                .first(where: { $0.id == attentionID })?
+                .readFingerprint
+            {
                 item.target = self
                 item.action = #selector(markPulseItemRead(_:))
                 item.representedObject = fingerprint
@@ -1024,33 +1029,25 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func markPulseItemRead(_ sender: NSMenuItem) {
-        guard let attentionID = sender.representedObject as? String else {
+        guard let fingerprint = sender.representedObject as? String else {
             return
         }
         do {
             let directory = currentSnapshotDirectory()
             let readStore = PulseReadStore(directory: directory)
-            let pulse: PulseLifecycleResult
+            try readStore.markRead(fingerprint)
             if let currentPulse = launchRuntime.currentPulse {
-                pulse = currentPulse
-            } else {
-                guard let cachedPulse = try PressureRunner.cachedPulse(
-                    snapshotStore: SnapshotStore(directory: directory),
-                    pulseReadStore: readStore
-                ) else {
-                    return
-                }
-                pulse = cachedPulse
-            }
-            guard let fingerprint = pulse.unfilteredModel.rankedAttentionItems
-                .first(where: { $0.id == attentionID })?
-                .readFingerprint
-            else {
+                let refreshedPulse = currentPulse.applyingReadState(try readStore.load())
+                handleLaunchUpdate(launchRuntime.publishPulse(refreshedPulse))
                 return
             }
-            try readStore.markRead(fingerprint)
-            let refreshedPulse = pulse.applyingReadState(try readStore.load())
-            handleLaunchUpdate(launchRuntime.publishPulse(refreshedPulse))
+            guard let cachedPulse = try PressureRunner.cachedPulse(
+                snapshotStore: SnapshotStore(directory: directory),
+                pulseReadStore: readStore
+            ) else {
+                return
+            }
+            handleLaunchUpdate(launchRuntime.publishPulse(cachedPulse))
         } catch {
             FileHandle.standardError.write(Data("pdtbar: mark read failed: \(error)\n".utf8))
         }
