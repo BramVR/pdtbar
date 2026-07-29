@@ -158,6 +158,7 @@ struct LiveOptionalFacetDegradationTests {
     @Test("Deadline error preserves completed live pages and reports truncation")
     func deadlineErrorPreservesCompletedPages() throws {
         let secondPageKey = "pdt-list-x-ray-holdings?limit=500&offset=500"
+        let clock = LivePaginationClock()
         let client = OptionalFacetToolClient(
             failuresByRequest: [
                 secondPageKey: PDTMCPConnectorError.timeout("X-ray page timed out"),
@@ -166,14 +167,19 @@ struct LiveOptionalFacetDegradationTests {
                 "pdt-list-x-ray-holdings?limit=500&offset=0":
                     Data(#"{"items":[{"weight":25.0}],"hasMore":true}"#.utf8),
             ],
-            delaySecondsByRequest: [secondPageKey: 0.06]
+            onRequest: { request in
+                if request == secondPageKey {
+                    clock.advance(by: 0.06)
+                }
+            }
         )
         let diagnostics = OptionalFacetDiagnosticRecorder()
 
         let snapshot = try liveDataSource(
             client: client,
             diagnostics: diagnostics,
-            paginationTimeoutSeconds: 0.05
+            paginationTimeoutSeconds: 0.05,
+            now: clock.now
         ).snapshot(asOf: "2026-07-28")
 
         #expect(snapshot.xRayHoldings?.map(\.weight) == [0.25])
@@ -248,7 +254,8 @@ struct LiveOptionalFacetDegradationTests {
         includeIncomeQuoteLookups: Bool = false,
         includePriceSeries: Bool = false,
         paginationTimeoutSeconds: Double = 240,
-        maxPagesPerList: Int = 50
+        maxPagesPerList: Int = 50,
+        now: @escaping @Sendable () -> Date = Date.init
     ) -> PDTLiveDataSource {
         PDTLiveDataSource(
             toolClient: client,
@@ -262,8 +269,26 @@ struct LiveOptionalFacetDegradationTests {
                 paginationTimeoutSeconds: paginationTimeoutSeconds,
                 maxPagesPerList: maxPagesPerList,
             ),
-            onOptionalFacetFailure: diagnostics.append
+            onOptionalFacetFailure: diagnostics.append,
+            now: now
         )
+    }
+}
+
+private final class LivePaginationClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current = Date(timeIntervalSinceReferenceDate: 0)
+
+    func now() -> Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return current
+    }
+
+    func advance(by interval: TimeInterval) {
+        lock.lock()
+        current = current.addingTimeInterval(interval)
+        lock.unlock()
     }
 }
 
@@ -271,7 +296,7 @@ private final class OptionalFacetToolClient: PDTLiveToolClient, @unchecked Senda
     private let failures: [String: any Error]
     private let failuresByRequest: [String: any Error]
     private let responses: [String: Data]
-    private let delaySecondsByRequest: [String: TimeInterval]
+    private let onRequest: @Sendable (String) -> Void
     private let lock = NSLock()
     private var calls: [String] = []
 
@@ -279,12 +304,12 @@ private final class OptionalFacetToolClient: PDTLiveToolClient, @unchecked Senda
         failures: [String: any Error] = [:],
         failuresByRequest: [String: any Error] = [:],
         responses: [String: Data] = [:],
-        delaySecondsByRequest: [String: TimeInterval] = [:]
+        onRequest: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.failures = failures
         self.failuresByRequest = failuresByRequest
         self.responses = responses
-        self.delaySecondsByRequest = delaySecondsByRequest
+        self.onRequest = onRequest
     }
 
     var recordedCalls: [String] {
@@ -307,9 +332,7 @@ private final class OptionalFacetToolClient: PDTLiveToolClient, @unchecked Senda
             .map { "\($0.key)=\($0.value)" }
             .joined(separator: "&")
         let key = suffix.isEmpty ? name : "\(name)?\(suffix)"
-        if let delay = delaySecondsByRequest[key] {
-            Thread.sleep(forTimeInterval: delay)
-        }
+        onRequest(key)
         if let failure = failuresByRequest[key] {
             throw failure
         }

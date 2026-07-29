@@ -177,9 +177,14 @@ struct BackgroundDetailRefreshTests {
         responses["pdt-list-x-ray-holdings?limit=500&offset=500"] = try mcpResult("""
         { "items": [{ "weight": 15.0 }], "hasMore": true }
         """)
+        let clock = BackgroundPaginationClock()
         let connector = SelectiveFailingPDTConnector(
             responses: responses,
-            delaySecondsByTool: ["pdt-list-x-ray-holdings": 0.08]
+            onCall: { tool in
+                if tool == "pdt-list-x-ray-holdings" {
+                    clock.advance(by: 0.08)
+                }
+            }
         )
 
         let result = try PDTBackgroundDetailRefresh(
@@ -191,7 +196,8 @@ struct BackgroundDetailRefreshTests {
                 paginationTimeoutSeconds: 0.15,
                 maxPagesPerList: 10,
                 retryBackoffSeconds: 0
-            )
+            ),
+            now: clock.now
         ).refresh()
 
         #expect(result.outcome == .degraded)
@@ -219,9 +225,14 @@ struct BackgroundDetailRefreshTests {
             }
             """)
         }
+        let clock = BackgroundPaginationClock()
         let connector = SelectiveFailingPDTConnector(
             responses: responses,
-            delaySecondsByTool: ["pdt-list-calendar-events": 0.08]
+            onCall: { tool in
+                if tool == "pdt-list-calendar-events" {
+                    clock.advance(by: 0.08)
+                }
+            }
         )
 
         let result = try PDTBackgroundDetailRefresh(
@@ -232,7 +243,8 @@ struct BackgroundDetailRefreshTests {
                 priceHistoryConcurrencyLimit: 2,
                 paginationTimeoutSeconds: 0.15,
                 retryBackoffSeconds: 0
-            )
+            ),
+            now: clock.now
         ).refresh()
 
         let committed = try #require(try store.loadPriorSnapshot())
@@ -1190,21 +1202,41 @@ private final class SlowPriceHistoryPDTConnector: PDTMCPConnector, @unchecked Se
     }
 }
 
+private final class BackgroundPaginationClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current = Date(timeIntervalSinceReferenceDate: 0)
+
+    func now() -> Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return current
+    }
+
+    func advance(by interval: TimeInterval) {
+        lock.lock()
+        current = current.addingTimeInterval(interval)
+        lock.unlock()
+    }
+}
+
 private final class SelectiveFailingPDTConnector: PDTMCPConnector, @unchecked Sendable {
     let responses: [String: Data]
     private let failures: [String: PDTMCPConnectorError]
     private let delaySecondsByTool: [String: TimeInterval]
+    private let onCall: @Sendable (String) -> Void
     private let lock = NSLock()
     private var calls: [String] = []
 
     init(
         responses: [String: Data],
         failures: [String: PDTMCPConnectorError] = [:],
-        delaySecondsByTool: [String: TimeInterval] = [:]
+        delaySecondsByTool: [String: TimeInterval] = [:],
+        onCall: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.responses = responses
         self.failures = failures
         self.delaySecondsByTool = delaySecondsByTool
+        self.onCall = onCall
     }
 
     func callCount(of name: String) -> Int {
@@ -1223,6 +1255,7 @@ private final class SelectiveFailingPDTConnector: PDTMCPConnector, @unchecked Se
         lock.lock()
         calls.append(name)
         lock.unlock()
+        onCall(name)
         if let delay = delaySecondsByTool[name], delay > 0 {
             Thread.sleep(forTimeInterval: delay)
         }

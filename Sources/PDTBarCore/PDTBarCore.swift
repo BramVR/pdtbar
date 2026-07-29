@@ -7095,6 +7095,7 @@ private func paginatePDTList<Cursor, Item>(
     initialCursor: Cursor,
     maxPages: Int,
     deadline: Date,
+    now: @Sendable () -> Date,
     treatErrorAsDeadline: (Error) -> Bool = { _ in false },
     fetchPage: (Cursor) throws -> PDTListPage<Cursor, Item>
 ) throws -> PDTListPaginationResult<Item> {
@@ -7102,14 +7103,14 @@ private func paginatePDTList<Cursor, Item>(
     var items: [Item] = []
     var pageCount = 0
     while true {
-        guard Date() < deadline else {
+        guard now() < deadline else {
             return PDTListPaginationResult(items: items, pageCount: pageCount, truncation: .deadline)
         }
         let page: PDTListPage<Cursor, Item>
         do {
             page = try fetchPage(cursor)
         } catch {
-            guard Date() >= deadline, treatErrorAsDeadline(error) else {
+            guard now() >= deadline, treatErrorAsDeadline(error) else {
                 throw error
             }
             return PDTListPaginationResult(items: items, pageCount: pageCount, truncation: .deadline)
@@ -7123,7 +7124,7 @@ private func paginatePDTList<Cursor, Item>(
         guard pageCount < maxPages else {
             return PDTListPaginationResult(items: items, pageCount: pageCount, truncation: .pageCap)
         }
-        guard Date() < deadline else {
+        guard now() < deadline else {
             return PDTListPaginationResult(items: items, pageCount: pageCount, truncation: .deadline)
         }
         cursor = nextCursor
@@ -7192,19 +7193,22 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
     private let pulseReadStore: PulseReadStore?
     private let asOf: String?
     private let options: PDTBackgroundDetailRefreshOptions
+    private let now: @Sendable () -> Date
 
     public init(
         connector: any PDTMCPConnector,
         snapshotStore: SnapshotStore,
         pulseReadStore: PulseReadStore? = nil,
         asOf: String? = nil,
-        options: PDTBackgroundDetailRefreshOptions = PDTBackgroundDetailRefreshOptions()
+        options: PDTBackgroundDetailRefreshOptions = PDTBackgroundDetailRefreshOptions(),
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.connector = connector
         self.snapshotStore = snapshotStore
         self.pulseReadStore = pulseReadStore
         self.asOf = asOf
         self.options = options
+        self.now = now
     }
 
     public func refresh(
@@ -7500,11 +7504,12 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) throws -> (holdings: [PDTXRayHoldingInput], diagnostic: PDTDetailRefreshFailureDiagnostic?) {
         let limit = 500
-        let deadline = Date().addingTimeInterval(options.effectivePaginationTimeoutSeconds)
+        let deadline = now().addingTimeInterval(options.effectivePaginationTimeoutSeconds)
         let pagination = try paginatePDTList(
             initialCursor: 0,
             maxPages: options.maxPagesPerList,
             deadline: deadline,
+            now: now,
             treatErrorAsDeadline: pdtPaginationErrorIsRetryable
         ) { offset in
             let arguments = ["limit": String(limit), "offset": String(offset)]
@@ -7545,7 +7550,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             "date_from": dayString(snapshotAsOf, addingDays: -370),
             "date_to": incomeDateRange["date_to"] ?? snapshotAsOf,
         ]
-        let paginationDeadline = Date().addingTimeInterval(options.effectivePaginationTimeoutSeconds)
+        let paginationDeadline = now().addingTimeInterval(options.effectivePaginationTimeoutSeconds)
         let calendarPagination = try liveCalendarEvents(
             arguments: incomeDateRange,
             deadline: paginationDeadline,
@@ -7585,6 +7590,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             initialCursor: 1,
             maxPages: options.maxPagesPerList,
             deadline: deadline,
+            now: now,
             treatErrorAsDeadline: pdtPaginationErrorIsRetryable
         ) { page in
             let arguments = baseArguments.merging([
@@ -7727,6 +7733,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             initialCursor: 1,
             maxPages: options.maxPagesPerList,
             deadline: deadline,
+            now: now,
             treatErrorAsDeadline: pdtPaginationErrorIsRetryable
         ) { page in
             let arguments = baseArguments.merging([
@@ -8143,15 +8150,18 @@ public struct PDTLiveDataSource: PortfolioDataSource {
     public var toolClient: any PDTLiveToolClient
     public var options: PDTLiveDataSourceOptions
     public var onOptionalFacetFailure: (@Sendable (PDTDetailRefreshFailureDiagnostic) -> Void)?
+    private let now: @Sendable () -> Date
 
     public init(
         toolClient: any PDTLiveToolClient,
         options: PDTLiveDataSourceOptions = PDTLiveDataSourceOptions(),
-        onOptionalFacetFailure: (@Sendable (PDTDetailRefreshFailureDiagnostic) -> Void)? = nil
+        onOptionalFacetFailure: (@Sendable (PDTDetailRefreshFailureDiagnostic) -> Void)? = nil,
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.toolClient = toolClient
         self.options = options
         self.onOptionalFacetFailure = onOptionalFacetFailure
+        self.now = now
     }
 
     public func snapshot(asOf: String? = nil) throws -> PortfolioSnapshot {
@@ -8230,7 +8240,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             }
         }
 
-        let incomePaginationDeadline = Date().addingTimeInterval(options.effectivePaginationTimeoutSeconds)
+        let incomePaginationDeadline = now().addingTimeInterval(options.effectivePaginationTimeoutSeconds)
         var calendarEvents: [LiveCalendarEvent] = []
         if options.includeIncomeEvents, !skipRemainingOptionalFacets {
             do {
@@ -8403,11 +8413,12 @@ public struct PDTLiveDataSource: PortfolioDataSource {
         throws -> (holdings: [PDTXRayHoldingInput], diagnostic: PDTDetailRefreshFailureDiagnostic?)
     {
         let limit = 500
-        let deadline = Date().addingTimeInterval(options.effectivePaginationTimeoutSeconds)
+        let deadline = now().addingTimeInterval(options.effectivePaginationTimeoutSeconds)
         let pagination = try paginatePDTList(
             initialCursor: 0,
             maxPages: options.maxPagesPerList,
             deadline: deadline,
+            now: now,
             treatErrorAsDeadline: pdtPaginationErrorIsRetryable
         ) { offset in
             let arguments = ["limit": String(limit), "offset": String(offset)]
@@ -8441,6 +8452,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             initialCursor: 1,
             maxPages: options.maxPagesPerList,
             deadline: deadline,
+            now: now,
             treatErrorAsDeadline: pdtPaginationErrorIsRetryable
         ) { page in
             let arguments = baseArguments.merging([
@@ -8475,6 +8487,7 @@ public struct PDTLiveDataSource: PortfolioDataSource {
             initialCursor: 1,
             maxPages: options.maxPagesPerList,
             deadline: deadline,
+            now: now,
             treatErrorAsDeadline: pdtPaginationErrorIsRetryable
         ) { page in
             let arguments = baseArguments.merging([
