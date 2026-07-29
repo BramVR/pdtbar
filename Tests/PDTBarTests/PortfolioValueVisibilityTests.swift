@@ -17,6 +17,9 @@ struct PortfolioValueVisibilityTests {
             model: model,
             settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
         )
+        let hiddenAtAppChoke = shown.applying(
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
         let shownText = renderedText(in: shown)
         let hiddenText = renderedText(in: hidden)
         let monetaryDisplays = try monetaryDisplays(in: snapshot)
@@ -26,8 +29,9 @@ struct PortfolioValueVisibilityTests {
             "Visible \(fixtureName) descriptor did not render a snapshot monetary value"
         )
         #expect(hiddenText.contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
+        #expect(hiddenAtAppChoke == hidden)
         #expect(
-            monetaryDigitGroups(in: snapshot).filter(hiddenText.contains).isEmpty,
+            try monetaryDigitGroups(in: snapshot).filter(hiddenText.contains).isEmpty,
             "Hidden \(fixtureName) descriptor leaked snapshot monetary digit groups"
         )
     }
@@ -45,7 +49,7 @@ struct PortfolioValueVisibilityTests {
         )
         let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
         let text = renderedText(in: descriptor) + renderedText(in: surface)
-        let leaked = monetaryDigitGroups(in: snapshot).filter(text.contains)
+        let leaked = try monetaryDigitGroups(in: snapshot).filter(text.contains)
 
         #expect(text.contains("Total portfolio value"))
         #expect(text.contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
@@ -79,7 +83,9 @@ struct PortfolioValueVisibilityTests {
         #expect(hidden.model == restored.model)
         #expect(renderedText(in: hidden.descriptor).contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
         #expect(
-            monetaryDigitGroups(in: snapshot).filter(renderedText(in: hidden.descriptor).contains).isEmpty
+            try monetaryDigitGroups(in: snapshot)
+                .filter(renderedText(in: hidden.descriptor).contains)
+                .isEmpty
         )
         #expect(
             try monetaryDisplays(in: snapshot).contains(where: renderedText(in: restored.descriptor).contains),
@@ -109,9 +115,25 @@ struct PortfolioValueVisibilityTests {
             settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
         )
         let text = renderedText(in: descriptor)
-        let leaked = monetaryDigitGroups(in: snapshot).filter(text.contains)
+        let leaked = try monetaryDigitGroups(in: snapshot).filter(text.contains)
 
         #expect(leaked.isEmpty, "Hidden GBp descriptor leaked: \(leaked.sorted())")
+    }
+
+    @Test("App applies portfolio value visibility at one menu installation choke point")
+    func appHasSinglePortfolioValueVisibilityChokePoint() throws {
+        let source = try String(
+            contentsOf: visibilityPackageRoot.appending(path: "Sources/PDTBarApp/main.swift"),
+            encoding: .utf8
+        )
+        let applications = source.components(separatedBy: ".applying(settings:").count - 1
+
+        #expect(applications == 1)
+        #expect(
+            source.contains(
+                "descriptor: descriptor.applying(settings: settingsStore.displaySettings)"
+            )
+        )
     }
 
     @MainActor
@@ -172,8 +194,8 @@ private func monetaryDisplays(in snapshot: PortfolioSnapshot) throws -> Set<Stri
     Set(try snapshotMoney(in: snapshot).map(formattedMoney))
 }
 
-private func monetaryDigitGroups(in snapshot: PortfolioSnapshot) -> Set<String> {
-    var values = snapshotMoneyValues(in: try? stableJSONData(snapshot))
+private func monetaryDigitGroups(in snapshot: PortfolioSnapshot) throws -> Set<String> {
+    var values = try snapshotMoney(in: snapshot).map(\.value)
     values.append(contentsOf: snapshot.priceSeries.map(\.closeAdjusted))
     return Set(values.map { decimalStringForTest($0, places: 2) })
 }
@@ -201,17 +223,6 @@ private func collectMoney(in object: Any, into values: inout [Money]) {
     } else if let array = object as? [Any] {
         array.forEach { collectMoney(in: $0, into: &values) }
     }
-}
-
-private func snapshotMoneyValues(in data: Data?) -> [String] {
-    guard let data,
-          let object = try? JSONSerialization.jsonObject(with: data)
-    else {
-        return []
-    }
-    var values: [Money] = []
-    collectMoney(in: object, into: &values)
-    return values.map(\.value)
 }
 
 private func formattedMoney(_ money: Money) -> String {
