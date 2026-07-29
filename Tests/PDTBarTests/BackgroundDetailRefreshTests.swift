@@ -736,8 +736,10 @@ struct BackgroundDetailRefreshTests {
         let elapsedSeconds = Date().timeIntervalSince(startedAt)
 
         #expect(result.outcome == .degraded)
-        #expect(elapsedSeconds < 0.5)
+        #expect(elapsedSeconds >= 0.9)
+        #expect(elapsedSeconds < 1.5)
         #expect(connector.maxActivePriceCalls <= 2)
+        #expect(connector.activePriceCallCount == 0)
         #expect(result.diagnostics.contains {
             $0.phase == .priceHistory && $0.category == .timeout
         })
@@ -1280,6 +1282,12 @@ private final class SlowPriceHistoryPDTConnector: PDTMCPConnector, @unchecked Se
     init(responses: [String: Data], priceDelaySeconds: TimeInterval) {
         self.responses = responses
         self.priceDelaySeconds = priceDelaySeconds
+    }
+
+    var activePriceCallCount: Int {
+        lock.withLock {
+            activePriceCalls
+        }
     }
 
     func availableReadTools() throws -> Set<String> {

@@ -1,4 +1,5 @@
 import Foundation
+import PDTBarCore
 
 public struct ClaudeLocalProcessResult: Equatable, Sendable {
     public var stdout: String
@@ -20,4 +21,28 @@ public protocol ClaudeLocalCommandRunning: Sendable {
         timeout: TimeInterval,
         environment: [String: String]
     ) throws -> ClaudeLocalProcessResult
+    func run(
+        executable: String,
+        arguments: [String],
+        timeout: TimeInterval,
+        environment: [String: String],
+        cancellation: PDTCancellation?
+    ) throws -> ClaudeLocalProcessResult
+}
+
+public extension ClaudeLocalCommandRunning {
+    func run(
+        executable: String,
+        arguments: [String],
+        timeout: TimeInterval,
+        environment: [String: String],
+        cancellation: PDTCancellation? = nil
+    ) throws -> ClaudeLocalProcessResult {
+        try run(
+            executable: executable,
+            arguments: arguments,
+            timeout: timeout,
+            environment: environment
+        )
+    }
 }

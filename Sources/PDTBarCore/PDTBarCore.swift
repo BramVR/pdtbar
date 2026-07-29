@@ -6587,6 +6587,12 @@ public protocol PDTMCPConnector {
         arguments: [String: String],
         retryDeadline: Date?
     ) throws -> PDTMCPConnectorCallResult
+    func callReadToolReportingAttempts(
+        _ name: String,
+        arguments: [String: String],
+        retryDeadline: Date?,
+        cancellation: PDTCancellation?
+    ) throws -> PDTMCPConnectorCallResult
 }
 
 public protocol PDTMCPConnectorProgressReporting {
@@ -6594,6 +6600,28 @@ public protocol PDTMCPConnectorProgressReporting {
         required: Set<String>,
         progress: @escaping @Sendable (String) -> Void
     ) throws -> Set<String>
+    func availableReadTools(
+        required: Set<String>,
+        cancellation: PDTCancellation?,
+        progress: @escaping @Sendable (String) -> Void
+    ) throws -> Set<String>
+}
+
+public extension PDTMCPConnectorProgressReporting {
+    func availableReadTools(
+        required: Set<String>,
+        cancellation: PDTCancellation? = nil,
+        progress: @escaping @Sendable (String) -> Void
+    ) throws -> Set<String> {
+        guard cancellation?.isCancelled != true else {
+            throw PDTMCPConnectorError.timeout("PDT tool discovery cancelled")
+        }
+        let tools = try availableReadTools(required: required, progress: progress)
+        guard cancellation?.isCancelled != true else {
+            throw PDTMCPConnectorError.timeout("PDT tool discovery cancelled")
+        }
+        return tools
+    }
 }
 
 public extension PDTMCPConnector {
@@ -6623,6 +6651,31 @@ public extension PDTMCPConnector {
                 : error
             throw PDTMCPConnectorCallFailure(underlyingError: underlyingError, attemptCount: 1)
         }
+    }
+
+    func callReadToolReportingAttempts(
+        _ name: String,
+        arguments: [String: String],
+        retryDeadline: Date?,
+        cancellation: PDTCancellation? = nil
+    ) throws -> PDTMCPConnectorCallResult {
+        guard cancellation?.isCancelled != true else {
+            let timeout = PDTMCPConnectorError.timeout("PDT \(name) call cancelled")
+            throw PDTMCPConnectorCallFailure(underlyingError: timeout, attemptCount: 0)
+        }
+        let result = try callReadToolReportingAttempts(
+            name,
+            arguments: arguments,
+            retryDeadline: retryDeadline
+        )
+        guard cancellation?.isCancelled != true else {
+            let timeout = PDTMCPConnectorError.timeout("PDT \(name) call cancelled")
+            throw PDTMCPConnectorCallFailure(
+                underlyingError: timeout,
+                attemptCount: result.attemptCount
+            )
+        }
+        return result
     }
 }
 
@@ -7280,8 +7333,15 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
     }
 
     public func refresh(
+        cancellation: PDTCancellation? = nil,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void = { _ in }
     ) throws -> PDTBackgroundDetailRefreshResult {
+        let cancellation = cancellation ?? PDTCancellation()
+        try throwIfCancelled(
+            cancellation,
+            tool: "pdt-get-portfolio-holdings",
+            phase: .baseHoldings
+        )
         try? snapshotStore.clearLastDetailRefreshDiagnostic()
         progress(BackgroundDetailRefreshProgress(phase: .baseHoldings, detail: "Checking PDT tools"))
         let requiredTools = [
@@ -7295,6 +7355,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         ]
         let availableTools = try availableReadTools(
             required: Set(requiredTools + PDTReadTools.performance),
+            cancellation: cancellation,
             progress: progress
         )
         let missing = requiredTools.filter { !availableTools.contains($0) }
@@ -7308,13 +7369,27 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         var diagnostics: [PDTDetailRefreshFailureDiagnostic] = []
         var snapshot: PortfolioSnapshot
         do {
-            snapshot = try baseSnapshot(asOf: snapshotAsOf, progress: progress)
+            snapshot = try baseSnapshot(
+                asOf: snapshotAsOf,
+                cancellation: cancellation,
+                progress: progress
+            )
         } catch {
+            try throwIfCancelled(
+                cancellation,
+                tool: "pdt-get-portfolio-holdings",
+                phase: .baseHoldings
+            )
             try snapshotStore.saveLastDetailRefreshDiagnostic(
                 diagnostic(for: error, tool: "pdt-get-portfolio-holdings", phase: .baseHoldings)
             )
             throw error
         }
+        try throwIfCancelled(
+            cancellation,
+            tool: "pdt-get-portfolio-holdings",
+            phase: .baseHoldings
+        )
         preserveOptionalDetails(in: &snapshot, from: originalPriorSnapshot)
         _ = try snapshotStore.commitCurrentSnapshot(snapshot)
 
@@ -7344,13 +7419,24 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                     phase: .allocation,
                     arguments: [:],
                     progress: progress,
-                    retryDeadline: now().addingTimeInterval(options.effectivePaginationTimeoutSeconds)
+                    retryDeadline: now().addingTimeInterval(options.effectivePaginationTimeoutSeconds),
+                    cancellation: cancellation
+                )
+                try throwIfCancelled(
+                    cancellation,
+                    tool: "pdt-get-portfolio-distributions",
+                    phase: .allocation
                 )
                 let normalized = PDTOptionalDetailNormalizer.normalizeDistributions(distributions.optionalDetailInput)
                 snapshot.sectors = normalized.sectors
                 snapshot.assetTypes = normalized.assetTypes
                 _ = try snapshotStore.commitCurrentSnapshot(snapshot)
             } catch {
+                try throwIfCancelled(
+                    cancellation,
+                    tool: "pdt-get-portfolio-distributions",
+                    phase: .allocation
+                )
                 recordOptionalPhaseFailure(error, tool: "pdt-get-portfolio-distributions", phase: .allocation)
             }
         }
@@ -7358,13 +7444,26 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         if !skipRemainingPhasesForUnavailableSetup {
             do {
                 progress(BackgroundDetailRefreshProgress(phase: .xRay))
-                let xRay = try xRayHoldings(progress: progress)
+                let xRay = try xRayHoldings(
+                    cancellation: cancellation,
+                    progress: progress
+                )
+                try throwIfCancelled(
+                    cancellation,
+                    tool: "pdt-list-x-ray-holdings",
+                    phase: .xRay
+                )
                 snapshot.xRayHoldings = PDTOptionalDetailNormalizer.normalizeXRayHoldings(xRay.holdings)
                 _ = try snapshotStore.commitCurrentSnapshot(snapshot)
                 if let diagnostic = xRay.diagnostic {
                     diagnostics.append(diagnostic)
                 }
             } catch {
+                try throwIfCancelled(
+                    cancellation,
+                    tool: "pdt-list-x-ray-holdings",
+                    phase: .xRay
+                )
                 recordOptionalPhaseFailure(error, tool: "pdt-list-x-ray-holdings", phase: .xRay, arguments: [
                     "limit": "",
                     "offset": "",
@@ -7379,13 +7478,24 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                     asOf: snapshotAsOf,
                     holdings: snapshot.openHoldings,
                     priorSnapshot: originalPriorSnapshot,
+                    cancellation: cancellation,
                     progress: progress
+                )
+                try throwIfCancelled(
+                    cancellation,
+                    tool: "pdt-list-calendar-events",
+                    phase: .income
                 )
                 snapshot.incomeEvents = income.events
                 snapshot.dividendRowCount = income.dividendRowCount
                 _ = try snapshotStore.commitCurrentSnapshot(snapshot)
                 diagnostics.append(contentsOf: income.diagnostics)
             } catch {
+                try throwIfCancelled(
+                    cancellation,
+                    tool: "pdt-list-calendar-events",
+                    phase: .income
+                )
                 recordOptionalPhaseFailure(error, tool: "pdt-list-calendar-events", phase: .income)
             }
         }
@@ -7399,7 +7509,13 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             let priceHistory = priceSeries(
                 for: snapshot.openHoldings,
                 asOf: snapshotAsOf,
+                cancellation: cancellation,
                 progress: progress
+            )
+            try throwIfCancelled(
+                cancellation,
+                tool: "pdt-list-symbol-prices",
+                phase: .priceHistory
             )
             snapshot.priceSeries = priceSeriesWithPriorFallback(
                 refreshed: priceHistory.points,
@@ -7419,9 +7535,23 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         {
             do {
                 progress(BackgroundDetailRefreshProgress(phase: .performance))
-                snapshot.performance = try performanceSummary(progress: progress)
+                let performance = try performanceSummary(
+                    cancellation: cancellation,
+                    progress: progress
+                )
+                try throwIfCancelled(
+                    cancellation,
+                    tool: "pdt-get-portfolio-performance",
+                    phase: .performance
+                )
+                snapshot.performance = performance
                 _ = try snapshotStore.commitCurrentSnapshot(snapshot)
             } catch {
+                try throwIfCancelled(
+                    cancellation,
+                    tool: "pdt-get-portfolio-performance",
+                    phase: .performance
+                )
                 snapshot.performance = nil
                 let failure = diagnostic(
                     for: error,
@@ -7436,6 +7566,11 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         } else {
             progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Performance unavailable"))
         }
+        try throwIfCancelled(
+            cancellation,
+            tool: "pdt-get-portfolio-performance",
+            phase: .performance
+        )
         let outcome: PDTBackgroundDetailRefreshOutcome = diagnostics.isEmpty ? .completed : .degraded
         let pulse = try PressureRunner.refreshedPulse(
             snapshot: snapshot,
@@ -7463,6 +7598,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
 
     private func baseSnapshot(
         asOf snapshotAsOf: String,
+        cancellation: PDTCancellation,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) throws -> PortfolioSnapshot {
         progress(BackgroundDetailRefreshProgress(phase: .baseHoldings))
@@ -7471,7 +7607,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             phase: .baseHoldings,
             arguments: [:],
             progress: progress,
-            retryDeadline: now().addingTimeInterval(options.effectivePaginationTimeoutSeconds)
+            retryDeadline: now().addingTimeInterval(options.effectivePaginationTimeoutSeconds),
+            cancellation: cancellation
         )
         let holdingInputs = holdingsEnvelope.holdings.map(\.baseHoldingInput)
         let portfolioCurrency = PDTBaseHoldingNormalizer.portfolioCurrency(from: holdingInputs, fallback: "EUR")
@@ -7486,14 +7623,29 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
 
     private func availableReadTools(
         required: Set<String>,
+        cancellation: PDTCancellation,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) throws -> Set<String> {
         if let progressReportingConnector = connector as? any PDTMCPConnectorProgressReporting {
-            return try progressReportingConnector.availableReadTools(required: required) { detail in
+            return try progressReportingConnector.availableReadTools(
+                required: required,
+                cancellation: cancellation
+            ) { detail in
                 progress(BackgroundDetailRefreshProgress(phase: .baseHoldings, detail: detail))
             }
         }
-        return try connector.availableReadTools(required: required)
+        try throwIfCancelled(
+            cancellation,
+            tool: "pdt-get-portfolio-holdings",
+            phase: .baseHoldings
+        )
+        let tools = try connector.availableReadTools(required: required)
+        try throwIfCancelled(
+            cancellation,
+            tool: "pdt-get-portfolio-holdings",
+            phase: .baseHoldings
+        )
+        return tools
     }
 
     private func preserveOptionalDetails(in snapshot: inout PortfolioSnapshot, from priorSnapshot: PortfolioSnapshot?) {
@@ -7513,12 +7665,14 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
     }
 
     private func performanceSummary(
+        cancellation: PDTCancellation,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) throws -> PortfolioPerformanceSummary {
         progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Calling pdt-get-portfolio-performance"))
         let performance: LivePortfolioPerformanceEnvelope = try callPerformanceDecoded(
             "pdt-get-portfolio-performance",
-            arguments: [:]
+            arguments: [:],
+            cancellation: cancellation
         )
         guard let periodStart = performance.oldestPortfolioDate,
               let periodEnd = performance.latestPortfolioDate
@@ -7528,7 +7682,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Calling pdt-get-portfolio-gains"))
         let gains: LivePortfolioGainsEnvelope = try callPerformanceDecoded(
             "pdt-get-portfolio-gains",
-            arguments: ["date_from": periodStart, "date_to": periodEnd]
+            arguments: ["date_from": periodStart, "date_to": periodEnd],
+            cancellation: cancellation
         )
         return PortfolioPerformanceSummary.build(
             totalGainPercentage: gains.totalGainsPercentage,
@@ -7539,10 +7694,15 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
 
     private func callPerformanceDecoded<T: Decodable>(
         _ tool: String,
-        arguments: [String: String]
+        arguments: [String: String],
+        cancellation: PDTCancellation
     ) throws -> T {
         do {
-            return try callDecoded(tool, arguments: arguments)
+            return try callDecoded(
+                tool,
+                arguments: arguments,
+                cancellation: cancellation
+            )
         } catch {
             throw PDTDetailRefreshToolError(diagnostic: diagnostic(
                 for: error,
@@ -7571,6 +7731,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
     }
 
     private func xRayHoldings(
+        cancellation: PDTCancellation,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) throws -> (holdings: [PDTXRayHoldingInput], diagnostic: PDTDetailRefreshFailureDiagnostic?) {
         let limit = 500
@@ -7589,7 +7750,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 phase: .xRay,
                 arguments: arguments,
                 progress: progress,
-                retryDeadline: deadline
+                retryDeadline: deadline,
+                cancellation: cancellation
             )
             return PDTListPage(
                 items: envelope.items.map(\.optionalDetailInput),
@@ -7610,6 +7772,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         asOf snapshotAsOf: String,
         holdings: [NormalizedHolding],
         priorSnapshot: PortfolioSnapshot?,
+        cancellation: PDTCancellation,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) throws -> (events: [IncomeEventSummary], dividendRowCount: Int, diagnostics: [PDTDetailRefreshFailureDiagnostic]) {
         let incomeDateRange = [
@@ -7624,11 +7787,13 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         let calendarPagination = try liveCalendarEvents(
             arguments: incomeDateRange,
             deadline: paginationDeadline,
+            cancellation: cancellation,
             progress: progress
         )
         let dividendPagination = try liveDividends(
             arguments: dividendDateRange,
             deadline: paginationDeadline,
+            cancellation: cancellation,
             progress: progress
         )
         let calendarEvents = calendarPagination.events.filter { $0.type != "no-events-today" }
@@ -7636,6 +7801,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             for: calendarEvents,
             holdings: holdings,
             priorSnapshot: priorSnapshot,
+            cancellation: cancellation,
             progress: progress
         )
         let normalized = PDTOptionalDetailNormalizer.normalizeIncomeEvents(
@@ -7654,6 +7820,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
     private func liveCalendarEvents(
         arguments baseArguments: [String: String],
         deadline: Date,
+        cancellation: PDTCancellation,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) throws -> (events: [LiveCalendarEvent], diagnostic: PDTDetailRefreshFailureDiagnostic?) {
         let pagination = try paginatePDTList(
@@ -7673,7 +7840,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 phase: .income,
                 arguments: arguments,
                 progress: progress,
-                retryDeadline: deadline
+                retryDeadline: deadline,
+                cancellation: cancellation
             )
             let lastPage = envelope.meta?.lastPage ?? page
             return PDTListPage(
@@ -7695,6 +7863,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         for calendarEvents: [LiveCalendarEvent],
         holdings: [NormalizedHolding],
         priorSnapshot: PortfolioSnapshot?,
+        cancellation: PDTCancellation,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) throws -> (quoteIDsBySymbolID: [Int: Int], diagnostics: [PDTDetailRefreshFailureDiagnostic]) {
         let neededSymbolIDs = Set(calendarEvents.compactMap(\.symbolId))
@@ -7758,7 +7927,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                     phase: .income,
                     arguments: ["id": String(holding.quoteId)],
                     progress: progress,
-                    retryDeadline: deadline
+                    retryDeadline: deadline,
+                    cancellation: cancellation
                 )
             } catch {
                 // A transient lookup failure once the budget ran out degrades
@@ -7797,6 +7967,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
     private func liveDividends(
         arguments baseArguments: [String: String],
         deadline: Date,
+        cancellation: PDTCancellation,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) throws -> (dividends: [LiveDividend], diagnostic: PDTDetailRefreshFailureDiagnostic?) {
         let pagination = try paginatePDTList(
@@ -7816,7 +7987,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 phase: .income,
                 arguments: arguments,
                 progress: progress,
-                retryDeadline: deadline
+                retryDeadline: deadline,
+                cancellation: cancellation
             )
             let lastPage = envelope.meta?.lastPage ?? page
             return PDTListPage(
@@ -7837,6 +8009,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
     private func priceSeries(
         for holdings: [NormalizedHolding],
         asOf snapshotAsOf: String,
+        cancellation: PDTCancellation,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
     ) -> (points: [PricePoint], diagnostics: [PDTDetailRefreshFailureDiagnostic], failedQuoteIDs: Set<Int>) {
         let priceDateRange = [
@@ -7849,6 +8022,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         let quoteIDs = holdings.map(\.quoteId)
         let accumulator = PDTPriceHistoryAccumulator()
         let workTracker = PDTPriceHistoryWorkTracker(quoteIDs: quoteIDs)
+        let priceCancellation = PDTCancellation(parent: cancellation)
         let workerCount = min(options.priceHistoryConcurrencyLimit, quoteIDs.count)
         let timeoutSeconds = options.effectivePriceHistoryTimeoutSeconds(holdingCount: totalCount)
         let deadline = now().addingTimeInterval(timeoutSeconds)
@@ -7863,6 +8037,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 // Claude/PDT auth or setup outage; the remaining holdings
                 // would each burn another doomed full CLI run.
                 while now() < deadline,
+                      !priceCancellation.isCancelled,
                       accumulator.unavailableSetupCategory() == nil,
                       let quoteID = workTracker.nextQuoteID()
                 {
@@ -7882,7 +8057,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                                     totalUnitCount: totalCount
                                 ))
                             },
-                            retryDeadline: deadline
+                            retryDeadline: deadline,
+                            cancellation: priceCancellation
                         )
                         let nextPoints = PDTOptionalDetailNormalizer.normalizePriceSeries(
                             prices.data.map(\.optionalDetailInput)
@@ -7920,10 +8096,22 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         }
         let timedOut = group.wait(timeout: .now() + timeoutSeconds) == .timedOut
             || now() >= deadline
+        let cancelled = cancellation.isCancelled
         let unavailableSetupCategory = accumulator.unavailableSetupCategory()
-        if timedOut || unavailableSetupCategory != nil {
+        var abandonedQuoteIDs: [Int] = []
+        if timedOut || cancelled {
+            priceCancellation.cancel()
+            abandonedQuoteIDs = workTracker.markAbandoned()
+            // The command runner polls cancellation before allowing its
+            // existing two-second SIGTERM grace. Leave enough room for that
+            // sweep to reach SIGKILL before the refresh completion can fire.
+            _ = group.wait(timeout: .now() + 3.0)
+        } else if unavailableSetupCategory != nil {
+            abandonedQuoteIDs = workTracker.markAbandoned()
+        }
+        if !abandonedQuoteIDs.isEmpty {
             let abandonedCategory = unavailableSetupCategory ?? .timeout
-            for quoteID in workTracker.markAbandoned() {
+            for quoteID in abandonedQuoteIDs {
                 let arguments = priceDateRange.merging([
                     "symbol_quote_id": String(quoteID),
                 ]) { _, new in new }
@@ -7951,7 +8139,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
     private func callDecoded<T: Decodable>(
         _ tool: String,
         arguments: [String: String],
-        retryDeadline: Date? = nil
+        retryDeadline: Date? = nil,
+        cancellation: PDTCancellation
     ) throws -> T {
         let connectorDeadline = retryDeadline.map {
             Date().addingTimeInterval(max(0, $0.timeIntervalSince(now())))
@@ -7959,7 +8148,8 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         let result = try connector.callReadToolReportingAttempts(
             tool,
             arguments: arguments,
-            retryDeadline: connectorDeadline
+            retryDeadline: connectorDeadline,
+            cancellation: cancellation
         )
         do {
             return try decodeLiveTool(tool, data: result.data)
@@ -7976,11 +8166,19 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         phase: BackgroundDetailRefreshPhase,
         arguments: [String: String],
         progress: (@Sendable (BackgroundDetailRefreshProgress) -> Void)? = nil,
-        retryDeadline: Date
+        retryDeadline: Date,
+        cancellation: PDTCancellation
     ) throws -> T {
         var outerAttempts = 0
         var totalAttempts = 0
         while true {
+            try throwIfCancelled(
+                cancellation,
+                tool: tool,
+                phase: phase,
+                attempts: totalAttempts,
+                arguments: arguments
+            )
             guard now() < retryDeadline else {
                 throw PDTDetailRefreshToolError(diagnostic: PDTDetailRefreshFailureDiagnostic(
                     toolName: tool,
@@ -7994,7 +8192,12 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             let detail = outerAttempts == 1 ? "Calling \(tool)" : "Retrying \(tool)"
             progress?(BackgroundDetailRefreshProgress(phase: phase, detail: detail))
             do {
-                return try callDecoded(tool, arguments: arguments, retryDeadline: retryDeadline)
+                return try callDecoded(
+                    tool,
+                    arguments: arguments,
+                    retryDeadline: retryDeadline,
+                    cancellation: cancellation
+                )
             } catch {
                 totalAttempts += (error as? PDTMCPConnectorCallFailure)?.attemptCount ?? 1
                 let failure = diagnostic(
@@ -8009,6 +8212,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 // starts another composed call after the phase deadline.
                 guard outerAttempts <= options.optionalRetryCount,
                       failure.category.isRetryable,
+                      !cancellation.isCancelled,
                       now() < retryDeadline
                 else {
                     throw PDTDetailRefreshToolError(diagnostic: failure)
@@ -8023,8 +8227,34 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                         Thread.sleep(forTimeInterval: backoff)
                     }
                 }
+                try throwIfCancelled(
+                    cancellation,
+                    tool: tool,
+                    phase: phase,
+                    attempts: totalAttempts,
+                    arguments: arguments
+                )
             }
         }
+    }
+
+    private func throwIfCancelled(
+        _ cancellation: PDTCancellation,
+        tool: String,
+        phase: BackgroundDetailRefreshPhase,
+        attempts: Int = 0,
+        arguments: [String: String] = [:]
+    ) throws {
+        guard cancellation.isCancelled else {
+            return
+        }
+        throw PDTDetailRefreshToolError(diagnostic: PDTDetailRefreshFailureDiagnostic(
+            toolName: tool,
+            phase: phase,
+            attemptCount: attempts,
+            category: .timeout,
+            argumentShape: arguments.keys.sorted()
+        ))
     }
 
     private func diagnostic(

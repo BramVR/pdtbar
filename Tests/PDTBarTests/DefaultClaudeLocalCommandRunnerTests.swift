@@ -1,10 +1,68 @@
 import Darwin
 import Foundation
-import Testing
 import PDTBarAppSupport
+import PDTBarCore
+import Testing
 
 @Suite("Default Claude local command runner")
 struct DefaultClaudeLocalCommandRunnerTests {
+    @Test("Already-cancelled runs do not launch a child")
+    func alreadyCancelledRunsDoNotLaunchChild() throws {
+        let runner = DefaultClaudeLocalCommandRunner()
+        let cancellation = PDTCancellation()
+        cancellation.cancel()
+        let markerFile = FileManager.default.temporaryDirectory
+            .appending(path: "pdtbar-pre-cancelled-\(UUID().uuidString).marker")
+        defer {
+            try? FileManager.default.removeItem(at: markerFile)
+        }
+
+        let result = try runner.run(
+            executable: "/bin/sh",
+            arguments: ["-c", #"touch "$MARKER_FILE""#],
+            timeout: 10,
+            environment: ["PATH": "/usr/bin:/bin", "MARKER_FILE": markerFile.path],
+            cancellation: cancellation
+        )
+
+        #expect(result.exitCode == -1)
+        #expect(!FileManager.default.fileExists(atPath: markerFile.path))
+    }
+
+    @Test("Cancelled runs terminate the child before the configured timeout")
+    func cancelledRunsTerminateChildBeforeTimeout() throws {
+        let runner = DefaultClaudeLocalCommandRunner()
+        let cancellation = PDTCancellation()
+        let pidFile = FileManager.default.temporaryDirectory
+            .appending(path: "pdtbar-cancelled-child-\(UUID().uuidString).pid")
+        defer {
+            try? FileManager.default.removeItem(at: pidFile)
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
+            cancellation.cancel()
+        }
+
+        let started = Date()
+        let result = try runner.run(
+            executable: "/bin/sh",
+            arguments: [
+                "-c",
+                #"echo $$ > "$PID_FILE"; exec sleep 15"#,
+            ],
+            timeout: 10,
+            environment: ["PATH": "/usr/bin:/bin", "PID_FILE": pidFile.path],
+            cancellation: cancellation
+        )
+        let elapsed = Date().timeIntervalSince(started)
+
+        #expect(result.exitCode == -1)
+        #expect(elapsed < 4.0)
+        let childPID = try #require(pid_t(
+            String(contentsOf: pidFile).trimmingCharacters(in: .whitespacesAndNewlines)
+        ))
+        #expect(eventuallyProcessExits(childPID))
+    }
+
     @Test("Timed-out runs return promptly when an escaped grandchild keeps the pipes open")
     func timedOutRunsReturnPromptlyWhenEscapedGrandchildKeepsPipesOpen() throws {
         let runner = DefaultClaudeLocalCommandRunner()
@@ -33,6 +91,40 @@ struct DefaultClaudeLocalCommandRunnerTests {
         #expect(elapsed < 5.0)
         let escapedPID = try #require(pid_t(String(contentsOf: pidFile).trimmingCharacters(in: .whitespacesAndNewlines)))
         #expect(eventuallyProcessExits(escapedPID))
+    }
+
+    @Test("Cancellation after root exit terminates a pipe-holding descendant")
+    func cancellationAfterRootExitTerminatesDescendant() throws {
+        let runner = DefaultClaudeLocalCommandRunner()
+        let cancellation = PDTCancellation()
+        let pidFile = FileManager.default.temporaryDirectory
+            .appending(path: "pdtbar-exited-root-grandchild-\(UUID().uuidString).pid")
+        defer {
+            try? FileManager.default.removeItem(at: pidFile)
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
+            cancellation.cancel()
+        }
+
+        let started = Date()
+        let result = try runner.run(
+            executable: "/bin/sh",
+            arguments: [
+                "-c",
+                #"/bin/sh -c 'trap "" TERM; exec sleep 15' & echo $! > "$PID_FILE"; sleep 0.3"#,
+            ],
+            timeout: 10,
+            environment: ["PATH": "/usr/bin:/bin", "PID_FILE": pidFile.path],
+            cancellation: cancellation
+        )
+        let elapsed = Date().timeIntervalSince(started)
+
+        #expect(result.exitCode == -1)
+        #expect(elapsed < 4.0)
+        let descendantPID = try #require(pid_t(
+            String(contentsOf: pidFile).trimmingCharacters(in: .whitespacesAndNewlines)
+        ))
+        #expect(eventuallyProcessExits(descendantPID))
     }
 
     @Test("Normal runs still drain output larger than the pipe buffer in full")
