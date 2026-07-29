@@ -311,5 +311,4 @@ private enum ClaudeStreamJSONValue: Codable, Equatable, Sendable {
         }
         return string
     }
-
 }
