@@ -310,7 +310,17 @@ ClickRetry ==
     /\ UNCHANGED <<pulse, probeInFlight, attemptID, cacheLoadFinished, pending, loginNext, loginActive,
                    probes, cacheLoad, logins>>
 
+\* markPulseItemRead click App:1022-1045: pulse rows carry "Mark as read"; the
+\* republish goes through publishPulse Core:4009, whatever else is running.
+ClickMarkRead ==
+    /\ menu.kind = "pulse"
+    /\ pulse # "none"
+    /\ Publish(pulse)
+    /\ UNCHANGED <<probeInFlight, attemptID, ffInFlight, cacheLoadFinished, pending, refreshInFlight,
+                   loginNext, loginActive, probes, cacheLoad, ffWorkers, bgWorkers, logins, retries>>
+
 Next ==
+    \/ ClickMarkRead
     \/ ProbeReturns
     \/ CacheLoadReturns
     \/ FirstFetchReturns
@@ -341,9 +351,12 @@ OneFetchAtATime == ffWorkers + bgWorkers <= 1
 
 \* The runtime's in-flight flags describe real work. A flag left TRUE with no
 \* worker blocks every retry and leaves the progress UI up forever.
-FlagsMatchWork ==
-    /\ ffInFlight <=> ffWorkers > 0
-    /\ bgInFlight => bgWorkers > 0
+FirstFetchFlagMatchesWork == ffInFlight <=> ffWorkers > 0
+
+\* Same promise for the background refresh. Also keeps progress rows coming
+\* (backgroundDetailRefreshProgress drops updates once the flag is FALSE) and
+\* keeps "Refresh now" hidden while a refresh runs.
+BackgroundFlagMatchesWork == bgInFlight <=> bgWorkers > 0
 
 \* A returning user with a cached pulse never pays for a full first fetch.
 NoFullFetchOverCache == ffInFlight => pulse = "none"
