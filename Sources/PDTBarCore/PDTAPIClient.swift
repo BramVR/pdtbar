@@ -488,6 +488,8 @@ public final class URLSessionPDTHTTPTransport: NSObject, PDTHTTPTransport, URLSe
     private let configuration: URLSessionConfiguration
 
     public init(configuration: URLSessionConfiguration = .ephemeral) {
+        // Copy first: URLSessionConfiguration is a reference type the caller may reuse.
+        let configuration = configuration.copy() as! URLSessionConfiguration
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false

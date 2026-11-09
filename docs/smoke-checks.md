@@ -85,8 +85,8 @@ Scripted PDT API client:
 swift run pdtbar-smoke scripted-api-client
 ```
 
-This uses no network, no token, and no Keychain. It drives `PDTAPIClient`
-through `ScriptedPDTHTTPTransport` with an in-memory token and proves GET-only
+This uses no network, no real credentials, and no Keychain. It drives
+`PDTAPIClient` through `ScriptedPDTHTTPTransport` with a fake in-memory token and proves GET-only
 requests to the PDT API origin, page and offset pagination, a 429 retry, a typed
 expired-token error, and a proof file without the token.
 

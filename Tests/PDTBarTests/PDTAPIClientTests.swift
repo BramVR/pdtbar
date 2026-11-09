@@ -270,6 +270,16 @@ struct PDTAPIClientTests {
         }
     }
 
+    @Test("URLSession transport leaves the caller's configuration untouched")
+    func urlSessionTransportCopiesConfiguration() {
+        let configuration = URLSessionConfiguration.default
+        let cookies = configuration.httpCookieStorage
+        _ = URLSessionPDTHTTPTransport(configuration: configuration)
+        #expect(configuration.httpShouldSetCookies)
+        #expect(configuration.httpCookieStorage === cookies)
+        #expect(configuration.urlCache != nil)
+    }
+
     @Test("URLSession transport refuses non-GET requests and every redirect")
     func urlSessionTransportGuards() throws {
         let transport = URLSessionPDTHTTPTransport()
