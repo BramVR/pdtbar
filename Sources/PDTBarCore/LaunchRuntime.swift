@@ -1013,9 +1013,20 @@ public enum PDTLaunchBackgroundDetailRefreshResult: Equatable {
 }
 
 public final class PDTLaunchRuntime {
+    /// Progress of readiness attempt `readinessAttemptID`. Results from older
+    /// attempts are dropped before they can reach any of these cases.
+    private enum ReadinessProbe: Equatable {
+        case idle
+        case running
+        /// `ready` arrived before the cached pulse load finished; applied once it does,
+        /// so a returning user gets a background refresh instead of a full first fetch.
+        case readyAwaitingCachedPulse
+    }
+
     public private(set) var currentPulse: PulseLifecycleResult?
     public private(set) var state: ClaudeLaunchState = .probingClaude
-    public private(set) var readinessProbeInFlight = false
+    private var readinessProbe = ReadinessProbe.idle
+    private var cachedPulseLoading = false
     public private(set) var readinessAttemptID = 0
     public private(set) var firstFetchInFlight = false
     public private(set) var backgroundDetailRefreshInFlight = false
@@ -1026,13 +1037,30 @@ public final class PDTLaunchRuntime {
 
     public func launch(cachedPulse: PulseLifecycleResult?) -> PDTOnboardingUpdate {
         currentPulse = cachedPulse
+        cachedPulseLoading = false
         return beginReadinessProbe()
     }
 
-    public func completeCachedPulseLoad(_ pulse: PulseLifecycleResult?) -> PDTOnboardingUpdate? {
-        guard let pulse else {
-            return nil
+    /// Launch before the cached pulse is decoded. Call `completeCachedPulseLoad` when it is.
+    public func launchWhileLoadingCachedPulse() -> PDTOnboardingUpdate {
+        let update = launch(cachedPulse: nil)
+        cachedPulseLoading = true
+        return update
+    }
+
+    public func completeCachedPulseLoad(
+        _ pulse: PulseLifecycleResult?,
+        allowsBackgroundDetailRefresh: Bool = true
+    ) -> PDTOnboardingUpdate? {
+        cachedPulseLoading = false
+        let cachedUpdate = pulse.flatMap(installCachedPulse)
+        guard readinessProbe == .readyAwaitingCachedPulse else {
+            return cachedUpdate
         }
+        return applyReadiness(.ready, allowsBackgroundDetailRefresh: allowsBackgroundDetailRefresh)
+    }
+
+    private func installCachedPulse(_ pulse: PulseLifecycleResult) -> PDTOnboardingUpdate? {
         if let currentPulse, currentPulse.source != .cachedSnapshot {
             return nil
         }
@@ -1059,7 +1087,7 @@ public final class PDTLaunchRuntime {
     }
 
     public func retryReadiness() -> PDTOnboardingUpdate? {
-        guard !readinessProbeInFlight else {
+        guard readinessProbe == .idle else {
             return nil
         }
         return beginReadinessProbe()
@@ -1071,11 +1099,22 @@ public final class PDTLaunchRuntime {
         allowsBackgroundDetailRefresh: Bool = true
     ) -> PDTOnboardingUpdate {
         if let attemptID {
-            guard readinessProbeInFlight, attemptID == readinessAttemptID else {
+            guard readinessProbe == .running, attemptID == readinessAttemptID else {
                 return currentUpdate()
             }
         }
-        readinessProbeInFlight = false
+        if result == .ready, cachedPulseLoading {
+            readinessProbe = .readyAwaitingCachedPulse
+            return currentUpdate()
+        }
+        return applyReadiness(result, allowsBackgroundDetailRefresh: allowsBackgroundDetailRefresh)
+    }
+
+    private func applyReadiness(
+        _ result: ClaudeReadinessProbeResult,
+        allowsBackgroundDetailRefresh: Bool
+    ) -> PDTOnboardingUpdate {
+        readinessProbe = .idle
         lastKnownReadiness = result
         if let currentPulse {
             self.currentPulse = pulseApplyingLastKnownReadiness(currentPulse)
@@ -1095,7 +1134,7 @@ public final class PDTLaunchRuntime {
     }
 
     public func beginLoginHandoff() -> PDTOnboardingUpdate {
-        readinessProbeInFlight = false
+        readinessProbe = .idle
         return update(state: .openingClaude, effect: .startLoginHandoff)
     }
 
@@ -1230,7 +1269,7 @@ public final class PDTLaunchRuntime {
 
     private func beginReadinessProbe() -> PDTOnboardingUpdate {
         readinessAttemptID += 1
-        readinessProbeInFlight = true
+        readinessProbe = .running
         return update(state: .probingClaude, effect: .probeReadiness)
     }
 

@@ -3,7 +3,7 @@
 # Every line must show a violation; "No error" means the model lost its teeth.
 # Invariants that already fail on the real code (open findings) are dropped first,
 # so each mutation is judged only by the invariants that pass today.
-FINDINGS=(BackgroundFlagMatchesWork ProbingMenuTellsTruth SetupMenuMeansIdle ProbeResultNotLost)
+FINDINGS=(BackgroundFlagMatchesWork ProbingMenuTellsTruth SetupMenuMeansIdle)
 set -euo pipefail
 cd "$(dirname "$0")"
 runner=../../Scripts/formal/tlc.sh
@@ -20,6 +20,7 @@ done <<'LIST'
 "keepFirstFetchFlag"                             FirstFetchFlagMatchesWork
 "noProbeFailedLogin"                             NeverStranded
 "noAttemptCheck"                                 SetupReflectsLatestProbe
+"parkStaleProbe"                                 ProbeResultNotLost
 "noRetryGuard","noAppDedupe"                     OneFetchAtATime
 "invertCacheLoadRefreshCheck"                    FetchingMenuTellsTruth
 LIST

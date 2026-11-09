@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed launch staying on "Checking Claude" forever when you log in with Claude during the first readiness check and an older check's result overwrote the newer one waiting for the cached pulse (#274).
 - Added a background detail refresh over the read-only PDT REST API that commits once at the end, keeps last-good facets on optional failures, and skips later phases after an auth outage; the shipped refresh stays on Claude until PDT sign-in lands.
 - Fixed portfolio-value privacy masking so money-bearing menu fields render from typed values instead of relying on currency regexes and prose-specific scrubbing.
 - Stopped in-flight Claude process trees when background detail refreshes time out or PDTBar quits, with a bounded worker shutdown grace.

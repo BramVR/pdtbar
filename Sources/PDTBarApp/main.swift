@@ -49,8 +49,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var portfolioFetchStartedAt: Date?
     private var portfolioFetchProgressTimer: Timer?
     private var activeSnapshotDirectory: URL?
-    private var cachedPulseLoadFinished = false
-    private var pendingReadyProbeAfterCachedPulseLoad: (result: ClaudeReadinessProbeResult, attemptID: Int)?
     private let claudeLoginAttemptGate = ClaudeLoginAttemptGate()
     private let menuActionDispatcher = MenuActionDispatcher()
     private let statusMenuHost = StatusMenuHost()
@@ -83,9 +81,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         switch options.mode {
         case .claudeFirst:
             activeSnapshotDirectory = firstFetchStateDirectory()
-            cachedPulseLoadFinished = false
-            pendingReadyProbeAfterCachedPulseLoad = nil
-            let launchUpdate = launchRuntime.launch(cachedPulse: nil)
+            let launchUpdate = launchRuntime.launchWhileLoadingCachedPulse()
             installMenuBarItem(launchUpdate.descriptor)
             startCachedPulseLoad()
             startClaudeReadinessProbe(attemptID: launchRuntime.readinessAttemptID)
@@ -116,13 +112,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else {
                     return
                 }
-                self.cachedPulseLoadFinished = true
-                if let update = self.launchRuntime.completeCachedPulseLoad(outcome.pulse) {
+                if let update = self.launchRuntime.completeCachedPulseLoad(
+                    outcome.pulse,
+                    allowsBackgroundDetailRefresh: self.backgroundDetailRefreshConfigured()
+                ) {
                     self.handleLaunchUpdate(update)
-                }
-                if let pending = self.pendingReadyProbeAfterCachedPulseLoad {
-                    self.pendingReadyProbeAfterCachedPulseLoad = nil
-                    self.finishClaudeReadinessProbe(pending.result, attemptID: pending.attemptID)
                 }
             }
         }
@@ -139,21 +133,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else {
                     return
                 }
-                self.finishClaudeReadinessProbe(result, attemptID: attemptID)
+                self.handleLaunchUpdate(self.launchRuntime.completeReadinessProbe(
+                    result,
+                    attemptID: attemptID,
+                    allowsBackgroundDetailRefresh: self.backgroundDetailRefreshConfigured()
+                ))
             }
         }
-    }
-
-    private func finishClaudeReadinessProbe(_ result: ClaudeReadinessProbeResult, attemptID: Int) {
-        if result == .ready, !cachedPulseLoadFinished {
-            pendingReadyProbeAfterCachedPulseLoad = (result, attemptID)
-            return
-        }
-        handleLaunchUpdate(launchRuntime.completeReadinessProbe(
-            result,
-            attemptID: attemptID,
-            allowsBackgroundDetailRefresh: returningLaunchBackgroundDetailRefreshEnabled()
-        ))
     }
 
     private func startFirstPortfolioFetch() {
@@ -336,7 +322,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func loginWithClaude(_ sender: NSMenuItem) {
-        pendingReadyProbeAfterCachedPulseLoad = nil
         let attempt = claudeLoginAttemptGate.begin()
         handleLaunchUpdate(launchRuntime.beginLoginHandoff())
         loginHandoff.startLogin { [weak self] result in
@@ -1114,11 +1099,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 private extension AppDelegate {
-    func returningLaunchBackgroundDetailRefreshEnabled() -> Bool {
-        guard launchRuntime.currentPulse != nil else {
-            return false
-        }
-        return (try? firstFetchConnectorConfiguration().shouldStartBackgroundRefresh) ?? false
+    func backgroundDetailRefreshConfigured() -> Bool {
+        (try? firstFetchConnectorConfiguration().shouldStartBackgroundRefresh) ?? false
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
