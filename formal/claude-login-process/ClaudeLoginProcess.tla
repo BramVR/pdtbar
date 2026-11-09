@@ -12,7 +12,7 @@
 (*                                                                         *)
 (* Files: Sources/PDTBarApp/main.swift (M),                               *)
 (*        Sources/PDTBarAppSupport/ClaudeLocalConnection.swift (C),       *)
-(*        Sources/PDTBarCore/PDTBarCore.swift (P).                        *)
+(*        Sources/PDTBarCore/LaunchRuntime.swift (L).                     *)
 (*                                                                         *)
 (* The `claude auth login` process is `root`. `kid` stands for any        *)
 (* process root spawns (a helper, a browser opener). It inherits root's   *)
@@ -22,7 +22,7 @@ EXTENDS Naturals
 
 CONSTANTS
     MaxClicks,            \* how many "Log in with Claude" clicks to explore
-    ProcessGroupRecorded  \* TRUE iff C:1292 setpgid(pid, pid) succeeds, so
+    ProcessGroupRecorded  \* TRUE iff C:1302 setpgid(pid, pid) succeeds, so
                           \* cleanup knows processGroup. It returns EACCES
                           \* after Process.run() has exec'd, so the code
                           \* runs with FALSE.
@@ -32,19 +32,19 @@ None == 0
 Finished == {"returned", "done"}
 
 VARIABLES
-    clicks,        \* ClaudeLoginAttemptGate.nextAttempt (P:2926)
-    gateActive,    \* ClaudeLoginAttemptGate.activeAttempt, None = nil (P:2927)
-    handoffActive, \* ClaudeCLILoginHandoff.activeCancellation by attempt (M:1127)
-    cancelled,     \* ClaudeLocalLoginCancellation.cancelled per attempt (C:741)
+    clicks,        \* ClaudeLoginAttemptGate.nextAttempt (L:120)
+    gateActive,    \* ClaudeLoginAttemptGate.activeAttempt, None = nil (L:121)
+    handoffActive, \* ClaudeCLILoginHandoff.activeCancellation by attempt (M:1159)
+    cancelled,     \* PDTCancellation.cancelled per attempt (PDTCancellation.swift:6)
     pc,            \* where each attempt's runner thread is
     root,          \* `claude auth login`: "none" | "alive" | "dead"
     kid,           \* a process root spawned: "none" | "alive" | "dead"
-    known,         \* kid is in cleanup's `descendants` snapshot (C:1248)
-    marker,        \* root printed a success substring (C:841 successSubstrings)
+    known,         \* kid is in cleanup's `descendants` snapshot (C:1258)
+    marker,        \* root printed a success substring (C:851 successSubstrings)
     exitStatus,    \* root's exit: "none" | "zero" | "nonzero" | "signal"
-    outcome,       \* ClaudeLocalLoginOutcome per attempt (C:733)
-    pending,       \* completion queued on DispatchQueue.main (M:345)
-    applied,       \* times the app applied this attempt's result (M:349-360)
+    outcome,       \* ClaudeLocalLoginOutcome per attempt (C:764)
+    pending,       \* completion queued on DispatchQueue.main (M:349)
+    applied,       \* times the app applied this attempt's result (M:353-364)
     staleApplied   \* history: a result was applied while a newer click existed
 
 vars == <<clicks, gateActive, handoffActive, cancelled, pc, root, kid, known,
@@ -93,9 +93,9 @@ SetOutcome(a, o) == outcome' = [outcome EXCEPT ![a] = o]
 (* Main thread: the click.                                                 *)
 (***************************************************************************)
 
-\* M:340 loginWithClaude -> P:2931 ClaudeLoginAttemptGate.begin, then
-\* M:1139 startLogin: cancel the previous attempt (M:1142), install the new
-\* cancellation (M:1143), and start the detached task (M:1145).
+\* M:344 loginWithClaude -> L:125 ClaudeLoginAttemptGate.begin, then
+\* M:1171 startLogin: cancel the previous attempt (M:1174), install the new
+\* cancellation (M:1175), and start the detached task (M:1177).
 Click ==
     /\ clicks < MaxClicks
     /\ LET a == clicks + 1 IN
@@ -112,7 +112,7 @@ Click ==
 (* Runner thread, one per attempt.                                         *)
 (***************************************************************************)
 
-\* C:838 runPTY's guard and C:1167 TTYCommandRunner.run's first check.
+\* C:848 runPTY's guard and C:1177 TTYCommandRunner.run's first check.
 Start(a) ==
     /\ pc[a] = "start"
     /\ IF cancelled[a]
@@ -121,7 +121,7 @@ Start(a) ==
     /\ UNCHANGED <<clicks, gateActive, handoffActive, cancelled, root, kid,
                    known, marker, exitStatus, pending, applied, staleApplied>>
 
-\* C:1283 proc.run() succeeds; didLaunch = true (C:1284). No cancellation
+\* C:1293 proc.run() succeeds; didLaunch = true (C:1294). No cancellation
 \* check sits between Start and here, so a click can cancel in between.
 Launch(a) ==
     /\ pc[a] = "launch"
@@ -130,8 +130,8 @@ Launch(a) ==
     /\ UNCHANGED <<clicks, gateActive, handoffActive, cancelled, kid, known,
                    marker, exitStatus, outcome, pending, applied, staleApplied>>
 
-\* C:1178 binaryNotFound, C:1185 openpty failure, or C:1288 launchFailed.
-\* Nothing launched, so cleanup only closes handles. C:823-827 maps a
+\* C:1188 binaryNotFound, C:1195 openpty failure, or C:1298 launchFailed.
+\* Nothing launched, so cleanup only closes handles. C:833-837 maps a
 \* generic launch error to .cancelled when the attempt was cancelled.
 LaunchFails(a) ==
     /\ pc[a] = "launch"
@@ -140,8 +140,8 @@ LaunchFails(a) ==
     /\ UNCHANGED <<clicks, gateActive, handoffActive, cancelled, root, kid,
                    known, marker, exitStatus, pending, applied, staleApplied>>
 
-\* C:1339 cancellation check after the initial delay. A throw runs the
-\* deferred cleanup (C:1280) before run() returns.
+\* C:1349 cancellation check after the initial delay. A throw runs the
+\* deferred cleanup (C:1290) before run() returns.
 AfterDelay(a) ==
     /\ pc[a] = "delay"
     /\ IF cancelled[a]
@@ -150,7 +150,7 @@ AfterDelay(a) ==
     /\ UNCHANGED <<clicks, gateActive, handoffActive, cancelled, root, kid,
                    known, marker, exitStatus, pending, applied, staleApplied>>
 
-\* C:1445 cancellation check at the top of the read loop.
+\* C:1455 cancellation check at the top of the read loop.
 LoopCancelled(a) ==
     /\ pc[a] = "loop"
     /\ cancelled[a]
@@ -159,7 +159,7 @@ LoopCancelled(a) ==
     /\ UNCHANGED <<clicks, gateActive, handoffActive, cancelled, root, kid,
                    known, marker, exitStatus, pending, applied, staleApplied>>
 
-\* C:1459 processChunk matched a stopOnSubstrings needle: stoppedEarly.
+\* C:1469 processChunk matched a stopOnSubstrings needle: stoppedEarly.
 LoopStopOnMarker(a) ==
     /\ pc[a] = "loop"
     /\ marker[a]
@@ -168,7 +168,7 @@ LoopStopOnMarker(a) ==
                    known, marker, exitStatus, outcome, pending, applied,
                    staleApplied>>
 
-\* C:1478 `if !proc.isRunning { break }`.
+\* C:1488 `if !proc.isRunning { break }`.
 LoopProcessExited(a) ==
     /\ pc[a] = "loop"
     /\ root[a] = "dead"
@@ -177,7 +177,7 @@ LoopProcessExited(a) ==
                    known, marker, exitStatus, outcome, pending, applied,
                    staleApplied>>
 
-\* C:1444 `while Date() < deadline` ends (120 s, M:1150).
+\* C:1454 `while Date() < deadline` ends (120 s, M:1182).
 LoopDeadline(a) ==
     /\ pc[a] = "loop"
     /\ SetPC(a, "postloop")
@@ -185,9 +185,9 @@ LoopDeadline(a) ==
                    known, marker, exitStatus, outcome, pending, applied,
                    staleApplied>>
 
-\* C:1482 cancellation check after the loop, then C:1515-1523 build the
-\* Result and C:810-816 runBlocking classifies it. The settle (C:1488) and
-\* drain (C:1507) read any marker already written, so `marker` stands for
+\* C:1492 cancellation check after the loop, then C:1525-1533 build the
+\* Result and C:820-826 runBlocking classifies it. The settle (C:1498) and
+\* drain (C:1517) read any marker already written, so `marker` stands for
 \* "the buffer holds a success substring".
 PostLoop(a) ==
     /\ pc[a] = "postloop"
@@ -201,7 +201,7 @@ PostLoop(a) ==
     /\ UNCHANGED <<clicks, gateActive, handoffActive, cancelled, root, kid,
                    known, marker, exitStatus, pending, applied, staleApplied>>
 
-\* C:1237 cleanup(): close the PTY handles (C:1242-1243), then C:1248
+\* C:1247 cleanup(): close the PTY handles (C:1252-1253), then C:1258
 \* snapshot descendantPIDs(of: root). proc_listchildpids only lists live
 \* children of a live parent; once root has exited, kid is reparented and
 \* no scan of root finds it.
@@ -212,15 +212,15 @@ CleanScan(a) ==
     /\ UNCHANGED <<clicks, gateActive, handoffActive, cancelled, root, kid,
                    marker, exitStatus, outcome, pending, applied, staleApplied>>
 
-\* Who a C:1641 terminateProcessTree sweep signals besides root: the
-\* knownDescendants snapshot, a fresh rescan of root (C:1650), and the
-\* process group when it was recorded (C:1654-1655).
+\* Who a C:1651 terminateProcessTree sweep signals besides root: the
+\* knownDescendants snapshot, a fresh rescan of root (C:1660), and the
+\* process group when it was recorded (C:1664-1665).
 SweepReachesKid(a) ==
     \/ known[a]
     \/ (kid[a] = "alive" /\ root[a] = "alive")
     \/ ProcessGroupRecorded
 
-\* C:1249-1251 proc.terminate() and C:1252-1257 terminateProcessTree(SIGTERM).
+\* C:1259-1261 proc.terminate() and C:1262-1267 terminateProcessTree(SIGTERM).
 \* Each signalled live process may exit now or keep running (it handles or
 \* ignores SIGTERM). Root may still exit later through RootExits.
 CleanTerm(a) ==
@@ -238,7 +238,7 @@ CleanTerm(a) ==
     /\ UNCHANGED <<clicks, gateActive, handoffActive, cancelled, known, marker,
                    outcome, pending, applied, staleApplied>>
 
-\* C:1258-1261 wait up to 2 s for root, then C:1262-1273: if root is still
+\* C:1268-1271 wait up to 2 s for root, then C:1272-1283: if root is still
 \* running, terminateProcessTree(SIGKILL); otherwise SIGKILL only the
 \* pre-SIGTERM `descendants` snapshot (no rescan, no process group).
 CleanWait(a) ==
@@ -256,7 +256,7 @@ CleanWait(a) ==
     /\ UNCHANGED <<clicks, gateActive, handoffActive, cancelled, known, marker,
                    outcome, pending, applied, staleApplied>>
 
-\* C:1274-1276 proc.waitUntilExit() blocks until root has exited; then
+\* C:1284-1286 proc.waitUntilExit() blocks until root has exited; then
 \* cleanup returns and run() returns or rethrows.
 CleanReap(a) ==
     /\ pc[a] = "cleanReap"
@@ -266,9 +266,9 @@ CleanReap(a) ==
                    known, marker, exitStatus, outcome, pending, applied,
                    staleApplied>>
 
-\* M:1154 clearActiveCancellation, then M:1155-1161: success and failure
-\* call the completion, which queues onto the main queue (M:345); .cancelled
-\* is dropped (M:1160).
+\* M:1186 clearActiveCancellation, then M:1187-1193: success and failure
+\* call the completion, which queues onto the main queue (M:349); .cancelled
+\* is dropped (M:1192).
 Deliver(a) ==
     /\ pc[a] = "returned"
     /\ SetPC(a, "done")
@@ -281,9 +281,9 @@ Deliver(a) ==
 (* Main thread: applying the result.                                      *)
 (***************************************************************************)
 
-\* M:346 `guard self.claudeLoginAttemptGate.finish(attempt)` (P:2941):
+\* M:350 `guard self.claudeLoginAttemptGate.finish(attempt)` (L:135):
 \* applied only while this attempt is still the gate's active one, then
-\* M:349-360 completeLoginHandoff.
+\* M:353-364 completeLoginHandoff.
 ApplyOnMain(a) ==
     /\ pending[a]
     /\ pending' = [pending EXCEPT ![a] = FALSE]
