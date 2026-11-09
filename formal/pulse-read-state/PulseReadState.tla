@@ -223,7 +223,8 @@ ResetEffect(to) ==
          ELSE /\ store' = store \ rm
               /\ intended' = intended \ rm
               /\ wRead' = store \ rm
-    /\ owed' = "none"
+    \* The owed reset is paid only once its mark is actually gone.
+    /\ owed' = IF owed \in store' THEN owed ELSE "none"
     /\ wPc' = to
     /\ UNCHANGED <<pdt, snap, display, wPrior, wNew, wLoaded, mainPc, mainFp,
                    mainLoaded>>
@@ -242,7 +243,9 @@ EarlyResetEffect(to) ==
 \* SnapshotStore.commitCurrentSnapshot, Persistence.swift:669 snapshot write.
 CommitEffect(to) ==
     /\ snap' = wNew
-    /\ owed' = IF Resets(wNew, wPrior) /\ ~ResetBeforeSnapshotCommit
+    \* A reset is owed when this write records a crossing against the
+    \* snapshot on disk while the crossing's old mark is still stored.
+    /\ owed' = IF Resets(wNew, snap) /\ wNew.conc \in store
                THEN wNew.conc ELSE owed
     /\ wPc' = to
     /\ UNCHANGED <<pdt, store, display, wPrior, wNew, wLoaded, wRead, mainPc,
