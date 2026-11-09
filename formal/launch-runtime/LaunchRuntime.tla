@@ -31,9 +31,10 @@ ProbeResults == {"ready", "notReady", "missingClaudeLogin", "missingPDTMCP", "fa
 NoPending == [result |-> "none", id |-> 0]
 
 VARIABLES
-    \* PDTLaunchRuntime (Core:1015-1034). probeInFlight: readinessProbe # .idle;
+    \* PDTLaunchRuntime (Core:1022-1041). probeInFlight: readinessProbe # .idle;
     \* cacheLoadFinished: ~cachedPulseLoading; pending: readinessProbe = .readyAwaitingCachedPulse
-    \* for attempt readinessAttemptID (pending.id is kept so invariants can name the attempt).
+    \* for readinessAttempt (pending.id is kept so invariants can name the attempt).
+    \* attemptID: readinessAttempt, an opaque PDTReadinessAttempt (Core:1017, tied to its runtime) every result must name.
     state, pulse, probeInFlight, attemptID, ffInFlight, bgInFlight, cacheLoadFinished, pending,
     \* AppDelegate (App:40-55)
     refreshInFlight, loginNext, loginActive,
@@ -126,10 +127,10 @@ Init ==
     /\ logins = {}
     /\ retries = 0
 
-\* completeReadinessProbe attempt check Core:1101-1105
+\* completeReadinessProbe attempt check Core:1108-1110 (required for every result)
 CurrentAttempt(id) == (probeInFlight /\ id = attemptID) \/ "noAttemptCheck" \in Mutations
 
-\* applyReadiness Core:1113-1134 (stale results stop here unchanged)
+\* applyReadiness Core:1120-1141 (stale results stop here unchanged)
 CompleteProbe(r, id) ==
     IF ~CurrentAttempt(id)
     THEN UNCHANGED <<state, pulse, probeInFlight, attemptID, ffInFlight, bgInFlight, menu,
@@ -144,7 +145,7 @@ CompleteProbe(r, id) ==
     ELSE IF ffInFlight \/ bgInFlight
     THEN /\ probeInFlight' = FALSE                                    \* guard returns currentUpdate()
          /\ UNCHANGED <<state, pulse, attemptID, ffInFlight, bgInFlight, menu, refreshInFlight, bgWorkers, ffWorkers>>
-    ELSE IF pulse # "none" /\ "ignoreCachedPulse" \notin Mutations          \* backgroundDetailRefreshConfigured (App:1102) is TRUE on real launches
+    ELSE IF pulse # "none" /\ "ignoreCachedPulse" \notin Mutations          \* backgroundDetailRefreshConfigured (App:1103, read only once a pulse exists) is TRUE on real launches
     THEN /\ probeInFlight' = FALSE
          /\ UNCHANGED <<pulse, attemptID, ffWorkers>>
          /\ StartBg
@@ -154,7 +155,7 @@ CompleteProbe(r, id) ==
          /\ Show("fetchingPortfolio")
          /\ StartFirstFetch
 
-\* probe result on the main queue (App:125-142) into completeReadinessProbe Core:1096-1111:
+\* probe result on the main queue (App:125-142) into completeReadinessProbe Core:1103-1118:
 \* the attempt check runs first, so only the current attempt can park its ready result.
 FinishProbe(r, id) ==
     IF /\ r = "ready" /\ ~cacheLoadFinished /\ "noCacheParking" \notin Mutations
@@ -172,7 +173,7 @@ ProbeReturns ==
         /\ FinishProbe(r, id)
         /\ UNCHANGED <<cacheLoadFinished, loginNext, loginActive, cacheLoad, logins, retries>>
 
-\* startCachedPulseLoad main-queue block App:111-120 + completeCachedPulseLoad Core:1051-1087
+\* startCachedPulseLoad main-queue block App:111-120 + completeCachedPulseLoad Core:1058-1094
 CacheLoadReturns ==
     /\ cacheLoad = "running"
     /\ cacheLoad' = "done"
@@ -265,7 +266,7 @@ FetchTimerTick ==
     /\ UNCHANGED <<pulse, probeInFlight, attemptID, ffInFlight, bgInFlight, cacheLoadFinished, pending,
                    refreshInFlight, loginNext, loginActive, probes, cacheLoad, ffWorkers, bgWorkers, logins, retries>>
 
-\* loginWithClaude click App:324-326 + beginLoginHandoff Core:1136-1139 (drops a parked result)
+\* loginWithClaude click App:324-326 + beginLoginHandoff Core:1143-1146 (drops a parked result)
 ClickLogin ==
     /\ CanLogin
     /\ loginNext < MaxLogins
@@ -388,7 +389,7 @@ MenuTellsTruth == ProbingMenuTellsTruth /\ FetchingMenuTellsTruth /\ SetupMenuMe
 
 \* While the runtime waits for readiness attempt N (probeInFlight), N's result is
 \* still on its way: its probe is running or its ready result is parked until the
-\* cached pulse loads (Core:1106-1109). A lost result leaves "Checking Claude" up forever.
+\* cached pulse loads (Core:1111-1114). A lost result leaves "Checking Claude" up forever.
 ProbeResultNotLost == probeInFlight => (attemptID \in probes \/ pending.id = attemptID)
 
 \* A setup screen that reports a probe result is never contradicted by a newer

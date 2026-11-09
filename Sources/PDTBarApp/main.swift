@@ -84,7 +84,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             let launchUpdate = launchRuntime.launchWhileLoadingCachedPulse()
             installMenuBarItem(launchUpdate.descriptor)
             startCachedPulseLoad()
-            startClaudeReadinessProbe(attemptID: launchRuntime.readinessAttemptID)
+            startClaudeReadinessProbe(for: launchRuntime.readinessAttempt)
         case let .fixture(fixture):
             let dataSource = PDTFixtureDataSource(fixture: fixture)
             let snapshotDirectory = try fixtureSnapshotDirectory()
@@ -122,7 +122,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func startClaudeReadinessProbe(attemptID: Int) {
+    private func startClaudeReadinessProbe(for attempt: PDTReadinessAttempt) {
         let probe = ScriptedClaudeReadinessProbe(
             appSupportDirectory: appSupportDirectory(),
             environment: environment
@@ -135,7 +135,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 self.handleLaunchUpdate(self.launchRuntime.completeReadinessProbe(
                     result,
-                    attemptID: attemptID,
+                    for: attempt,
                     allowsBackgroundDetailRefresh: self.backgroundDetailRefreshConfigured()
                 ))
             }
@@ -352,7 +352,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         case .none:
             return
         case .probeReadiness:
-            startClaudeReadinessProbe(attemptID: launchRuntime.readinessAttemptID)
+            startClaudeReadinessProbe(for: launchRuntime.readinessAttempt)
         case .startLoginHandoff:
             return
         case .startFirstFetch:
@@ -1099,6 +1099,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 private extension AppDelegate {
+    /// Reads connector configuration. `PDTLaunchRuntime` calls this lazily, only once a pulse exists.
     func backgroundDetailRefreshConfigured() -> Bool {
         (try? firstFetchConnectorConfiguration().shouldStartBackgroundRefresh) ?? false
     }

@@ -345,7 +345,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         let launch = runtime.launch(cachedPulse: nil)
-        let ready = runtime.completeReadinessProbe(.ready)
+        let ready = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
         let complete = runtime.completeFirstFetch(.succeeded(pulse))
 
         #expect(launch.effect == .probeReadiness)
@@ -364,7 +364,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         let launch = runtime.launch(cachedPulse: cachedPulse)
-        let ready = runtime.completeReadinessProbe(.ready)
+        let ready = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
 
         #expect(runtime.currentPulse?.source == .cachedSnapshot)
         #expect(launch.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
@@ -381,7 +381,7 @@ struct PDTOnboardingRunnerTests {
 
         let launch = runtime.launch(cachedPulse: nil)
         let cached = try #require(runtime.completeCachedPulseLoad(cachedPulse))
-        let ready = runtime.completeReadinessProbe(.ready)
+        let ready = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
 
         #expect(launch.descriptor.statusTitle == "Checking Claude")
         #expect(runtime.currentPulse?.source == .cachedSnapshot)
@@ -427,7 +427,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: nil)
-        _ = runtime.completeReadinessProbe(.ready)
+        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
         let fetched = runtime.completeFirstFetch(.succeeded(fetchedPulse))
         let lateCache = runtime.completeCachedPulseLoad(cachedPulse)
 
@@ -442,9 +442,9 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: nil)
-        let attemptID = runtime.readinessAttemptID
+        let attempt = runtime.readinessAttempt
         let login = runtime.beginLoginHandoff()
-        let staleReady = runtime.completeReadinessProbe(.ready, attemptID: attemptID)
+        let staleReady = runtime.completeReadinessProbe(.ready, for: attempt)
 
         #expect(login.descriptor.statusTitle == "Signing in with Claude")
         #expect(staleReady.descriptor.statusTitle == "Signing in with Claude")
@@ -458,7 +458,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: cachedPulse)
-        let ready = runtime.completeReadinessProbe(.ready)
+        let ready = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
         let progress = try #require(runtime.backgroundDetailRefreshProgress(
             BackgroundDetailRefreshProgress(
                 phase: .priceHistory,
@@ -482,7 +482,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: cachedPulse)
-        let ready = runtime.completeReadinessProbe(.ready, allowsBackgroundDetailRefresh: false)
+        let ready = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt, allowsBackgroundDetailRefresh: false)
 
         #expect(ready.effect == .startFirstFetch)
         #expect(runtime.firstFetchInFlight)
@@ -499,7 +499,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: cachedPulse)
-        _ = runtime.completeReadinessProbe(.ready)
+        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
         let completed = runtime.completeBackgroundDetailRefresh(.succeeded(refreshedPulse, outcome: .completed))
 
         #expect(!runtime.backgroundDetailRefreshInFlight)
@@ -517,7 +517,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: cachedPulse)
-        _ = runtime.completeReadinessProbe(.ready)
+        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
         let degraded = runtime.completeBackgroundDetailRefresh(.succeeded(refreshedPulse, outcome: .degraded))
 
         #expect(!runtime.backgroundDetailRefreshInFlight)
@@ -534,7 +534,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: cachedPulse)
-        _ = runtime.completeReadinessProbe(.ready)
+        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
         let failed = runtime.completeBackgroundDetailRefresh(.failed("scripted detail fill failed"))
 
         #expect(!runtime.backgroundDetailRefreshInFlight)
@@ -558,7 +558,7 @@ struct PDTOnboardingRunnerTests {
         )
 
         _ = runtime.launch(cachedPulse: cachedPulse)
-        _ = runtime.completeReadinessProbe(.ready)
+        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
         let failed = runtime.completeBackgroundDetailRefresh(.failed("scripted detail fill failed", diagnostic: diagnostic))
         let diagnosticRow = try #require(healthRow(in: failed.descriptor)?.children.first { $0.id == "dataHealth.diagnostic" })
 
@@ -573,7 +573,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: cachedPulse)
-        _ = runtime.completeReadinessProbe(.ready)
+        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
         _ = runtime.completeBackgroundDetailRefresh(.failed("scripted detail fill failed"))
 
         let retry = try #require(runtime.retryFirstFetch())
@@ -593,7 +593,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: cachedPulse)
-        _ = runtime.completeReadinessProbe(.ready)
+        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
         let failed = runtime.completeBackgroundDetailRefresh(.failed("scripted details fill failed"))
 
         #expect(runtime.currentPulse?.source == .cachedSnapshot)
@@ -609,7 +609,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: cachedPulse)
-        let ready = runtime.completeReadinessProbe(.ready)
+        let ready = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
         let health = try #require(healthRow(in: ready.descriptor))
 
         #expect(ready.effect == .startBackgroundDetailRefresh)
@@ -624,7 +624,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: nil)
-        _ = runtime.completeReadinessProbe(.missingPDTMCP)
+        _ = runtime.completeReadinessProbe(.missingPDTMCP, for: runtime.readinessAttempt)
         _ = try #require(runtime.completeCachedPulseLoad(cachedPulse))
 
         #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.claude == .ready)
@@ -638,7 +638,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: cachedPulse)
-        _ = runtime.completeReadinessProbe(.ready)
+        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
         let republished = runtime.publishPulse(
             cachedPulse.applyingReadState(PulseReadState(readFingerprints: ["pulse:v1:test"]))
         )
@@ -672,7 +672,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: cachedPulse)
-        _ = runtime.completeReadinessProbe(.missingPDTMCP)
+        _ = runtime.completeReadinessProbe(.missingPDTMCP, for: runtime.readinessAttempt)
         let republished = runtime.publishPulse(cachedPulse)
         let health = try #require(healthRow(in: republished.descriptor))
 
@@ -704,7 +704,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: nil)
-        _ = runtime.completeReadinessProbe(.ready)
+        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
         let failed = runtime.completeFirstFetch(.failed("scripted first fetch failed"))
 
         #expect(runtime.currentPulse == nil)
@@ -718,7 +718,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: nil)
-        _ = runtime.completeReadinessProbe(.ready)
+        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
         #expect(runtime.retryFirstFetch() == nil)
         _ = runtime.completeFirstFetch(.failed("scripted first fetch failed"))
 
@@ -738,8 +738,8 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: nil)
-        let firstReady = runtime.completeReadinessProbe(.ready)
-        let duplicateReady = runtime.completeReadinessProbe(.ready)
+        let firstReady = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
+        let duplicateReady = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
 
         #expect(firstReady.effect == .startFirstFetch)
         #expect(duplicateReady.effect == .none)
@@ -753,13 +753,13 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: nil)
-        let firstAttemptID = runtime.readinessAttemptID
+        let firstAttempt = runtime.readinessAttempt
         _ = runtime.completeLoginHandoff(.succeeded)
-        let secondAttemptID = runtime.readinessAttemptID
-        let staleFailure = runtime.completeReadinessProbe(.failed, attemptID: firstAttemptID)
-        let ready = runtime.completeReadinessProbe(.ready, attemptID: secondAttemptID)
+        let secondAttempt = runtime.readinessAttempt
+        let staleFailure = runtime.completeReadinessProbe(.failed, for: firstAttempt)
+        let ready = runtime.completeReadinessProbe(.ready, for: secondAttempt)
         let complete = runtime.completeFirstFetch(.succeeded(pulse))
-        let laterStaleFailure = runtime.completeReadinessProbe(.missingClaudeLogin, attemptID: firstAttemptID)
+        let laterStaleFailure = runtime.completeReadinessProbe(.missingClaudeLogin, for: firstAttempt)
 
         #expect(staleFailure.effect == .none)
         #expect(staleFailure.descriptor.statusTitle == "Checking Claude")
@@ -776,12 +776,12 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launchWhileLoadingCachedPulse()
-        let launchAttemptID = runtime.readinessAttemptID
+        let launchAttempt = runtime.readinessAttempt
         _ = runtime.beginLoginHandoff()
         _ = runtime.completeLoginHandoff(.succeeded)
-        let loginAttemptID = runtime.readinessAttemptID
-        let currentReady = runtime.completeReadinessProbe(.ready, attemptID: loginAttemptID)
-        let staleReady = runtime.completeReadinessProbe(.ready, attemptID: launchAttemptID)
+        let loginAttempt = runtime.readinessAttempt
+        let currentReady = runtime.completeReadinessProbe(.ready, for: loginAttempt)
+        let staleReady = runtime.completeReadinessProbe(.ready, for: launchAttempt)
         let cached = try #require(runtime.completeCachedPulseLoad(cachedPulse))
 
         #expect(currentReady.effect == .none)
@@ -797,12 +797,82 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launchWhileLoadingCachedPulse()
-        let parked = runtime.completeReadinessProbe(.ready, attemptID: runtime.readinessAttemptID)
+        let parked = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
         let cacheMiss = runtime.completeCachedPulseLoad(nil)
 
         #expect(parked.effect == .none)
         #expect(cacheMiss?.effect == .startFirstFetch)
         #expect(cacheMiss?.descriptor.statusTitle == "Fetching portfolio")
+    }
+
+    @Test("Ready from before Check again starts nothing when the cached pulse loads")
+    func readyFromBeforeCheckAgainStartsNothingWhenCachedPulseLoads() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launchWhileLoadingCachedPulse()
+        let launchAttempt = runtime.readinessAttempt
+        _ = runtime.completeReadinessProbe(.missingPDTMCP, for: launchAttempt)
+        _ = try #require(runtime.retryReadiness())
+        let staleReady = runtime.completeReadinessProbe(.ready, for: launchAttempt)
+        let missingLogin = runtime.completeReadinessProbe(.missingClaudeLogin, for: runtime.readinessAttempt)
+        let cached = try #require(runtime.completeCachedPulseLoad(cachedPulse))
+
+        #expect(staleReady.effect == .none)
+        #expect(rowTitles(in: missingLogin.descriptor).contains("Check again"))
+        #expect(cached.effect == .none)
+        #expect(!runtime.firstFetchInFlight)
+        #expect(!runtime.backgroundDetailRefreshInFlight)
+    }
+
+    @Test("Readiness result for another runtime's attempt is ignored")
+    func readinessResultForAnotherRuntimesAttemptIsIgnored() {
+        let runtime = PDTLaunchRuntime()
+        let otherRuntime = PDTLaunchRuntime()
+
+        _ = runtime.launchWhileLoadingCachedPulse()
+        _ = otherRuntime.launchWhileLoadingCachedPulse()
+        let foreignReady = runtime.completeReadinessProbe(.ready, for: otherRuntime.readinessAttempt)
+        let missingLogin = runtime.completeReadinessProbe(.missingClaudeLogin, for: runtime.readinessAttempt)
+        let cacheMiss = runtime.completeCachedPulseLoad(nil)
+
+        #expect(foreignReady.effect == .none)
+        #expect(rowTitles(in: missingLogin.descriptor).contains("Check again"))
+        #expect(cacheMiss == nil)
+        #expect(!runtime.firstFetchInFlight)
+    }
+
+    @Test("Readiness reads the background refresh setting only once a pulse exists")
+    func readinessReadsBackgroundRefreshSettingOnlyOncePulseExists() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+
+        let coldLaunch = PDTLaunchRuntime()
+        var coldReads = 0
+        _ = coldLaunch.launch(cachedPulse: nil)
+        let firstFetch = coldLaunch.completeReadinessProbe(
+            .ready,
+            for: coldLaunch.readinessAttempt,
+            allowsBackgroundDetailRefresh: { coldReads += 1; return true }()
+        )
+
+        #expect(firstFetch.effect == .startFirstFetch)
+        #expect(coldReads == 0)
+
+        let returningLaunch = PDTLaunchRuntime()
+        var returningReads = 0
+        _ = returningLaunch.launchWhileLoadingCachedPulse()
+        _ = returningLaunch.completeReadinessProbe(
+            .ready,
+            for: returningLaunch.readinessAttempt,
+            allowsBackgroundDetailRefresh: { returningReads += 1; return true }()
+        )
+        let replay = try #require(returningLaunch.completeCachedPulseLoad(
+            cachedPulse,
+            allowsBackgroundDetailRefresh: { returningReads += 1; return true }()
+        ))
+
+        #expect(replay.effect == .startBackgroundDetailRefresh)
+        #expect(returningReads == 1)
     }
 
     @Test("Launch runtime stale readiness completion preserves cached fetch failure copy")
@@ -811,12 +881,12 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: cachedPulse)
-        let firstAttemptID = runtime.readinessAttemptID
+        let firstAttempt = runtime.readinessAttempt
         _ = runtime.completeLoginHandoff(.succeeded)
-        let secondAttemptID = runtime.readinessAttemptID
-        _ = runtime.completeReadinessProbe(.ready, attemptID: secondAttemptID)
+        let secondAttempt = runtime.readinessAttempt
+        _ = runtime.completeReadinessProbe(.ready, for: secondAttempt)
         let failure = runtime.completeFirstFetch(.failed("scripted details fill failed"))
-        let staleFailure = runtime.completeReadinessProbe(.failed, attemptID: firstAttemptID)
+        let staleFailure = runtime.completeReadinessProbe(.failed, for: firstAttempt)
 
         #expect(failure.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
         #expect(rowTitles(in: staleFailure.descriptor).contains("Details fill failed"))
@@ -830,11 +900,11 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: cachedPulse)
-        let firstAttemptID = runtime.readinessAttemptID
+        let firstAttempt = runtime.readinessAttempt
         _ = runtime.completeLoginHandoff(.succeeded)
-        let secondAttemptID = runtime.readinessAttemptID
-        let missingSetup = runtime.completeReadinessProbe(.missingPDTMCP, attemptID: secondAttemptID)
-        let staleFailure = runtime.completeReadinessProbe(.failed, attemptID: firstAttemptID)
+        let secondAttempt = runtime.readinessAttempt
+        let missingSetup = runtime.completeReadinessProbe(.missingPDTMCP, for: secondAttempt)
+        let staleFailure = runtime.completeReadinessProbe(.failed, for: firstAttempt)
 
         #expect(missingSetup.descriptor.statusTitle == "Add the PDT MCP server to Claude")
         #expect(staleFailure.descriptor.statusTitle == "Add the PDT MCP server to Claude")

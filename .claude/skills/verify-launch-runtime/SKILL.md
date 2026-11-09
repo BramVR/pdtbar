@@ -9,21 +9,21 @@ A TLA+ model of the no-argument PDTBar launch: `PDTLaunchRuntime` plus the `AppD
 
 ## When to use
 
-Run it when a change touches any covered function below, the order of main-queue work in `AppDelegate`, which buttons a launch menu shows, or the meaning of `readinessProbe`, `cachedPulseLoading`, `firstFetchInFlight`, `backgroundDetailRefreshInFlight`, `portfolioRefreshInFlight`. Pure copy or layout changes to menu rows do not need it, unless a row's `role` changes (`setupLogin`, `setupRetry`, `fetchRetry` are the clickable ones the model tracks).
+Run it when a change touches any covered function below, the order of main-queue work in `AppDelegate`, which buttons a launch menu shows, or the meaning of `readinessProbe`, `readinessAttempt`, `cachedPulseLoading`, `firstFetchInFlight`, `backgroundDetailRefreshInFlight`, `portfolioRefreshInFlight`. Pure copy or layout changes to menu rows do not need it, unless a row's `role` changes (`setupLogin`, `setupRetry`, `fetchRetry` are the clickable ones the model tracks).
 
 ## Coverage
 
 Sync commit: `1b6ffd4` (origin/main when the model was last confirmed to describe the covered code; the code was re-read after the #241 file split). After you confirm the model still describes the code at a newer commit, move this line forward. Never move it without that check.
 
 `Sources/PDTBarCore/LaunchRuntime.swift`:
-- `PDTLaunchRuntime` 1015-1321: `launch` 1038, `launchWhileLoadingCachedPulse` 1045, `completeCachedPulseLoad` 1051, `installCachedPulse` 1063, `retryReadiness` 1089, `completeReadinessProbe` 1096, `applyReadiness` 1113, `beginLoginHandoff` 1136, `completeLoginHandoff` 1141, `retryFirstFetch` 1156, `firstFetchProgress` 1167, `completeFirstFetch` 1174, `beginBackgroundDetailRefresh` 1184, `backgroundDetailRefreshProgress` 1191, `completeBackgroundDetailRefresh` 1208, `publishPulse` 1248, `beginReadinessProbe` 1270, `startBackgroundDetailRefresh` 1276, `update` 1293.
+- `PDTReadinessAttempt` 1017. `PDTLaunchRuntime` 1022-1328: `launch` 1045, `launchWhileLoadingCachedPulse` 1052, `completeCachedPulseLoad` 1058, `installCachedPulse` 1070, `retryReadiness` 1096, `completeReadinessProbe` 1103, `applyReadiness` 1120, `beginLoginHandoff` 1143, `completeLoginHandoff` 1148, `retryFirstFetch` 1163, `firstFetchProgress` 1174, `completeFirstFetch` 1181, `beginBackgroundDetailRefresh` 1191, `backgroundDetailRefreshProgress` 1198, `completeBackgroundDetailRefresh` 1215, `publishPulse` 1255, `beginReadinessProbe` 1277, `startBackgroundDetailRefresh` 1283, `update` 1300.
 - `ClaudeLoginAttemptGate` 118.
 - Clickable rows per state: `ClaudeLaunchFlow.descriptor(for:cachedPulse:)` 364, `descriptorForBackgroundRefreshFailure` 572, `descriptorForBackgroundDetailProgress` 597, `descriptorForBackgroundDetailDegraded` 613, `descriptor(forLoginFailure:)` 647, `portfolioFetchFailureRows` 943, `ClaudeSetupMenuDescriptor` 1440-1556.
 
 `Sources/PDTBarCore/MenuDescriptorRenderer.swift`: default pulse "Refresh now" row 277.
 
 `Sources/PDTBarApp/main.swift` (`AppDelegate`):
-- `launch` 80, `startCachedPulseLoad` 102, `startClaudeReadinessProbe` 125, `startFirstPortfolioFetch` 145, `finishFirstPortfolioFetch` 182, `updatePortfolioFetchProgress` 218, `retryPortfolioFetch` 236, `startBackgroundPortfolioRefresh` 243, `finishBackgroundPortfolioRefresh` 300, `retryClaudeReadiness` 317, `loginWithClaude` 324, `handleLaunchUpdate` 349, row-role-to-selector wiring in `makeMenuItem` 550, `markPulseItemRead` 1032, `backgroundDetailRefreshConfigured` 1102.
+- `launch` 80, `startCachedPulseLoad` 102, `startClaudeReadinessProbe` 125, `startFirstPortfolioFetch` 145, `finishFirstPortfolioFetch` 182, `updatePortfolioFetchProgress` 218, `retryPortfolioFetch` 236, `startBackgroundPortfolioRefresh` 243, `finishBackgroundPortfolioRefresh` 300, `retryClaudeReadiness` 317, `loginWithClaude` 324, `handleLaunchUpdate` 349, row-role-to-selector wiring in `makeMenuItem` 550, `markPulseItemRead` 1032, `backgroundDetailRefreshConfigured` 1103.
 
 To see whether a change touches covered code: `git diff 1b6ffd4 -- Sources/PDTBarCore/LaunchRuntime.swift Sources/PDTBarCore/MenuDescriptorRenderer.swift Sources/PDTBarApp/main.swift` and look for the names above.
 
@@ -49,7 +49,7 @@ Passing today:
 - `NeverStranded`: something is running, or the menu offers Log in, Check again, or Try again / Refresh now. Harm if broken: the user is stuck with no way forward but quitting.
 - `SetupReflectsLatestProbe`: a setup screen showing a probe result is never contradicted by a newer probe still running.
 - `FetchingMenuTellsTruth`: a "Refreshing" / "Fetching" menu means a fetch is running.
-- `ProbeResultNotLost`: while the runtime waits for readiness attempt N, N's result is still running or parked until the cached pulse loads. Fixed in #274: `PDTLaunchRuntime` checks the attempt before it parks a `ready`, so a superseded probe can no longer overwrite the parked result. Mutation `parkStaleProbe` restores the old order.
+- `ProbeResultNotLost`: while the runtime waits for readiness attempt N, N's result is still running or parked until the cached pulse loads. Fixed in #274: every probe result must name its `PDTReadinessAttempt`, and `PDTLaunchRuntime` checks it before it parks a `ready`, so a superseded probe can no longer overwrite the parked result. Mutation `parkStaleProbe` restores the old order.
 
 Open findings (fail on the code at the sync commit; listed in `check.sh` as `OPEN_FINDINGS`):
 - `BackgroundFlagMatchesWork` (shortest path 4 steps). On a returning launch the background refresh starts. The user clicks "Mark as read" on a pulse row, and `markPulseItemRead` republishes through `publishPulse`, which sets `backgroundDetailRefreshInFlight = false` while the refresh is still running. Progress rows stop, because `backgroundDetailRefreshProgress` drops updates once the flag is false. "Refresh now" reappears during the refresh. When the refresh finishes it publishes its own older read state (see `verify-pulse-read-state`, stale publish). Fix direction: republish a mark-read without touching the refresh flag or the progress descriptor.
