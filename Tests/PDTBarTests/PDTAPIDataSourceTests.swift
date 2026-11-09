@@ -120,6 +120,7 @@ struct PDTAPIDataSourceTests {
             holdingRow(quoteId: 1, symbolId: 2, worthLocal: nil),
             holdingRow(quoteId: 1, symbolId: 2, weight: #""heavy""#),
             holdingRow(quoteId: 1, symbolId: 2, worthLocal: #"{"value":"lots","currency":"EUR"}"#),
+            holdingRow(quoteId: 1, symbolId: 2, closedAt: "20260302"),
         ] {
             let transport = ScriptedPDTHTTPTransport([ok(#"{"data":[\#(row)]}"#)])
             #expect(throws: PDTAPIError.invalidResponse) {
@@ -329,10 +330,11 @@ private func holdingRow(
     quoteId: Int,
     symbolId: Int,
     worthLocal: String? = #"{"value":"100.00","currency":"EUR"}"#,
-    weight: String = "0.5"
+    weight: String = "0.5",
+    closedAt: String = "null"
 ) -> String {
     let worth = worthLocal.map { #","currentWorthLocal":\#($0)"# } ?? ""
-    return #"{"symbolName":"Holding \#(quoteId)","symbolQuoteId":\#(quoteId),"symbolId":\#(symbolId),"currentPriceDate":"2026-06-22T23:59:59+00:00","portfolioWeight":\#(weight),"closedAt":null\#(worth)}"#
+    return #"{"symbolName":"Holding \#(quoteId)","symbolQuoteId":\#(quoteId),"symbolId":\#(symbolId),"currentPriceDate":"2026-06-22T23:59:59+00:00","portfolioWeight":\#(weight),"closedAt":\#(closedAt)\#(worth)}"#
 }
 
 private func ok(_ body: String) -> ScriptedPDTHTTPTransport.Reply {

@@ -1,6 +1,5 @@
 import Foundation
 
-// REST response rows decoded straight from PDT's envelopes (ADR-0002 live findings).
 // PDT may send money values and ratios as JSON numbers or numeric strings, so every
 // numeric field goes through `decodeNumber`/`decodeMoney`. Money stays a decimal string.
 
@@ -57,7 +56,7 @@ struct APIHolding: Decodable {
         unrealisedBoughtShares = try? container.decodeNumberIfPresent(.unrealisedBoughtShares)
         unrealisedGains = try? container.decodeMoneyIfPresent(.unrealisedGains)
         unrealisedGainsPercentage = try? container.decodeNumberIfPresent(.unrealisedGainsPercentage)
-        closedAt = try? container.decodeIfPresent(String.self, forKey: .closedAt)
+        closedAt = try container.decodeIfPresent(String.self, forKey: .closedAt)
         isin = try? container.decodeIfPresent(String.self, forKey: .isin)
     }
 
@@ -226,7 +225,7 @@ private extension KeyedDecodingContainer {
 
     func decodeNumber(_ key: Key) throws -> Double {
         if let text = try? decode(String.self, forKey: key) {
-            guard let number = Double(text.trimmingCharacters(in: .whitespaces)), number.isFinite else {
+            guard let number = Double(text), number.isFinite else {
                 throw DecodingError.dataCorruptedError(forKey: key, in: self, debugDescription: "not a numeric string")
             }
             return number
