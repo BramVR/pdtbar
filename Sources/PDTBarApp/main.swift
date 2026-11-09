@@ -96,8 +96,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 snapshotStore: SnapshotStore(directory: snapshotDirectory),
                 pulseReadStore: PulseReadStore(directory: snapshotDirectory)
             )
-            launchRuntime.replaceCurrentPulse(result)
-            installMenuBarItem(result.descriptor)
+            if let descriptor = launchRuntime.replaceCurrentPulse(result) {
+                installMenuBarItem(descriptor)
+            }
         }
     }
 

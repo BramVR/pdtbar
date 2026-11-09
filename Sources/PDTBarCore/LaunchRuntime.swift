@@ -1236,8 +1236,10 @@ public final class PDTLaunchRuntime {
         }
     }
 
-    public func replaceCurrentPulse(_ pulse: PulseLifecycleResult) {
+    /// Returns the menu for the pulse as shown, joined with the read store.
+    public func replaceCurrentPulse(_ pulse: PulseLifecycleResult) -> MenuDescriptor? {
         show(pulse)
+        return currentPulse?.descriptor
     }
 
     /// Call after the read store changes. Only the pulse rows change; the

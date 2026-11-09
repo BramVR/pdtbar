@@ -75,8 +75,9 @@ struct DisplayedPulseReadStateTests {
         try fixture.readStore.markRead(item.readFingerprint)
         let runtime = PDTLaunchRuntime(loadReadState: { try? fixture.readStore.load() })
 
-        runtime.replaceCurrentPulse(fixture.pulse)
+        let descriptor = try #require(runtime.replaceCurrentPulse(fixture.pulse))
 
+        #expect(!markReadPayloads(in: descriptor).contains(item.id))
         #expect(runtime.currentPulse?.model.rankedAttentionItems.contains { $0.id == item.id } == false)
     }
 }
