@@ -1,0 +1,21 @@
+{
+  "data": {
+    "items": [
+      {
+        "symbolName": "Nova Lithography",
+        "weight": 12.5
+      },
+      {
+        "symbolName": "Orbit Communications",
+        "weight": "8.25"
+      }
+    ],
+    "hasMore": true,
+    "totalCount": 3,
+    "sourceSymbolIds": [
+      5001,
+      5002
+    ],
+    "sourceSymbols": []
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "data": [
+    {
+      "symbolId": 5013,
+      "exchangeId": 31,
+      "currencyId": 9,
+      "id": 9013,
+      "code": null,
+      "exchangeName": "Cash",
+      "currencyCode": "USD"
+    }
+  ],
+  "meta": {
+    "currentPage": 1,
+    "lastPage": 1,
+    "perPage": 100,
+    "total": 1
+  },
+  "links": {
+    "first": null,
+    "last": null,
+    "prev": null,
+    "next": null
+  }
+}

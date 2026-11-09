@@ -1,0 +1,42 @@
+{
+  "data": {
+    "prices": [
+      [
+        {
+          "id": 1,
+          "date": "2026-06-22",
+          "close": "612.40",
+          "closeAdjusted": "612.40",
+          "closeCurrency": "EUR",
+          "symbolQuoteId": 9001
+        },
+        {
+          "id": 2,
+          "date": "2026-06-19",
+          "close": 598.0,
+          "closeAdjusted": 598.0,
+          "closeCurrency": "EUR",
+          "symbolQuoteId": 9001
+        }
+      ],
+      [
+        {
+          "id": 3,
+          "date": "2026-06-22",
+          "close": "818.00",
+          "closeAdjusted": "818.00",
+          "closeCurrency": "GBX",
+          "symbolQuoteId": 9004
+        },
+        {
+          "id": 4,
+          "date": "2026-06-19",
+          "close": 812,
+          "closeAdjusted": 812,
+          "closeCurrency": "GBX",
+          "symbolQuoteId": 9004
+        }
+      ]
+    ]
+  }
+}
