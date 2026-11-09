@@ -770,6 +770,41 @@ struct PDTOnboardingRunnerTests {
         #expect(runtime.currentPulse?.source == .fetchedSnapshot)
     }
 
+    @Test("Ready result parked behind the cached pulse load survives a stale ready from the superseded attempt")
+    func parkedReadySurvivesStaleReadyFromSupersededAttempt() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launchWhileLoadingCachedPulse()
+        let launchAttemptID = runtime.readinessAttemptID
+        _ = runtime.beginLoginHandoff()
+        _ = runtime.completeLoginHandoff(.succeeded)
+        let loginAttemptID = runtime.readinessAttemptID
+        let currentReady = runtime.completeReadinessProbe(.ready, attemptID: loginAttemptID)
+        let staleReady = runtime.completeReadinessProbe(.ready, attemptID: launchAttemptID)
+        let cached = try #require(runtime.completeCachedPulseLoad(cachedPulse))
+
+        #expect(currentReady.effect == .none)
+        #expect(currentReady.descriptor.statusTitle == "Checking Claude")
+        #expect(staleReady.effect == .none)
+        #expect(cached.effect == .startBackgroundDetailRefresh)
+        #expect(rowTitles(in: cached.descriptor).contains("Filling details"))
+        #expect(!rowTitles(in: cached.descriptor).contains("Checking Claude setup"))
+    }
+
+    @Test("Ready result parked behind an empty cached pulse load starts the first fetch")
+    func parkedReadyStartsFirstFetchWhenNoCachedPulse() {
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launchWhileLoadingCachedPulse()
+        let parked = runtime.completeReadinessProbe(.ready, attemptID: runtime.readinessAttemptID)
+        let cacheMiss = runtime.completeCachedPulseLoad(nil)
+
+        #expect(parked.effect == .none)
+        #expect(cacheMiss?.effect == .startFirstFetch)
+        #expect(cacheMiss?.descriptor.statusTitle == "Fetching portfolio")
+    }
+
     @Test("Launch runtime stale readiness completion preserves cached fetch failure copy")
     func launchRuntimeStaleReadinessCompletionPreservesCachedFetchFailureCopy() throws {
         let cachedPulse = try cachedQuietFixturePulse()
