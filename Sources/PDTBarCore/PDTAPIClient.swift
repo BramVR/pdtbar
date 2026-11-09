@@ -566,9 +566,13 @@ public final class ScriptedPDTHTTPTransport: PDTHTTPTransport, @unchecked Sendab
     private let lock = NSLock()
     private var replies: [Reply]
     private var recorded: [URLRequest] = []
+    private var pendingInitialDelay: TimeInterval
 
-    public init(_ replies: [Reply]) {
+    /// `initialDelaySeconds` holds the first request, so scripted smokes can
+    /// observe the app while a refresh is in flight. Cancellation ends the wait.
+    public init(_ replies: [Reply], initialDelaySeconds: TimeInterval = 0) {
         self.replies = replies
+        pendingInitialDelay = max(0, initialDelaySeconds)
     }
 
     public var requests: [URLRequest] {
@@ -577,7 +581,8 @@ public final class ScriptedPDTHTTPTransport: PDTHTTPTransport, @unchecked Sendab
         return recorded
     }
 
-    public func send(_ request: URLRequest, cancellation _: PDTCancellation?) throws -> (Data, HTTPURLResponse) {
+    public func send(_ request: URLRequest, cancellation: PDTCancellation?) throws -> (Data, HTTPURLResponse) {
+        try waitForInitialDelay(cancellation: cancellation)
         lock.lock()
         defer { lock.unlock() }
         recorded.append(request)
@@ -590,6 +595,20 @@ public final class ScriptedPDTHTTPTransport: PDTHTTPTransport, @unchecked Sendab
             return (body, response)
         case let .failure(code):
             throw URLError(code)
+        }
+    }
+
+    private func waitForInitialDelay(cancellation: PDTCancellation?) throws {
+        lock.lock()
+        let delay = pendingInitialDelay
+        pendingInitialDelay = 0
+        lock.unlock()
+        let deadline = Date().addingTimeInterval(delay)
+        while Date() < deadline {
+            if cancellation?.isCancelled == true {
+                throw URLError(.cancelled)
+            }
+            Thread.sleep(forTimeInterval: min(0.05, max(0, deadline.timeIntervalSinceNow)))
         }
     }
 }

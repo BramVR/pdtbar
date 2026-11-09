@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added a background detail refresh over the read-only PDT REST API that commits once at the end, keeps last-good facets on optional failures, and skips later phases after an auth outage; the shipped refresh stays on Claude until PDT sign-in lands.
 - Fixed portfolio-value privacy masking so money-bearing menu fields render from typed values instead of relying on currency regexes and prose-specific scrubbing.
 - Stopped in-flight Claude process trees when background detail refreshes time out or PDTBar quits, with a bounded worker shutdown grace.
 - Declined to annualize portfolio returns over periods shorter than 90 days and now explains when the reporting period is too short.

@@ -228,7 +228,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             tool: "pdt-get-portfolio-holdings",
             phase: .baseHoldings
         )
-        preserveOptionalDetails(in: &snapshot, from: originalPriorSnapshot)
+        Self.preserveOptionalDetails(in: &snapshot, from: originalPriorSnapshot)
         _ = try snapshotStore.commitCurrentSnapshot(snapshot)
 
         // Once one optional phase fails because Claude/PDT is unavailable
@@ -355,7 +355,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 tool: "pdt-list-symbol-prices",
                 phase: .priceHistory
             )
-            snapshot.priceSeries = priceSeriesWithPriorFallback(
+            snapshot.priceSeries = Self.priceSeriesWithPriorFallback(
                 refreshed: priceHistory.points,
                 failedQuoteIDs: priceHistory.failedQuoteIDs,
                 priorSnapshot: originalPriorSnapshot,
@@ -486,7 +486,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         return tools
     }
 
-    private func preserveOptionalDetails(in snapshot: inout PortfolioSnapshot, from priorSnapshot: PortfolioSnapshot?) {
+    static func preserveOptionalDetails(in snapshot: inout PortfolioSnapshot, from priorSnapshot: PortfolioSnapshot?) {
         guard let priorSnapshot else {
             return
         }
@@ -551,7 +551,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         }
     }
 
-    private func priceSeriesWithPriorFallback(
+    static func priceSeriesWithPriorFallback(
         refreshed: [PricePoint],
         failedQuoteIDs: Set<Int>,
         priorSnapshot: PortfolioSnapshot?,
