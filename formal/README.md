@@ -22,4 +22,4 @@ A pass covers the model and its bounds only. Each skill lists what its model lea
 - `launch-runtime`: launch, readiness probe, login handoff, first fetch, cached pulse, background refresh wiring. Skill `verify-launch-runtime`. Check: `formal/launch-runtime/check.sh`.
 - `claude-login-process`: `claude auth login` PTY run, timeout, cancellation, process-tree cleanup. Skill `verify-claude-login-process`.
 - `pulse-read-state`: mark-as-read, read-state reset, snapshot commit ordering. Skill `verify-pulse-read-state`. Check: `formal/pulse-read-state/check.sh`.
-- `background-detail-refresh`: phases, retries, outage skip, price-history worker pool and deadline. Skill `verify-background-detail-refresh`.
+- `background-detail-refresh`: phases, retries, cancellation, outage skip, price-history worker pool and deadline. Skill `verify-background-detail-refresh`.
