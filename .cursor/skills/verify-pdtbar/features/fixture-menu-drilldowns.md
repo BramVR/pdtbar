@@ -31,6 +31,19 @@ Scripts/verify_pdtbar.sh stop "$RUN"
 
 Opt-in pixel proof captures the screen, so ask the user first: `swift run pdtbar-smoke real-user-pulse --fixture <f> --snapshot-dir "$RUN/real-user-pulse" --artifacts "$RUN/evidence" --peekaboo /opt/homebrew/bin/peekaboo`.
 
+## Visual proof
+
+For PR proof, run `Scripts/verify_pdtbar.sh can-capture` first and skip on exit 3. Use a screenshot for the status icon and the top-level menu. Use a recording when the change is about the menu opening, such as layout shifts or chart rendering.
+
+```bash
+RUN=$(Scripts/verify_pdtbar.sh launch docs/pdt/fixtures/concentration-pressure.json | sed -n 's/^ready: //p')
+Scripts/verify_pdtbar.sh capture screenshot "$RUN" menu-open
+Scripts/verify_pdtbar.sh capture record "$RUN" menu-clip 4
+Scripts/verify_pdtbar.sh stop "$RUN"
+```
+
+The image must show the Concentration Stack icon in its highlighted state and the open menu with Summary, Pulse, Allocation with its chart, Income, Data, and Actions. Capture does not hover rows, so submenus stay closed. Swap the fixture for the state under test, such as `quiet-no-pressure.json`.
+
 ## Gotchas
 
 - Fixtures with a prior snapshot (`big-mover.json`) seed it only through `real-user-pulse`. A plain `verify_pdtbar.sh launch` has no prior, so big-mover deltas may not show.

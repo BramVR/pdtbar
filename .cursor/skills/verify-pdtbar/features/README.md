@@ -8,4 +8,6 @@ One file per user-facing feature. Each file names the observable end state that 
 - [fixture-menu-drilldowns.md](fixture-menu-drilldowns.md) covers the status icon, the pulse, and the allocation, income, Data/Prices, and Data health submenus. Launch proof is prompt-free. Pixel proof is opt-in.
 - [settings-portfolio-values.md](settings-portfolio-values.md) covers the Settings window and the `Show portfolio values` mask. It is opt-in only.
 
+Each file ends with a `Visual proof` section: the opt-in `Scripts/verify_pdtbar.sh capture` command, its fixture, and what the image must show. See Visual capture in [`../SKILL.md`](../SKILL.md).
+
 Proved end to end (launch, doctor, drive, evidence, cleanup): `first-fetch-pulse` via `scripted-first-fetch`.

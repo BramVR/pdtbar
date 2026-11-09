@@ -29,6 +29,18 @@ Read `$RUN/evidence/pdtbar-scripted-first-fetch-proof.json`. Pass requires `snap
 
 Related prompt-free scenarios: `ready-launch` (the same path, with the logged-out menu skipped) and `scripted-pdt-connector` (connector only, with no app; it proves each required tool is called exactly once and that degraded detail refresh can be retried).
 
+## Visual proof
+
+For PR proof, run `Scripts/verify_pdtbar.sh can-capture` first and skip on exit 3. The smokes launch their own app, so capture a fixture run that shows the end state of a first fetch. Take a screenshot. The pulse is static.
+
+```bash
+RUN=$(Scripts/verify_pdtbar.sh launch docs/pdt/fixtures/concentration-pressure.json | sed -n 's/^ready: //p')
+Scripts/verify_pdtbar.sh capture screenshot "$RUN" pulse-menu
+Scripts/verify_pdtbar.sh stop "$RUN"
+```
+
+The image must show the status item and the open menu with `Pulse` at the top and the attention rows under it. It shows the fixture pulse, not a scripted first fetch. Label it that way.
+
 ## Gotchas
 
 - The smoke scripts PDT at the production MCP connector boundary (`scripted-pdt-mcp.json`). It does not prove live PDT reachability. That is `live-pdt` or `manual-claude-pdt`, both opt-in, and live PDT is never driven without the user.

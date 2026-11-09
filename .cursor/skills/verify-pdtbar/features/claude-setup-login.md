@@ -28,6 +28,10 @@ Scripts/verify_pdtbar.sh stop "$RUN"
 
 Read `pdtbar-scripted-setup-retry-proof.json` (readiness probe counts and status booleans) and `pdtbar-scripted-login-handoff-proof.json` (fake CLI not called before the click, login invoked, readiness rerun, fetch started).
 
+## Visual proof
+
+For PR proof, run `Scripts/verify_pdtbar.sh can-capture` first and skip on exit 3. `capture` works only on a `verify_pdtbar.sh launch` run, which is fixture mode, so it cannot show the setup or login menus. There is no capture path for this feature yet. Prove it with the smoke JSON and AX identifiers above, and say in the PR that no image exists.
+
 ## Gotchas
 
 - These smokes need AX to click menu items. Without AX they write descriptor and probe-gate proof and return `skipped` with the missing permission named. Report that as not driven, not as passed.
