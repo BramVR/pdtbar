@@ -696,8 +696,10 @@ struct PDTOnboardingRunnerTests {
         let health = try #require(healthRow(in: republished.descriptor))
 
         #expect(runtime.lastKnownReadiness == nil)
-        #expect(health.detail == "Needs attention")
-        #expect(health.children.first { $0.id == "dataHealth.source" }?.detail == "Claude unknown; PDT unknown; read tools unknown; policy unknown")
+        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.claude == .unknown)
+        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.pdtMCP == .unknown)
+        #expect(health.detail == "Checking")
+        #expect(health.children.first { $0.id == "dataHealth.source" }?.detail == "Claude checking; PDT unknown; read tools unknown; policy unknown")
     }
 
     @Test("Mark-read republish reflects missing PDT MCP readiness")
@@ -720,6 +722,8 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: nil)
+        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
+        _ = runtime.completeFirstFetch(.succeeded(fetchedPulse))
         let republished = runtime.publishPulse(fetchedPulse)
 
         #expect(fetchedPulse.model.facetSnapshots.dataHealth.source.detail == "Claude ready; PDT ready; 7/7 read tools; read-only")

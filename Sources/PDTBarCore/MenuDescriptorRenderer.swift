@@ -481,6 +481,13 @@ public enum MenuDescriptorRenderer {
                 title: "Refreshing now",
                 detail: "Already in progress"
             )
+        case .waitingForSetup:
+            return MenuRow(
+                id: "actions.refreshNow",
+                role: .fetchStatus,
+                title: "Refresh now",
+                detail: "After Claude setup check"
+            )
         }
     }
 
@@ -1142,6 +1149,8 @@ public enum MenuDescriptorRenderer {
 enum MenuRefreshActionState {
     case available
     case inProgress
+    /// Shown but not clickable: a refresh may start only once readiness comes back ready.
+    case waitingForSetup
 }
 
 public enum IncomeCalendarDescriptor {
