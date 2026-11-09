@@ -46,6 +46,15 @@ ToolSearch resolution, PDT read-tool calls, retry classification, read-only
 allowlists, and Claude tool-result parsing flow through app support instead of
 the AppKit delegate.
 
+`PDTAPIClient` is the read-only PDT REST transport (#244, ADR-0002), not yet
+wired into launch: an allowlisted `PDTAPIResource` enum (every case a `GET` to
+`https://api.portfoliodividendtracker.com/v1`), an injected token provider
+(Keychain in production, in-memory in tests), typed `PDTAPIError`s from PDT's
+error envelope, bounded retries for 429/5xx/transient transport failures with
+`Retry-After`, page and offset pagination with stall and page-cap guards, and no
+response logging. `URLSessionPDTHTTPTransport` refuses redirects so the bearer
+token never leaves the PDT origin.
+
 `DataHealth` composes runtime/source facts into model state: Claude/PDT
 readiness, required read tools, read-only policy, cache/source, detail-fill,
 freshness, read-state, and redacted diagnostics. Menu descriptors render this

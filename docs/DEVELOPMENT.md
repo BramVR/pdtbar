@@ -103,6 +103,7 @@ swift build
 swift test
 swift run pdtbar-checks
 swift run pdtbar-smoke scripted-pdt-connector
+swift run pdtbar-smoke scripted-api-client
 swift run pdtbar-smoke scripted-login-handoff
 swift run pdtbar-smoke scripted-setup-retry
 swift run pdtbar-smoke scripted-pulse-mark-read

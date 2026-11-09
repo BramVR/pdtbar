@@ -46,6 +46,7 @@ swift build
 swift test
 swift run pdtbar-checks
 swift run pdtbar-smoke scripted-pdt-connector
+swift run pdtbar-smoke scripted-api-client
 swift run pdtbar-smoke scripted-login-handoff
 swift run pdtbar-smoke scripted-setup-retry
 swift run pdtbar-smoke scripted-pulse-mark-read
@@ -77,6 +78,17 @@ swift run pdtbar-smoke packaged-onboarding --app PDTBar.app
 
 Add optional live proof only when explicitly requested or when local deterministic
 and packaged scripted proof cannot cover the change.
+
+Scripted PDT API client:
+
+```bash
+swift run pdtbar-smoke scripted-api-client
+```
+
+This uses no network, no token, and no Keychain. It drives `PDTAPIClient`
+through `ScriptedPDTHTTPTransport` with an in-memory token and proves GET-only
+requests to the PDT API origin, page and offset pagination, a 429 retry, a typed
+expired-token error, and a proof file without the token.
 
 Scripted Claude PDT connector e2e:
 

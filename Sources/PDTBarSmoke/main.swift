@@ -38,6 +38,8 @@ do {
         report = try livePDTSmoke(arguments: Array(arguments.dropFirst()))
     case "scripted-pdt-connector":
         report = try scriptedPDTConnectorSmoke(arguments: Array(arguments.dropFirst()))
+    case "scripted-api-client":
+        report = try scriptedAPIClientSmoke(arguments: Array(arguments.dropFirst()))
     case "copy-holding-identifier-action":
         report = copyHoldingIdentifierActionSmoke()
     case "scripted-first-fetch":
@@ -86,6 +88,7 @@ do {
       pdtbar-smoke manual-claude-pdt [--claude <path>] [--model <alias>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke live-pdt [--server <mcporter-server>] [--mcporter <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-pdt-connector [--artifacts <dir>]
+      pdtbar-smoke scripted-api-client [--artifacts <dir>]
       pdtbar-smoke copy-holding-identifier-action
       pdtbar-smoke scripted-first-fetch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-returning-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
@@ -1520,6 +1523,96 @@ private func scriptedPDTConnectorSmoke(arguments: [String]) throws -> SmokeRepor
         detail: "scripted Claude PDT connector checked required v1 read tools, called each required tool exactly once plus optional symbol lookup for a coalesced fetch, rendered through PressureRunner, and proved progressive degraded detail refresh with redacted proof",
         artifacts: [artifactPath(proof)]
     )
+}
+
+private func scriptedAPIClientSmoke(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let proof = artifacts.appending(path: "pdtbar-scripted-api-client-proof.json")
+    let secret = "pdt_scripted_smoke_secret"
+    let page = { (rows: String, current: Int, last: Int) in
+        ScriptedPDTHTTPTransport.Reply.response(
+            status: 200,
+            body: Data(#"{"data":[\#(rows)],"meta":{"currentPage":\#(current),"lastPage":\#(last),"perPage":100,"total":3}}"#.utf8)
+        )
+    }
+    let transport = ScriptedPDTHTTPTransport([
+        .response(status: 200, body: Data(#"{"data":[{"id":1},{"id":2}]}"#.utf8)),
+        .response(status: 429, body: Data(#"{"error":{"code":"RATE_LIMITED","message":"m","details":{},"traceId":"t"}}"#.utf8), headers: ["Retry-After": "0"]),
+        page(#"{"id":1},{"id":2}"#, 1, 2),
+        page(#"{"id":3}"#, 2, 2),
+        .response(status: 200, body: Data(#"{"data":{"items":[{"id":1}],"hasMore":false,"totalCount":1},"meta":[]}"#.utf8)),
+        .response(status: 401, body: Data(#"{"error":{"code":"TOKEN_INVALID","message":"m","details":{"reason":"expired"},"traceId":"t"}}"#.utf8)),
+    ])
+    let client = PDTAPIClient(
+        transport: transport,
+        tokenProvider: InMemoryPDTAPITokenProvider(token: PDTAPIToken(secret)),
+        sleeper: ThreadPDTAPISleeper()
+    )
+    let holdings: [ScriptedAPIRow] = try client.getAll(.holdings())
+    let dividends: [ScriptedAPIRow] = try client.getAll(.dividends())
+    let xRay: [ScriptedAPIRow] = try client.getAll(.xRay)
+    var expiredTokenClassified = false
+    do {
+        _ = try client.get(.me)
+    } catch PDTAPIError.tokenInvalid(reason: "expired") {
+        expiredTokenClassified = true
+    }
+
+    let requests = transport.requests
+    let proofPayload = ScriptedAPIClientProof(
+        requestCount: requests.count,
+        paths: requests.compactMap { $0.url?.path },
+        onlyGET: requests.allSatisfy { $0.httpMethod == "GET" && $0.httpBody == nil },
+        onlyPDTOrigin: requests.allSatisfy { $0.url?.scheme == "https" && $0.url?.host == "api.portfoliodividendtracker.com" },
+        holdingRows: holdings.count,
+        paginatedDividendRows: dividends.count,
+        xRayRows: xRay.count,
+        rateLimitRetried: requests.filter { $0.url?.path == "/v1/dividends" }.count == 3,
+        expiredTokenClassified: expiredTokenClassified
+    )
+    let proofData = try stableJSONData(proofPayload)
+    try proofData.write(to: proof, options: .atomic)
+
+    guard proofPayload.onlyGET,
+          proofPayload.onlyPDTOrigin,
+          holdings.count == 2,
+          dividends.count == 3,
+          xRay.count == 1,
+          proofPayload.rateLimitRetried,
+          expiredTokenClassified,
+          !String(decoding: proofData, as: UTF8.self).contains(secret)
+    else {
+        return SmokeReport(
+            name: "scripted-api-client",
+            status: SmokeStatus.failed,
+            detail: "scripted PDT API client did not prove GET-only same-origin requests, pagination, rate-limit retry, typed token errors, or token redaction",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+    return SmokeReport(
+        name: "scripted-api-client",
+        status: SmokeStatus.passed,
+        detail: "scripted PDT API client sent only GET requests to the PDT API origin, completed page and offset pagination, retried a 429, classified an expired token, and kept the token out of proof",
+        artifacts: [artifactPath(proof)]
+    )
+}
+
+private struct ScriptedAPIRow: Decodable {
+    var id: Int
+}
+
+private struct ScriptedAPIClientProof: Codable {
+    var requestCount: Int
+    var paths: [String]
+    var onlyGET: Bool
+    var onlyPDTOrigin: Bool
+    var holdingRows: Int
+    var paginatedDividendRows: Int
+    var xRayRows: Int
+    var rateLimitRetried: Bool
+    var expiredTokenClassified: Bool
 }
 
 private func copyHoldingIdentifierActionSmoke() -> SmokeReport {
