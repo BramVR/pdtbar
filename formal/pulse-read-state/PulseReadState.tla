@@ -15,7 +15,8 @@
 (* File writes are atomic (OwnerOnlyLocalStore.write renames a temp file,  *)
 (* Persistence.swift:126). Paths are Swift file:line at commit 1b6ffd4,    *)
 (* under Sources/PDTBarCore/ unless they say main.swift (PDTBarApp). The   *)
-(* mark-read and publish actions cite the code after the #268/#269 fix.    *)
+(* mark-read and publish actions cite the code after the #268/#269 fix,   *)
+(* the commit and reset actions the code after the #270 fix.              *)
 (***************************************************************************)
 EXTENDS FiniteSets
 
@@ -25,8 +26,11 @@ CONSTANTS
     \* the store, the background refresh result included. FALSE replays the
     \* code before #269, which published the worker's read state.
     ReapplyOnBgPublish,
-    \* TRUE models a fix: the re-crossing reset runs before the snapshot that
-    \* records the crossing is committed.
+    \* TRUE is current code (#270): SnapshotStore.commitCurrentSnapshot
+    \* (Persistence.swift:660) removes the read marks of items that re-cross
+    \* against the snapshot on disk (666), then writes the snapshot (669). The
+    \* reset after the commit only prunes stale marks (569). FALSE replays the
+    \* code before #270, which reset re-crossed marks after the commit.
     ResetBeforeSnapshotCommit,
     \* TRUE is current code: PulseReadStore.markRead runs its load and save
     \* inside PulseReadStore.mutationQueue (Persistence.swift:20, 38).
@@ -92,11 +96,15 @@ Resets(s, p) == s.conc \in ConcFps /\ p # NoSnap /\ p.conc = "below"
 
 Reappeared(s, p) == IF Resets(s, p) THEN {s.conc} ELSE {}
 
-\* PressureRunner.staleReadFingerprints, Persistence.swift:592.
+\* PressureRunner.staleReadFingerprints, Persistence.swift:586.
 Stale(s, loaded) ==
     IF s.inc = "none" THEN {} ELSE {f \in loaded \cap IncFps : f # s.inc}
 
-ToRemove(s, p, loaded) == Reappeared(s, p) \cup Stale(s, loaded)
+\* What the reset after the commit removes. Since #270 the re-crossed marks
+\* are already gone by then, so only stale marks remain.
+ToRemove(s, p, loaded) ==
+    IF ResetBeforeSnapshotCommit THEN Stale(s, loaded)
+    ELSE Reappeared(s, p) \cup Stale(s, loaded)
 
 Pulse(s, p, r, read) ==
     [shown |-> TRUE, inc |-> s.inc, conc |-> ConcItem(s, p, r), read |-> read]
@@ -204,8 +212,9 @@ MarkReadReload ==
 (* Shared worker steps.                                                    *)
 
 \* PulseReadStore.removeReadFingerprints, Persistence.swift:49, called from
-\* PressureRunner.readStateAfterResettingReappearedItems, Persistence.swift:569.
-\* With nothing to remove the result keeps the loaded state (586-588).
+\* PressureRunner.readStateAfterPruningStaleItems, Persistence.swift:569
+\* (readStateAfterResettingReappearedItems before #270). With nothing to
+\* remove the result keeps the loaded state.
 ResetEffect(to) ==
     /\ LET rm == ToRemove(wNew, wPrior, wLoaded) IN
          IF rm = {}
@@ -219,16 +228,18 @@ ResetEffect(to) ==
     /\ UNCHANGED <<pdt, snap, display, wPrior, wNew, wLoaded, mainPc, mainFp,
                    mainLoaded>>
 
-\* Fixed variant only: drop the re-crossed mark before the snapshot that
-\* records the crossing reaches disk.
+\* SnapshotStore.commitCurrentSnapshot, Persistence.swift:661-667: drop the
+\* marks of items that re-cross against the snapshot on disk, in one
+\* removeReadFingerprints write, before the snapshot write (669). Only the
+\* running worker writes the snapshot, so snap here is the prior it loaded.
 EarlyResetEffect(to) ==
-    /\ store' = store \ Reappeared(wNew, wPrior)
-    /\ intended' = intended \ Reappeared(wNew, wPrior)
+    /\ store' = store \ Reappeared(wNew, snap)
+    /\ intended' = intended \ Reappeared(wNew, snap)
     /\ wPc' = to
     /\ UNCHANGED <<pdt, snap, display, wPrior, wNew, wLoaded, wRead, mainPc,
                    mainFp, mainLoaded, owed>>
 
-\* SnapshotStore.commitCurrentSnapshot, Persistence.swift:662.
+\* SnapshotStore.commitCurrentSnapshot, Persistence.swift:669 snapshot write.
 CommitEffect(to) ==
     /\ snap' = wNew
     /\ owed' = IF Resets(wNew, wPrior) /\ ~ResetBeforeSnapshotCommit
@@ -254,8 +265,10 @@ FirstFetchStart ==
     /\ UNCHANGED <<pdt, snap, store, display, wPrior, wNew, wLoaded, wRead,
                    mainPc, mainFp, mainLoaded, intended, owed>>
 
-\* PressureRunner.run, Persistence.swift:417-429: fetch, load prior,
-\* displayReadState.
+\* PressureRunner.run, Persistence.swift:417-428: fetch, load prior. Since
+\* #270 displayReadState loads after the commit (430). Only the publish and
+\* the changed-bucket check read it, and the publish re-reads the store, so
+\* loading it here keeps the model smaller without changing any property.
 FirstFetchLoad ==
     /\ wPc = "ffLoad"
     /\ wNew' = pdt
@@ -269,7 +282,7 @@ FirstFetchEarlyReset ==
     /\ wPc = "ffEarlyReset"
     /\ EarlyResetEffect("ffCommit")
 
-\* PressureRunner.run, Persistence.swift:430 commitCurrentSnapshot.
+\* PressureRunner.run, Persistence.swift:429 commitCurrentSnapshot.
 FirstFetchCommit ==
     /\ wPc = "ffCommit"
     /\ CommitEffect("ffReset")
@@ -321,17 +334,19 @@ BgEarlyReset ==
     /\ wPc = "bgEarlyReset"
     /\ EarlyResetEffect("bgBaseCommit")
 
-\* PDTBackgroundDetailRefresh.swift:225 base-holdings commit. The
-\* allocation/xRay/income/performance phase commits (264, 288, 322, 379)
-\* rewrite the same holdings and are folded into bgDetails, as are the
-\* throwIfCancelled checks between them (256-400).
+\* PDTBackgroundDetailRefresh.swift:232 base-holdings commit. The
+\* allocation/xRay/income/performance phase commits (271, 295, 329, 386)
+\* rewrite the same holdings against the base already on disk, so their
+\* early reset finds no crossing. They are folded into bgDetails, as are
+\* the throwIfCancelled checks between them (256-410).
 BgBaseCommit ==
     /\ wPc = "bgBaseCommit"
     /\ CommitEffect("bgDetails")
 
-\* PDTBackgroundDetailRefresh.swift:406 calls PressureRunner.refreshedPulse,
-\* Persistence.swift:461 displayReadState and 469 commitCurrentSnapshot of
-\* the same holdings. No cancellation check runs from here to the return.
+\* PDTBackgroundDetailRefresh.swift:413 calls PressureRunner.refreshedPulse,
+\* Persistence.swift:468 commitCurrentSnapshot of the same holdings, whose
+\* early reset finds no crossing against the base on disk, then 469
+\* displayReadState. No cancellation check runs from here to the return.
 BgLoadReadState ==
     /\ wPc = "bgDetails"
     /\ wLoaded' = store
