@@ -16,11 +16,11 @@ Run it when a change touches any covered function below, the order of main-queue
 Sync commit: `1b6ffd4` (origin/main when the model was last confirmed to describe the covered code; the code was re-read after the #241 file split). After you confirm the model still describes the code at a newer commit, move this line forward. Never move it without that check.
 
 `Sources/PDTBarCore/LaunchRuntime.swift`:
-- `PDTReadinessAttempt` 1017. `PDTLaunchRuntime` 1022-1328: `launch` 1045, `launchWhileLoadingCachedPulse` 1052, `completeCachedPulseLoad` 1058, `installCachedPulse` 1070, `retryReadiness` 1096, `completeReadinessProbe` 1103, `applyReadiness` 1120, `beginLoginHandoff` 1143, `completeLoginHandoff` 1148, `retryFirstFetch` 1163, `firstFetchProgress` 1174, `completeFirstFetch` 1181, `beginBackgroundDetailRefresh` 1191, `backgroundDetailRefreshProgress` 1198, `completeBackgroundDetailRefresh` 1215, `publishPulse` 1255, `beginReadinessProbe` 1277, `startBackgroundDetailRefresh` 1283, `update` 1300.
+- `PDTReadinessAttempt` 1017. `PDTLaunchRuntime` 1022-1334: `launch` 1045, `launchWhileLoadingCachedPulse` 1052, `completeCachedPulseLoad` 1058, `installCachedPulse` 1070, `retryReadiness` 1096, `completeReadinessProbe` 1103, `applyReadiness` 1120, `beginLoginHandoff` 1143, `completeLoginHandoff` 1148, `retryFirstFetch` 1164, `firstFetchProgress` 1176, `completeFirstFetch` 1183, `beginBackgroundDetailRefresh` 1193, `backgroundDetailRefreshProgress` 1200, `completeBackgroundDetailRefresh` 1217, `publishPulse` 1257, `beginReadinessProbe` 1283, `startBackgroundDetailRefresh` 1289, `update` 1306.
 - `ClaudeLoginAttemptGate` 118.
-- Clickable rows per state: `ClaudeLaunchFlow.descriptor(for:cachedPulse:)` 364, `descriptorForBackgroundRefreshFailure` 572, `descriptorForBackgroundDetailProgress` 597, `descriptorForBackgroundDetailDegraded` 613, `descriptor(forLoginFailure:)` 647, `portfolioFetchFailureRows` 943, `ClaudeSetupMenuDescriptor` 1440-1556.
+- Clickable rows per state: `ClaudeLaunchFlow.descriptor(for:cachedPulse:)` 364, `descriptorForBackgroundRefreshFailure` 572, `descriptorForBackgroundDetailProgress` 597, `descriptorForBackgroundDetailDegraded` 613, `descriptor(forLoginFailure:)` 647, `portfolioFetchFailureRows` 943, `ClaudeSetupMenuDescriptor` 1492-1610.
 
-`Sources/PDTBarCore/MenuDescriptorRenderer.swift`: default pulse "Refresh now" row 277.
+`Sources/PDTBarCore/MenuDescriptorRenderer.swift`: default pulse "Refresh now" row 277, `refreshActionRow` 468 (`waitingForSetup` is shown but not clickable).
 
 `Sources/PDTBarApp/main.swift` (`AppDelegate`):
 - `launch` 80, `startCachedPulseLoad` 102, `startClaudeReadinessProbe` 125, `startFirstPortfolioFetch` 145, `finishFirstPortfolioFetch` 182, `updatePortfolioFetchProgress` 218, `retryPortfolioFetch` 236, `startBackgroundPortfolioRefresh` 243, `finishBackgroundPortfolioRefresh` 300, `retryClaudeReadiness` 317, `loginWithClaude` 324, `handleLaunchUpdate` 349, row-role-to-selector wiring in `makeMenuItem` 550, `markPulseItemRead` 1032, `backgroundDetailRefreshConfigured` 1103.
@@ -49,11 +49,14 @@ Passing today:
 - `NeverStranded`: something is running, or the menu offers Log in, Check again, or Try again / Refresh now. Harm if broken: the user is stuck with no way forward but quitting.
 - `SetupReflectsLatestProbe`: a setup screen showing a probe result is never contradicted by a newer probe still running.
 - `FetchingMenuTellsTruth`: a "Refreshing" / "Fetching" menu means a fetch is running.
+- `ProbingMenuTellsTruth`: "Checking Claude setup" means the newest readiness result is still on its way.
+- `SetupMenuMeansIdle`: a setup screen is shown only when no fetch runs behind it.
+- `CheckBeforeWork`: no fetch runs while a readiness check is pending. Fixed in #267: `retryFirstFetch` refuses until readiness came back ready, the cached pulse shown during the check renders "Refresh now" as not clickable (`waitingForSetup`), and a mark-read `publishPulse` during the check keeps `.probingClaude`. Mutation `republishSkipsCheck` restores the mark-read path. The menu is mutated in place (main.swift 485), so no model path reaches `retryFirstFetch` without a clickable row; its refusal is the runtime's own rule, pinned by `LaunchFlowTests`. This also makes the refresh-in-flight guard in `applyReadiness` unreachable.
+- `RefreshOfferIsLive`: every clickable "Refresh now" / "Try again" is accepted by `retryFirstFetch`. Mutation `probingOffersRefresh` shows a dead button.
 - `ProbeResultNotLost`: while the runtime waits for readiness attempt N, N's result is still running or parked until the cached pulse loads. Fixed in #274: every probe result must name its `PDTReadinessAttempt`, and `PDTLaunchRuntime` checks it before it parks a `ready`, so a superseded probe can no longer overwrite the parked result. Mutation `parkStaleProbe` restores the old order.
 
 Open findings (fail on the code at the sync commit; listed in `check.sh` as `OPEN_FINDINGS`):
 - `BackgroundFlagMatchesWork` (shortest path 4 steps). On a returning launch the background refresh starts. The user clicks "Mark as read" on a pulse row, and `markPulseItemRead` republishes through `publishPulse`, which sets `backgroundDetailRefreshInFlight = false` while the refresh is still running. Progress rows stop, because `backgroundDetailRefreshProgress` drops updates once the flag is false. "Refresh now" reappears during the refresh. When the refresh finishes it publishes its own older read state (see `verify-pulse-read-state`, stale publish). Fix direction: republish a mark-read without touching the refresh flag or the progress descriptor.
-- `ProbingMenuTellsTruth` and `SetupMenuMeansIdle` (shortest path 4 and 6 steps). On a returning launch, the cached pulse shown during "Checking Claude setup" keeps its "Refresh now" row. Clicking it calls `retryFirstFetch`, which starts a background refresh before readiness is known. When the probe then returns a setup result, a setup screen covers a refresh that is still running, and its progress callbacks flip the menu back. If the user clicks "Check again" and the probe returns `ready`, `completeReadinessProbe` takes the refresh-in-flight guard. That guard leaves `state == .probingClaude` with `readinessProbe == .idle`, so the menu says "Checking Claude setup" until the refresh reports. Changing the row to "Refreshing now" makes `FetchingMenuTellsTruth` fail. Hiding the row was a dead end while `ProbeResultNotLost` failed (#274, now fixed); recheck `NeverStranded` when changing it.
 
 When a fix lands, remove the invariant from `OPEN_FINDINGS` in both `check.sh` and `mutations.sh`, and update this list.
 
@@ -75,7 +78,7 @@ When TLC reports a violation, replay its steps against the Swift code before you
 
 ## Scope and bounds
 
-Bounds (`LaunchRuntime.cfg`): at most 3 readiness attempts from "Check again", 2 login clicks, and 2 Try again / Refresh now clicks (`MaxProbes`, `MaxLogins`, `MaxRetries`), with `BackgroundAfterFirstFetch = TRUE` as on real launches. That covers 4,901 distinct states. Mark as read is unbounded (it is idempotent in this model). A pass covers these bounds only.
+Bounds (`LaunchRuntime.cfg`): at most 3 readiness attempts from "Check again", 2 login clicks, and 2 Try again / Refresh now clicks (`MaxProbes`, `MaxLogins`, `MaxRetries`), with `BackgroundAfterFirstFetch = TRUE` as on real launches. That covers 1,924 distinct states. Mark as read is unbounded (it is idempotent in this model). A pass covers these bounds only.
 
 Modelled at this abstraction:
 - Probe results are any of the five `ClaudeReadinessProbeResult` values.

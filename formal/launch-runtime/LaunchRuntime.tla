@@ -59,7 +59,9 @@ vars == <<state, pulse, probeInFlight, attemptID, ffInFlight, bgInFlight,
 
 \* ClaudeLaunchFlow.descriptor(for:cachedPulse:) Core:364-539
 Desc(st, p) ==
-    IF p # "none" /\ st = "probingClaude"        THEN [kind |-> "pulse", st |-> st, refresh |-> "available"]   \* cached pulse keeps its "Refresh now" row (MenuDescriptorRenderer.swift:277)
+    IF p # "none" /\ st = "probingClaude"
+    THEN [kind |-> "pulse", st |-> st,
+          refresh |-> IF "probingOffersRefresh" \in Mutations THEN "available" ELSE "none"]  \* .withRefreshAction(.waitingForSetup): "Refresh now" shown, not clickable
     ELSE IF p # "none" /\ st = "fetchingPortfolio" THEN [kind |-> "pulse", st |-> st, refresh |-> "inProgress"] \* .withRefreshAction(.inProgress) Core:394
     ELSE IF p # "none" /\ st = "portfolioFetchFailed" THEN [kind |-> "pulse", st |-> st, refresh |-> "available"] \* descriptorForBackgroundRefreshFailure Core:572
     ELSE IF st = "portfolioFetchFailed"            THEN [kind |-> "setup", st |-> st, refresh |-> "available"]   \* portfolioFetchFailureRows "Try again" Core:943
@@ -212,8 +214,9 @@ CacheLoadReturns ==
 Publish(newPulse) ==
     /\ bgInFlight' = FALSE
     /\ pulse' = newPulse
-    /\ state' = "fetchingPortfolio"
-    /\ menu' = RefreshedMenu
+    /\ IF state = "probingClaude" /\ "republishSkipsCheck" \notin Mutations
+       THEN /\ UNCHANGED state /\ menu' = Desc("probingClaude", newPulse)   \* a republish keeps the readiness check
+       ELSE /\ state' = "fetchingPortfolio" /\ menu' = RefreshedMenu
 
 \* finishFirstPortfolioFetch App:196-211 + completeFirstFetch Core:1135-1143
 FirstFetchReturns ==
@@ -303,12 +306,16 @@ ClickCheckAgain ==
     /\ UNCHANGED <<cacheLoadFinished, pending, refreshInFlight, loginNext, loginActive, cacheLoad,
                    ffWorkers, bgWorkers, logins, retries>>
 
+\* retryFirstFetch accepts only once readiness came back ready (Core retryFirstFetch)
+ReadinessCleared == state \in {"fetchingPortfolio", "portfolioFetchFailed"}
+
 \* retryPortfolioFetch click App:250-255 + retryFirstFetch Core:1117-1126
 ClickRetry ==
     /\ CanRetry
     /\ retries < MaxRetries
     /\ retries' = retries + 1
     /\ ("noRetryGuard" \in Mutations \/ (~ffInFlight /\ ~bgInFlight))
+    /\ ReadinessCleared
     /\ IF pulse # "none"
        THEN /\ UNCHANGED <<ffWorkers>> /\ StartBg
        ELSE /\ ffInFlight' = TRUE
@@ -397,6 +404,13 @@ ProbeResultNotLost == probeInFlight => (attemptID \in probes \/ pending.id = att
 SetupReflectsLatestProbe ==
     (menu.kind = "setup" /\ menu.st \in {"loggedOut", "missingClaudeLogin", "missingPDTMCP", "probeFailed"})
         => attemptID \notin probes
+
+\* No portfolio fetch runs while a readiness check is pending: a fetch starts only
+\* after readiness comes back ready, never behind a setup screen it could cover.
+CheckBeforeWork == probeInFlight => (~ffInFlight /\ ~bgInFlight /\ ffWorkers + bgWorkers = 0)
+
+\* Every clickable "Refresh now" / "Try again" starts a fetch; none is a dead button.
+RefreshOfferIsLive == CanRetry => (ReadinessCleared /\ ~ffInFlight /\ ~bgInFlight)
 
 \* The user is never stranded: either something is running or the menu offers a way forward.
 NeverStranded ==

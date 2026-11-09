@@ -375,7 +375,7 @@ public enum ClaudeLaunchFlow {
                         claudeReadiness: .checking,
                         pdtMCPReadiness: .unknown,
                         detailFill: .notStarted
-                    ),
+                    ).withRefreshAction(.waitingForSetup),
                     rowsFirst: true,
                     rows: [
                         MenuRow(
@@ -1160,8 +1160,10 @@ public final class PDTLaunchRuntime {
         }
     }
 
+    /// Accepted only after readiness came back ready, so no fetch runs behind a setup screen.
     public func retryFirstFetch() -> PDTOnboardingUpdate? {
-        guard !firstFetchInFlight, !backgroundDetailRefreshInFlight else {
+        guard state == .fetchingPortfolio || state == .portfolioFetchFailed,
+              !firstFetchInFlight, !backgroundDetailRefreshInFlight else {
             return nil
         }
         if let currentPulse {
@@ -1256,6 +1258,10 @@ public final class PDTLaunchRuntime {
         backgroundDetailRefreshInFlight = false
         let publishedPulse = pulseApplyingLastKnownReadiness(pulse)
         currentPulse = publishedPulse
+        // A mark-read republish during the setup check must not skip the check.
+        if state == .probingClaude {
+            return update(state: .probingClaude)
+        }
         state = .fetchingPortfolio
         let descriptor = ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: publishedPulse.descriptor)
         lastDescriptor = descriptor

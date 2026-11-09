@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed "Refresh now" starting a portfolio refresh while PDTBar was still checking Claude setup on a returning launch, which let a setup screen cover a running refresh and could leave "Checking Claude setup" up with no check running; the row now waits for the check, and marking a row read during the check keeps it (#267).
 - Fixed launch staying on "Checking Claude" forever when you log in with Claude during the first readiness check and an older check's result overwrote the newer one waiting for the cached pulse (#274).
 - Added a background detail refresh over the read-only PDT REST API that commits once at the end, keeps last-good facets on optional failures, and skips later phases after an auth outage; the shipped refresh stays on Claude until PDT sign-in lands.
 - Fixed portfolio-value privacy masking so money-bearing menu fields render from typed values instead of relying on currency regexes and prose-specific scrubbing.
