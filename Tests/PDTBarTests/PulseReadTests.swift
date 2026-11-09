@@ -278,6 +278,7 @@ struct PulseReadTests {
         let readStore = PulseReadStore(directory: snapshotStore.directory)
         var priorSnapshot = snapshot
         priorSnapshot.openHoldings[0].weight = 0.190
+        _ = try snapshotStore.commitCurrentSnapshot(priorSnapshot)
 
         try readStore.markRead(originalItem.readFingerprint)
         let refreshed = try PressureRunner.refreshedPulse(

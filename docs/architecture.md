@@ -31,7 +31,10 @@ Claude/PDT readiness probe -> `PortfolioDataSource` -> normalized `PortfolioSnap
 `PressureRunner` is the Pulse lifecycle seam for cached snapshots, first fetches,
 and refreshed snapshots: it loads prior state, computes pressure, applies/reset
 read state, commits snapshot metadata when needed, and returns the rendered
-descriptor as one `PulseLifecycleResult`.
+descriptor as one `PulseLifecycleResult`. `SnapshotStore.commitCurrentSnapshot`
+removes the read marks of concentration items that cross back above the
+threshold against the snapshot it replaces before it writes, so a quit between
+the two writes cannot record a crossing whose old read mark is still stored.
 
 `PDTLaunchRuntime` is the scripted no-argument launch seam for readiness,
 cached-pulse display, first-fetch success/failure, returning-launch background

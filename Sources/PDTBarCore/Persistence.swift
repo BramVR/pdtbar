@@ -363,7 +363,7 @@ public enum PressureRunner {
             snapshotCommit: commit,
             pulseReadStore: pulseReadStore,
             source: .cachedSnapshot,
-            resetsReappearedReadState: false,
+            prunesStaleReadState: false,
             detailRefreshDiagnostic: cachedDetailRefreshDiagnostic(for: snapshot, snapshotStore: snapshotStore),
             priorSnapshotLoadStatus: snapshotLoad.status,
             today: today ?? currentDayString()
@@ -426,8 +426,8 @@ public enum PressureRunner {
             snapshot.latestDetailFillOutcome = snapshot.latestDetailFillOutcome
                 ?? priorSnapshot.latestDetailFillOutcome
         }
-        let loadedReadState = displayReadState(from: pulseReadStore)
         let commit = try snapshotStore.commitCurrentSnapshot(snapshot)
+        let loadedReadState = displayReadState(from: pulseReadStore)
         return try lifecycleResult(
             snapshot: snapshot,
             priorSnapshot: priorSnapshot,
@@ -435,7 +435,7 @@ public enum PressureRunner {
             pulseReadStore: pulseReadStore,
             source: .fetchedSnapshot,
             loadedReadState: loadedReadState,
-            resetsReappearedReadState: true,
+            prunesStaleReadState: true,
             priorSnapshotLoadStatus: priorSnapshotLoad.status
         )
     }
@@ -458,7 +458,6 @@ public enum PressureRunner {
         detailRefreshDiagnostic: PDTDetailRefreshFailureDiagnostic? = nil,
         priorSnapshotLoadStatus: PriorSnapshotLoadStatus = .notRequested
     ) throws -> PulseLifecycleResult {
-        let loadedReadState = displayReadState(from: pulseReadStore)
         var committedSnapshot = snapshot
         if let detailRefreshOutcome {
             committedSnapshot.latestDetailFillOutcome = detailRefreshOutcome
@@ -467,6 +466,7 @@ public enum PressureRunner {
             committedSnapshot.latestCompleteDetailFillAsOf = committedSnapshot.asOf
         }
         let commit = try snapshotStore.commitCurrentSnapshot(committedSnapshot)
+        let loadedReadState = displayReadState(from: pulseReadStore)
         return try lifecycleResult(
             snapshot: committedSnapshot,
             priorSnapshot: priorSnapshot,
@@ -474,7 +474,7 @@ public enum PressureRunner {
             pulseReadStore: pulseReadStore,
             source: .refreshedSnapshot,
             loadedReadState: loadedReadState,
-            resetsReappearedReadState: true,
+            prunesStaleReadState: true,
             detailRefreshOutcome: detailRefreshOutcome,
             detailRefreshDiagnostic: detailRefreshDiagnostic,
             priorSnapshotLoadStatus: priorSnapshotLoadStatus
@@ -512,7 +512,7 @@ public enum PressureRunner {
         pulseReadStore: PulseReadStore?,
         source: PulseLifecycleSource,
         loadedReadState: PulseReadState? = nil,
-        resetsReappearedReadState: Bool,
+        prunesStaleReadState: Bool,
         detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil,
         detailRefreshDiagnostic: PDTDetailRefreshFailureDiagnostic? = nil,
         priorSnapshotLoadStatus: PriorSnapshotLoadStatus = .notRequested,
@@ -537,8 +537,8 @@ public enum PressureRunner {
                 priorSnapshotLoadStatus: priorSnapshotLoadStatus
             )
         )
-        let readState = resetsReappearedReadState
-            ? try readStateAfterResettingReappearedItems(
+        let readState = prunesStaleReadState
+            ? try readStateAfterPruningStaleItems(
                 in: rawModel,
                 loadedReadState: displayReadState,
                 pulseReadStore: pulseReadStore
@@ -566,7 +566,7 @@ public enum PressureRunner {
         )
     }
 
-    static func readStateAfterResettingReappearedItems(
+    static func readStateAfterPruningStaleItems(
         in model: PortfolioPulseModel,
         loadedReadState: PulseReadState?,
         pulseReadStore: PulseReadStore?
@@ -576,17 +576,11 @@ public enum PressureRunner {
         else {
             return loadedReadState
         }
-        let reappearedFingerprints = Set(
-            model.rankedAttentionItems
-                .filter(\.resetsReadState)
-                .map(\.readFingerprint)
-        )
         let staleFingerprints = staleReadFingerprints(in: model, readState: loadedReadState)
-        let fingerprintsToRemove = reappearedFingerprints.union(staleFingerprints)
-        guard !fingerprintsToRemove.isEmpty else {
+        guard !staleFingerprints.isEmpty else {
             return loadedReadState
         }
-        return try pulseReadStore.removeReadFingerprints(fingerprintsToRemove)
+        return try pulseReadStore.removeReadFingerprints(staleFingerprints)
     }
 
     private static func staleReadFingerprints(
@@ -659,7 +653,18 @@ public struct SnapshotStore: Sendable {
         }
     }
 
+    /// Replaces the snapshot on disk. A concentration item that crosses back
+    /// above the threshold against the snapshot it replaces loses its old read
+    /// mark first, so a quit between the two writes leaves the crossing still
+    /// detectable on disk instead of recorded with its mark still stored.
     public func commitCurrentSnapshot(_ snapshot: PortfolioSnapshot) throws -> SnapshotCommit {
+        let reappeared = PressureEngine.reappearedReadFingerprints(
+            from: snapshot,
+            priorSnapshot: try loadPriorSnapshotResult().snapshot
+        )
+        if !reappeared.isEmpty {
+            _ = try PulseReadStore(directory: directory).removeReadFingerprints(reappeared)
+        }
         let target = currentSnapshotPath
         try OwnerOnlyLocalStore.write(stableJSONData(snapshot), to: target)
         return SnapshotCommit(written: true, path: target.path, asOf: snapshot.asOf)
