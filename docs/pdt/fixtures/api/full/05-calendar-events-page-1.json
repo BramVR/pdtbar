@@ -1,0 +1,32 @@
+{
+  "data": [
+    {
+      "id": 1001,
+      "date": "2026-06-24",
+      "type": "ex-dividend",
+      "isEstimated": false,
+      "symbolId": 5003,
+      "symbolName": "Helix Pharma A/S"
+    },
+    {
+      "id": 1002,
+      "date": "2026-06-26",
+      "type": "ex-dividend",
+      "isEstimated": false,
+      "symbolId": 5001,
+      "symbolName": "Nova Lithography"
+    }
+  ],
+  "meta": {
+    "currentPage": 1,
+    "lastPage": 2,
+    "perPage": 2,
+    "total": 3
+  },
+  "links": {
+    "first": null,
+    "last": null,
+    "prev": null,
+    "next": null
+  }
+}

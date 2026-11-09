@@ -1,0 +1,306 @@
+{
+  "data": [
+    {
+      "symbolName": "Nova Lithography",
+      "isin": "NL0000000001",
+      "symbolId": 5001,
+      "symbolQuoteId": 9001,
+      "currentPrice": {
+        "value": "612.40",
+        "currency": "EUR"
+      },
+      "currentPriceDate": "2026-06-22T23:59:59+00:00",
+      "currentPriceLocal": {
+        "value": "612.40",
+        "currency": "EUR"
+      },
+      "currentExchangeRate": 1,
+      "currentExchangeRateDate": "2026-06-22T23:59:59+00:00",
+      "currentWorth": {
+        "value": "12000.00",
+        "currency": "EUR"
+      },
+      "currentWorthLocal": {
+        "value": "12000.00",
+        "currency": "EUR"
+      },
+      "portfolioWeight": "0.3",
+      "unrealisedGains": {
+        "value": 2200.0,
+        "currency": "EUR"
+      },
+      "unrealisedGainsPercentage": "0.2245",
+      "brokers": [
+        1
+      ],
+      "corporateActions": [],
+      "startsAt": "2023-02-14T09:12:00+00:00",
+      "closedAt": null,
+      "unrealisedBoughtPriceTotalLocal": {
+        "value": 9800.0,
+        "currency": "EUR"
+      },
+      "unrealisedBoughtShares": "19.6"
+    },
+    {
+      "symbolName": "Orbit Communications",
+      "isin": "US0000000022",
+      "symbolId": 5002,
+      "symbolQuoteId": 9002,
+      "currentPrice": {
+        "value": "401.20",
+        "currency": "USD"
+      },
+      "currentPriceDate": "2026-06-22T23:59:59+00:00",
+      "currentExchangeRate": 1.154,
+      "currentExchangeRateDate": "2026-06-22T23:59:59+00:00",
+      "currentWorth": {
+        "value": "9232.00",
+        "currency": "USD"
+      },
+      "currentWorthLocal": {
+        "value": "8000.00",
+        "currency": "EUR"
+      },
+      "portfolioWeight": 0.2,
+      "unrealisedGains": {
+        "value": "0.00",
+        "currency": "EUR"
+      },
+      "unrealisedGainsPercentage": 0,
+      "brokers": [
+        1
+      ],
+      "corporateActions": [],
+      "startsAt": "2023-02-14T09:12:00+00:00",
+      "closedAt": null
+    },
+    {
+      "symbolName": "Helix Pharma A/S",
+      "isin": "DK0000000033",
+      "symbolId": 5003,
+      "symbolQuoteId": 9003,
+      "currentPrice": {
+        "value": "292.95",
+        "currency": "DKK"
+      },
+      "currentPriceDate": "2026-06-22T23:59:59+00:00",
+      "currentPriceLocal": {
+        "value": "39.20",
+        "currency": "EUR"
+      },
+      "currentExchangeRate": "7.4735",
+      "currentExchangeRateDate": "2026-06-22T23:59:59+00:00",
+      "currentWorth": {
+        "value": "44841.00",
+        "currency": "DKK"
+      },
+      "currentWorthLocal": {
+        "value": "6000.00",
+        "currency": "EUR"
+      },
+      "portfolioWeight": 0.15,
+      "unrealisedGains": {
+        "value": "n/a",
+        "currency": "EUR"
+      },
+      "unrealisedGainsPercentage": "n/a",
+      "brokers": [
+        1
+      ],
+      "corporateActions": [],
+      "startsAt": "2023-02-14T09:12:00+00:00",
+      "closedAt": null
+    },
+    {
+      "symbolName": "Meridian Pay",
+      "isin": "GB0000000044",
+      "symbolId": 5004,
+      "symbolQuoteId": 9004,
+      "currentPrice": {
+        "value": "818.00",
+        "currency": "GBX"
+      },
+      "currentPriceDate": "2026-06-22T23:59:59+00:00",
+      "currentPriceLocal": {
+        "value": "9.44",
+        "currency": "EUR"
+      },
+      "currentExchangeRate": 86.665,
+      "currentExchangeRateDate": "2026-06-22T23:59:59+00:00",
+      "currentWorth": {
+        "value": 693320.0,
+        "currency": "GBX"
+      },
+      "currentWorthLocal": {
+        "value": "8000.00",
+        "currency": "EUR"
+      },
+      "portfolioWeight": 0.2,
+      "unrealisedGains": {
+        "value": "0.00",
+        "currency": "EUR"
+      },
+      "unrealisedGainsPercentage": 0,
+      "brokers": [
+        1
+      ],
+      "corporateActions": [],
+      "startsAt": "2023-02-14T09:12:00+00:00",
+      "closedAt": null,
+      "unrealisedBoughtPriceAverageLocal": {
+        "value": "8.10",
+        "currency": "EUR"
+      },
+      "unrealisedBoughtShares": 847.5
+    },
+    {
+      "symbolName": "Cash",
+      "isin": null,
+      "symbolId": 5010,
+      "symbolQuoteId": 9010,
+      "currentPrice": {
+        "value": "1.00",
+        "currency": "EUR"
+      },
+      "currentPriceDate": "2026-06-22T23:59:59+00:00",
+      "currentPriceLocal": {
+        "value": "1.00",
+        "currency": "EUR"
+      },
+      "currentExchangeRate": 1,
+      "currentExchangeRateDate": "2026-06-22T23:59:59+00:00",
+      "currentWorth": {
+        "value": "4000.00",
+        "currency": "EUR"
+      },
+      "currentWorthLocal": {
+        "value": "4000.00",
+        "currency": "EUR"
+      },
+      "portfolioWeight": 0.1,
+      "unrealisedGains": {
+        "value": "0.00",
+        "currency": "EUR"
+      },
+      "unrealisedGainsPercentage": 0,
+      "brokers": [
+        1
+      ],
+      "corporateActions": [],
+      "startsAt": null,
+      "closedAt": null
+    },
+    {
+      "symbolName": "Cash",
+      "isin": null,
+      "symbolId": 5013,
+      "symbolQuoteId": 9013,
+      "currentPrice": {
+        "value": "1.00",
+        "currency": "USD"
+      },
+      "currentPriceDate": "2026-06-22T23:59:59+00:00",
+      "currentPriceLocal": {
+        "value": "0.87",
+        "currency": "EUR"
+      },
+      "currentExchangeRate": "1.154",
+      "currentExchangeRateDate": "2026-06-22T23:59:59+00:00",
+      "currentWorth": {
+        "value": "2308.00",
+        "currency": "USD"
+      },
+      "currentWorthLocal": {
+        "value": 2000.0,
+        "currency": "EUR"
+      },
+      "portfolioWeight": "0.05",
+      "unrealisedGains": {
+        "value": "0.00",
+        "currency": "EUR"
+      },
+      "unrealisedGainsPercentage": 0,
+      "brokers": [
+        1
+      ],
+      "corporateActions": [],
+      "startsAt": null,
+      "closedAt": null
+    },
+    {
+      "symbolName": "Lumen Luxury",
+      "isin": "FR0000000088",
+      "symbolId": 5007,
+      "symbolQuoteId": 9007,
+      "currentPrice": {
+        "value": "499.25",
+        "currency": "EUR"
+      },
+      "currentPriceDate": "2026-06-22T23:59:59+00:00",
+      "currentPriceLocal": {
+        "value": "499.25",
+        "currency": "EUR"
+      },
+      "currentExchangeRate": 1,
+      "currentExchangeRateDate": "2026-06-22T23:59:59+00:00",
+      "currentWorth": {
+        "value": "0.00",
+        "currency": "EUR"
+      },
+      "currentWorthLocal": {
+        "value": "0.00",
+        "currency": "EUR"
+      },
+      "portfolioWeight": 0,
+      "unrealisedGains": {
+        "value": "0.00",
+        "currency": "EUR"
+      },
+      "unrealisedGainsPercentage": 0,
+      "brokers": [
+        1
+      ],
+      "corporateActions": [],
+      "startsAt": "2023-02-14T09:12:00+00:00",
+      "closedAt": null
+    },
+    {
+      "symbolName": "Solstice Payments",
+      "isin": "NL0000000077",
+      "symbolId": 5006,
+      "symbolQuoteId": 9006,
+      "currentPrice": {
+        "value": "875.80",
+        "currency": "EUR"
+      },
+      "currentPriceDate": "2026-06-22T23:59:59+00:00",
+      "currentPriceLocal": {
+        "value": "875.80",
+        "currency": "EUR"
+      },
+      "currentExchangeRate": 1,
+      "currentExchangeRateDate": "2026-06-22T23:59:59+00:00",
+      "currentWorth": {
+        "value": "3500.00",
+        "currency": "EUR"
+      },
+      "currentWorthLocal": {
+        "value": "3500.00",
+        "currency": "EUR"
+      },
+      "portfolioWeight": 0,
+      "unrealisedGains": {
+        "value": "0.00",
+        "currency": "EUR"
+      },
+      "unrealisedGainsPercentage": 0,
+      "brokers": [
+        1
+      ],
+      "corporateActions": [],
+      "startsAt": "2023-02-14T09:12:00+00:00",
+      "closedAt": "2026-03-02T10:00:00+00:00"
+    }
+  ]
+}

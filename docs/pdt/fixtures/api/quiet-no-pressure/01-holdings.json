@@ -1,0 +1,382 @@
+{
+  "data": [
+    {
+      "symbolName": "Nova Lithography",
+      "isin": "NL0000000001",
+      "symbolQuoteId": 9001,
+      "currentPrice": {
+        "value": "598.00",
+        "currency": "EUR"
+      },
+      "currentPriceDate": "2026-06-22T23:59:59+00:00",
+      "currentPriceLocal": {
+        "value": "598.00",
+        "currency": "EUR"
+      },
+      "currentExchangeRate": 1,
+      "currentExchangeRateDate": "2026-06-22T23:59:59+00:00",
+      "currentWorth": {
+        "value": "6000.00",
+        "currency": "EUR"
+      },
+      "currentWorthLocal": {
+        "value": "6000.00",
+        "currency": "EUR"
+      },
+      "portfolioWeight": 0.1171875,
+      "portfolioWeightRelative": 0.1171875,
+      "unrealisedGains": {
+        "value": "510.00",
+        "currency": "EUR"
+      },
+      "unrealisedGainsPercentage": 0.0929,
+      "dividendsReceived": {
+        "value": "0.00",
+        "currency": "EUR"
+      },
+      "brokers": [
+        1
+      ],
+      "corporateActions": [],
+      "startsAt": "2023-02-14T09:12:00+00:00",
+      "closedAt": null,
+      "symbolId": 5001
+    },
+    {
+      "symbolName": "Orbit Communications",
+      "isin": "US0000000022",
+      "symbolQuoteId": 9002,
+      "currentPrice": {
+        "value": "399.50",
+        "currency": "USD"
+      },
+      "currentPriceDate": "2026-06-22T23:59:59+00:00",
+      "currentPriceLocal": {
+        "value": "346.19",
+        "currency": "EUR"
+      },
+      "currentExchangeRate": "1.154",
+      "currentExchangeRateDate": "2026-06-22T23:59:59+00:00",
+      "currentWorth": {
+        "value": "6924.00",
+        "currency": "USD"
+      },
+      "currentWorthLocal": {
+        "value": 6000.0,
+        "currency": "EUR"
+      },
+      "portfolioWeight": "0.1171875",
+      "portfolioWeightRelative": 0.1171875,
+      "unrealisedGains": {
+        "value": "620.00",
+        "currency": "EUR"
+      },
+      "unrealisedGainsPercentage": 0.1155,
+      "dividendsReceived": {
+        "value": "0.00",
+        "currency": "EUR"
+      },
+      "brokers": [
+        1
+      ],
+      "corporateActions": [],
+      "startsAt": "2022-11-03T15:41:00+00:00",
+      "closedAt": null,
+      "symbolId": 5002
+    },
+    {
+      "symbolName": "Helix Pharma A/S",
+      "isin": "DK0000000033",
+      "symbolQuoteId": 9003,
+      "currentPrice": {
+        "value": "300.10",
+        "currency": "DKK"
+      },
+      "currentPriceDate": "2026-06-22T23:59:59+00:00",
+      "currentPriceLocal": {
+        "value": "40.16",
+        "currency": "EUR"
+      },
+      "currentExchangeRate": 7.4735,
+      "currentExchangeRateDate": "2026-06-22T23:59:59+00:00",
+      "currentWorth": {
+        "value": "43340.00",
+        "currency": "DKK"
+      },
+      "currentWorthLocal": {
+        "value": "5800.00",
+        "currency": "EUR"
+      },
+      "portfolioWeight": 0.11328125,
+      "portfolioWeightRelative": 0.11328125,
+      "unrealisedGains": {
+        "value": "120.00",
+        "currency": "EUR"
+      },
+      "unrealisedGainsPercentage": 0.0211,
+      "dividendsReceived": {
+        "value": "112.40",
+        "currency": "EUR"
+      },
+      "brokers": [
+        1
+      ],
+      "corporateActions": [],
+      "startsAt": "2023-06-20T08:30:00+00:00",
+      "closedAt": null,
+      "symbolId": 5003
+    },
+    {
+      "symbolName": "Caldera Clinical",
+      "isin": "US0000000055",
+      "symbolQuoteId": 9005,
+      "currentPrice": {
+        "value": "455.00",
+        "currency": "USD"
+      },
+      "currentPriceDate": "2026-06-22T23:59:59+00:00",
+      "currentPriceLocal": {
+        "value": "394.28",
+        "currency": "EUR"
+      },
+      "currentExchangeRate": "1.154",
+      "currentExchangeRateDate": "2026-06-22T23:59:59+00:00",
+      "currentWorth": {
+        "value": "6235.00",
+        "currency": "USD"
+      },
+      "currentWorthLocal": {
+        "value": 5403.0,
+        "currency": "EUR"
+      },
+      "portfolioWeight": "0.10552734",
+      "portfolioWeightRelative": 0.10552734,
+      "unrealisedGains": {
+        "value": "703.00",
+        "currency": "EUR"
+      },
+      "unrealisedGainsPercentage": 0.1497,
+      "dividendsReceived": {
+        "value": "0.00",
+        "currency": "EUR"
+      },
+      "brokers": [
+        1
+      ],
+      "corporateActions": [],
+      "startsAt": "2024-03-11T14:48:00+00:00",
+      "closedAt": null,
+      "symbolId": 5005
+    },
+    {
+      "symbolName": "Meridian Pay",
+      "isin": "GB0000000044",
+      "symbolQuoteId": 9004,
+      "currentPrice": {
+        "value": "812.00",
+        "currency": "GBX"
+      },
+      "currentPriceDate": "2026-06-22T23:59:59+00:00",
+      "currentPriceLocal": {
+        "value": "9.37",
+        "currency": "EUR"
+      },
+      "currentExchangeRate": 86.665,
+      "currentExchangeRateDate": "2026-06-22T23:59:59+00:00",
+      "currentWorth": {
+        "value": "450860.00",
+        "currency": "GBX"
+      },
+      "currentWorthLocal": {
+        "value": "5202.00",
+        "currency": "EUR"
+      },
+      "portfolioWeight": 0.10160156,
+      "portfolioWeightRelative": 0.10160156,
+      "unrealisedGains": {
+        "value": "-180.00",
+        "currency": "EUR"
+      },
+      "unrealisedGainsPercentage": -0.0334,
+      "dividendsReceived": {
+        "value": "0.00",
+        "currency": "EUR"
+      },
+      "brokers": [
+        1
+      ],
+      "corporateActions": [],
+      "startsAt": "2023-09-28T10:22:00+00:00",
+      "closedAt": null,
+      "symbolId": 5004
+    },
+    {
+      "symbolName": "Atlas Broad Index ETF (Acc.)",
+      "isin": "IE0000000099",
+      "symbolQuoteId": 9009,
+      "currentPrice": {
+        "value": "705.00",
+        "currency": "EUR"
+      },
+      "currentPriceDate": "2026-06-22T23:59:59+00:00",
+      "currentPriceLocal": {
+        "value": "705.00",
+        "currency": "EUR"
+      },
+      "currentExchangeRate": "1",
+      "currentExchangeRateDate": "2026-06-22T23:59:59+00:00",
+      "currentWorth": {
+        "value": "5500.00",
+        "currency": "EUR"
+      },
+      "currentWorthLocal": {
+        "value": 5500.0,
+        "currency": "EUR"
+      },
+      "portfolioWeight": "0.10742188",
+      "portfolioWeightRelative": 0.10742188,
+      "unrealisedGains": {
+        "value": "820.00",
+        "currency": "EUR"
+      },
+      "unrealisedGainsPercentage": 0.1752,
+      "dividendsReceived": {
+        "value": "0.00",
+        "currency": "EUR"
+      },
+      "brokers": [
+        1
+      ],
+      "corporateActions": [],
+      "startsAt": "2022-08-30T09:00:00+00:00",
+      "closedAt": null,
+      "symbolId": 5009
+    },
+    {
+      "symbolName": "Axis Logistics",
+      "isin": "NL0000000066",
+      "symbolQuoteId": 9011,
+      "currentPrice": {
+        "value": "33.10",
+        "currency": "EUR"
+      },
+      "currentPriceDate": "2026-06-22T23:59:59+00:00",
+      "currentPriceLocal": {
+        "value": "33.10",
+        "currency": "EUR"
+      },
+      "currentExchangeRate": 1,
+      "currentExchangeRateDate": "2026-06-22T23:59:59+00:00",
+      "currentWorth": {
+        "value": "5500.00",
+        "currency": "EUR"
+      },
+      "currentWorthLocal": {
+        "value": "5500.00",
+        "currency": "EUR"
+      },
+      "portfolioWeight": 0.10742188,
+      "portfolioWeightRelative": 0.10742188,
+      "unrealisedGains": {
+        "value": "-90.00",
+        "currency": "EUR"
+      },
+      "unrealisedGainsPercentage": -0.0161,
+      "dividendsReceived": {
+        "value": "44.10",
+        "currency": "EUR"
+      },
+      "brokers": [
+        1
+      ],
+      "corporateActions": [],
+      "startsAt": "2023-04-18T09:01:00+00:00",
+      "closedAt": null,
+      "symbolId": 5011
+    },
+    {
+      "symbolName": "Zephyr Energy",
+      "isin": "NL0000000110",
+      "symbolQuoteId": 9012,
+      "currentPrice": {
+        "value": "29.40",
+        "currency": "EUR"
+      },
+      "currentPriceDate": "2026-06-22T23:59:59+00:00",
+      "currentPriceLocal": {
+        "value": "29.40",
+        "currency": "EUR"
+      },
+      "currentExchangeRate": "1",
+      "currentExchangeRateDate": "2026-06-22T23:59:59+00:00",
+      "currentWorth": {
+        "value": "4900.00",
+        "currency": "EUR"
+      },
+      "currentWorthLocal": {
+        "value": 4900.0,
+        "currency": "EUR"
+      },
+      "portfolioWeight": "0.09570313",
+      "portfolioWeightRelative": 0.09570313,
+      "unrealisedGains": {
+        "value": "150.00",
+        "currency": "EUR"
+      },
+      "unrealisedGainsPercentage": 0.0316,
+      "dividendsReceived": {
+        "value": "88.30",
+        "currency": "EUR"
+      },
+      "brokers": [
+        1
+      ],
+      "corporateActions": [],
+      "startsAt": "2024-02-06T10:44:00+00:00",
+      "closedAt": null,
+      "symbolId": 5012
+    },
+    {
+      "symbolName": "Cash",
+      "isin": null,
+      "symbolQuoteId": 9010,
+      "currentPrice": {
+        "value": "1.00",
+        "currency": "EUR"
+      },
+      "currentPriceDate": "2026-06-22T23:59:59+00:00",
+      "currentPriceLocal": {
+        "value": "1.00",
+        "currency": "EUR"
+      },
+      "currentExchangeRate": 1,
+      "currentExchangeRateDate": "2026-06-22T23:59:59+00:00",
+      "currentWorth": {
+        "value": "1895.00",
+        "currency": "EUR"
+      },
+      "currentWorthLocal": {
+        "value": "1895.00",
+        "currency": "EUR"
+      },
+      "portfolioWeight": 0.03701172,
+      "portfolioWeightRelative": 0.03701172,
+      "unrealisedGains": {
+        "value": "0.00",
+        "currency": "EUR"
+      },
+      "unrealisedGainsPercentage": 0,
+      "dividendsReceived": {
+        "value": "0.00",
+        "currency": "EUR"
+      },
+      "brokers": [
+        1
+      ],
+      "corporateActions": [],
+      "startsAt": null,
+      "closedAt": null,
+      "symbolId": 5010
+    }
+  ]
+}

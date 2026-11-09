@@ -37,7 +37,9 @@ read tool. The product's job is curation, not coverage.
 The seam hides raw PDT/MCP shapes from the engine. One interface, three current
 adapters (live PDT via a `PDTLiveToolClient`, Claude/PDT MCP connector-backed
 fetch via `PDTMCPConnectorDataSource`, and a fixture adapter reading
-`fixtures/*.json`). It returns
+`fixtures/*.json`). `PDTAPIDataSource` (#246) adds a fourth over the PDT REST
+API: REST envelopes decode into the same normalization inputs, holdings supply
+the `symbolId`/ISIN joins, and it is not wired into the app yet. It returns
 **normalized facets**, not raw PDT payloads:
 
 ```

@@ -40,6 +40,8 @@ do {
         report = try scriptedPDTConnectorSmoke(arguments: Array(arguments.dropFirst()))
     case "scripted-api-client":
         report = try scriptedAPIClientSmoke(arguments: Array(arguments.dropFirst()))
+    case "scripted-api-snapshot":
+        report = try scriptedAPISnapshotSmoke(arguments: Array(arguments.dropFirst()))
     case "copy-holding-identifier-action":
         report = copyHoldingIdentifierActionSmoke()
     case "scripted-first-fetch":
@@ -89,6 +91,7 @@ do {
       pdtbar-smoke live-pdt [--server <mcporter-server>] [--mcporter <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-pdt-connector [--artifacts <dir>]
       pdtbar-smoke scripted-api-client [--artifacts <dir>]
+      pdtbar-smoke scripted-api-snapshot [--artifacts <dir>]
       pdtbar-smoke copy-holding-identifier-action
       pdtbar-smoke scripted-first-fetch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-returning-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
@@ -1613,6 +1616,111 @@ private struct ScriptedAPIClientProof: Codable {
     var xRayRows: Int
     var rateLimitRetried: Bool
     var expiredTokenClassified: Bool
+}
+
+private func scriptedAPISnapshotSmoke(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let proof = artifacts.appending(path: "pdtbar-scripted-api-snapshot-proof.json")
+    let secret = "pdt_scripted_smoke_secret"
+    let fixtures = packageRoot.appending(path: "docs/pdt/fixtures/api/full")
+    let replies = try FileManager.default.contentsOfDirectory(at: fixtures, includingPropertiesForKeys: nil)
+        .filter { $0.pathExtension == "json" }
+        .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        .map { ScriptedPDTHTTPTransport.Reply.response(status: 200, body: try Data(contentsOf: $0)) }
+    let transport = ScriptedPDTHTTPTransport(replies)
+    let diagnostics = SmokeDiagnosticRecorder()
+    let dataSource = PDTAPIDataSource(
+        client: PDTAPIClient(
+            transport: transport,
+            tokenProvider: InMemoryPDTAPITokenProvider(token: PDTAPIToken(secret))
+        ),
+        onOptionalFacetFailure: { diagnostics.record($0) }
+    )
+    let snapshot = try dataSource.snapshot(asOf: "2026-06-22")
+
+    let requests = transport.requests
+    let proofPayload = ScriptedAPISnapshotProof(
+        requestCount: requests.count,
+        paths: requests.compactMap { $0.url?.path },
+        onlyGET: requests.allSatisfy { $0.httpMethod == "GET" && $0.httpBody == nil },
+        onlyPDTOrigin: requests.allSatisfy { $0.url?.scheme == "https" && $0.url?.host == "api.portfoliodividendtracker.com" },
+        openHoldings: snapshot.openHoldings.count,
+        holdingsWithCopyableIdentifier: snapshot.openHoldings.filter { $0.copyableIdentifier != nil }.count,
+        sectors: snapshot.sectors.count,
+        assetTypes: snapshot.assetTypes.count,
+        xRayHoldings: snapshot.xRayHoldings?.count,
+        incomeEvents: snapshot.incomeEvents.count,
+        dividendRows: snapshot.dividendRowCount,
+        pricePoints: snapshot.priceSeries.count,
+        degraded: snapshot.latestDetailFillOutcome == .degraded,
+        diagnostics: diagnostics.diagnostics
+    )
+    let proofData = try stableJSONData(proofPayload)
+    try proofData.write(to: proof, options: .atomic)
+
+    guard proofPayload.onlyGET,
+          proofPayload.onlyPDTOrigin,
+          requests.count == replies.count,
+          proofPayload.openHoldings == 6,
+          proofPayload.holdingsWithCopyableIdentifier == 4,
+          proofPayload.sectors == 4,
+          proofPayload.xRayHoldings == 3,
+          proofPayload.incomeEvents == 3,
+          proofPayload.dividendRows == 4,
+          proofPayload.pricePoints == 4,
+          !proofPayload.degraded,
+          proofPayload.diagnostics.isEmpty,
+          !String(decoding: proofData, as: UTF8.self).contains(secret)
+    else {
+        return SmokeReport(
+            name: "scripted-api-snapshot",
+            status: SmokeStatus.failed,
+            detail: "scripted PDT REST snapshot did not map every facet from GET-only same-origin fixture replies without degrading or leaking the token",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+    return SmokeReport(
+        name: "scripted-api-snapshot",
+        status: SmokeStatus.passed,
+        detail: "scripted PDT REST snapshot replayed \(requests.count) GET-only fixture replies from the PDT API origin, mapped holdings, allocation, x-ray, income, dividends, identifiers, and prices without degrading, and kept the token out of proof",
+        artifacts: [artifactPath(proof)]
+    )
+}
+
+private struct ScriptedAPISnapshotProof: Codable {
+    var requestCount: Int
+    var paths: [String]
+    var onlyGET: Bool
+    var onlyPDTOrigin: Bool
+    var openHoldings: Int
+    var holdingsWithCopyableIdentifier: Int
+    var sectors: Int
+    var assetTypes: Int
+    var xRayHoldings: Int?
+    var incomeEvents: Int
+    var dividendRows: Int
+    var pricePoints: Int
+    var degraded: Bool
+    var diagnostics: [PDTDetailRefreshFailureDiagnostic]
+}
+
+private final class SmokeDiagnosticRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [PDTDetailRefreshFailureDiagnostic] = []
+
+    var diagnostics: [PDTDetailRefreshFailureDiagnostic] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
+
+    func record(_ diagnostic: PDTDetailRefreshFailureDiagnostic) {
+        lock.lock()
+        defer { lock.unlock() }
+        recorded.append(diagnostic)
+    }
 }
 
 private func copyHoldingIdentifierActionSmoke() -> SmokeReport {

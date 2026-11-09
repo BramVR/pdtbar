@@ -47,6 +47,7 @@ swift test
 swift run pdtbar-checks
 swift run pdtbar-smoke scripted-pdt-connector
 swift run pdtbar-smoke scripted-api-client
+swift run pdtbar-smoke scripted-api-snapshot
 swift run pdtbar-smoke scripted-login-handoff
 swift run pdtbar-smoke scripted-setup-retry
 swift run pdtbar-smoke scripted-pulse-mark-read
@@ -89,6 +90,18 @@ This uses no network, no real credentials, and no Keychain. It drives
 `PDTAPIClient` through `ScriptedPDTHTTPTransport` with a fake in-memory token and proves GET-only
 requests to the PDT API origin, page and offset pagination, a 429 retry, a typed
 expired-token error, and a proof file without the token.
+
+Scripted PDT REST snapshot:
+
+```bash
+swift run pdtbar-smoke scripted-api-snapshot
+```
+
+This uses no network, no real credentials, and no Keychain. It replays
+`docs/pdt/fixtures/api/full/` through `PDTAPIDataSource` and writes
+`pdtbar-scripted-api-snapshot-proof.json` with the request paths, GET-only and
+PDT-origin checks, per-facet counts, and the degraded flag. It fails if any facet
+degrades or the fake token appears in the proof.
 
 Scripted Claude PDT connector e2e:
 

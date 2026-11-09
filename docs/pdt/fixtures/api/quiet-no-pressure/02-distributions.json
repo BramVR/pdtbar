@@ -1,0 +1,80 @@
+{
+  "data": {
+    "sectors": [
+      {
+        "categoryName": "information-technology",
+        "totalValue": {
+          "value": "11500.00",
+          "currency": "EUR"
+        },
+        "percentage": "22.4609375"
+      },
+      {
+        "categoryName": "communication-services",
+        "totalValue": {
+          "value": "6000.00",
+          "currency": "EUR"
+        },
+        "percentage": 11.71875
+      },
+      {
+        "categoryName": "health-care",
+        "totalValue": {
+          "value": "11203.00",
+          "currency": "EUR"
+        },
+        "percentage": "21.880859"
+      },
+      {
+        "categoryName": "financials",
+        "totalValue": {
+          "value": "5202.00",
+          "currency": "EUR"
+        },
+        "percentage": 10.16015625
+      },
+      {
+        "categoryName": "industrials",
+        "totalValue": {
+          "value": "5500.00",
+          "currency": "EUR"
+        },
+        "percentage": "10.7421875"
+      },
+      {
+        "categoryName": "energy",
+        "totalValue": {
+          "value": "4900.00",
+          "currency": "EUR"
+        },
+        "percentage": 9.5703125
+      }
+    ],
+    "assetTypes": [
+      {
+        "categoryName": "common-stock",
+        "totalValue": {
+          "value": "43805.00",
+          "currency": "EUR"
+        },
+        "percentage": 85.556640625
+      },
+      {
+        "categoryName": "etf",
+        "totalValue": {
+          "value": "5500.00",
+          "currency": "EUR"
+        },
+        "percentage": 10.7421875
+      },
+      {
+        "categoryName": "cash",
+        "totalValue": {
+          "value": "1895.00",
+          "currency": "EUR"
+        },
+        "percentage": 3.701171875
+      }
+    ]
+  }
+}

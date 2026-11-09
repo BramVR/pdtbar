@@ -1,0 +1,56 @@
+{
+  "data": {
+    "sectors": [
+      {
+        "categoryName": "information-technology",
+        "totalValue": {
+          "value": "12000.00",
+          "currency": "EUR"
+        },
+        "percentage": "30.0"
+      },
+      {
+        "categoryName": "communication-services",
+        "totalValue": {
+          "value": 8000.0,
+          "currency": "EUR"
+        },
+        "percentage": 20
+      },
+      {
+        "categoryName": "financials",
+        "totalValue": {
+          "value": "8000.00",
+          "currency": "EUR"
+        },
+        "percentage": 20.0
+      },
+      {
+        "categoryName": "health-care",
+        "totalValue": {
+          "value": "6000.00",
+          "currency": "EUR"
+        },
+        "percentage": "15"
+      }
+    ],
+    "assetTypes": [
+      {
+        "categoryName": "common-stock",
+        "totalValue": {
+          "value": "34000.00",
+          "currency": "EUR"
+        },
+        "percentage": 85
+      },
+      {
+        "categoryName": "cash",
+        "totalValue": {
+          "value": "6000.00",
+          "currency": "EUR"
+        },
+        "percentage": "15.0"
+      }
+    ]
+  }
+}

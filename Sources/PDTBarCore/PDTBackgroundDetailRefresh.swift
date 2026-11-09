@@ -82,6 +82,13 @@ func pdtDetailRefreshFailureCategory(for error: Error) -> PDTDetailRefreshFailur
         .unavailable
     case PDTLiveDataSourceError.transientUnavailableToolResult:
         .transientFailure
+    case PDTAPIError.missingToken, PDTAPIError.unauthenticated, PDTAPIError.tokenInvalid,
+         PDTAPIError.insufficientScope, PDTAPIError.apiAccessPaused, PDTAPIError.forbidden:
+        .setupUnavailable
+    case PDTAPIError.invalidResponse:
+        .decode
+    case PDTAPIError.rateLimited, PDTAPIError.server, PDTAPIError.transport, PDTAPIError.paginationStalled:
+        .transientFailure
     default:
         .exit
     }
