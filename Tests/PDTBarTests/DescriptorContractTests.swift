@@ -95,20 +95,24 @@ struct DescriptorContractTests {
             nonQuietDescriptor,
         ]
 
-        for visibleText in descriptors.flatMap(visibleMenuText) {
-            #expect(violatesVisibleCopyRules(visibleText) == false, "\(visibleText)")
+        // Report only the broken rule and its location; echoing the copy could leak a token into CI logs.
+        for (descriptorIndex, descriptor) in descriptors.enumerated() {
+            for (textIndex, visibleText) in visibleMenuText(descriptor).enumerated() {
+                let violation = visibleCopyRuleViolation(visibleText)
+                #expect(violation == nil, "descriptor \(descriptorIndex), visible text \(textIndex)")
+            }
         }
     }
 
     @Test("Visible copy may name a token but never internal terms or a token value")
     func visibleCopyRulesAllowTokenWordButNotTokenValues() {
-        #expect(violatesVisibleCopyRules("Paste a read-only PDT token") == false)
-        #expect(violatesVisibleCopyRules("Token expires on 2027-11-09") == false)
-        #expect(violatesVisibleCopyRules("Sign in with PDT") == false)
-        #expect(violatesVisibleCopyRules("Connected with pdt_AbC123xyz"))
-        #expect(violatesVisibleCopyRules("OAuth sign-in failed"))
-        #expect(violatesVisibleCopyRules("Paste your API key"))
-        #expect(violatesVisibleCopyRules("Loaded fixture data"))
+        #expect(visibleCopyRuleViolation("Paste a read-only PDT token") == nil)
+        #expect(visibleCopyRuleViolation("Token expires on 2027-11-09") == nil)
+        #expect(visibleCopyRuleViolation("Sign in with PDT") == nil)
+        #expect(visibleCopyRuleViolation("Connected with pdt_AbC123xyz") == "token-shaped value")
+        #expect(visibleCopyRuleViolation("OAuth sign-in failed") == "forbidden term: oauth")
+        #expect(visibleCopyRuleViolation("Paste your API key") == "forbidden term: api key")
+        #expect(visibleCopyRuleViolation("Loaded fixture data") == "forbidden term: fixture")
     }
 }
 
@@ -159,10 +163,16 @@ private func visibleMenuText(_ rows: [MenuRow]) -> [String] {
 // internal tooling names, and anything shaped like a PDT token value are not.
 private let forbiddenVisibleTerms = ["codex", "oauth", "api key", "fixture", "mcporter"]
 
-private func violatesVisibleCopyRules(_ value: String) -> Bool {
+/// Names the broken rule without echoing the copy, so a failure never prints a token value.
+private func visibleCopyRuleViolation(_ value: String) -> String? {
     let lowered = value.lowercased()
-    return forbiddenVisibleTerms.contains { lowered.contains($0) }
-        || value.range(of: #"pdt_[A-Za-z0-9]"#, options: .regularExpression) != nil
+    if let term = forbiddenVisibleTerms.first(where: { lowered.contains($0) }) {
+        return "forbidden term: \(term)"
+    }
+    if value.range(of: #"pdt_[A-Za-z0-9]"#, options: .regularExpression) != nil {
+        return "token-shaped value"
+    }
+    return nil
 }
 
 private func containsAdviceLikeLanguage(_ value: String) -> Bool {
