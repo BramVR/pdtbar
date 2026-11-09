@@ -2065,29 +2065,27 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
     let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
     try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
     let proof = artifacts.appending(path: "pdtbar-scripted-returning-launch-proof.json")
-    let responses = try scriptedPDTConnectorResponses()
-    let responseStrings = responses.mapValues { String(decoding: $0, as: UTF8.self) }
+    let responses = try scriptedAPIBackgroundRefreshResponses()
     let staleSnapshot = try PDTFixtureDataSource(fixture: defaultFixture).snapshot(asOf: "2026-03-28")
     let cachedDescriptor = MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: staleSnapshot))
     let refreshDelay = max(options.timeout * 5, 10.0)
-    let refreshConfiguration = ScriptedPDTMCPConnectorConfiguration(
-        responses: responseStrings,
+    let refreshConfiguration = ScriptedPDTAPIConfiguration(
+        responses: responses,
         asOf: "2026-03-29",
-        initialCallDelaySeconds: refreshDelay
+        initialRequestDelaySeconds: refreshDelay
     )
     let expectedFreshStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-returning-launch-expected")
     defer {
         try? FileManager.default.removeItem(at: expectedFreshStore.directory)
     }
     _ = try expectedFreshStore.commitCurrentSnapshot(staleSnapshot)
-    let expectedFreshConfiguration = ScriptedPDTMCPConnectorConfiguration(
-        responses: responseStrings,
-        asOf: refreshConfiguration.asOf
-    )
-    let expectedFreshRun = try PDTBackgroundDetailRefresh(
-        connector: expectedFreshConfiguration.connector(),
+    let expectedFreshRun = try PDTAPIBackgroundDetailRefresh(
+        client: PDTAPIClient(
+            transport: ScriptedPDTAPIConfiguration(responses: responses).transport(),
+            tokenProvider: InMemoryPDTAPITokenProvider(token: PDTAPIToken("scripted"))
+        ),
         snapshotStore: expectedFreshStore,
-        asOf: expectedFreshConfiguration.asOf
+        asOf: refreshConfiguration.asOf
     ).refresh()
 
     let successAppSupport = try options.isolatedAppSupportDirectory(prefix: "scripted-returning-launch-success-app-support")
@@ -2235,11 +2233,14 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
     }
     terminate(successProcess)
 
-    let failureConfiguration = ScriptedPDTMCPConnectorConfiguration(
-        responses: responseStrings,
-        asOf: "2026-03-29",
-        failure: "transientFailure",
-        failureMessage: "Claude call timed out"
+    let unavailable = ScriptedPDTAPIConfiguration.Response(
+        status: 503,
+        body: #"{"error":{"code":"SERVICE_UNAVAILABLE","message":"m","details":{},"traceId":"t"}}"#,
+        headers: ["Retry-After": "0"]
+    )
+    let failureConfiguration = ScriptedPDTAPIConfiguration(
+        responses: Array(repeating: unavailable, count: PDTAPIRequestPolicy().maxAttempts),
+        asOf: "2026-03-29"
     )
     let failureAppSupport = try options.isolatedAppSupportDirectory(prefix: "scripted-returning-launch-failure-app-support")
     let failureStore = SnapshotStore(directory: failureAppSupport.appending(path: "pdtbar/state"))
@@ -5136,6 +5137,32 @@ private func writeFirstFetchAppScript(
         to: directory.appending(path: "scripted-pdt-mcp.json"),
         options: .atomic
     )
+}
+
+private func writeFirstFetchAppScript(
+    configuration: ScriptedPDTAPIConfiguration,
+    appSupportDirectory: URL
+) throws {
+    let directory = appSupportDirectory.appending(path: "pdtbar")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try Data(#"{"result":"ready"}"#.utf8).write(
+        to: directory.appending(path: "claude-readiness.json"),
+        options: .atomic
+    )
+    try stableJSONData(configuration).write(
+        to: directory.appending(path: "scripted-pdt-api.json"),
+        options: .atomic
+    )
+}
+
+/// The `full` API fixture in background-refresh request order. Symbol-quote
+/// lookups belong to the first fetch only.
+private func scriptedAPIBackgroundRefreshResponses() throws -> [ScriptedPDTAPIConfiguration.Response] {
+    let directory = packageRoot.appending(path: "docs/pdt/fixtures/api/full")
+    return try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        .filter { $0.pathExtension == "json" && !$0.lastPathComponent.contains("symbol-quotes") }
+        .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        .map { ScriptedPDTAPIConfiguration.Response(body: String(decoding: try Data(contentsOf: $0), as: UTF8.self)) }
 }
 
 private func launchSetupRetryApp(

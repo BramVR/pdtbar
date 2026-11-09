@@ -263,9 +263,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         activeSnapshotDirectory = stateDirectory
         let snapshotStore = SnapshotStore(directory: stateDirectory)
         let pulseReadStore = PulseReadStore(directory: stateDirectory)
-        let refreshConfiguration: FirstFetchConnectorConfiguration
+        let refresh: any PDTBackgroundDetailRefreshing
         do {
-            refreshConfiguration = try backgroundRefreshConnectorConfiguration(environment: environment)
+            refresh = try backgroundDetailRefresh(snapshotStore: snapshotStore, pulseReadStore: pulseReadStore)
         } catch {
             finishBackgroundPortfolioRefresh(
                 PortfolioFetchOutcome(errorDescription: "\(error)")
@@ -283,12 +283,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             let outcome: PortfolioFetchOutcome
             do {
-                let refresh = PDTBackgroundDetailRefresh(
-                    connector: refreshConfiguration.connector,
-                    snapshotStore: snapshotStore,
-                    pulseReadStore: pulseReadStore,
-                    asOf: refreshConfiguration.asOf,
-                )
                 let result = try refresh.refresh(cancellation: cancellation) { progress in
                     DispatchQueue.main.async { [weak self] in
                         guard let self,
@@ -408,22 +402,44 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    private func backgroundRefreshConnectorConfiguration(
-        environment: [String: String]
-    ) throws -> FirstFetchConnectorConfiguration {
+    /// The shipped refresh stays on Claude until a PDT token source exists
+    /// (#245, #248). Scripted runs can drive the REST refresh offline.
+    private func backgroundDetailRefresh(
+        snapshotStore: SnapshotStore,
+        pulseReadStore: PulseReadStore
+    ) throws -> any PDTBackgroundDetailRefreshing {
         if scriptedBackgroundRefreshEnabled() {
+            let scriptedAPIURL = appSupportDirectory().appending(path: "pdtbar/scripted-pdt-api.json")
+            if FileManager.default.fileExists(atPath: scriptedAPIURL.path) {
+                let configuration = try JSONDecoder().decode(
+                    ScriptedPDTAPIConfiguration.self,
+                    from: Data(contentsOf: scriptedAPIURL)
+                )
+                return PDTAPIBackgroundDetailRefresh(
+                    client: PDTAPIClient(
+                        transport: configuration.transport(),
+                        tokenProvider: InMemoryPDTAPITokenProvider(token: PDTAPIToken("scripted"))
+                    ),
+                    snapshotStore: snapshotStore,
+                    pulseReadStore: pulseReadStore,
+                    asOf: configuration.asOf
+                )
+            }
             let scriptedURL = appSupportDirectory().appending(path: "pdtbar/scripted-pdt-mcp.json")
             if FileManager.default.fileExists(atPath: scriptedURL.path) {
                 let configuration = try scriptedPDTConnectorConfiguration()
-                return FirstFetchConnectorConfiguration(
+                return PDTBackgroundDetailRefresh(
                     connector: try configuration.connector(),
+                    snapshotStore: snapshotStore,
+                    pulseReadStore: pulseReadStore,
                     asOf: configuration.asOf
                 )
             }
         }
-        return FirstFetchConnectorConfiguration(
+        return PDTBackgroundDetailRefresh(
             connector: ClaudeLocalConnection(environment: environment),
-            asOf: nil
+            snapshotStore: snapshotStore,
+            pulseReadStore: pulseReadStore
         )
     }
 

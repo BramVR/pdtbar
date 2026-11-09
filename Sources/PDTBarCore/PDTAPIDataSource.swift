@@ -182,7 +182,7 @@ public struct PDTAPIDataSource: PortfolioDataSource {
     }
 }
 
-private extension PDTAPIResource {
+extension PDTAPIResource {
     /// Query names only, never values, for redacted refresh diagnostics.
     var argumentShape: [String] {
         let paging: [String] = switch pagination {

@@ -53,11 +53,28 @@ wired into launch: an allowlisted `PDTAPIResource` enum (every case a `GET` to
 error envelope, bounded retries for 429/5xx/transient transport failures with
 `Retry-After`, page and offset pagination with stall and page-cap guards, and no
 response logging. `URLSessionPDTHTTPTransport` refuses redirects so the bearer
-token never leaves the PDT origin.
+token never leaves the PDT origin. `getReportingAttempts` and
+`getAllReportingAttempts` also return how many requests a call sent, retries
+and pages included, and throw `PDTAPIRequestFailure` with that count, so
+refresh diagnostics persist real attempt counts.
 
 `PDTAPIDataSource` (#246) is the `PortfolioDataSource` over that client, also not
 yet wired in: it decodes REST envelopes into the existing normalization inputs,
 requires holdings, and degrades the snapshot when an optional facet fails.
+
+`PDTAPIBackgroundDetailRefresh` (#247) is the background detail refresh over the
+same client. It shares `PDTBackgroundDetailRefreshResult` and the
+`PDTBackgroundDetailRefreshing` seam with the Claude refresh, which stays the
+shipped path until a PDT token source exists (#245, #248). Phases run in order
+with no tool discovery and no per-holding lookups: holdings carry `symbolId`
+for the income join, and prices come from `prices/batch` in chunks of 50. Every
+phase fills one in-memory snapshot. The store is written once, by
+`PressureRunner.refreshedPulse`, so a cancel (quit, account switch) or a failed
+required base leaves the last good snapshot on disk. A failed optional phase
+keeps the prior facet and degrades the outcome. An auth or setup outage skips
+every later phase, price batches included. Performance is reported unavailable
+until the REST performance shapes are mapped. The app runs it only for scripted
+`scripted-pdt-api.json` replays today.
 
 `DataHealth` composes runtime/source facts into model state: Claude/PDT
 readiness, required read tools, read-only policy, cache/source, detail-fill,

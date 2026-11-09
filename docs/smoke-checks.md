@@ -250,12 +250,14 @@ swift build --product pdtbar
 swift run pdtbar-smoke scripted-returning-launch
 ```
 
-This uses isolated app-support directories and no live Claude credentials. It
-seeds a previous complete local snapshot, launches the no-argument app path with
-a delayed scripted refresh, and verifies the cached pulse stays visible while the
+This uses isolated app-support directories and no live Claude or PDT
+credentials. It seeds a previous complete local snapshot, launches the
+no-argument app path with a delayed scripted PDT REST refresh (the
+`docs/pdt/fixtures/api/full` replies, served through `scripted-pdt-api.json` by
+`PDTAPIBackgroundDetailRefresh`), and verifies the cached pulse stays visible while the
 refresh is in progress. It then verifies complete refreshed data replaces the
-snapshot and pulse only after the scripted fetch finishes. A second
-transient-failure launch proves the previous snapshot stays in place and the
+snapshot and pulse only after the scripted fetch finishes. A second launch
+whose holdings requests all answer `503` proves the previous snapshot stays in place and the
 menu shows `Details fill failed` plus `Fill details again`. Proof artifacts contain
 paths, selectors, status text, as-of dates, and booleans only.
 

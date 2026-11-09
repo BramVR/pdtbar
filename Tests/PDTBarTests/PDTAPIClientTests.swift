@@ -176,6 +176,46 @@ struct PDTAPIClientTests {
         #expect(exhaustedSleeper.delays == [2, 2])
     }
 
+    @Test("Reporting calls count every request sent, retries and pages included, on success and on failure")
+    func reportingCallsCountRequests() throws {
+        let unavailable = ScriptedPDTHTTPTransport.Reply.response(status: 503, body: Data(envelope("SERVICE_UNAVAILABLE").utf8))
+        let recovering = ScriptedPDTHTTPTransport([unavailable, ok(#"{"data":[]}"#)])
+        let recovered = try makeClient(recovering).getReportingAttempts(.me, as: [String: [Int]].self)
+        #expect(recovered.attemptCount == 2)
+        #expect(recovered.attemptCount == recovering.requests.count)
+
+        let secondPage = #"{"data":[{"id":2}],"meta":{"currentPage":2,"lastPage":2}}"#
+        let paged = ScriptedPDTHTTPTransport([
+            ok(#"{"data":[{"id":1}],"meta":{"currentPage":1,"lastPage":2}}"#), unavailable, ok(secondPage),
+        ])
+        let rows = try makeClient(paged).getAllReportingAttempts(.dividends(), as: Row.self)
+        #expect(rows.value == [Row(id: 1), Row(id: 2)])
+        #expect(rows.attemptCount == 3)
+
+        let exhausted = ScriptedPDTHTTPTransport(Array(repeating: unavailable, count: 5))
+        do {
+            _ = try makeClient(exhausted).getAllReportingAttempts(.holdings(), as: Row.self)
+            Issue.record("expected the call to fail")
+        } catch let failure as PDTAPIRequestFailure {
+            #expect(failure.attemptCount == 3)
+            #expect(failure.attemptCount == exhausted.requests.count)
+            #expect(failure.underlyingError as? PDTAPIError == .server(status: 503, retryAfter: nil))
+        }
+
+        let undecodable = ScriptedPDTHTTPTransport([ok(#"{"data":"nope"}"#)])
+        do {
+            _ = try makeClient(undecodable).getAllReportingAttempts(.holdings(), as: Row.self)
+            Issue.record("expected the call to fail")
+        } catch let failure as PDTAPIRequestFailure {
+            #expect(failure.attemptCount == 1)
+            #expect(failure.underlyingError as? PDTAPIError == .invalidResponse)
+        }
+
+        #expect(throws: PDTAPIError.server(status: 503, retryAfter: nil)) {
+            _ = try makeClient(ScriptedPDTHTTPTransport(Array(repeating: unavailable, count: 3))).get(.me)
+        }
+    }
+
     @Test("A Retry-After longer than the policy allows fails fast")
     func longRetryAfterFailsFast() {
         let transport = ScriptedPDTHTTPTransport([rateLimited(retryAfter: "120"), ok(#"{"data":[]}"#)])
