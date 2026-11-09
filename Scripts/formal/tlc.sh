@@ -41,5 +41,5 @@ trap 'rm -rf "$meta_dir"' EXIT
 
 cd "$spec_dir"
 java -XX:+UseParallelGC -cp "$JAR" tlc2.TLC \
-  -config "$(basename "$cfg")" -metadir "$meta_dir" -workers auto -cleanup \
+  -config "$(basename "$cfg")" -metadir "$meta_dir" -workers "${PDTBAR_TLC_WORKERS:-1}" -cleanup \
   "$@" "$(basename "$spec")"
