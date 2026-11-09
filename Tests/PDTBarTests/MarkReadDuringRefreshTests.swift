@@ -53,6 +53,56 @@ struct MarkReadDuringRefreshTests {
     }
 }
 
+@Suite("Displayed pulse follows the read store")
+struct DisplayedPulseReadStateTests {
+    @Test("A cached launch shows rows the read store marks read as read")
+    func cachedLaunchShowsStoreReadState() throws {
+        let fixture = try ConcentrationFixture()
+        let item = try #require(fixture.pulse.model.rankedAttentionItems.first)
+        try fixture.readStore.markRead(item.readFingerprint)
+        let runtime = PDTLaunchRuntime(loadReadState: { try? fixture.readStore.load() })
+
+        let launch = runtime.launch(cachedPulse: fixture.pulse)
+
+        #expect(!markReadPayloads(in: launch.descriptor).contains(item.id))
+        #expect(runtime.currentPulse?.model.rankedAttentionItems.contains { $0.id == item.id } == false)
+    }
+
+    @Test("A replaced pulse shows rows the read store marks read as read")
+    func replacedPulseShowsStoreReadState() throws {
+        let fixture = try ConcentrationFixture()
+        let item = try #require(fixture.pulse.model.rankedAttentionItems.first)
+        try fixture.readStore.markRead(item.readFingerprint)
+        let runtime = PDTLaunchRuntime(loadReadState: { try? fixture.readStore.load() })
+
+        runtime.replaceCurrentPulse(fixture.pulse)
+
+        #expect(runtime.currentPulse?.model.rankedAttentionItems.contains { $0.id == item.id } == false)
+    }
+}
+
+/// A concentration pulse loaded from the cache, and the read store beside it.
+private struct ConcentrationFixture {
+    let readStore: PulseReadStore
+    let pulse: PulseLifecycleResult
+
+    init() throws {
+        let fixture = packageRoot.appending(path: "docs/pdt/fixtures/concentration-pressure.json")
+        let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-displayed-pulse-read-state")
+        readStore = PulseReadStore(directory: snapshotStore.directory)
+        _ = try PressureRunner.run(
+            dataSource: PDTFixtureDataSource(fixture: fixture),
+            snapshotStore: snapshotStore,
+            pulseReadStore: readStore
+        )
+        pulse = try #require(try PressureRunner.cachedPulse(
+            snapshotStore: snapshotStore,
+            pulseReadStore: readStore,
+            today: "2026-06-22"
+        ))
+    }
+}
+
 /// A returning launch with a cached concentration pulse, ready readiness, and a background refresh in flight.
 private struct ReturningLaunch {
     let readStore: PulseReadStore
@@ -60,20 +110,10 @@ private struct ReturningLaunch {
     let runtime: PDTLaunchRuntime
 
     init() throws {
-        let fixture = packageRoot.appending(path: "docs/pdt/fixtures/concentration-pressure.json")
-        let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-mark-read-during-refresh")
-        let readStore = PulseReadStore(directory: snapshotStore.directory)
-        _ = try PressureRunner.run(
-            dataSource: PDTFixtureDataSource(fixture: fixture),
-            snapshotStore: snapshotStore,
-            pulseReadStore: readStore
-        )
+        let fixture = try ConcentrationFixture()
+        let readStore = fixture.readStore
         self.readStore = readStore
-        cachedPulse = try #require(try PressureRunner.cachedPulse(
-            snapshotStore: snapshotStore,
-            pulseReadStore: readStore,
-            today: "2026-06-22"
-        ))
+        cachedPulse = fixture.pulse
         runtime = PDTLaunchRuntime(loadReadState: { try? readStore.load() })
         _ = runtime.launch(cachedPulse: cachedPulse)
         let ready = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
