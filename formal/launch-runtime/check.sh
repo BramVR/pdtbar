@@ -4,11 +4,11 @@
 # Exit 1: a new invariant fails, or an open finding stopped failing (update the list + skill).
 set -euo pipefail
 cd "$(dirname "$0")"
-OPEN_FINDINGS="BackgroundFlagMatchesWork"
+OPEN_FINDINGS=""
 
 out="$(../../Scripts/formal/tlc.sh LaunchRuntime.tla -continue 2>&1)"
 echo "$out" | grep -E 'distinct states found' || { echo "$out"; exit 1; }
-violated="$(echo "$out" | grep -oE 'Invariant [A-Za-z]+ is violated' | awk '{print $2}' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+violated="$(echo "$out" | { grep -oE 'Invariant [A-Za-z]+ is violated' || true; } | awk '{print $2}' | sort -u | tr '\n' ' ' | sed 's/ $//')"
 expected="$(echo $OPEN_FINDINGS | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')"
 echo "violated: ${violated:-none}"
 echo "expected: $expected"

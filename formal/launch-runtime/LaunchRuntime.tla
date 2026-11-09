@@ -210,9 +210,8 @@ CacheLoadReturns ==
                          /\ StartFirstFetch
     /\ UNCHANGED <<loginNext, loginActive, logins, retries>>
 
-\* publishPulse Core:1209-1220
+\* publishFetchedPulse Core:1240-1250
 Publish(newPulse) ==
-    /\ bgInFlight' = FALSE
     /\ pulse' = newPulse
     /\ IF state = "probingClaude" /\ "republishSkipsCheck" \notin Mutations
        THEN /\ UNCHANGED state /\ menu' = Desc("probingClaude", newPulse)   \* a republish keeps the readiness check
@@ -231,7 +230,7 @@ FirstFetchReturns ==
              ELSE /\ ffInFlight' = FALSE
                   /\ Publish("live")
                   /\ ffWorkers' = ffWorkers - 1
-                  /\ UNCHANGED <<refreshInFlight, bgWorkers>>
+                  /\ UNCHANGED <<bgInFlight, refreshInFlight, bgWorkers>>
         ELSE /\ ffInFlight' = ("keepFirstFetchFlag" \in Mutations)
              /\ ffWorkers' = ffWorkers - 1
              /\ UNCHANGED <<pulse, bgInFlight, refreshInFlight, bgWorkers>>
@@ -325,12 +324,17 @@ ClickRetry ==
     /\ UNCHANGED <<pulse, probeInFlight, attemptID, cacheLoadFinished, pending, loginNext, loginActive,
                    probes, cacheLoad, logins>>
 
-\* markPulseItemRead click App:1031-1054: pulse rows carry "Mark as read"; the
-\* republish goes through publishPulse Core:1209, whatever else is running.
+\* markPulseItemRead click App:1025-1034: pulse rows carry "Mark as read". It
+\* writes the read store, then pulseReadStateDidChange Core:1232 re-renders the
+\* current screen with the new read rows. State, flags, and the refresh offer
+\* stay as they were. Mutation markReadPublishes replays the code before #268,
+\* which republished through publishPulse and cleared the refresh flag.
 ClickMarkRead ==
     /\ menu.kind = "pulse"
     /\ pulse # "none"
-    /\ Publish(pulse)
+    /\ IF "markReadPublishes" \in Mutations
+       THEN /\ bgInFlight' = FALSE /\ Publish(pulse)
+       ELSE UNCHANGED <<state, pulse, bgInFlight, menu>>
     /\ UNCHANGED <<probeInFlight, attemptID, ffInFlight, cacheLoadFinished, pending, refreshInFlight,
                    loginNext, loginActive, probes, cacheLoad, ffWorkers, bgWorkers, logins, retries>>
 

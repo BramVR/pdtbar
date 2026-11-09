@@ -14,13 +14,16 @@
 (* or above it in one of two weight buckets. Fingerprints are the values.  *)
 (* File writes are atomic (OwnerOnlyLocalStore.write renames a temp file,  *)
 (* Persistence.swift:126). Paths are Swift file:line at commit 1b6ffd4,    *)
-(* under Sources/PDTBarCore/ unless they say main.swift (PDTBarApp).       *)
+(* under Sources/PDTBarCore/ unless they say main.swift (PDTBarApp). The   *)
+(* mark-read and publish actions cite the code after the #268/#269 fix.    *)
 (***************************************************************************)
 EXTENDS FiniteSets
 
 CONSTANTS
-    \* TRUE models a fix: finishBackgroundPortfolioRefresh re-reads the store
-    \* before publishing, as finishFirstPortfolioFetch already does.
+    \* TRUE is current code (#269): PDTLaunchRuntime.pulseForDisplay
+    \* (LaunchRuntime.swift:1253) re-reads the store for every pulse it
+    \* publishes, the background refresh result included. FALSE replays the
+    \* code before #269, which published the worker's read state.
     ReapplyOnBgPublish,
     \* TRUE models a fix: the re-crossing reset runs before the snapshot that
     \* records the crossing is committed.
@@ -185,8 +188,9 @@ MarkReadSave ==
     /\ UNCHANGED <<pdt, snap, display, wPc, wPrior, wNew, wLoaded, wRead,
                    mainFp, mainLoaded, owed>>
 
-\* main.swift:1040-1041 currentPulse.applyingReadState(readStore.load()) and
-\* PDTLaunchRuntime.publishPulse, LaunchRuntime.swift:1209.
+\* main.swift:1027 PDTLaunchRuntime.pulseReadStateDidChange,
+\* LaunchRuntime.swift:1232, which applies readStore.load() through
+\* pulseForDisplay (1253).
 MarkReadReload ==
     /\ mainPc = "reloading"
     /\ display' = [display EXCEPT !.read = store]
@@ -273,8 +277,8 @@ FirstFetchReset ==
     /\ wPc = "ffReset"
     /\ ResetEffect("ffReady")
 
-\* main.swift:196 finishFirstPortfolioFetch: pulseApplyingCurrentReadState
-\* (main.swift:199, 442) re-reads the store, then completeFirstFetch.
+\* main.swift:184 finishFirstPortfolioFetch, then completeFirstFetch
+\* (LaunchRuntime.swift:1180), whose pulseForDisplay (1253) re-reads the store.
 FirstFetchPublish ==
     /\ wPc = "ffReady"
     /\ mainPc = "idle"
@@ -339,9 +343,9 @@ BgReset ==
     /\ wPc = "bgReset"
     /\ ResetEffect("bgReady")
 
-\* main.swift:320 finishBackgroundPortfolioRefresh and
-\* PDTLaunchRuntime.completeBackgroundDetailRefresh, LaunchRuntime.swift:1169
-\* (main.swift:325): currentPulse = pulse with the worker's readState.
+\* main.swift:301 finishBackgroundPortfolioRefresh and
+\* PDTLaunchRuntime.completeBackgroundDetailRefresh, LaunchRuntime.swift:1206:
+\* currentPulse = pulseForDisplay(pulse), which re-reads the store (1253).
 BgPublish ==
     /\ wPc = "bgReady"
     /\ mainPc = "idle"
