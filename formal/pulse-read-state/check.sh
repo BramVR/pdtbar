@@ -12,9 +12,10 @@ spec="$here/PulseReadState.tla"
 expectations=(
   "PulseReadState_store.cfg|pass"
   "PulseReadState_fixed.cfg|pass"
-  "PulseReadState_stale_publish.cfg|DisplayMatchesStoreWhenIdle"
+  "PulseReadState_stale_publish.cfg|pass"
   "PulseReadState_lost_reset.cfg|ReadMarkClearedOnRecrossing"
   "PulseReadState_broken_markread.cfg|NoLostReadStateUpdate"
+  "PulseReadState_broken_bgpublish.cfg|DisplayMatchesStoreWhenIdle"
 )
 
 failures=0

@@ -29,9 +29,9 @@ Sync commit: `1b6ffd4`. The model describes the code at that commit.
 
 `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift`: `refresh` 166 (prior load 198, base fetch 202, base commit 225, phase commits 264/288/322/379, `throwIfCancelled` checks 171-400, `refreshedPulse` call 406) and `throwIfCancelled` 1072.
 
-`Sources/PDTBarCore/LaunchRuntime.swift`: `PDTLaunchRuntime.completeCachedPulseLoad` 1032, `completeReadinessProbe` 1068, `retryFirstFetch` 1117, `completeBackgroundDetailRefresh` 1169, `publishPulse` 1209.
+`Sources/PDTBarCore/LaunchRuntime.swift`: `PDTLaunchRuntime.completeCachedPulseLoad` 1032, `completeReadinessProbe` 1068, `retryFirstFetch` 1117, `completeBackgroundDetailRefresh` 1169, `publishPulse` 1209. After the sync commit, #269 moved the read-state join into the runtime: `DisplayedPulse.show` is the only way to set the pulse the runtime shows, and it re-reads the store every time. Mark-read calls `pulseReadStateDidChange`.
 
-`Sources/PDTBarApp/main.swift`: `launch` 82, `startCachedPulseLoad` 106, `startFirstPortfolioFetch` 159, `finishFirstPortfolioFetch` 196, `startBackgroundPortfolioRefresh` 257, `finishBackgroundPortfolioRefresh` 320, `pulseApplyingCurrentReadState` 442, mark-read row setup 573, `markPulseItemRead` 1031, `applicationWillTerminate` 1117.
+`Sources/PDTBarApp/main.swift`: `launch` 82, `startCachedPulseLoad` 106, `startFirstPortfolioFetch` 159, `finishFirstPortfolioFetch` 196, `startBackgroundPortfolioRefresh` 257, `finishBackgroundPortfolioRefresh` 320, `pulseApplyingCurrentReadState` 442 (removed in #269), mark-read row setup 573, `markPulseItemRead` 1031, `applicationWillTerminate` 1117.
 
 Every action in the spec has a comment naming the Swift function and line it models. If `git diff 1b6ffd4 -- <file>` shows changes in any function above, recheck the model against the code before trusting a pass.
 
@@ -45,9 +45,10 @@ About 15 seconds. It runs each config through `Scripts/formal/tlc.sh` (pinned TL
 
 - `PulseReadState_store.cfg`: pass. Current code, `NoLostReadStateUpdate`.
 - `PulseReadState_fixed.cfg`: pass. Both findings fixed in the model (`ReapplyOnBgPublish`, `ResetBeforeSnapshotCommit` TRUE), every invariant.
-- `PulseReadState_stale_publish.cfg`: `DisplayMatchesStoreWhenIdle` violated. Finding 1.
+- `PulseReadState_stale_publish.cfg`: pass. Finding 1, fixed in #269.
 - `PulseReadState_lost_reset.cfg`: `ReadMarkClearedOnRecrossing` violated. Finding 2.
 - `PulseReadState_broken_markread.cfg`: `NoLostReadStateUpdate` violated. The "able to fail" mutation: `markRead` outside `mutationQueue`.
+- `PulseReadState_broken_bgpublish.cfg`: `DisplayMatchesStoreWhenIdle` violated. Mutation: the background refresh publishes its worker's read state, as before #269.
 
 One config alone: `Scripts/formal/tlc.sh formal/pulse-read-state/PulseReadState.tla formal/pulse-read-state/<config>.cfg`. The default `PulseReadState.cfg` checks every invariant against current code and stops at whichever finding TLC reaches first.
 
@@ -55,9 +56,9 @@ Read every TLC result with the `/statechart` skill. It turns a violation into it
 
 ## Current findings
 
-Both reproduce on `1b6ffd4`. Each was also replayed on the real Swift code with a throwaway sequential test through `PDTBackgroundDetailRefresh` and `PDTLaunchRuntime`.
+Both reproduce on `1b6ffd4`. Finding 1 is fixed in #269; finding 2 is open. Each was also replayed on the real Swift code with a throwaway sequential test through `PDTBackgroundDetailRefresh` and `PDTLaunchRuntime`.
 
-Finding 1, stale background publish. Shortest TLC trace (`PulseReadState_stale_publish.cfg`, 9 states):
+Finding 1, stale background publish (fixed in #269). Shortest TLC trace on `1b6ffd4` (now `PulseReadState_broken_bgpublish.cfg`, 9 states):
 
 1. Start (`Init`). The snapshot holds a concentration row in weight bucket `c1`. The read store holds the same holding's older bucket mark `c2`. The cached pulse (`PressureRunner.cachedPulse`, Persistence.swift:343) shows `c1` unread.
 2. `BgStart`. `startBackgroundPortfolioRefresh` starts the worker (main.swift:257).
@@ -69,7 +70,7 @@ Finding 1, stale background publish. Shortest TLC trace (`PulseReadState_stale_p
 8. `BgReset`. `readStateAfterResettingReappearedItems` finds nothing to remove and returns the loaded `{c2}` (Persistence.swift:586-588).
 9. `BgPublish`. `finishBackgroundPortfolioRefresh` (main.swift:320) calls `completeBackgroundDetailRefresh` (LaunchRuntime.swift:1169) with readState `{c2}`. The row is unread again while the store says read.
 
-The mark-read can also land after step 8, while the worker's `finishBackgroundPortfolioRefresh` block waits in the main queue. Fix direction: re-read the store before publishing, as `finishFirstPortfolioFetch` does with `pulseApplyingCurrentReadState`. Related, not modelled: `publishPulse` sets `backgroundDetailRefreshInFlight = false`, so a mark-read during a refresh also stops the progress rows.
+The mark-read can also land after step 8, while the worker's `finishBackgroundPortfolioRefresh` block waits in the main queue. Fix (#269): `PDTLaunchRuntime` re-reads the store for every pulse it publishes, so no worker's read state reaches the menu. The related flag bug, where a mark-read during a refresh stopped the progress rows, is fixed in #268 and checked by `verify-launch-runtime`.
 
 Finding 2, reset lost on quit. Shortest TLC trace (`PulseReadState_lost_reset.cfg`, 5 states):
 

@@ -16,7 +16,7 @@ Run it when a change touches any covered function below, the order of main-queue
 Sync commit: `1b6ffd4` (origin/main when the model was last confirmed to describe the covered code; the code was re-read after the #241 file split). After you confirm the model still describes the code at a newer commit, move this line forward. Never move it without that check.
 
 `Sources/PDTBarCore/LaunchRuntime.swift`:
-- `PDTReadinessAttempt` 1017. `PDTLaunchRuntime` 1022-1334: `launch` 1045, `launchWhileLoadingCachedPulse` 1052, `completeCachedPulseLoad` 1058, `installCachedPulse` 1070, `retryReadiness` 1096, `completeReadinessProbe` 1103, `applyReadiness` 1120, `beginLoginHandoff` 1143, `completeLoginHandoff` 1148, `retryFirstFetch` 1164, `firstFetchProgress` 1176, `completeFirstFetch` 1183, `beginBackgroundDetailRefresh` 1193, `backgroundDetailRefreshProgress` 1200, `completeBackgroundDetailRefresh` 1217, `publishPulse` 1257, `beginReadinessProbe` 1283, `startBackgroundDetailRefresh` 1289, `update` 1306.
+- `PDTReadinessAttempt` 1017. `PDTLaunchRuntime` 1022-1334: `launch` 1045, `launchWhileLoadingCachedPulse` 1052, `completeCachedPulseLoad` 1058, `installCachedPulse` 1070, `retryReadiness` 1096, `completeReadinessProbe` 1103, `applyReadiness` 1120, `beginLoginHandoff` 1143, `completeLoginHandoff` 1148, `retryFirstFetch` 1164, `firstFetchProgress` 1176, `completeFirstFetch` 1183, `beginBackgroundDetailRefresh` 1193, `backgroundDetailRefreshProgress` 1200, `completeBackgroundDetailRefresh` 1217, `publishPulse` 1257 (replaced after the sync commit by `pulseReadStateDidChange` for mark-read and `publishFetchedPulse` for the first fetch, #268), `beginReadinessProbe` 1283, `startBackgroundDetailRefresh` 1289, `update` 1306.
 - `ClaudeLoginAttemptGate` 118.
 - Clickable rows per state: `ClaudeLaunchFlow.descriptor(for:cachedPulse:)` 364, `descriptorForBackgroundRefreshFailure` 572, `descriptorForBackgroundDetailProgress` 597, `descriptorForBackgroundDetailDegraded` 613, `descriptor(forLoginFailure:)` 647, `portfolioFetchFailureRows` 943, `ClaudeSetupMenuDescriptor` 1492-1610.
 
@@ -51,12 +51,12 @@ Passing today:
 - `FetchingMenuTellsTruth`: a "Refreshing" / "Fetching" menu means a fetch is running.
 - `ProbingMenuTellsTruth`: "Checking Claude setup" means the newest readiness result is still on its way.
 - `SetupMenuMeansIdle`: a setup screen is shown only when no fetch runs behind it.
-- `CheckBeforeWork`: no fetch runs while a readiness check is pending. Fixed in #267: `retryFirstFetch` refuses until readiness came back ready, the cached pulse shown during the check renders "Refresh now" as not clickable (`waitingForSetup`), and a mark-read `publishPulse` during the check keeps `.probingClaude`. Mutation `republishSkipsCheck` restores the mark-read path. The menu is mutated in place (main.swift 485), so no model path reaches `retryFirstFetch` without a clickable row; its refusal is the runtime's own rule, pinned by `LaunchFlowTests`. This also makes the refresh-in-flight guard in `applyReadiness` unreachable.
+- `CheckBeforeWork`: no fetch runs while a readiness check is pending. Fixed in #267: `retryFirstFetch` refuses until readiness came back ready, the cached pulse shown during the check renders "Refresh now" as not clickable (`waitingForSetup`), and a fetched pulse published during the check keeps `.probingClaude`. Since #268 a mark-read changes no launch state, so `republishSkipsCheck` is paired with `markReadPublishes` in `mutations.sh` to reach that branch. The menu is mutated in place (main.swift 485), so no model path reaches `retryFirstFetch` without a clickable row; its refusal is the runtime's own rule, pinned by `LaunchFlowTests`. This also makes the refresh-in-flight guard in `applyReadiness` unreachable.
 - `RefreshOfferIsLive`: every clickable "Refresh now" / "Try again" is accepted by `retryFirstFetch`. Mutation `probingOffersRefresh` shows a dead button.
+- `BackgroundFlagMatchesWork`: `backgroundDetailRefreshInFlight` is true exactly while a background refresh runs. Fixed in #268: mark-read used to republish through `publishPulse`, which cleared the flag mid-refresh, so progress rows stopped and "Refresh now" came back. Mark-read now calls `pulseReadStateDidChange`, which only re-renders the pulse rows. Mutation `markReadPublishes` restores the old path. That old path was also the only way to click a fetch retry during a refresh, so the `noRetryGuard` row adds it too.
 - `ProbeResultNotLost`: while the runtime waits for readiness attempt N, N's result is still running or parked until the cached pulse loads. Fixed in #274: every probe result must name its `PDTReadinessAttempt`, and `PDTLaunchRuntime` checks it before it parks a `ready`, so a superseded probe can no longer overwrite the parked result. Mutation `parkStaleProbe` restores the old order.
 
-Open findings (fail on the code at the sync commit; listed in `check.sh` as `OPEN_FINDINGS`):
-- `BackgroundFlagMatchesWork` (shortest path 4 steps). On a returning launch the background refresh starts. The user clicks "Mark as read" on a pulse row, and `markPulseItemRead` republishes through `publishPulse`, which sets `backgroundDetailRefreshInFlight = false` while the refresh is still running. Progress rows stop, because `backgroundDetailRefreshProgress` drops updates once the flag is false. "Refresh now" reappears during the refresh. When the refresh finishes it publishes its own older read state (see `verify-pulse-read-state`, stale publish). Fix direction: republish a mark-read without touching the refresh flag or the progress descriptor.
+Open findings (listed in `check.sh` as `OPEN_FINDINGS`): none.
 
 When a fix lands, remove the invariant from `OPEN_FINDINGS` in both `check.sh` and `mutations.sh`, and update this list.
 
@@ -78,7 +78,7 @@ When TLC reports a violation, replay its steps against the Swift code before you
 
 ## Scope and bounds
 
-Bounds (`LaunchRuntime.cfg`): at most 3 readiness attempts from "Check again", 2 login clicks, and 2 Try again / Refresh now clicks (`MaxProbes`, `MaxLogins`, `MaxRetries`), with `BackgroundAfterFirstFetch = TRUE` as on real launches. That covers 1,924 distinct states. Mark as read is unbounded (it is idempotent in this model). A pass covers these bounds only.
+Bounds (`LaunchRuntime.cfg`): at most 3 readiness attempts from "Check again", 2 login clicks, and 2 Try again / Refresh now clicks (`MaxProbes`, `MaxLogins`, `MaxRetries`), with `BackgroundAfterFirstFetch = TRUE` as on real launches. That covers 1,627 distinct states. Mark as read is unbounded (it changes nothing this model tracks). A pass covers these bounds only.
 
 Modelled at this abstraction:
 - Probe results are any of the five `ClaudeReadinessProbeResult` values.
@@ -92,7 +92,7 @@ Left out:
 - What the background refresh does inside (see `verify-background-detail-refresh`).
 - Login subprocess behavior (see `verify-claude-login-process`).
 - Read-state writes (see `verify-pulse-read-state`).
-- Settings re-renders. Mark-as-read is modelled only as a republish through `publishPulse`; its read-state writes belong to `verify-pulse-read-state`.
+- Settings re-renders. Mark-as-read is modelled only as a re-render that keeps state, flags, and menu; its read-state writes belong to `verify-pulse-read-state`.
 - Data health source facts on cached pulses.
 - Timer cadence. A first-fetch progress tick may happen any time a first fetch is in flight.
 - `PDTOnboardingCoordinator` / `PDTOnboardingRunner`, a synchronous test seam that the app does not use.

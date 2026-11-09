@@ -400,7 +400,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: cachedPulse)
-        let republished = runtime.publishPulse(cachedPulse)
+        let republished = try #require(runtime.pulseReadStateDidChange())
 
         #expect(republished.state == .probingClaude)
         #expect(rowTitles(in: republished.descriptor).contains("Checking Claude setup"))
@@ -669,13 +669,11 @@ struct PDTOnboardingRunnerTests {
     @Test("Mark-read republish carries last known runtime readiness")
     func markReadRepublishCarriesLastKnownRuntimeReadiness() throws {
         let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
+        let runtime = PDTLaunchRuntime(loadReadState: { PulseReadState(readFingerprints: ["pulse:v1:test"]) })
 
         _ = runtime.launch(cachedPulse: cachedPulse)
         _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        let republished = runtime.publishPulse(
-            cachedPulse.applyingReadState(PulseReadState(readFingerprints: ["pulse:v1:test"]))
-        )
+        let republished = try #require(runtime.pulseReadStateDidChange())
         let health = try #require(healthRow(in: republished.descriptor))
 
         #expect(runtime.lastKnownReadiness == .ready)
@@ -692,7 +690,7 @@ struct PDTOnboardingRunnerTests {
         let runtime = PDTLaunchRuntime()
 
         _ = runtime.launch(cachedPulse: cachedPulse)
-        let republished = runtime.publishPulse(cachedPulse)
+        let republished = try #require(runtime.pulseReadStateDidChange())
         let health = try #require(healthRow(in: republished.descriptor))
 
         #expect(runtime.lastKnownReadiness == nil)
@@ -709,11 +707,12 @@ struct PDTOnboardingRunnerTests {
 
         _ = runtime.launch(cachedPulse: cachedPulse)
         _ = runtime.completeReadinessProbe(.missingPDTMCP, for: runtime.readinessAttempt)
-        let republished = runtime.publishPulse(cachedPulse)
-        let health = try #require(healthRow(in: republished.descriptor))
+        let republished = try #require(runtime.pulseReadStateDidChange())
+        let health = try #require(runtime.currentPulse?.model.facetSnapshots.dataHealth)
 
-        #expect(health.children.first { $0.id == "dataHealth.source" }?.detail == "Claude ready; PDT missing; read tools unknown; policy unknown")
-        #expect(health.detail == "Needs attention")
+        #expect(republished.state == .missingPDTMCP)
+        #expect(health.source.detail == "Claude ready; PDT missing; read tools unknown; policy unknown")
+        #expect(health.status == .degraded)
     }
 
     @Test("Republished fetched pulse keeps live-verified source facts")
@@ -724,7 +723,7 @@ struct PDTOnboardingRunnerTests {
         _ = runtime.launch(cachedPulse: nil)
         _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
         _ = runtime.completeFirstFetch(.succeeded(fetchedPulse))
-        let republished = runtime.publishPulse(fetchedPulse)
+        let republished = try #require(runtime.pulseReadStateDidChange())
 
         #expect(fetchedPulse.model.facetSnapshots.dataHealth.source.detail == "Claude ready; PDT ready; 7/7 read tools; read-only")
         #expect(fetchedPulse.model.facetSnapshots.dataHealth.status == .healthy)
