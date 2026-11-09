@@ -1030,6 +1030,17 @@ public final class PDTLaunchRuntime {
         case readyAwaitingCachedPulse
     }
 
+    /// What the menu shows around `currentPulse`. The descriptor is rendered from this on
+    /// every update, so a pulse change such as a mark-read keeps the surrounding rows.
+    private enum Screen {
+        case launchState(fetchingElapsedSeconds: Int?)
+        case loginFailed(ClaudeLoginFailureReason)
+        case detailProgress(BackgroundDetailRefreshProgress)
+        case detailDegraded
+        case detailFailed(PDTDetailRefreshFailureDiagnostic?)
+        case refreshed
+    }
+
     public private(set) var currentPulse: PulseLifecycleResult?
     public private(set) var state: ClaudeLaunchState = .probingClaude
     private var readinessProbe = ReadinessProbe.idle
@@ -1038,9 +1049,14 @@ public final class PDTLaunchRuntime {
     public private(set) var firstFetchInFlight = false
     public private(set) var backgroundDetailRefreshInFlight = false
     public private(set) var lastKnownReadiness: ClaudeReadinessProbeResult?
-    private var lastDescriptor: MenuDescriptor?
+    private var screen = Screen.launchState(fetchingElapsedSeconds: nil)
+    private let loadReadState: () -> PulseReadState?
 
-    public init() {}
+    /// `loadReadState` reads the pulse read store. It returns nil when the store is unreadable,
+    /// and the pulse keeps the read state it was built with.
+    public init(loadReadState: @escaping () -> PulseReadState? = { nil }) {
+        self.loadReadState = loadReadState
+    }
 
     public func launch(cachedPulse: PulseLifecycleResult?) -> PDTOnboardingUpdate {
         currentPulse = cachedPulse
@@ -1071,26 +1087,11 @@ public final class PDTLaunchRuntime {
         if let currentPulse, currentPulse.source != .cachedSnapshot {
             return nil
         }
-        let installedPulse = pulseApplyingLastKnownReadiness(pulse)
-        currentPulse = installedPulse
-        let descriptor: MenuDescriptor
-        if backgroundDetailRefreshInFlight {
-            descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
-                cachedPulse: installedPulse.descriptor,
-                progress: BackgroundDetailRefreshProgress(phase: .baseHoldings),
-                cachedSnapshotAsOf: installedPulse.model.asOf
-            )
-        } else {
-            descriptor = ClaudeLaunchFlow.descriptor(
-                for: state,
-                cachedPulse: installedPulse.descriptor
-            )
-        }
-        lastDescriptor = descriptor
-        return PDTOnboardingUpdate(
-            state: state,
-            descriptor: descriptor
-        )
+        currentPulse = pulseForDisplay(pulse)
+        screen = backgroundDetailRefreshInFlight
+            ? .detailProgress(BackgroundDetailRefreshProgress(phase: .baseHoldings))
+            : .launchState(fetchingElapsedSeconds: nil)
+        return currentUpdate()
     }
 
     public func retryReadiness() -> PDTOnboardingUpdate? {
@@ -1151,12 +1152,8 @@ public final class PDTLaunchRuntime {
             return beginReadinessProbe()
         case .failed(let reason):
             state = .missingClaude
-            let descriptor = ClaudeLaunchFlow.descriptor(forLoginFailure: reason)
-            lastDescriptor = descriptor
-            return PDTOnboardingUpdate(
-                state: state,
-                descriptor: descriptor
-            )
+            screen = .loginFailed(reason)
+            return currentUpdate()
         }
     }
 
@@ -1184,7 +1181,7 @@ public final class PDTLaunchRuntime {
         firstFetchInFlight = false
         switch result {
         case .succeeded(let pulse):
-            return publishPulse(pulse)
+            return publishFetchedPulse(pulse)
         case .failed:
             return update(state: .portfolioFetchFailed)
         }
@@ -1198,20 +1195,12 @@ public final class PDTLaunchRuntime {
     }
 
     public func backgroundDetailRefreshProgress(_ progress: BackgroundDetailRefreshProgress) -> PDTOnboardingUpdate? {
-        guard backgroundDetailRefreshInFlight, let pulse = currentPulse else {
+        guard backgroundDetailRefreshInFlight, currentPulse != nil else {
             return nil
         }
         state = .fetchingPortfolio
-        let descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
-            cachedPulse: pulse.descriptor,
-            progress: progress,
-            cachedSnapshotAsOf: pulse.model.asOf
-        )
-        lastDescriptor = descriptor
-        return PDTOnboardingUpdate(
-            state: state,
-            descriptor: descriptor
-        )
+        screen = .detailProgress(progress)
+        return currentUpdate()
     }
 
     public func completeBackgroundDetailRefresh(
@@ -1220,33 +1209,17 @@ public final class PDTLaunchRuntime {
         backgroundDetailRefreshInFlight = false
         switch result {
         case let .succeeded(pulse, outcome):
-            currentPulse = pulse
+            currentPulse = pulseForDisplay(pulse)
             state = .fetchingPortfolio
-            let descriptor: MenuDescriptor
-            if outcome == .degraded {
-                descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailDegraded(cachedPulse: pulse.descriptor)
-            } else {
-                descriptor = ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: pulse.descriptor)
-            }
-            lastDescriptor = descriptor
-            return PDTOnboardingUpdate(
-                state: state,
-                descriptor: descriptor
-            )
+            screen = outcome == .degraded ? .detailDegraded : .refreshed
+            return currentUpdate()
         case .failed(_, let diagnostic):
-            guard let pulse = currentPulse else {
+            guard currentPulse != nil else {
                 return update(state: .portfolioFetchFailed)
             }
             state = .portfolioFetchFailed
-            let descriptor = ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(
-                cachedPulse: pulse.descriptor,
-                diagnostic: diagnostic
-            )
-            lastDescriptor = descriptor
-            return PDTOnboardingUpdate(
-                state: state,
-                descriptor: descriptor
-            )
+            screen = .detailFailed(diagnostic)
+            return currentUpdate()
         }
     }
 
@@ -1254,21 +1227,32 @@ public final class PDTLaunchRuntime {
         currentPulse = pulse
     }
 
-    public func publishPulse(_ pulse: PulseLifecycleResult) -> PDTOnboardingUpdate {
-        backgroundDetailRefreshInFlight = false
-        let publishedPulse = pulseApplyingLastKnownReadiness(pulse)
-        currentPulse = publishedPulse
-        // A mark-read republish during the setup check must not skip the check.
+    /// Call after the read store changes. Only the pulse rows change; the
+    /// launch state and any running fetch or refresh are left as they are.
+    public func pulseReadStateDidChange() -> PDTOnboardingUpdate? {
+        guard let pulse = currentPulse else {
+            return nil
+        }
+        currentPulse = pulseForDisplay(pulse)
+        return currentUpdate()
+    }
+
+    private func publishFetchedPulse(_ pulse: PulseLifecycleResult) -> PDTOnboardingUpdate {
+        currentPulse = pulseForDisplay(pulse)
+        // A setup check started during the fetch still decides what happens next.
         if state == .probingClaude {
             return update(state: .probingClaude)
         }
         state = .fetchingPortfolio
-        let descriptor = ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: publishedPulse.descriptor)
-        lastDescriptor = descriptor
-        return PDTOnboardingUpdate(
-            state: state,
-            descriptor: descriptor
-        )
+        screen = .refreshed
+        return currentUpdate()
+    }
+
+    /// A pulse built on a worker carries the read state it loaded there, which a
+    /// mark-read made since then has outdated. The read store is the source of truth.
+    private func pulseForDisplay(_ pulse: PulseLifecycleResult) -> PulseLifecycleResult {
+        let readPulse = loadReadState().map(pulse.applyingReadState) ?? pulse
+        return pulseApplyingLastKnownReadiness(readPulse)
     }
 
     /// Cached pulses only claim the source facts the runtime has actually
@@ -1290,17 +1274,8 @@ public final class PDTLaunchRuntime {
         firstFetchInFlight = false
         backgroundDetailRefreshInFlight = true
         state = .fetchingPortfolio
-        let descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
-            cachedPulse: pulse.descriptor,
-            progress: BackgroundDetailRefreshProgress(phase: .baseHoldings),
-            cachedSnapshotAsOf: pulse.model.asOf
-        )
-        lastDescriptor = descriptor
-        return PDTOnboardingUpdate(
-            state: state,
-            descriptor: descriptor,
-            effect: .startBackgroundDetailRefresh
-        )
+        screen = .detailProgress(BackgroundDetailRefreshProgress(phase: .baseHoldings))
+        return currentUpdate(effect: .startBackgroundDetailRefresh)
     }
 
     private func update(
@@ -1309,27 +1284,49 @@ public final class PDTLaunchRuntime {
         fetchingElapsedSeconds: Int? = nil
     ) -> PDTOnboardingUpdate {
         self.state = state
-        let descriptor = ClaudeLaunchFlow.descriptor(
-            for: state,
-            cachedPulse: currentPulse?.descriptor,
-            fetchingElapsedSeconds: fetchingElapsedSeconds
-        )
-        lastDescriptor = descriptor
-        return PDTOnboardingUpdate(
-            state: state,
-            descriptor: descriptor,
-            effect: effect
-        )
+        screen = .launchState(fetchingElapsedSeconds: fetchingElapsedSeconds)
+        return currentUpdate(effect: effect)
     }
 
-    private func currentUpdate() -> PDTOnboardingUpdate {
-        if let lastDescriptor {
-            return PDTOnboardingUpdate(
-                state: state,
-                descriptor: lastDescriptor
-            )
+    private func currentUpdate(effect: PDTOnboardingEffect = .none) -> PDTOnboardingUpdate {
+        PDTOnboardingUpdate(state: state, descriptor: descriptor(for: screen), effect: effect)
+    }
+
+    private func descriptor(for screen: Screen) -> MenuDescriptor {
+        guard let pulse = currentPulse else {
+            if case .loginFailed(let reason) = screen {
+                return ClaudeLaunchFlow.descriptor(forLoginFailure: reason)
+            }
+            if case .launchState(let fetchingElapsedSeconds) = screen {
+                return ClaudeLaunchFlow.descriptor(for: state, fetchingElapsedSeconds: fetchingElapsedSeconds)
+            }
+            return ClaudeLaunchFlow.descriptor(for: state)
         }
-        return update(state: state)
+        switch screen {
+        case .launchState(let fetchingElapsedSeconds):
+            return ClaudeLaunchFlow.descriptor(
+                for: state,
+                cachedPulse: pulse.descriptor,
+                fetchingElapsedSeconds: fetchingElapsedSeconds
+            )
+        case .loginFailed(let reason):
+            return ClaudeLaunchFlow.descriptor(forLoginFailure: reason)
+        case .detailProgress(let progress):
+            return ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+                cachedPulse: pulse.descriptor,
+                progress: progress,
+                cachedSnapshotAsOf: pulse.model.asOf
+            )
+        case .detailDegraded:
+            return ClaudeLaunchFlow.descriptorForBackgroundDetailDegraded(cachedPulse: pulse.descriptor)
+        case .detailFailed(let diagnostic):
+            return ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(
+                cachedPulse: pulse.descriptor,
+                diagnostic: diagnostic
+            )
+        case .refreshed:
+            return ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: pulse.descriptor)
+        }
     }
 }
 

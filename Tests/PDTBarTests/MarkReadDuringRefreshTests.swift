@@ -74,7 +74,7 @@ private struct ReturningLaunch {
             pulseReadStore: readStore,
             today: "2026-06-22"
         ))
-        runtime = PDTLaunchRuntime()
+        runtime = PDTLaunchRuntime(loadReadState: { try? readStore.load() })
         _ = runtime.launch(cachedPulse: cachedPulse)
         let ready = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
         try #require(ready.effect == .startBackgroundDetailRefresh)
@@ -83,8 +83,7 @@ private struct ReturningLaunch {
     /// What the app does when the user clicks a row's Mark as read item.
     func markRead(_ item: AttentionItem) throws -> PDTOnboardingUpdate {
         try readStore.markRead(item.readFingerprint)
-        let current = try #require(runtime.currentPulse)
-        return runtime.publishPulse(current.applyingReadState(try readStore.load()))
+        return try #require(runtime.pulseReadStateDidChange())
     }
 }
 

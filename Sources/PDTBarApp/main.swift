@@ -41,7 +41,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let options: PDTBarLaunchOptions
     private let environment: [String: String]
     private let loginHandoff: ClaudeLoginHandoff
-    private let launchRuntime = PDTLaunchRuntime()
+    private lazy var launchRuntime = PDTLaunchRuntime { [unowned self] in
+        try? PulseReadStore(directory: self.currentSnapshotDirectory()).load()
+    }
     private var statusItem: NSStatusItem?
     private var portfolioRefreshInFlight = false
     private var activeRefreshCancellation: PDTCancellation?
@@ -182,8 +184,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private func finishFirstPortfolioFetch(_ outcome: PortfolioFetchOutcome) {
         stopPortfolioFetchProgressTimer()
         if let pulse = outcome.pulse {
-            let refreshedPulse = pulseApplyingCurrentReadState(pulse)
-            handleLaunchUpdate(launchRuntime.completeFirstFetch(.succeeded(refreshedPulse)))
+            handleLaunchUpdate(launchRuntime.completeFirstFetch(.succeeded(pulse)))
             if outcome.shouldStartBackgroundRefresh {
                 if let update = launchRuntime.beginBackgroundDetailRefresh() {
                     handleLaunchUpdate(update)
@@ -438,14 +439,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func currentSnapshotDirectory() -> URL {
         activeSnapshotDirectory ?? firstFetchStateDirectory()
-    }
-
-    private func pulseApplyingCurrentReadState(_ pulse: PulseLifecycleResult) -> PulseLifecycleResult {
-        let readStore = PulseReadStore(directory: currentSnapshotDirectory())
-        guard let readState = try? readStore.load() else {
-            return pulse
-        }
-        return pulse.applyingReadState(readState)
     }
 
     private func fixtureSnapshotDirectory() throws -> URL {
@@ -1034,21 +1027,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         do {
-            let directory = currentSnapshotDirectory()
-            let readStore = PulseReadStore(directory: directory)
-            try readStore.markRead(fingerprint)
-            if let currentPulse = launchRuntime.currentPulse {
-                let refreshedPulse = currentPulse.applyingReadState(try readStore.load())
-                handleLaunchUpdate(launchRuntime.publishPulse(refreshedPulse))
-                return
+            try PulseReadStore(directory: currentSnapshotDirectory()).markRead(fingerprint)
+            if let update = launchRuntime.pulseReadStateDidChange() {
+                handleLaunchUpdate(update)
             }
-            guard let cachedPulse = try PressureRunner.cachedPulse(
-                snapshotStore: SnapshotStore(directory: directory),
-                pulseReadStore: readStore
-            ) else {
-                return
-            }
-            handleLaunchUpdate(launchRuntime.publishPulse(cachedPulse))
         } catch {
             FileHandle.standardError.write(Data("pdtbar: mark read failed: \(error)\n".utf8))
         }
