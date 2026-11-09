@@ -374,6 +374,40 @@ struct PDTOnboardingRunnerTests {
         #expect(rowTitles(in: ready.descriptor).contains("Step 1/6: Base holdings"))
     }
 
+    @Test("Refresh waits for the Claude setup check on a returning launch")
+    func refreshWaitsForClaudeSetupCheckOnReturningLaunch() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        let probing = runtime.launch(cachedPulse: cachedPulse)
+        #expect(actionRow("actions.refreshNow", in: probing.descriptor)?.title == "Refresh now")
+        #expect(!rowRoles(in: probing.descriptor).contains(.fetchRetry))
+        #expect(runtime.retryFirstFetch() == nil)
+
+        let setup = runtime.completeReadinessProbe(.missingClaudeLogin, for: runtime.readinessAttempt)
+        #expect(setup.state == .missingClaudeLogin)
+        #expect(!runtime.backgroundDetailRefreshInFlight)
+
+        _ = try #require(runtime.retryReadiness())
+        let ready = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
+        #expect(ready.state == .fetchingPortfolio)
+        #expect(ready.effect == .startBackgroundDetailRefresh)
+    }
+
+    @Test("Mark-read republish during the Claude setup check keeps the check")
+    func markReadRepublishDuringClaudeSetupCheckKeepsTheCheck() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launch(cachedPulse: cachedPulse)
+        let republished = runtime.publishPulse(cachedPulse)
+
+        #expect(republished.state == .probingClaude)
+        #expect(rowTitles(in: republished.descriptor).contains("Checking Claude setup"))
+        #expect(!rowRoles(in: republished.descriptor).contains(.fetchRetry))
+        #expect(runtime.retryFirstFetch() == nil)
+    }
+
     @Test("Launch runtime can install cached pulse after initial probing paint")
     func launchRuntimeCanInstallCachedPulseAfterInitialProbingPaint() throws {
         let cachedPulse = try cachedQuietFixturePulse()
@@ -1245,6 +1279,13 @@ private func freshnessRefreshDetailsAction(in descriptor: MenuDescriptor) -> Men
         .first { $0.id == "freshness.summary" }?
         .children
         .first { $0.id == "freshness.refreshDetails" }
+}
+
+private func rowRoles(in descriptor: MenuDescriptor) -> [MenuRowRole] {
+    func roles(_ rows: [MenuRow]) -> [MenuRowRole] {
+        rows.flatMap { [$0.role] + roles($0.children) }
+    }
+    return roles(descriptor.sections.flatMap(\.rows))
 }
 
 private func actionRow(_ id: String, in descriptor: MenuDescriptor) -> MenuRow? {
