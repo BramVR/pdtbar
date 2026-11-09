@@ -210,7 +210,7 @@ CacheLoadReturns ==
                          /\ StartFirstFetch
     /\ UNCHANGED <<loginNext, loginActive, logins, retries>>
 
-\* publishFetchedPulse Core:1240-1250
+\* publishFetchedPulse Core:1253-1262
 Publish(newPulse) ==
     /\ pulse' = newPulse
     /\ IF state = "probingClaude" /\ "republishSkipsCheck" \notin Mutations
@@ -325,7 +325,7 @@ ClickRetry ==
                    probes, cacheLoad, logins>>
 
 \* markPulseItemRead click App:1025-1034: pulse rows carry "Mark as read". It
-\* writes the read store, then pulseReadStateDidChange Core:1232 re-renders the
+\* writes the read store, then pulseReadStateDidChange Core:1245 re-renders the
 \* current screen with the new read rows. State, flags, and the refresh offer
 \* stay as they were. Mutation markReadPublishes replays the code before #268,
 \* which republished through publishPulse and cleared the refresh flag.

@@ -20,9 +20,9 @@
 EXTENDS FiniteSets
 
 CONSTANTS
-    \* TRUE is current code (#269): PDTLaunchRuntime.pulseForDisplay
-    \* (LaunchRuntime.swift:1253) re-reads the store for every pulse it
-    \* publishes, the background refresh result included. FALSE replays the
+    \* TRUE is current code (#269): every pulse PDTLaunchRuntime shows goes
+    \* through DisplayedPulse.show (LaunchRuntime.swift:1033), which re-reads
+    \* the store, the background refresh result included. FALSE replays the
     \* code before #269, which published the worker's read state.
     ReapplyOnBgPublish,
     \* TRUE models a fix: the re-crossing reset runs before the snapshot that
@@ -102,6 +102,8 @@ Pulse(s, p, r, read) ==
     [shown |-> TRUE, inc |-> s.inc, conc |-> ConcItem(s, p, r), read |-> read]
 
 \* PressureRunner.cachedPulse, Persistence.swift:343: no prior, no reset (366).
+\* The runtime installs it through DisplayedPulse.show (LaunchRuntime.swift:1033),
+\* which joins the store again on the main thread.
 CachedDisplay ==
     IF snap = NoSnap THEN NoDisplay ELSE Pulse(snap, NoSnap, store, store)
 
@@ -189,8 +191,8 @@ MarkReadSave ==
                    mainFp, mainLoaded, owed>>
 
 \* main.swift:1027 PDTLaunchRuntime.pulseReadStateDidChange,
-\* LaunchRuntime.swift:1232, which applies readStore.load() through
-\* pulseForDisplay (1253).
+\* LaunchRuntime.swift:1245, which applies readStore.load() through
+\* DisplayedPulse.show (1033).
 MarkReadReload ==
     /\ mainPc = "reloading"
     /\ display' = [display EXCEPT !.read = store]
@@ -278,7 +280,7 @@ FirstFetchReset ==
     /\ ResetEffect("ffReady")
 
 \* main.swift:184 finishFirstPortfolioFetch, then completeFirstFetch
-\* (LaunchRuntime.swift:1180), whose pulseForDisplay (1253) re-reads the store.
+\* (LaunchRuntime.swift:1193), whose DisplayedPulse.show (1033) re-reads the store.
 FirstFetchPublish ==
     /\ wPc = "ffReady"
     /\ mainPc = "idle"
@@ -344,8 +346,8 @@ BgReset ==
     /\ ResetEffect("bgReady")
 
 \* main.swift:301 finishBackgroundPortfolioRefresh and
-\* PDTLaunchRuntime.completeBackgroundDetailRefresh, LaunchRuntime.swift:1206:
-\* currentPulse = pulseForDisplay(pulse), which re-reads the store (1253).
+\* PDTLaunchRuntime.completeBackgroundDetailRefresh, LaunchRuntime.swift:1219,
+\* shows the pulse through DisplayedPulse.show, which re-reads the store (1033).
 BgPublish ==
     /\ wPc = "bgReady"
     /\ mainPc = "idle"

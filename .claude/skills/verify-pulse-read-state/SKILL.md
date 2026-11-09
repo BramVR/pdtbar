@@ -29,7 +29,7 @@ Sync commit: `1b6ffd4`. The model describes the code at that commit.
 
 `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift`: `refresh` 166 (prior load 198, base fetch 202, base commit 225, phase commits 264/288/322/379, `throwIfCancelled` checks 171-400, `refreshedPulse` call 406) and `throwIfCancelled` 1072.
 
-`Sources/PDTBarCore/LaunchRuntime.swift`: `PDTLaunchRuntime.completeCachedPulseLoad` 1032, `completeReadinessProbe` 1068, `retryFirstFetch` 1117, `completeBackgroundDetailRefresh` 1169, `publishPulse` 1209. After the sync commit, #269 moved the read-state join into the runtime: `pulseForDisplay` re-reads the store for every pulse it publishes, and mark-read calls `pulseReadStateDidChange`.
+`Sources/PDTBarCore/LaunchRuntime.swift`: `PDTLaunchRuntime.completeCachedPulseLoad` 1032, `completeReadinessProbe` 1068, `retryFirstFetch` 1117, `completeBackgroundDetailRefresh` 1169, `publishPulse` 1209. After the sync commit, #269 moved the read-state join into the runtime: `DisplayedPulse.show` is the only way to set the pulse the runtime shows, and it re-reads the store every time. Mark-read calls `pulseReadStateDidChange`.
 
 `Sources/PDTBarApp/main.swift`: `launch` 82, `startCachedPulseLoad` 106, `startFirstPortfolioFetch` 159, `finishFirstPortfolioFetch` 196, `startBackgroundPortfolioRefresh` 257, `finishBackgroundPortfolioRefresh` 320, `pulseApplyingCurrentReadState` 442 (removed in #269), mark-read row setup 573, `markPulseItemRead` 1031, `applicationWillTerminate` 1117.
 

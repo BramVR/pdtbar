@@ -1019,6 +1019,22 @@ public struct PDTReadinessAttempt: Equatable, Sendable {
     fileprivate let number: Int
 }
 
+/// The pulse the menu shows. `show` is the only way to set it, and it applies the
+/// read store's current state last, so no caller can display a worker's older copy.
+private struct DisplayedPulse {
+    private let loadReadState: () -> PulseReadState?
+    private(set) var pulse: PulseLifecycleResult?
+
+    init(loadReadState: @escaping () -> PulseReadState?) {
+        self.loadReadState = loadReadState
+    }
+
+    /// An unreadable store returns nil, and the pulse keeps the read state it was built with.
+    mutating func show(_ pulse: PulseLifecycleResult?) {
+        self.pulse = pulse.map { pulse in loadReadState().map(pulse.applyingReadState) ?? pulse }
+    }
+}
+
 public final class PDTLaunchRuntime {
     /// Progress of `readinessAttempt`. `completeReadinessProbe` drops results
     /// for any other attempt before they can reach these cases.
@@ -1041,7 +1057,8 @@ public final class PDTLaunchRuntime {
         case refreshed
     }
 
-    public private(set) var currentPulse: PulseLifecycleResult?
+    private var displayed: DisplayedPulse
+    public var currentPulse: PulseLifecycleResult? { displayed.pulse }
     public private(set) var state: ClaudeLaunchState = .probingClaude
     private var readinessProbe = ReadinessProbe.idle
     private var cachedPulseLoading = false
@@ -1050,16 +1067,14 @@ public final class PDTLaunchRuntime {
     public private(set) var backgroundDetailRefreshInFlight = false
     public private(set) var lastKnownReadiness: ClaudeReadinessProbeResult?
     private var screen = Screen.launchState(fetchingElapsedSeconds: nil)
-    private let loadReadState: () -> PulseReadState?
 
-    /// `loadReadState` reads the pulse read store. It returns nil when the store is unreadable,
-    /// and the pulse keeps the read state it was built with.
+    /// `loadReadState` reads the pulse read store; see `DisplayedPulse.show`.
     public init(loadReadState: @escaping () -> PulseReadState? = { nil }) {
-        self.loadReadState = loadReadState
+        displayed = DisplayedPulse(loadReadState: loadReadState)
     }
 
     public func launch(cachedPulse: PulseLifecycleResult?) -> PDTOnboardingUpdate {
-        currentPulse = cachedPulse
+        show(cachedPulse)
         cachedPulseLoading = false
         return beginReadinessProbe()
     }
@@ -1087,7 +1102,7 @@ public final class PDTLaunchRuntime {
         if let currentPulse, currentPulse.source != .cachedSnapshot {
             return nil
         }
-        currentPulse = pulseForDisplay(pulse)
+        show(pulse)
         screen = backgroundDetailRefreshInFlight
             ? .detailProgress(BackgroundDetailRefreshProgress(phase: .baseHoldings))
             : .launchState(fetchingElapsedSeconds: nil)
@@ -1124,9 +1139,7 @@ public final class PDTLaunchRuntime {
     ) -> PDTOnboardingUpdate {
         readinessProbe = .idle
         lastKnownReadiness = result
-        if let currentPulse {
-            self.currentPulse = pulseApplyingLastKnownReadiness(currentPulse)
-        }
+        show(currentPulse)
         let nextState = ClaudeLaunchFlow.state(afterReadinessProbe: result)
         if nextState == .fetchingPortfolio {
             guard !firstFetchInFlight, !backgroundDetailRefreshInFlight else {
@@ -1209,7 +1222,7 @@ public final class PDTLaunchRuntime {
         backgroundDetailRefreshInFlight = false
         switch result {
         case let .succeeded(pulse, outcome):
-            currentPulse = pulseForDisplay(pulse)
+            show(pulse)
             state = .fetchingPortfolio
             screen = outcome == .degraded ? .detailDegraded : .refreshed
             return currentUpdate()
@@ -1224,7 +1237,7 @@ public final class PDTLaunchRuntime {
     }
 
     public func replaceCurrentPulse(_ pulse: PulseLifecycleResult) {
-        currentPulse = pulse
+        show(pulse)
     }
 
     /// Call after the read store changes. Only the pulse rows change; the
@@ -1233,12 +1246,12 @@ public final class PDTLaunchRuntime {
         guard let pulse = currentPulse else {
             return nil
         }
-        currentPulse = pulseForDisplay(pulse)
+        show(pulse)
         return currentUpdate()
     }
 
     private func publishFetchedPulse(_ pulse: PulseLifecycleResult) -> PDTOnboardingUpdate {
-        currentPulse = pulseForDisplay(pulse)
+        show(pulse)
         // A setup check started during the fetch still decides what happens next.
         if state == .probingClaude {
             return update(state: .probingClaude)
@@ -1248,11 +1261,8 @@ public final class PDTLaunchRuntime {
         return currentUpdate()
     }
 
-    /// A pulse built on a worker carries the read state it loaded there, which a
-    /// mark-read made since then has outdated. The read store is the source of truth.
-    private func pulseForDisplay(_ pulse: PulseLifecycleResult) -> PulseLifecycleResult {
-        let readPulse = loadReadState().map(pulse.applyingReadState) ?? pulse
-        return pulseApplyingLastKnownReadiness(readPulse)
+    private func show(_ pulse: PulseLifecycleResult?) {
+        displayed.show(pulse.map(pulseApplyingLastKnownReadiness))
     }
 
     /// Cached pulses only claim the source facts the runtime has actually
