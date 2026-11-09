@@ -21,31 +21,35 @@ Run it when a diff touches any covered code below, or changes how `claude auth l
 
 ## Covered code
 
-Sync commit: `032058b4a626ded234c4f6345dd6fe95d7210923`. The model was last confirmed against the code at this commit.
+Sync commit: `1b6ffd4`. The model was last confirmed against the code at this commit.
 
 `Sources/PDTBarApp/main.swift`:
 
-- `loginWithClaude` (340-364). Modelled by `Click` and `ApplyOnMain`. The gate guard sits at 346.
-- `ClaudeCLILoginHandoff.startLogin` (1139-1164) and `clearActiveCancellation` (1166-1172). Modelled by `Click` and `Deliver`.
+- `loginWithClaude` (344-368). Modelled by `Click` and `ApplyOnMain`. The gate guard sits at 350.
+- `ClaudeCLILoginHandoff.startLogin` (1171-1196) and `clearActiveCancellation` (1198-1204). Modelled by `Click` and `Deliver`.
 
-`Sources/PDTBarCore/PDTBarCore.swift`:
+`Sources/PDTBarCore/LaunchRuntime.swift`:
 
-- `ClaudeLoginAttemptGate.begin` and `finish` (2924-2952). Modelled by `gateActive`, `Click`, and `ApplyOnMain`.
+- `ClaudeLoginAttemptGate.begin` and `finish` (118-145). Modelled by `gateActive`, `Click`, and `ApplyOnMain`.
+
+`Sources/PDTBarCore/PDTCancellation.swift`:
+
+- `PDTCancellation` (3-28), the login's cancellation token. Modelled by `cancelled`. The login creates it without a parent.
 
 `Sources/PDTBarAppSupport/ClaudeLocalConnection.swift`:
 
-- `ClaudeLocalLoginOutcome` and `ClaudeLocalLoginCancellation` (733-758).
-- `ClaudeLocalLoginRunner.runBlocking` (794-829) and `runPTY` (831-887). Modelled by `Start`, `LaunchFails`, and `PostLoop`.
-- `TTYCommandRunner.run` (1160-1526): the cancellation checks at 1167, 1339, 1445, and 1482, the launch at 1283, the read loop at 1444-1480, and the result at 1515-1526. Modelled by `Start` through `PostLoop`.
-- `cleanup()` inside `TTYCommandRunner.run` (1237-1278) with `defer` at 1280, and the post-launch `setpgid` at 1291-1294. Modelled by `CleanScan`, `CleanTerm`, `CleanWait`, and `CleanReap`.
-- `ClaudeLocalProcessTreeTerminator` (1616-1659). Modelled by `SweepReachesKid` and the cleanup actions.
+- `ClaudeLocalLoginOutcome` (764-768).
+- `ClaudeLocalLoginRunner.runBlocking` (804-839) and `runPTY` (841-897). Modelled by `Start`, `LaunchFails`, and `PostLoop`.
+- `TTYCommandRunner.run` (1170-1536): the cancellation checks at 1177, 1349, 1455, and 1492, the launch at 1293, the read loop at 1454-1490, and the result at 1525-1536. Modelled by `Start` through `PostLoop`.
+- `cleanup()` inside `TTYCommandRunner.run` (1247-1288) with `defer` at 1290, and the post-launch `setpgid` at 1301-1304. Modelled by `CleanScan`, `CleanTerm`, `CleanWait`, and `CleanReap`.
+- `ClaudeLocalProcessTreeTerminator` (1626-1669). Modelled by `SweepReachesKid` and the cleanup actions.
 
-Every action in the `.tla` carries a comment naming the Swift line it models (`M:` main.swift, `C:` ClaudeLocalConnection.swift, `P:` PDTBarCore.swift).
+Every action in the `.tla` carries a comment naming the Swift line it models (`M:` main.swift, `C:` ClaudeLocalConnection.swift, `L:` LaunchRuntime.swift).
 
 To see whether covered code changed since the sync commit:
 
 ```bash
-git diff 032058b4a626ded234c4f6345dd6fe95d7210923 -- Sources/PDTBarApp/main.swift Sources/PDTBarCore/PDTBarCore.swift Sources/PDTBarAppSupport/ClaudeLocalConnection.swift
+git diff 1b6ffd4 -- Sources/PDTBarApp/main.swift Sources/PDTBarCore/LaunchRuntime.swift Sources/PDTBarCore/PDTCancellation.swift Sources/PDTBarAppSupport/ClaudeLocalConnection.swift
 ```
 
 Only hunks inside the functions above matter.
@@ -61,7 +65,7 @@ Scripts/formal/tlc.sh formal/claude-login-process/ClaudeLoginProcess.tla formal/
 
 Expected at the sync commit:
 
-- `ClaudeLoginProcess.cfg` (two clicks) prints `Model checking completed. No error has been found.` with 186,349 distinct states, in about 10 seconds.
+- `ClaudeLoginProcess.cfg` (two clicks) prints `Model checking completed. No error has been found.` with 186,349 distinct states, in about 20 seconds.
 - `OrphanFinding.cfg` (one click) prints `Invariant NoOrphanOnReturn is violated.` in under a second. This is the known finding. Any other result means the model or the code changed.
 
 Read every result with the `/statechart` skill. For a violation it shows the shortest path in plain words. For a pass it charts how the login moves between states.
@@ -79,9 +83,9 @@ Shortest trace from `OrphanFinding.cfg`, in the code's names:
 5. `terminateProcessTree(SIGTERM)` rescans and signals the helper and root. Root exits. The helper ignores SIGTERM.
 6. Root is no longer running, so cleanup SIGKILLs only the old, empty snapshot. `waitUntilExit` returns and the helper is still alive.
 
-A plainer path needs no race and no ignored signal. `claude auth login` spawns a helper, prints "Successfully logged in", and exits during the 0.35 s settle. By the time `cleanup()` scans, the helper has been reparented to launchd, so `descendantPIDs(of:)` finds nothing, and no signal reaches it. A throwaway test at the sync commit reproduced this against the real `ClaudeLocalLoginRunner`. A fake login script ran `sleep 30 &`, and the `sleep` was still alive after `run()` returned `.success`.
+A plainer path needs no race and no ignored signal. `claude auth login` spawns a helper, prints "Successfully logged in", and exits during the 0.35 s settle. By the time `cleanup()` scans, the helper has been reparented to launchd, so `descendantPIDs(of:)` finds nothing, and no signal reaches it. A throwaway test at `032058b` reproduced this against the real `ClaudeLocalLoginRunner`. A fake login script ran `sleep 30 &`, and the `sleep` was still alive after `run()` returned `.success`.
 
-Why the process group does not save it: Foundation's `Process` already starts the child in its own process group (pgid equals pid), so the later `setpgid(pid, pid)` at C:1292 always fails with `EACCES` and `processGroup` stays nil. That was measured on macOS 26 at the sync commit. Setting `ProcessGroupRecorded = TRUE` in a cfg shows that recording the group alone is not enough either. The root-dead branch of `cleanup()` (C:1269-1272) still SIGKILLs only the snapshot, so a helper spawned after the SIGTERM sweep escapes. A fix needs both: use the group Foundation already created, and SIGKILL that group on both branches.
+Why the process group does not save it: Foundation's `Process` already starts the child in its own process group (pgid equals pid), so the later `setpgid(pid, pid)` at C:1302 always fails with `EACCES` and `processGroup` stays nil. That was measured on macOS 26 at `032058b`, before #239. #239 did not touch this code. Setting `ProcessGroupRecorded = TRUE` in a cfg shows that recording the group alone is not enough either. The root-dead branch of `cleanup()` (C:1279-1282) still SIGKILLs only the snapshot, so a helper spawned after the SIGTERM sweep escapes. A fix needs both: use the group Foundation already created, and SIGKILL that group on both branches.
 
 When a fix lands, mirror it in the model, confirm `OrphanFinding.cfg` passes, then move `NoOrphanOnReturn` into `ClaudeLoginProcess.cfg` and delete `OrphanFinding.cfg`.
 
@@ -105,16 +109,17 @@ When a change is intended:
 3. Prove the changed property can still fail. Apply its mutation below to a scratch copy and confirm that TLC catches it.
 4. Update the line anchors in this skill. Move the sync commit forward only after you confirm the model describes the code at the new commit.
 
-Mutations that each property must catch (each was run at the sync commit):
+Mutations that each property must catch. Each ran at `032058b`, and the `StaleResultNeverApplied` one ran again at `1b6ffd4`:
 
-- `StaleResultNeverApplied`. In `ApplyOnMain`, replace `IF gateActive = a` with `IF TRUE` (the main.swift:346 gate guard removed). Result: the invariant is violated.
-- `EveryAttemptReturns`. In `CleanWait`, make the root-alive branch `UNCHANGED <<kid, root, exitStatus>>` (the SIGKILL escalation at C:1262-1268 removed). Result: temporal properties are violated, because the run stutters in `cleanReap` (`waitUntilExit` hangs).
+- `StaleResultNeverApplied`. In `ApplyOnMain`, replace `IF gateActive = a` with `IF TRUE` (the main.swift:350 gate guard removed). Result: the invariant is violated.
+- `EveryAttemptReturns`. In `CleanWait`, make the root-alive branch `UNCHANGED <<kid, root, exitStatus>>` (the SIGKILL escalation at C:1272-1278 removed). Result: temporal properties are violated, because the run stutters in `cleanReap` (`waitUntilExit` hangs).
 - `RootDeadOnReturn`. In `PostLoop`, go to `"returned"` instead of `"cleanScan"` unless cancelled (`defer { cleanup() }` replaced by cleanup on errors only). Result: the invariant is violated.
 - `LatestAttemptResolves`. In `PostLoop`, change `"timedOut"` to `"cancelled"` (runBlocking mapping a timeout to `.cancelled`). Result: temporal properties are violated, because the latest click is never resolved.
 
 ## Out of scope
 
-- `DefaultClaudeLocalCommandRunner.run` and `ClaudeLocalPipeDrain` (the `claude -p` and `claude mcp list` path). They use the same `setProcessGroup` call and `ClaudeLocalProcessTreeTerminator`, so the process-group part of the finding applies there by reading the code, but the model does not check that path.
+- `DefaultClaudeLocalCommandRunner.run` (`Sources/PDTBarAppSupport/DefaultClaudeLocalCommandRunner.swift`) and `ClaudeLocalPipeDrain` (the `claude auth status`, `claude -p`, and `claude mcp list` path). They use the same `setProcessGroup` call (line 70) and `ClaudeLocalProcessTreeTerminator`, so the process-group part of the finding applies there by reading the code, but the model does not check that path.
+- Refresh cancellation from #239 and app quit. `applicationWillTerminate` cancels only the background refresh, not a running login.
 - What `launchRuntime.beginLoginHandoff` and `completeLoginHandoff` do with the result, and what happens to other menu states while a login runs.
 - The PTY byte stream: the rolling needle buffer, send-on-substring answers, cursor queries, URL detection, and partial reads of the success marker at the deadline.
 - Processes that leave root's process group (`setsid`, daemonizing helpers), PID reuse, and a root process that cannot be killed by SIGKILL.
