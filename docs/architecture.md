@@ -55,6 +55,10 @@ error envelope, bounded retries for 429/5xx/transient transport failures with
 response logging. `URLSessionPDTHTTPTransport` refuses redirects so the bearer
 token never leaves the PDT origin.
 
+`PDTAPIDataSource` (#246) is the `PortfolioDataSource` over that client, also not
+yet wired in: it decodes REST envelopes into the existing normalization inputs,
+requires holdings, and degrades the snapshot when an optional facet fails.
+
 `DataHealth` composes runtime/source facts into model state: Claude/PDT
 readiness, required read tools, read-only policy, cache/source, detail-fill,
 freshness, read-state, and redacted diagnostics. Menu descriptors render this

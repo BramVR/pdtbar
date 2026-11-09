@@ -30,6 +30,19 @@ normalization source of truth; setup/login flow lives in
   - `income-event.json` — ex-dividend in window + payment landed + derivable raise.
   - `big-mover.json` — +12.4% move via price history and prior-vs-current snapshot.
   - `quiet-no-pressure.json` — the explicit all-quiet state.
+- [`fixtures/api/`](fixtures/api/) — synthetic PDT REST response bodies, one file
+  per request, numbered in the order `PDTAPIDataSource` sends them. Replay a
+  directory's files sorted by name through `ScriptedPDTHTTPTransport`. Same fake
+  universe (`symbolId` = `symbolQuoteId` − 4000). Bodies mix JSON numbers and
+  numeric strings on purpose. No `_meta` keys.
+  - `full/` — every facet: GBX/FX and second-currency cash holdings, an inactive
+    zero-worth row and a closed row, two calendar pages with an estimated event,
+    a dividend correction pair, x-ray offset pages, symbol quotes, prices/batch.
+    Drives `swift run pdtbar-smoke scripted-api-snapshot`.
+  - `quiet-no-pressure/`, `concentration-pressure/` — the MCP fixtures of the same
+    name in REST envelopes, for pressure parity tests.
+  - Assumed, not yet seen live: calendar, dividend, and symbol-quote row fields
+    match the MCP tools; x-ray items carry `weight` (0-100) beside `symbolName`.
 
 ## Sanitization rules applied
 
