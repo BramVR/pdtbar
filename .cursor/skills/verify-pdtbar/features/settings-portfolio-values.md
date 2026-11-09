@@ -19,7 +19,9 @@ Click the menu bar icon, choose `Settings...`, and switch `Show portfolio values
 The flow is opt-in only, because it captures the screen:
 
 ```bash
+RUN=$(Scripts/verify_pdtbar.sh launch | sed -n 's/^ready: //p')   # run dir; evidence lands in $RUN/evidence
 swift run pdtbar-smoke portfolio-values-settings-proof --artifacts "$RUN/evidence" --snapshot-dir "$RUN/settings-snapshot"
+Scripts/verify_pdtbar.sh stop "$RUN"
 ```
 
 It writes `pdtbar-portfolio-values-settings-proof.json` and PNGs.

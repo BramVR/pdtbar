@@ -17,7 +17,20 @@ EOF
   exit 64
 }
 
-fail() { printf 'FAIL: %s\n' "$*"; exit 1; }
+fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+
+# Accept only a direct child of RUNS_DIR with launch's name shape; prints the canonical path.
+resolve_run() {
+  local name runs
+  [[ -d "$1" ]] || fail "no run dir $1"
+  name="$(basename "$1")"
+  [[ "${name}" =~ ^[0-9]{8}-[0-9]{6}-[0-9]+$ ]] || fail "not a verify run dir: $1"
+  runs="$(cd "${RUNS_DIR}" 2>/dev/null && pwd -P)" || fail "no runs dir ${RUNS_DIR}"
+  [[ "$(cd "$1" && pwd -P)" == "${runs}/${name}" ]] || fail "run dir must be under ${RUNS_DIR}: $1"
+  printf '%s\n' "${runs}/${name}"
+}
+
+suite_for() { printf 'com.pdtbar.verify.%s\n' "$(basename "$1")"; }
 
 pid_command() { ps -ww -o command= -p "$1" 2>/dev/null || true; }
 
@@ -32,9 +45,12 @@ launch() {
   [[ -f "${fixture}" ]] || fail "missing fixture ${fixture}"
   fixture="$(cd "$(dirname "${fixture}")" && pwd)/$(basename "${fixture}")"
 
-  local run="${RUNS_DIR}/$(date +%Y%m%d-%H%M%S)-$$"
+  mkdir -p "${RUNS_DIR}"
+  local run
+  run="$(cd "${RUNS_DIR}" && pwd -P)/$(date +%Y%m%d-%H%M%S)-$$"
   mkdir -p "${run}/snapshots" "${run}/app-support" "${run}/evidence"
-  local suite="com.pdtbar.verify.$(basename "${run}")"
+  local suite
+  suite="$(suite_for "${run}")"
   printf '%s\n' "${suite}" > "${run}/defaults-suite"
   printf '%s\n' "${fixture}" > "${run}/fixture"
   stat -f '%i %m' "${APP}" > "${run}/binary"
@@ -61,7 +77,8 @@ launch() {
 }
 
 doctor() {
-  local run="$1" pid newest
+  local run pid newest
+  run="$(resolve_run "$1")"
   [[ -f "${run}/pid" ]] || fail "no pid file in ${run} (stopped or never launched)"
   pid="$(cat "${run}/pid")"
   printf 'run: %s\npid: %s\n' "${run}" "${pid}"
@@ -82,8 +99,8 @@ doctor() {
 }
 
 stop() {
-  local run="$1" pid
-  [[ -d "${run}" ]] || fail "no run dir ${run}"
+  local run pid suite
+  run="$(resolve_run "$1")"
   if [[ -f "${run}/pid" ]]; then
     pid="$(cat "${run}/pid")"
     if kill -0 "${pid}" 2>/dev/null; then
@@ -94,10 +111,10 @@ stop() {
     fi
     rm -f "${run}/pid"
   fi
-  if [[ -f "${run}/defaults-suite" ]]; then
-    defaults delete "$(cat "${run}/defaults-suite")" >/dev/null 2>&1 || true
-    rm -f "${HOME}/Library/Preferences/$(cat "${run}/defaults-suite").plist"
-  fi
+  # Derived from the validated run name, never read back from the run dir.
+  suite="$(suite_for "${run}")"
+  defaults delete "${suite}" >/dev/null 2>&1 || true
+  rm -f "${HOME}/Library/Preferences/${suite}.plist"
   rm -rf "${run}/app-support"
   printf 'stopped: %s (evidence kept: snapshots/ evidence/ app.log)\n' "${run}"
 }

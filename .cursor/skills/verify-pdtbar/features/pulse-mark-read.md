@@ -17,10 +17,12 @@ Open the menu while an attention item shows, then pick `Mark as read` on that it
 ## Driving it with pdtbar-smoke
 
 ```bash
+RUN=$(Scripts/verify_pdtbar.sh launch | sed -n 's/^ready: //p')   # run dir; evidence lands in $RUN/evidence
 swift run pdtbar-smoke scripted-pulse-mark-read --artifacts "$RUN/evidence"
+Scripts/verify_pdtbar.sh stop "$RUN"
 ```
 
-Read `pdtbar-scripted-pulse-mark-read-proof.json`. To look at the item by hand, run `Scripts/verify_pdtbar.sh launch docs/pdt/fixtures/concentration-pressure.json`. After the action, the read state is written under `$RUN/snapshots/`.
+Read `$RUN/evidence/pdtbar-scripted-pulse-mark-read-proof.json`. `--artifacts` moves only that proof file. The smoke always writes its snapshot and read state to `.build/pdtbar-smoke-artifacts/scripted-pulse-mark-read-state-<uuid>/`, whatever `--artifacts` says. Look there for the persisted fingerprint. To look at the item by hand, run `Scripts/verify_pdtbar.sh launch docs/pdt/fixtures/concentration-pressure.json`.
 
 ## Gotchas
 

@@ -19,9 +19,11 @@ On a Mac with no Claude sign-in, launch PDTBar and click the menu bar icon. The 
 
 ```bash
 swift build --product pdtbar
+RUN=$(Scripts/verify_pdtbar.sh launch | sed -n 's/^ready: //p')   # run dir; evidence lands in $RUN/evidence
 swift run pdtbar-smoke scripted-setup-retry   --artifacts "$RUN/evidence" --app-support-dir "$RUN/smoke-app-support"
 swift run pdtbar-smoke scripted-login-handoff --artifacts "$RUN/evidence" --app-support-dir "$RUN/smoke-app-support"
 swift run pdtbar-smoke logged-out-launch      --artifacts "$RUN/evidence" --app-support-dir "$RUN/smoke-app-support"
+Scripts/verify_pdtbar.sh stop "$RUN"
 ```
 
 Read `pdtbar-scripted-setup-retry-proof.json` (readiness probe counts and status booleans) and `pdtbar-scripted-login-handoff-proof.json` (fake CLI not called before the click, login invoked, readiness rerun, fetch started).
