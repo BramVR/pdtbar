@@ -13,7 +13,7 @@ Feature journeys live in [features/README.md](features/README.md).
 
 - Never launch `pdtbar` with no arguments unless `PDTBAR_DISABLE_REAL_CLAUDE=1` is set or the isolated app support dir holds `pdtbar/claude-readiness.json`. Otherwise the app runs the real `claude` CLI, which can read the login Keychain and show a Keychain prompt.
 - Never point a run at the user's real app support dir or `UserDefaults`. Always set `PDTBAR_APP_SUPPORT_DIR`, `--snapshot-dir`, and `PDTBAR_USER_DEFAULTS_SUITE` to isolated values (`Scripts/verify_pdtbar.sh` does this).
-- Live Claude/PDT (`manual-claude-pdt`, `live-pdt`), Peekaboo, and any screenshot-capturing smoke are opt-in only. Do not run them unless the user asks. PDT write tools are never called.
+- Live Claude/PDT (`manual-claude-pdt`, `live-pdt`), Peekaboo, and any screenshot-capturing smoke are opt-in only. Do not run them unless the user asks. PDT write tools are never called. For real menu pixels, use `Scripts/verify_pdtbar.sh capture` (see Visual capture). It is the sanctioned opt-in path.
 - Never kill by process name. A user may run an installed `PDTBar.app`, and other checkouts may run their own build.
 - Never call `AXIsProcessTrustedWithOptions` with the prompt option, `CGRequestScreenCaptureAccess`, or `osascript`/System Events UI scripting. Those can show TCC dialogs.
 
@@ -83,7 +83,27 @@ swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.js
 - Read the proof. `accessibilityChecked: false` means the menu was never opened. That proves launch and state, not what the menu showed. Say so in the PR.
 - Mocks are allowed only where the repo already isolates a production boundary: scripted readiness (`claude-readiness.json`), scripted PDT MCP (`scripted-pdt-mcp.json`), and the scripted login binary (`--scripted-claude-login-bin`). Never use internal setters or test-only code paths as proof.
 - Redaction (`docs/smoke-checks.md`): proof may carry selectors, row text, counts, booleans, and fixture names. It must never carry live holdings, values, account IDs, endpoints, or raw PDT payloads.
-- PR images must be PNG uploaded to the PR so GitHub serves a `user-attachments` URL (see `AGENTS.md`). A permission-free visual: `swift run pdtbar-smoke fixture-proof --output <run>/evidence/fixture-proof.svg`, then `qlmanage -t -s 1200 -o <run>/evidence <run>/evidence/fixture-proof.svg`. It is descriptor-rendered, not real menu pixels. Label it that way.
+- PR images must be PNG uploaded to the PR so GitHub serves a `user-attachments` URL (see `AGENTS.md`). Real menu pixels come from Visual capture. A permission-free visual: `swift run pdtbar-smoke fixture-proof --output <run>/evidence/fixture-proof.svg`, then `qlmanage -t -s 1200 -o <run>/evidence <run>/evidence/fixture-proof.svg`. It is descriptor-rendered, not real menu pixels. Label it that way.
+
+## Visual capture
+
+Use it whenever you collect PR proof for a change the menu shows. It is opt-in tooling. It takes real pixels of the status item and its open menu from a `verify_pdtbar.sh launch` run, cropped to those windows, so a PR can carry inline PNG proof. It needs an unlocked, awake, visible screen and Screen Recording already granted to the host. It never requests either permission. It opens the menu only when Accessibility is already granted. Nothing in the app or the default gate (`swift run pdtbar-checks`, `Scripts/test.sh`) calls it.
+
+```bash
+swift build --product pdtbar && swift build --product pdtbar-capture
+RUN=$(Scripts/verify_pdtbar.sh launch docs/pdt/fixtures/concentration-pressure.json | sed -n 's/^ready: //p')
+Scripts/verify_pdtbar.sh can-capture                          # exit 0: yes; exit 3: no, with the first failing check
+Scripts/verify_pdtbar.sh capture screenshot "$RUN" menu-open    # $RUN/evidence/menu-open.png
+Scripts/verify_pdtbar.sh capture record "$RUN" menu-clip 4      # $RUN/evidence/menu-clip.mov + menu-clip-poster.png
+Scripts/verify_pdtbar.sh stop "$RUN"
+```
+
+- Run `can-capture` first. On exit 3 (`can-capture: no (<check>: <detail>)`, for example CI, a locked screen, a sleeping display, the screen saver, or Screen Recording not granted), skip visual proof and say why in the PR. Do not retry or work around it.
+- `capture` runs `doctor` first and refuses a stale or foreign run. `<name>` must match `^[A-Za-z0-9._-]+$`. Seconds are 1 to 30. Use at least 3, because the menu opens about 1.2 seconds into the clip and closes 0.5 seconds before the end.
+- Read the output. `menu: open` (screenshot) or `menu: opened during clip` (record) means the menu is in frame. Without Accessibility, older macOS captures only the status item (`menu: closed (accessibility not granted)`). On macOS 26 the status item lives in a Control Center window, so capture fails with a clear reason instead.
+- Not blank: `blank-check: ok (lumaRange=..)` must print, and a blank, black, uniform, or transparent image exits 1. Then open the PNG with your image viewer tool and confirm it shows the status item and the expected rows. A recording is proved by its poster PNG, a frame from the clip midpoint, checked the same way.
+- Redaction: fixture data only. Never capture with live portfolio data. The menu is translucent, so content behind it shows faintly, and neighboring menu bar icons are in frame. Clear the screen area under the menu first.
+- PR attachment: upload the PNG to the PR body or a comment so GitHub serves a `user-attachments` URL. Do it by hand, by drag-and-drop in the GitHub web editor or with an existing upload tool. Never link `raw.githubusercontent.com` or branch URLs. A `.mov` is optional extra. The poster PNG is the inline proof.
 
 ## Cleanup
 
@@ -95,7 +115,7 @@ Scripts/verify_pdtbar.sh stop <run-dir>
 
 ## Helpers
 
-- `Scripts/verify_pdtbar.sh launch [fixture] | doctor <run-dir> | stop <run-dir>` is executable and syntax-checked by `make check`.
+- `Scripts/verify_pdtbar.sh launch [fixture] | doctor <run-dir> | stop <run-dir> | can-capture | capture screenshot <run-dir> <name> | capture record <run-dir> <name> <seconds>` is executable and syntax-checked by `make check`. Capture runs `.build/debug/pdtbar-capture` (`Sources/PDTBarCapture`).
 - `swift run pdtbar-smoke` with no arguments prints every scenario and its flags.
 
 Keep this skill and `features/` honest as behavior changes with `/maintain-verification-skill`, if installed, or by hand. When a journey fails because a precondition is missing, record why under that feature's Gotchas. Never weaken the journey to make it pass.

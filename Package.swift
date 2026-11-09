@@ -39,6 +39,7 @@ let package = Package(
         .executable(name: "pdtbar-dev", targets: ["PDTBarDev"]),
         .executable(name: "pdtbar-smoke", targets: ["PDTBarSmoke"]),
         .executable(name: "pdtbar-checks", targets: ["PDTBarChecks"]),
+        .executable(name: "pdtbar-capture", targets: ["PDTBarCapture"]),
     ],
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-testing.git", exact: "6.3.2"),
@@ -65,6 +66,7 @@ let package = Package(
             name: "PDTBarChecks",
             dependencies: ["PDTBarCore"]
         ),
+        .executableTarget(name: "PDTBarCapture"),
         .testTarget(
             name: "PDTBarTests",
             dependencies: [

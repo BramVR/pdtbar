@@ -24,6 +24,18 @@ Scripts/verify_pdtbar.sh stop "$RUN"
 
 Read `$RUN/evidence/pdtbar-scripted-pulse-mark-read-proof.json`. `--artifacts` moves only that proof file. The smoke always writes its snapshot and read state to `.build/pdtbar-smoke-artifacts/scripted-pulse-mark-read-state-<uuid>/`, whatever `--artifacts` says. Look there for the persisted fingerprint. To look at the item by hand, run `Scripts/verify_pdtbar.sh launch docs/pdt/fixtures/concentration-pressure.json`.
 
+## Visual proof
+
+For PR proof, run `Scripts/verify_pdtbar.sh can-capture` first and skip on exit 3. Take a screenshot of the item before marking. A recording adds nothing, because nothing clicks `Mark as read`.
+
+```bash
+RUN=$(Scripts/verify_pdtbar.sh launch docs/pdt/fixtures/concentration-pressure.json | sed -n 's/^ready: //p')
+Scripts/verify_pdtbar.sh capture screenshot "$RUN" pulse-unread
+Scripts/verify_pdtbar.sh stop "$RUN"
+```
+
+The image must show the status item and the open menu with the concentration attention items under `Pulse`. It proves the item is visible, not that `Mark as read` hides it.
+
 ## Gotchas
 
 - The smoke drives the descriptor action payload and `PulseReadStore` without opening the menu. It proves the persistence contract but not the menu click. A real click needs AX plus a hand-driven or new AX scenario. No existing scenario clicks `Mark as read`.
