@@ -10,6 +10,8 @@ read_when:
 
 This is the current Claude-first product flow. Older PRD/planning text is historical when it conflicts with this file, the Swift code, or closed child issues #44-#53 and #64.
 
+> **Superseded by [ADR-0002](adr/0002-pdt-public-rest-api.md).** PDTBar is moving to direct read-only PDT REST access with browser sign-in (main) or a pasted read-only token (fallback). This file stays accurate for the shipped app until #248 switches onboarding and #250 deletes the Claude path. Do not extend the Claude path with new features.
+
 ## Product launch
 
 No-argument `pdtbar` launch is the user path. It uses isolated app support when `--app-support-dir` or `PDTBAR_APP_SUPPORT_DIR` is supplied for smoke tests; otherwise it uses normal app state. Fixture mode is explicit only:
@@ -28,7 +30,7 @@ On product launch the app enters `probingClaude` before visible login UI or cach
 - Missing Claude CLI or failed login: show the matching CodexBar-style login failure (`Claude CLI not found`, `Claude login timed out`, `Claude login failed`, or `Could not start claude auth login`) plus retryable `Log in with Claude`.
 - Probe/fetch failure: keep setup or the previous good pulse visible; show retry copy in the menu.
 
-`Log in with Claude` is user-initiated. It runs `claude auth login` through the same PTY-style flow CodexBar uses for Claude Code auth, then waits for CLI login success. `PDTBAR_CLAUDE_BIN` may point at a configured Claude executable, but old scripted handoff env is removed from the product launch environment. Browser OAuth, generic providers, Codex login, API keys, tokens, raw MCP JSON, and mcporter are not product login paths.
+`Log in with Claude` is user-initiated. It runs `claude auth login` through the same PTY-style flow CodexBar uses for Claude Code auth, then waits for CLI login success. `PDTBAR_CLAUDE_BIN` may point at a configured Claude executable, but old scripted handoff env is removed from the product launch environment. Generic providers, Codex login, raw MCP JSON, and mcporter are not product login paths. PDT browser sign-in and token paste arrive with ADR-0002, not as extensions of this Claude flow.
 After a successful login, PDTBar re-runs Claude/PDT readiness before deciding whether to fetch, show signed-out setup, show missing PDT MCP setup, or show probe failure. A failed login shows the matching retryable login failure state.
 
 ## First fetch and returning launch

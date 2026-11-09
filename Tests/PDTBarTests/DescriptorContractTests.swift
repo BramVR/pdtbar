@@ -94,12 +94,21 @@ struct DescriptorContractTests {
             quietDescriptor,
             nonQuietDescriptor,
         ]
-        let forbiddenVisibleTerms = ["codex", "oauth", "api key", "token", "fixture", "mcporter"]
 
         for visibleText in descriptors.flatMap(visibleMenuText) {
-            let lowered = visibleText.lowercased()
-            #expect(forbiddenVisibleTerms.allSatisfy { !lowered.contains($0) })
+            #expect(violatesVisibleCopyRules(visibleText) == false, "\(visibleText)")
         }
+    }
+
+    @Test("Visible copy may name a token but never internal terms or a token value")
+    func visibleCopyRulesAllowTokenWordButNotTokenValues() {
+        #expect(violatesVisibleCopyRules("Paste a read-only PDT token") == false)
+        #expect(violatesVisibleCopyRules("Token expires on 2027-11-09") == false)
+        #expect(violatesVisibleCopyRules("Sign in with PDT") == false)
+        #expect(violatesVisibleCopyRules("Connected with pdt_AbC123xyz"))
+        #expect(violatesVisibleCopyRules("OAuth sign-in failed"))
+        #expect(violatesVisibleCopyRules("Paste your API key"))
+        #expect(violatesVisibleCopyRules("Loaded fixture data"))
     }
 }
 
@@ -144,6 +153,16 @@ private func visibleMenuText(_ rows: [MenuRow]) -> [String] {
     rows.flatMap { row in
         [row.title, row.detail].compactMap { $0 } + visibleMenuText(row.children)
     }
+}
+
+// ADR-0002: "token" is allowed in setup and expiry copy; protocol jargon,
+// internal tooling names, and anything shaped like a PDT token value are not.
+private let forbiddenVisibleTerms = ["codex", "oauth", "api key", "fixture", "mcporter"]
+
+private func violatesVisibleCopyRules(_ value: String) -> Bool {
+    let lowered = value.lowercased()
+    return forbiddenVisibleTerms.contains { lowered.contains($0) }
+        || value.range(of: #"pdt_[A-Za-z0-9]"#, options: .regularExpression) != nil
 }
 
 private func containsAdviceLikeLanguage(_ value: String) -> Bool {

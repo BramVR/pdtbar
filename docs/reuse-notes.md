@@ -12,7 +12,7 @@ read_when:
 
 ## What We Reuse
 
-- **CodexBar / RepoBar** (Swift menu-bar apps) — reuse the **menu-bar skeleton ideas**: status item, menu + submenus, refresh/coalescing, cached pulse while refreshing, and crisp empty/loading/error states. Do not copy browser OAuth, provider switching, or Keychain token storage into the Claude-first product path.
+- **CodexBar / RepoBar** (Swift menu-bar apps) — reuse the **menu-bar skeleton ideas**: status item, menu + submenus, refresh/coalescing, cached pulse while refreshing, and crisp empty/loading/error states. Do not copy provider switching. Browser sign-in and Keychain token storage are now in scope for PDT access only (ADR-0002); adapt CodexBar's patterns to one PDT credential, not a provider registry.
   - https://github.com/steipete/CodexBar · https://github.com/steipete/RepoBar
 - **mcporter** (TS MCP runtime/CLI) — use it to **explore the PDT MCP during research** (list tools, inspect schemas, call ad-hoc) and for the optional live smoke. ADR-0001 chose native Swift, so mcporter is not a shipped runtime bridge.
   - https://github.com/steipete/mcporter
@@ -42,7 +42,7 @@ Keep this script close to CodexBar's version unless PDTBar has a concrete docs-r
 - Logging/redaction helpers, if live proof and support diagnostics expand.
 - Menu card measurement/recycling patterns, only if PDTBar adopts hosted SwiftUI menu cards.
 
-Do not copy provider registry, browser cookie import, OAuth/device flow, Keychain credential caches, Sparkle, WidgetKit, or multi-provider settings for v1. Homebrew release machinery is now a narrow distribution need; keep it limited to GitHub app archives and the tap cask.
+Do not copy provider registry, browser cookie import, device flow, multi-account Keychain credential caches, Sparkle, WidgetKit, or multi-provider settings for v1. Homebrew release machinery is now a narrow distribution need; keep it limited to GitHub app archives and the tap cask.
 
 ## Deferred But Plausible Later
 
@@ -50,7 +50,7 @@ Do not copy provider registry, browser cookie import, OAuth/device flow, Keychai
 - **Codex login for MCP access:** plausible future source path alongside Claude CLI. When this becomes active work, revisit CodexBar's Codex login/source-selection patterns and write an ADR before copying auth/storage code.
 - **Provider/source registry:** likely useful only when Claude/PDT is no longer the sole product source. Introduce the smallest source abstraction when the second real source lands.
 - **Existing Claude/Codex login reuse:** valid when narrow, read-only, prompt-safe, and explicit about storage ownership. Reuse host-app cookies/tokens only through a small source adapter; do not add broad browser-cookie import or generic credential storage until a product path requires it.
-- **Credential storage:** only after a product path requires PDTBar-owned credentials. Until then, prefer existing signed-in host apps and scripted smoke fakes.
+- **Credential storage:** required now for one PDT credential (ADR-0002): one Keychain item, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, in-memory store in tests and smokes. Still no generic credential store.
 
 ## Not now (deferred ecosystem)
 
@@ -58,7 +58,7 @@ oracle, claude-code-mcp, imsg, poltergeist, Sparkle, stats.store — all optiona
 
 ## Decisions this affects
 
-ADR-0001 resolved the native-Swift-vs-TS-core choice: native Swift, with mcporter as research/dev tooling only.
+ADR-0001 resolved the native-Swift-vs-TS-core choice: native Swift, with mcporter as research/dev tooling only. ADR-0002 brings PDT browser sign-in and one Keychain credential into scope.
 
 ## Licensing
 

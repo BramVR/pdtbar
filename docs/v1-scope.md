@@ -16,7 +16,7 @@ The goal of v1 is to ship the smallest coherent product: Claude-first launch, on
 
 Concretely, v1 is "done" when:
 - The no-argument app path is the product path; fixture mode remains explicit `--fixture` developer tooling.
-- The app connects through the Claude CLI and configured PDT MCP server, then pulls only the required read tools.
+- The app connects through the Claude CLI and configured PDT MCP server, then pulls only the required read tools. ADR-0002 replaces this with direct read-only PDT REST access (#243); the Claude path stays the shipped path until #248/#250 land.
 - The engine computes pressure for the v1 facets and emits the structured model.
 - The bar shows the Concentration Stack status icon, the ranked attention item(s) at the glance, expansion to the supporting numbers, and an "all quiet" state.
 - Setup, fetch, stale, and retryable failure states are covered without publishing fixture or partial data as real.
@@ -58,7 +58,7 @@ The two hardest moments are day one and a calm day. Handle them deliberately:
 - Packaging / auto-update / distribution machinery (Sparkle, Homebrew). Until Homebrew is real and tested, user-facing docs must say it is not supported and point users to a shared macOS app zip or the public app download once one exists.
 - Extra connectors (oracle, imsg, poltergeist).
 - A user-facing CLI (the engine emits JSON for testing; a CLI is a dev convenience, not a product surface).
-- Non-Claude login providers, Codex login, generic OAuth, pasted API keys/tokens, and raw MCP JSON as product paths. Existing host-app auth reuse may be used when narrow, read-only, prompt-safe, and documented.
+- Non-PDT login providers, Codex login, write scopes, and raw MCP JSON as product paths. PDT browser sign-in and a pasted read-only PDT token are the accepted connection paths (ADR-0002); nothing else.
 - mcporter as a shipped runtime path; it remains research/dev tooling unless a later ADR supersedes ADR-0001.
 
 ## One thing to actively consider un-deferring

@@ -4,7 +4,7 @@
 
 ## Product in one paragraph
 
-An ambient, plug-and-play companion for an investor's **whole** portfolio, built on the Portfolio Dividend Tracker (PDT) MCP (which exposes holdings, performance, gains, allocation, transactions, cash, corporate actions, ETF x-ray, and benchmarks — not just dividends). It lives in the macOS menu bar and surfaces only the few things worth attention right now, via layered disclosure. It is **not** a clone of the PDT dashboard; the value is curation, not completeness.
+An ambient, plug-and-play companion for an investor's **whole** portfolio, built on Portfolio Dividend Tracker (PDT) data, read through PDT's public REST API (ADR-0002; the Claude CLI + PDT MCP path is being retired). PDT exposes holdings, performance, gains, allocation, transactions, cash, corporate actions, ETF x-ray, and benchmarks — not just dividends. It lives in the macOS menu bar and surfaces only the few things worth attention right now, via layered disclosure. It is **not** a clone of the PDT dashboard; the value is curation, not completeness.
 
 ## Domain model (sharpen during grilling)
 
@@ -13,6 +13,7 @@ An ambient, plug-and-play companion for an investor's **whole** portfolio, built
 - **Attention item** — one unit of pressure the engine outputs: what it is, which facet, a severity/score, and the supporting numbers that triggered it.
 - **The model** — the structured output the engine emits and the bar renders: the ranked attention items + their supporting data + per-facet snapshots. (Likely JSON.)
 - **Pulse** — the menu-bar surface that renders the model.
+- **PDT connection** — PDTBar's read-only access to the user's PDT account: browser sign-in (main) or a pasted read-only token (fallback). One credential, stored in this Mac's Keychain only. *Disconnect* deletes it; *reconnect* is the state when PDT rejects it.
 - **Quiet-by-default** — the bar shows attention items at the glance and is silent ("all quiet") when nothing crosses a threshold; everything else is reachable underneath but never shouted.
 
 ## Shared language (ubiquitous language)
@@ -22,8 +23,8 @@ Anchor terms above (**facet, pressure, attention item, the model, pulse, quiet-b
 ## Hard constraints (decided — non-negotiable)
 
 1. **Informational, not financial advice.** Descriptive only ("KO cut its dividend"), never prescriptive ("sell KO"). Anything advice-like is out of scope / compliance-gated.
-2. **Read-only against PDT by default.** No writes, trades, or fund movements without an explicit, confirmed, opt-in action.
-3. **Local-first / privacy.** Keep financial data local. If an LLM is ever added, minimize what is sent and document it.
+2. **Read-only against PDT by default.** No writes, trades, or fund movements without an explicit, confirmed, opt-in action. The REST client sends only `GET` requests and requests only the `read` scope (ADR-0002).
+3. **Local-first / privacy.** Keep financial data local. If an LLM is ever added, minimize what is sent and document it. The PDT credential is stored on this Mac only, is sent only to PDT, and never appears in logs, snapshots, or diagnostics.
 4. **Plug-and-play.** Two clicks to value, ~60-second aha, zero commands in daily use, quiet by default. Judge every decision against this.
 5. **Engine/bar separation.** The engine computes; the bar renders. The bar holds no portfolio logic.
 
@@ -31,6 +32,7 @@ Anchor terms above (**facet, pressure, attention item, the model, pulse, quiet-b
 
 - [x] **PDT data reality** — exercised 2026-06-22; see `docs/pdt/` (seam, schemas, sanitized fixtures). All v1 facets have dedicated read tools; gaps (cross-tool join key, derived raise/cut, per-holding freshness) documented.
 - [x] **Core stack** — native Swift; mcporter is research/dev only. See ADR-0001.
+- [x] **PDT integration** — public REST API, read-only, browser sign-in with token-paste fallback; Claude/MCP path deleted at parity. See ADR-0002.
 - [ ] **Pressure thresholds** — the concrete signals/thresholds per facet, and how they're tuned.
 - [ ] **Bar information architecture** — what's in the status item / at the glance / behind expansion / in submenus.
 - [ ] **History store** — confirmed required (pressure = change over time); decide shape and retention. See `docs/v1-scope.md`.
