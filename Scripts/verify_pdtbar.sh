@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Prompt-free PDTBar instance for the verify-pdtbar skill.
-# Fixture mode only: never calls Claude, PDT, Keychain, Accessibility, or Screen Recording.
+# launch/doctor/stop run fixture mode only: they never call Claude, PDT, Keychain, Accessibility, or Screen Recording.
+# can-capture/capture are opt-in visual proof: they only preflight Screen Recording and use Accessibility when already granted.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="${ROOT_DIR}/.build/debug/pdtbar"
+CAPTURE="${ROOT_DIR}/.build/debug/pdtbar-capture"
 RUNS_DIR="${ROOT_DIR}/.build/verify-pdtbar"
 
 usage() {
@@ -13,6 +15,9 @@ usage:
   Scripts/verify_pdtbar.sh launch [fixture.json]   # prints run dir; default fixture quiet-no-pressure
   Scripts/verify_pdtbar.sh doctor <run-dir>
   Scripts/verify_pdtbar.sh stop <run-dir>
+  Scripts/verify_pdtbar.sh can-capture                                  # exit 0 yes, 3 no (with reason)
+  Scripts/verify_pdtbar.sh capture screenshot <run-dir> <name>          # <run>/evidence/<name>.png
+  Scripts/verify_pdtbar.sh capture record <run-dir> <name> <seconds>    # <run>/evidence/<name>.mov + -poster.png
 EOF
   exit 64
 }
@@ -85,7 +90,8 @@ doctor() {
   kill -0 "${pid}" 2>/dev/null || fail "process ${pid} not running; see ${run}/app.log"
   ours "${pid}" "${run}" || fail "pid ${pid} is not this run's fixture app: $(pid_command "${pid}")"
   printf 'process: ours (%s)\n' "${APP}"
-  newest="$(find "${ROOT_DIR}/Sources" -name '*.swift' -newer "${APP}" -print -quit)"
+  # The capture tool is not part of the app, so editing it must not mark the app stale.
+  newest="$(find "${ROOT_DIR}/Sources" -path "${ROOT_DIR}/Sources/PDTBarCapture" -prune -o -name '*.swift' -newer "${APP}" -print -quit)"
   [[ -z "${newest}" ]] || fail "stale build: ${newest} is newer than ${APP}; rebuild and relaunch"
   [[ "$(stat -f '%i %m' "${APP}")" == "$(cat "${run}/binary")" ]] || fail "binary rebuilt after launch; running process has old code; stop and relaunch"
   printf 'build: fresh (binary unchanged since launch; no Sources/*.swift newer)\n'
@@ -119,9 +125,43 @@ stop() {
   printf 'stopped: %s (evidence kept: snapshots/ evidence/ app.log)\n' "${run}"
 }
 
+require_capture_tool() {
+  local newest
+  [[ -x "${CAPTURE}" ]] || fail "missing ${CAPTURE}; run: swift build --product pdtbar-capture"
+  newest="$(find "${ROOT_DIR}/Sources/PDTBarCapture" -name '*.swift' -newer "${CAPTURE}" -print -quit)"
+  [[ -z "${newest}" ]] || fail "stale ${CAPTURE}; run: swift build --product pdtbar-capture"
+}
+
+can_capture() {
+  require_capture_tool
+  exec "${CAPTURE}" preflight
+}
+
+capture() {
+  local mode="${1:-}" run name seconds report
+  case "${mode}:$#" in
+    screenshot:3 | record:4) ;;
+    *) usage ;;
+  esac
+  require_capture_tool
+  run="$(resolve_run "${2%/}")"
+  name="$3"
+  [[ "${name}" =~ ^[A-Za-z0-9._-]+$ ]] || fail "name must match ^[A-Za-z0-9._-]+$: ${name}"
+  report="$(doctor "${run}" 2>&1)" || { printf '%s\n' "${report}" >&2; fail "doctor not ok for ${run}"; }
+  if [[ "${mode}" == screenshot ]]; then
+    "${CAPTURE}" screenshot --pid "$(cat "${run}/pid")" --out "${run}/evidence/${name}.png"
+  else
+    [[ "$4" =~ ^[0-9]{1,2}$ ]] && (( 10#$4 >= 1 && 10#$4 <= 30 )) || fail "seconds must be an integer 1..30: $4"
+    seconds="$((10#$4))"
+    "${CAPTURE}" record --pid "$(cat "${run}/pid")" --seconds "${seconds}" --out "${run}/evidence/${name}.mov"
+  fi
+}
+
 case "${1:-}" in
   launch) shift; launch "$@" ;;
   doctor) [[ $# -eq 2 ]] || usage; doctor "${2%/}" ;;
   stop) [[ $# -eq 2 ]] || usage; stop "${2%/}" ;;
+  can-capture) [[ $# -eq 1 ]] || usage; can_capture ;;
+  capture) shift; capture "$@" ;;
   *) usage ;;
 esac
