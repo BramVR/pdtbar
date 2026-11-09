@@ -9,11 +9,11 @@
   login handoff) is modelled as "in flight" bookkeeping whose completion is a
   later main-queue step, so TLC explores every completion order.
 
-  Code anchors (Sources/PDTBarCore/PDTBarCore.swift = Core, Sources/PDTBarApp/main.swift = App):
-    PDTLaunchRuntime ................. Core:3815-4083
-    ClaudeLaunchFlow.descriptor ...... Core:3170-3345 (which buttons a menu shows)
-    ClaudeLoginAttemptGate ........... Core:2924-2952
-    AppDelegate effect wiring ........ App:78-380
+  Code anchors (Sources/PDTBarCore/LaunchRuntime.swift = Core, Sources/PDTBarApp/main.swift = App):
+    PDTLaunchRuntime ................. Core:1015-1282
+    ClaudeLaunchFlow.descriptor ...... Core:364-539 (which buttons a menu shows)
+    ClaudeLoginAttemptGate ........... Core:118-146
+    AppDelegate effect wiring ........ App:82-384
 *)
 EXTENDS Naturals, Sequences, FiniteSets
 
@@ -31,18 +31,18 @@ ProbeResults == {"ready", "notReady", "missingClaudeLogin", "missingPDTMCP", "fa
 NoPending == [result |-> "none", id |-> 0]
 
 VARIABLES
-    \* PDTLaunchRuntime (Core:3816-3822)
+    \* PDTLaunchRuntime (Core:1016-1022)
     state, pulse, probeInFlight, attemptID, ffInFlight, bgInFlight,
-    \* AppDelegate (App:35-41)
+    \* AppDelegate (App:44-56)
     cacheLoadFinished, pending, refreshInFlight, loginNext, loginActive,
     \* last menu installed by installMenuBarItem (what the user sees and can click)
     menu,
     \* background work actually running
-    probes,       \* set of readiness attempt IDs whose probe.check() is running (App:127)
-    cacheLoad,    \* "running" | "done" (App:102)
-    ffWorkers,    \* number of running first-fetch blocks (App:162)
-    bgWorkers,    \* number of running PDTBackgroundDetailRefresh blocks (App:263)
-    logins,       \* set of login attempt numbers whose handoff is running (App:340)
+    probes,       \* set of readiness attempt IDs whose probe.check() is running (App:131)
+    cacheLoad,    \* "running" | "done" (App:106)
+    ffWorkers,    \* number of running first-fetch blocks (App:159)
+    bgWorkers,    \* number of running PDTBackgroundDetailRefresh blocks (App:257)
+    logins,       \* set of login attempt numbers whose handoff is running (App:344)
     retries
 
 vars == <<state, pulse, probeInFlight, attemptID, ffInFlight, bgInFlight,
@@ -54,47 +54,47 @@ vars == <<state, pulse, probeInFlight, attemptID, ffInFlight, bgInFlight,
    kind: "setup" (setup/login screen, pulse hidden) or "pulse" (pulse visible).
    refresh: "available" (Refresh now / Try again clickable), "inProgress", "none". *)
 
-\* ClaudeLaunchFlow.descriptor(for:cachedPulse:) Core:3170-3345
+\* ClaudeLaunchFlow.descriptor(for:cachedPulse:) Core:364-539
 Desc(st, p) ==
-    IF p # "none" /\ st = "probingClaude"        THEN [kind |-> "pulse", st |-> st, refresh |-> "available"]   \* cached pulse keeps its "Refresh now" row (Core:4694)
-    ELSE IF p # "none" /\ st = "fetchingPortfolio" THEN [kind |-> "pulse", st |-> st, refresh |-> "inProgress"] \* .withRefreshAction(.inProgress) Core:3200
-    ELSE IF p # "none" /\ st = "portfolioFetchFailed" THEN [kind |-> "pulse", st |-> st, refresh |-> "available"] \* descriptorForBackgroundRefreshFailure Core:3376
-    ELSE IF st = "portfolioFetchFailed"            THEN [kind |-> "setup", st |-> st, refresh |-> "available"]   \* portfolioFetchFailureRows "Try again" Core:3743
+    IF p # "none" /\ st = "probingClaude"        THEN [kind |-> "pulse", st |-> st, refresh |-> "available"]   \* cached pulse keeps its "Refresh now" row (MenuDescriptorRenderer.swift:277)
+    ELSE IF p # "none" /\ st = "fetchingPortfolio" THEN [kind |-> "pulse", st |-> st, refresh |-> "inProgress"] \* .withRefreshAction(.inProgress) Core:394
+    ELSE IF p # "none" /\ st = "portfolioFetchFailed" THEN [kind |-> "pulse", st |-> st, refresh |-> "available"] \* descriptorForBackgroundRefreshFailure Core:572
+    ELSE IF st = "portfolioFetchFailed"            THEN [kind |-> "setup", st |-> st, refresh |-> "available"]   \* portfolioFetchFailureRows "Try again" Core:943
     ELSE                                                [kind |-> "setup", st |-> st, refresh |-> "none"]
 
-ProgressMenu  == [kind |-> "pulse", st |-> "fetchingPortfolio", refresh |-> "inProgress"]  \* descriptorForBackgroundDetailProgress Core:3401
-RefreshedMenu == [kind |-> "pulse", st |-> "fetchingPortfolio", refresh |-> "available"]   \* descriptorWithRefreshDetailsAction / Degraded Core:3346,3417
+ProgressMenu  == [kind |-> "pulse", st |-> "fetchingPortfolio", refresh |-> "inProgress"]  \* descriptorForBackgroundDetailProgress Core:597
+RefreshedMenu == [kind |-> "pulse", st |-> "fetchingPortfolio", refresh |-> "available"]   \* descriptorWithRefreshDetailsAction / Degraded Core:540,3417
 
-\* setupLogin rows: every setup screen except no-pulse fetching (Core:3222-3345, 4241-4356, 3743)
+\* setupLogin rows: every setup screen except no-pulse fetching (Core:416-539, 4241-4356, 3743)
 CanLogin == menu.kind = "setup" /\ menu.st # "fetchingPortfolio"
             /\ ~("noProbeFailedLogin" \in Mutations /\ menu.st = "probeFailed")
-\* setupRetry rows: only missingClaudeLogin / missingPDTMCP (Core:4293-4356)
+\* setupRetry rows: only missingClaudeLogin / missingPDTMCP (Core:1493-1556)
 CanCheckAgain == menu.kind = "setup" /\ menu.st \in {"missingClaudeLogin", "missingPDTMCP"}
 \* fetchRetry rows ("Try again", "Refresh now", "Fill details again")
 CanRetry == menu.refresh = "available"
 
 ---------------------------------------------------------------------------------
-(* Runtime transitions. Each returns the effect handleLaunchUpdate (App:366) runs. *)
+(* Runtime transitions. Each returns the effect handleLaunchUpdate (App:370) runs. *)
 
-\* PDTLaunchRuntime.update(state:) Core:4054 + installMenuBarItem
+\* PDTLaunchRuntime.update(state:) Core:1254 + installMenuBarItem
 Show(st) == /\ state' = st /\ menu' = Desc(st, pulse)   \* callers never change pulse
 
-\* handleLaunchUpdate effects (App:366-380)
+\* handleLaunchUpdate effects (App:370-384)
 StartProbe(id) == probes' = probes \cup {id}
 StartFirstFetch == ffWorkers' = ffWorkers + 1
-\* startBackgroundPortfolioRefresh (App:263): AppDelegate drops the start when its own flag is set
+\* startBackgroundPortfolioRefresh (App:257): AppDelegate drops the start when its own flag is set
 StartBackground ==
     IF refreshInFlight /\ "noAppDedupe" \notin Mutations THEN UNCHANGED <<refreshInFlight, bgWorkers>>
     ELSE /\ refreshInFlight' = TRUE /\ bgWorkers' = bgWorkers + 1
 
-\* beginReadinessProbe Core:4031
+\* beginReadinessProbe Core:1231
 BeginProbe ==
     /\ attemptID' = attemptID + 1
     /\ probeInFlight' = TRUE
     /\ Show("probingClaude")
     /\ StartProbe(attemptID + 1)
 
-\* startBackgroundDetailRefresh Core:4037
+\* startBackgroundDetailRefresh Core:1237
 StartBg ==
     /\ ffInFlight' = FALSE
     /\ bgInFlight' = TRUE
@@ -104,7 +104,7 @@ StartBg ==
 
 ---------------------------------------------------------------------------------
 Init ==
-    \* launch(): launchRuntime.launch(cachedPulse: nil), startCachedPulseLoad, startClaudeReadinessProbe (App:78-87)
+    \* launch(): launchRuntime.launch(cachedPulse: nil), startCachedPulseLoad, startClaudeReadinessProbe (App:82-91)
     /\ state = "probingClaude"
     /\ pulse = "none"
     /\ probeInFlight = TRUE
@@ -124,7 +124,7 @@ Init ==
     /\ logins = {}
     /\ retries = 0
 
-\* completeReadinessProbe(_:attemptID:allowsBackgroundDetailRefresh:) Core:3868-3895
+\* completeReadinessProbe(_:attemptID:allowsBackgroundDetailRefresh:) Core:1068-1095
 CompleteProbe(r, id) ==
     IF ~(probeInFlight /\ id = attemptID) /\ "noAttemptCheck" \notin Mutations
     THEN UNCHANGED <<state, pulse, probeInFlight, attemptID, ffInFlight, bgInFlight, menu,
@@ -139,7 +139,7 @@ CompleteProbe(r, id) ==
     ELSE IF ffInFlight \/ bgInFlight
     THEN /\ probeInFlight' = FALSE                                    \* guard returns currentUpdate()
          /\ UNCHANGED <<state, pulse, attemptID, ffInFlight, bgInFlight, menu, refreshInFlight, bgWorkers, ffWorkers>>
-    ELSE IF pulse # "none" /\ "ignoreCachedPulse" \notin Mutations          \* allowsBackgroundDetailRefresh (App:155) is TRUE once a pulse exists
+    ELSE IF pulse # "none" /\ "ignoreCachedPulse" \notin Mutations          \* allowsBackgroundDetailRefresh (App:1101) is TRUE once a pulse exists
     THEN /\ probeInFlight' = FALSE
          /\ UNCHANGED <<pulse, attemptID, ffWorkers>>
          /\ StartBg
@@ -149,7 +149,7 @@ CompleteProbe(r, id) ==
          /\ Show("fetchingPortfolio")
          /\ StartFirstFetch
 
-\* finishClaudeReadinessProbe App:143-153
+\* finishClaudeReadinessProbe App:147-157
 FinishProbe(r, id) ==
     IF r = "ready" /\ ~cacheLoadFinished /\ "noCacheParking" \notin Mutations
     THEN /\ pending' = [result |-> r, id |-> id]
@@ -158,14 +158,14 @@ FinishProbe(r, id) ==
     ELSE /\ CompleteProbe(r, id)
          /\ UNCHANGED pending
 
-\* probe.check() returns on the main queue (App:132-139)
+\* probe.check() returns on the main queue (App:136-143)
 ProbeReturns ==
     \E id \in probes, r \in ProbeResults :
         /\ probes' = probes \ {id}
         /\ FinishProbe(r, id)
         /\ UNCHANGED <<cacheLoadFinished, loginNext, loginActive, cacheLoad, logins, retries>>
 
-\* startCachedPulseLoad main-queue block App:111-122 + completeCachedPulseLoad Core:3832-3858
+\* startCachedPulseLoad main-queue block App:115-126 + completeCachedPulseLoad Core:1032-1058
 CacheLoadReturns ==
     /\ cacheLoad = "running"
     /\ cacheLoad' = "done"
@@ -200,20 +200,20 @@ CacheLoadReturns ==
                          /\ StartFirstFetch
     /\ UNCHANGED <<loginNext, loginActive, logins, retries>>
 
-\* publishPulse Core:4009-4020
+\* publishPulse Core:1209-1220
 Publish(newPulse) ==
     /\ bgInFlight' = FALSE
     /\ pulse' = newPulse
     /\ state' = "fetchingPortfolio"
     /\ menu' = RefreshedMenu
 
-\* finishFirstPortfolioFetch App:202-217 + completeFirstFetch Core:3935-3943
+\* finishFirstPortfolioFetch App:196-211 + completeFirstFetch Core:1135-1143
 FirstFetchReturns ==
     /\ ffWorkers > 0
     /\ \E ok \in BOOLEAN :
         IF ok
         THEN IF BackgroundAfterFirstFetch
-             THEN \* completeFirstFetch(.succeeded) then beginBackgroundDetailRefresh() (Core:3945) in one block
+             THEN \* completeFirstFetch(.succeeded) then beginBackgroundDetailRefresh() (Core:1145) in one block
                   /\ pulse' = "live"
                   /\ StartBg
                   /\ ffWorkers' = ffWorkers - 1
@@ -228,7 +228,7 @@ FirstFetchReturns ==
     /\ UNCHANGED <<probeInFlight, attemptID, cacheLoadFinished, pending, loginNext, loginActive,
                    probes, cacheLoad, logins, retries>>
 
-\* refresh progress callback App:290-300 + backgroundDetailRefreshProgress Core:3952-3967
+\* refresh progress callback App:292-302 + backgroundDetailRefreshProgress Core:1152-1167
 BackgroundProgress ==
     /\ bgWorkers > 0
     /\ refreshInFlight /\ bgInFlight /\ pulse # "none"
@@ -237,7 +237,7 @@ BackgroundProgress ==
     /\ UNCHANGED <<pulse, probeInFlight, attemptID, ffInFlight, bgInFlight, cacheLoadFinished, pending,
                    refreshInFlight, loginNext, loginActive, probes, cacheLoad, ffWorkers, bgWorkers, logins, retries>>
 
-\* finishBackgroundPortfolioRefresh App:318-331 + completeBackgroundDetailRefresh Core:3969-4007
+\* finishBackgroundPortfolioRefresh App:320-335 + completeBackgroundDetailRefresh Core:1169-1207
 BackgroundReturns ==
     /\ bgWorkers > 0
     /\ bgWorkers' = bgWorkers - 1
@@ -251,14 +251,14 @@ BackgroundReturns ==
     /\ UNCHANGED <<probeInFlight, attemptID, ffInFlight, cacheLoadFinished, pending, loginNext, loginActive,
                    probes, cacheLoad, ffWorkers, logins, retries>>
 
-\* updatePortfolioFetchProgress timer App:238-244 + firstFetchProgress Core:3928-3933
+\* updatePortfolioFetchProgress timer App:232-238 + firstFetchProgress Core:1128-1133
 FetchTimerTick ==
     /\ ffInFlight
     /\ Show("fetchingPortfolio")
     /\ UNCHANGED <<pulse, probeInFlight, attemptID, ffInFlight, bgInFlight, cacheLoadFinished, pending,
                    refreshInFlight, loginNext, loginActive, probes, cacheLoad, ffWorkers, bgWorkers, logins, retries>>
 
-\* loginWithClaude click App:340-343 + beginLoginHandoff Core:3897-3900
+\* loginWithClaude click App:344-347 + beginLoginHandoff Core:1097-1100
 ClickLogin ==
     /\ CanLogin
     /\ loginNext < MaxLogins
@@ -271,7 +271,7 @@ ClickLogin ==
     /\ UNCHANGED <<pulse, attemptID, ffInFlight, bgInFlight, cacheLoadFinished, refreshInFlight,
                    probes, cacheLoad, ffWorkers, bgWorkers, retries>>
 
-\* login completion App:344-363, ClaudeLoginAttemptGate.finish Core:2941 + completeLoginHandoff Core:3902-3915
+\* login completion App:348-367, ClaudeLoginAttemptGate.finish Core:135 + completeLoginHandoff Core:1102-1115
 LoginReturns ==
     \E a \in logins, ok \in BOOLEAN :
         /\ logins' = logins \ {a}
@@ -282,10 +282,10 @@ LoginReturns ==
                    THEN /\ UNCHANGED <<pulse, ffInFlight, bgInFlight>> /\ BeginProbe
                    ELSE /\ UNCHANGED <<pulse, probeInFlight, attemptID, ffInFlight, bgInFlight, probes>>
                         /\ state' = "missingClaude"
-                        /\ menu' = [kind |-> "setup", st |-> "missingClaude", refresh |-> "none"]  \* descriptor(forLoginFailure:) Core:3451
+                        /\ menu' = [kind |-> "setup", st |-> "missingClaude", refresh |-> "none"]  \* descriptor(forLoginFailure:) Core:647
         /\ UNCHANGED <<cacheLoadFinished, pending, refreshInFlight, loginNext, cacheLoad, ffWorkers, bgWorkers, retries>>
 
-\* retryClaudeReadiness click App:333-338 + retryReadiness Core:3861-3866
+\* retryClaudeReadiness click App:337-342 + retryReadiness Core:1061-1066
 ClickCheckAgain ==
     /\ CanCheckAgain
     /\ ~probeInFlight
@@ -295,7 +295,7 @@ ClickCheckAgain ==
     /\ UNCHANGED <<cacheLoadFinished, pending, refreshInFlight, loginNext, loginActive, cacheLoad,
                    ffWorkers, bgWorkers, logins, retries>>
 
-\* retryPortfolioFetch click App:256-261 + retryFirstFetch Core:3917-3926
+\* retryPortfolioFetch click App:250-255 + retryFirstFetch Core:1117-1126
 ClickRetry ==
     /\ CanRetry
     /\ retries < MaxRetries
@@ -310,8 +310,8 @@ ClickRetry ==
     /\ UNCHANGED <<pulse, probeInFlight, attemptID, cacheLoadFinished, pending, loginNext, loginActive,
                    probes, cacheLoad, logins>>
 
-\* markPulseItemRead click App:1022-1045: pulse rows carry "Mark as read"; the
-\* republish goes through publishPulse Core:4009, whatever else is running.
+\* markPulseItemRead click App:1031-1054: pulse rows carry "Mark as read"; the
+\* republish goes through publishPulse Core:1209, whatever else is running.
 ClickMarkRead ==
     /\ menu.kind = "pulse"
     /\ pulse # "none"
@@ -381,7 +381,7 @@ MenuTellsTruth == ProbingMenuTellsTruth /\ FetchingMenuTellsTruth /\ SetupMenuMe
 
 \* While the runtime waits for readiness attempt N (probeInFlight), N's result is
 \* still on its way: its probe is running or its ready result is parked until the
-\* cached pulse loads (App:144-146). A lost result leaves "Checking Claude" up forever.
+\* cached pulse loads (App:148-150). A lost result leaves "Checking Claude" up forever.
 ProbeResultNotLost == probeInFlight => (attemptID \in probes \/ pending.id = attemptID)
 
 \* A setup screen that reports a probe result is never contradicted by a newer

@@ -13,17 +13,19 @@ Run it when a change touches any covered function below, the order of main-queue
 
 ## Coverage
 
-Sync commit: `1431dc2` (last commit touching the covered files when the model was confirmed to describe them). After you confirm the model still describes the code at a newer commit, move this line forward. Never move it without that check.
+Sync commit: `1b6ffd4` (origin/main when the model was last confirmed to describe the covered code; the code was re-read after the #241 file split). After you confirm the model still describes the code at a newer commit, move this line forward. Never move it without that check.
 
-`Sources/PDTBarCore/PDTBarCore.swift`:
-- `PDTLaunchRuntime` 3815-4083: `launch` 3827, `completeCachedPulseLoad` 3832, `retryReadiness` 3861, `completeReadinessProbe` 3868, `beginLoginHandoff` 3897, `completeLoginHandoff` 3902, `retryFirstFetch` 3917, `firstFetchProgress` 3928, `completeFirstFetch` 3935, `beginBackgroundDetailRefresh` 3945, `backgroundDetailRefreshProgress` 3952, `completeBackgroundDetailRefresh` 3969, `publishPulse` 4009, `beginReadinessProbe` 4031, `startBackgroundDetailRefresh` 4037, `update` 4054.
-- `ClaudeLoginAttemptGate` 2924.
-- Clickable rows per state: `ClaudeLaunchFlow.descriptor(for:cachedPulse:)` 3170, `descriptorForBackgroundRefreshFailure` 3376, `descriptorForBackgroundDetailProgress` 3401, `descriptorForBackgroundDetailDegraded` 3417, `descriptor(forLoginFailure:)` 3451, `portfolioFetchFailureRows` 3743, `ClaudeSetupMenuDescriptor` 4241-4356, default pulse "Refresh now" row 4694.
+`Sources/PDTBarCore/LaunchRuntime.swift`:
+- `PDTLaunchRuntime` 1015-1282: `launch` 1027, `completeCachedPulseLoad` 1032, `retryReadiness` 1061, `completeReadinessProbe` 1068, `beginLoginHandoff` 1097, `completeLoginHandoff` 1102, `retryFirstFetch` 1117, `firstFetchProgress` 1128, `completeFirstFetch` 1135, `beginBackgroundDetailRefresh` 1145, `backgroundDetailRefreshProgress` 1152, `completeBackgroundDetailRefresh` 1169, `publishPulse` 1209, `beginReadinessProbe` 1231, `startBackgroundDetailRefresh` 1237, `update` 1254.
+- `ClaudeLoginAttemptGate` 118.
+- Clickable rows per state: `ClaudeLaunchFlow.descriptor(for:cachedPulse:)` 364, `descriptorForBackgroundRefreshFailure` 572, `descriptorForBackgroundDetailProgress` 597, `descriptorForBackgroundDetailDegraded` 613, `descriptor(forLoginFailure:)` 647, `portfolioFetchFailureRows` 943, `ClaudeSetupMenuDescriptor` 1440-1556.
+
+`Sources/PDTBarCore/MenuDescriptorRenderer.swift`: default pulse "Refresh now" row 277.
 
 `Sources/PDTBarApp/main.swift` (`AppDelegate`):
-- `launch` 78, `startCachedPulseLoad` 102, `markPulseItemRead` 1022, `startClaudeReadinessProbe` 127, `finishClaudeReadinessProbe` 143, `returningLaunchBackgroundDetailRefreshEnabled` 155, `startFirstPortfolioFetch` 162, `finishFirstPortfolioFetch` 202, `updatePortfolioFetchProgress` 238, `retryPortfolioFetch` 256, `startBackgroundPortfolioRefresh` 263, `finishBackgroundPortfolioRefresh` 318, `retryClaudeReadiness` 333, `loginWithClaude` 340, `handleLaunchUpdate` 366, row-role-to-selector wiring in `makeMenuItem` 545.
+- `launch` 82, `startCachedPulseLoad` 106, `startClaudeReadinessProbe` 131, `finishClaudeReadinessProbe` 147, `startFirstPortfolioFetch` 159, `finishFirstPortfolioFetch` 196, `updatePortfolioFetchProgress` 232, `retryPortfolioFetch` 250, `startBackgroundPortfolioRefresh` 257, `finishBackgroundPortfolioRefresh` 320, `retryClaudeReadiness` 337, `loginWithClaude` 344, `handleLaunchUpdate` 370, row-role-to-selector wiring in `makeMenuItem` 549, `markPulseItemRead` 1031, `returningLaunchBackgroundDetailRefreshEnabled` 1101.
 
-To see whether a change touches covered code: `git diff 1431dc2 -- Sources/PDTBarCore/PDTBarCore.swift Sources/PDTBarApp/main.swift` and look for the names above.
+To see whether a change touches covered code: `git diff 1b6ffd4 -- Sources/PDTBarCore/LaunchRuntime.swift Sources/PDTBarCore/MenuDescriptorRenderer.swift Sources/PDTBarApp/main.swift` and look for the names above.
 
 ## Run
 
@@ -83,6 +85,7 @@ Modelled at this abstraction:
 
 Left out:
 - Fixture mode.
+- Quit-time refresh cancellation (`applicationWillTerminate`, main.swift 1117, #239): it only runs while the app exits.
 - What the background refresh does inside (see `verify-background-detail-refresh`).
 - Login subprocess behavior (see `verify-claude-login-process`).
 - Read-state writes (see `verify-pulse-read-state`).
