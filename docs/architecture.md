@@ -53,7 +53,10 @@ wired into launch: an allowlisted `PDTAPIResource` enum (every case a `GET` to
 error envelope, bounded retries for 429/5xx/transient transport failures with
 `Retry-After`, page and offset pagination with stall and page-cap guards, and no
 response logging. `URLSessionPDTHTTPTransport` refuses redirects so the bearer
-token never leaves the PDT origin.
+token never leaves the PDT origin. `getReportingAttempts` and
+`getAllReportingAttempts` also return how many requests a call sent, retries
+and pages included, and throw `PDTAPIRequestFailure` with that count, so
+refresh diagnostics persist real attempt counts.
 
 `PDTAPIDataSource` (#246) is the `PortfolioDataSource` over that client, also not
 yet wired in: it decodes REST envelopes into the existing normalization inputs,

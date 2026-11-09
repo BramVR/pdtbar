@@ -53,11 +53,11 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
         progress(BackgroundDetailRefreshProgress(phase: .baseHoldings))
         let rows: [APIHolding]
         do {
-            rows = try client.getAll(.holdings(), cancellation: cancellation)
-        } catch {
+            rows = try client.getAllReportingAttempts(.holdings(), as: APIHolding.self, cancellation: cancellation).value
+        } catch let failure as PDTAPIRequestFailure {
             try throwIfCancelled(cancellation, .holdings(), phase: .baseHoldings)
-            try snapshotStore.saveLastDetailRefreshDiagnostic(diagnostic(for: error, .holdings(), phase: .baseHoldings))
-            throw error
+            try snapshotStore.saveLastDetailRefreshDiagnostic(diagnostic(for: failure, .holdings(), phase: .baseHoldings))
+            throw failure.underlyingError
         }
         try throwIfCancelled(cancellation, .holdings(), phase: .baseHoldings)
 
@@ -94,7 +94,7 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
 
         try optionalPhase(.allocation) {
             let distributions = try fetch(.distributions, phase: .allocation, cancellation: cancellation) {
-                try decodeAPIResponse(APIDistributionsEnvelope.self, from: client.get(.distributions, cancellation: cancellation))
+                try client.getReportingAttempts(.distributions, as: APIDistributionsEnvelope.self, cancellation: cancellation)
             }
             let normalized = PDTOptionalDetailNormalizer.normalizeDistributions(distributions.optionalDetailInput)
             snapshot.sectors = normalized.sectors
@@ -103,7 +103,7 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
 
         try optionalPhase(.xRay) {
             let xRayRows = try fetch(.xRay, phase: .xRay, cancellation: cancellation) {
-                try client.getAll(.xRay, as: APIXRayHolding.self, cancellation: cancellation)
+                try client.getAllReportingAttempts(.xRay, as: APIXRayHolding.self, cancellation: cancellation)
             }
             snapshot.xRayHoldings = PDTOptionalDetailNormalizer.normalizeXRayHoldings(xRayRows.map(\.optionalDetailInput))
         }
@@ -112,14 +112,14 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
             let incomeEnd = dayString(snapshotAsOf, addingDays: 30)
             let calendarResource = PDTAPIResource.calendarEvents(dateFrom: snapshotAsOf, dateTo: incomeEnd)
             let calendarEvents = try fetch(calendarResource, phase: .income, cancellation: cancellation) {
-                try client.getAll(calendarResource, as: APICalendarEvent.self, cancellation: cancellation)
+                try client.getAllReportingAttempts(calendarResource, as: APICalendarEvent.self, cancellation: cancellation)
             }
             let dividendsResource = PDTAPIResource.dividends(
                 dateFrom: dayString(snapshotAsOf, addingDays: -370),
                 dateTo: incomeEnd
             )
             let dividends = try fetch(dividendsResource, phase: .income, cancellation: cancellation) {
-                try client.getAll(dividendsResource, as: APIDividend.self, cancellation: cancellation)
+                try client.getAllReportingAttempts(dividendsResource, as: APIDividend.self, cancellation: cancellation)
             }
             // REST holdings carry symbolId, so income events join to open
             // holdings without the per-holding symbol-quote scan.
@@ -156,11 +156,12 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
                     failedQuoteIDs.formUnion(chunk)
                 } else {
                     do {
-                        let priceRows = try fetch(resource, phase: .priceHistory, cancellation: cancellation) {
-                            try decodeAPIResponse(APIPricesBatchEnvelope.self, from: client.get(resource, cancellation: cancellation))
-                                .data.prices.joined().map(\.optionalDetailInput)
+                        let batch = try fetch(resource, phase: .priceHistory, cancellation: cancellation) {
+                            try client.getReportingAttempts(resource, as: APIPricesBatchEnvelope.self, cancellation: cancellation)
                         }
-                        points += PDTOptionalDetailNormalizer.normalizePriceSeries(priceRows)
+                        points += PDTOptionalDetailNormalizer.normalizePriceSeries(
+                            batch.data.prices.joined().map(\.optionalDetailInput)
+                        )
                     } catch let failure as PDTDetailRefreshToolError {
                         try throwIfCancelled(cancellation, resource, phase: .priceHistory)
                         record(failure.diagnostic)
@@ -220,26 +221,26 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
         _ resource: PDTAPIResource,
         phase: BackgroundDetailRefreshPhase,
         cancellation: PDTCancellation,
-        _ body: () throws -> T
+        _ request: () throws -> PDTAPIResult<T>
     ) throws -> T {
         do {
-            return try body()
-        } catch {
+            return try request().value
+        } catch let failure as PDTAPIRequestFailure {
             try throwIfCancelled(cancellation, resource, phase: phase)
-            throw PDTDetailRefreshToolError(diagnostic: diagnostic(for: error, resource, phase: phase))
+            throw PDTDetailRefreshToolError(diagnostic: diagnostic(for: failure, resource, phase: phase))
         }
     }
 
     private func diagnostic(
-        for error: Error,
+        for failure: PDTAPIRequestFailure,
         _ resource: PDTAPIResource,
         phase: BackgroundDetailRefreshPhase
     ) -> PDTDetailRefreshFailureDiagnostic {
         PDTDetailRefreshFailureDiagnostic(
             toolName: resource.path,
             phase: phase,
-            attemptCount: 1,
-            category: pdtDetailRefreshFailureCategory(for: error),
+            attemptCount: failure.attemptCount,
+            category: pdtDetailRefreshFailureCategory(for: failure.underlyingError),
             argumentShape: resource.argumentShape
         )
     }

@@ -58,6 +58,37 @@ struct PDTAPIBackgroundDetailRefreshTests {
         #expect(diagnostic.category == .transientFailure)
     }
 
+    @Test("A retried base failure persists the number of requests actually sent")
+    func baseFailurePersistsRequestCount() throws {
+        let store = try seededStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let transport = ScriptedPDTHTTPTransport(Array(repeating: apiError(503, "SERVICE_UNAVAILABLE"), count: 3))
+
+        #expect(throws: PDTAPIError.server(status: 503, retryAfter: nil)) {
+            try refresh(transport, store: store, maxAttempts: 3).refresh(cancellation: nil, progress: { _ in })
+        }
+
+        #expect(transport.requests.count == 3)
+        #expect(try store.loadLastDetailRefreshDiagnostic()?.attemptCount == 3)
+    }
+
+    @Test("A paged optional facet that fails after retries persists every request it sent")
+    func optionalFailurePersistsRequestCount() throws {
+        let store = try seededStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        var replies = try fullReplies()
+        let unavailable = apiError(503, "SERVICE_UNAVAILABLE")
+        replies.replaceSubrange(5...6, with: [unavailable, unavailable, unavailable])
+        let transport = ScriptedPDTHTTPTransport(replies)
+
+        let result = try refresh(transport, store: store, maxAttempts: 3).refresh(cancellation: nil, progress: { _ in })
+
+        let calendarRequests = transport.requests.filter { $0.url!.path == "/v1/calendar-events" }.count
+        #expect(calendarRequests == 4)
+        #expect(result.diagnostics.map(\.attemptCount) == [calendarRequests])
+        #expect(try store.loadLastDetailRefreshDiagnostic()?.attemptCount == calendarRequests)
+    }
+
     @Test("A failed optional facet keeps its last good value and degrades the outcome")
     func optionalFailureKeepsLastGoodFacet() throws {
         let store = try seededStore { $0.sectors = [DistributionSummary(name: "last-good", percentage: 100, totalValue: Money(value: "1", currency: "EUR"))] }

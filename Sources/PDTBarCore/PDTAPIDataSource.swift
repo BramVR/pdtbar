@@ -199,7 +199,7 @@ extension PDTAPIResource {
     }
 }
 
-func decodeAPIResponse<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+private func decodeAPIResponse<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
     do {
         return try JSONDecoder().decode(type, from: data)
     } catch {

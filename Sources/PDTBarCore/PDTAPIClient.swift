@@ -263,6 +263,23 @@ public struct ThreadPDTAPISleeper: PDTAPISleeper {
 
 /// Read-only PDT REST client: `GET` only, bearer token only to the PDT API
 /// origin, typed errors, bounded retries, pagination, and no response logging.
+/// A successful call and the HTTP requests it sent, retries and pages included.
+public struct PDTAPIResult<Value> {
+    public let value: Value
+    public let attemptCount: Int
+}
+
+/// A failed call and the HTTP requests it sent before failing, retries and
+/// pages included. `underlyingError` is the `PDTAPIError` the plain calls throw.
+public struct PDTAPIRequestFailure: Error, CustomStringConvertible {
+    public let underlyingError: any Error
+    public let attemptCount: Int
+
+    public var description: String {
+        "\(underlyingError) after \(attemptCount) request(s)"
+    }
+}
+
 public struct PDTAPIClient {
     public static let baseURL = URL(string: "https://api.portfoliodividendtracker.com/v1/")!
 
@@ -290,27 +307,78 @@ public struct PDTAPIClient {
 
     /// One response body. For paged resources this is the first page only.
     public func get(_ resource: PDTAPIResource, cancellation: PDTCancellation? = nil) throws -> Data {
-        try send(resource, extraQuery: [], cancellation: cancellation)
+        try withoutAttemptCount {
+            try countingRequests { sent in
+                try send(resource, extraQuery: [], cancellation: cancellation, sent: &sent)
+            }
+        }
     }
 
     /// Every row of a list resource, following page or offset pagination.
     /// Rows come from `data` (lists), or `data.items` (x-ray).
     public func getAll<Row: Decodable>(
         _ resource: PDTAPIResource,
-        as _: Row.Type = Row.self,
+        as type: Row.Type = Row.self,
         cancellation: PDTCancellation? = nil
     ) throws -> [Row] {
-        switch resource.pagination {
-        case .none:
-            return try decode(ListPage<Row>.self, from: get(resource, cancellation: cancellation)).data
-        case .pages:
-            return try collectPages(resource, cancellation: cancellation)
-        case .offset:
-            return try collectOffsets(resource, cancellation: cancellation)
+        try withoutAttemptCount {
+            try getAllReportingAttempts(resource, as: type, cancellation: cancellation)
         }
     }
 
-    private func collectPages<Row: Decodable>(_ resource: PDTAPIResource, cancellation: PDTCancellation?) throws -> [Row] {
+    /// `get` decoded as `Body`, with the request count. Failures, decoding
+    /// included, throw `PDTAPIRequestFailure`.
+    public func getReportingAttempts<Body: Decodable>(
+        _ resource: PDTAPIResource,
+        as _: Body.Type,
+        cancellation: PDTCancellation? = nil
+    ) throws -> PDTAPIResult<Body> {
+        try countingRequests { sent in
+            try decode(Body.self, from: send(resource, extraQuery: [], cancellation: cancellation, sent: &sent))
+        }
+    }
+
+    /// `getAll` with the request count. Failures throw `PDTAPIRequestFailure`.
+    public func getAllReportingAttempts<Row: Decodable>(
+        _ resource: PDTAPIResource,
+        as _: Row.Type = Row.self,
+        cancellation: PDTCancellation? = nil
+    ) throws -> PDTAPIResult<[Row]> {
+        try countingRequests { sent in
+            switch resource.pagination {
+            case .none:
+                try decode(ListPage<Row>.self, from: send(resource, extraQuery: [], cancellation: cancellation, sent: &sent)).data
+            case .pages:
+                try collectPages(resource, cancellation: cancellation, sent: &sent)
+            case .offset:
+                try collectOffsets(resource, cancellation: cancellation, sent: &sent)
+            }
+        }
+    }
+
+    private func countingRequests<Value>(_ call: (inout Int) throws -> Value) throws -> PDTAPIResult<Value> {
+        var sent = 0
+        do {
+            let value = try call(&sent)
+            return PDTAPIResult(value: value, attemptCount: sent)
+        } catch {
+            throw PDTAPIRequestFailure(underlyingError: error, attemptCount: sent)
+        }
+    }
+
+    private func withoutAttemptCount<Value>(_ call: () throws -> PDTAPIResult<Value>) throws -> Value {
+        do {
+            return try call().value
+        } catch let failure as PDTAPIRequestFailure {
+            throw failure.underlyingError
+        }
+    }
+
+    private func collectPages<Row: Decodable>(
+        _ resource: PDTAPIResource,
+        cancellation: PDTCancellation?,
+        sent: inout Int
+    ) throws -> [Row] {
         var rows: [Row] = []
         for page in 1...max(1, policy.maxPages) {
             let body = try send(
@@ -319,7 +387,8 @@ public struct PDTAPIClient {
                     URLQueryItem(name: "page", value: String(page)),
                     URLQueryItem(name: "perPage", value: String(policy.pageSize)),
                 ],
-                cancellation: cancellation
+                cancellation: cancellation,
+                sent: &sent
             )
             let decoded = try decode(ListPage<Row>.self, from: body)
             guard let meta = decoded.meta else {
@@ -339,7 +408,11 @@ public struct PDTAPIClient {
         throw PDTAPIError.paginationLimitExceeded
     }
 
-    private func collectOffsets<Row: Decodable>(_ resource: PDTAPIResource, cancellation: PDTCancellation?) throws -> [Row] {
+    private func collectOffsets<Row: Decodable>(
+        _ resource: PDTAPIResource,
+        cancellation: PDTCancellation?,
+        sent: inout Int
+    ) throws -> [Row] {
         var rows: [Row] = []
         for _ in 1...max(1, policy.maxPages) {
             let body = try send(
@@ -348,7 +421,8 @@ public struct PDTAPIClient {
                     URLQueryItem(name: "limit", value: String(policy.pageSize)),
                     URLQueryItem(name: "offset", value: String(rows.count)),
                 ],
-                cancellation: cancellation
+                cancellation: cancellation,
+                sent: &sent
             )
             let decoded = try decode(OffsetPage<Row>.self, from: body).data
             rows += decoded.items
@@ -365,7 +439,8 @@ public struct PDTAPIClient {
     private func send(
         _ resource: PDTAPIResource,
         extraQuery: [URLQueryItem],
-        cancellation: PDTCancellation?
+        cancellation: PDTCancellation?,
+        sent: inout Int
     ) throws -> Data {
         guard resource.isValid else {
             throw PDTAPIError.invalidRequest
@@ -381,7 +456,7 @@ public struct PDTAPIClient {
                 throw PDTAPIError.cancelled
             }
             do {
-                return try sendOnce(url: url, cancellation: cancellation)
+                return try sendOnce(url: url, cancellation: cancellation, sent: &sent)
             } catch let error as PDTAPIError where error.isRetryable && attempt < policy.maxAttempts {
                 let delay = retryDelay(for: error, attempt: attempt)
                 guard delay <= policy.maxRetryDelay else {
@@ -393,7 +468,7 @@ public struct PDTAPIClient {
         }
     }
 
-    private func sendOnce(url: URL, cancellation: PDTCancellation?) throws -> Data {
+    private func sendOnce(url: URL, cancellation: PDTCancellation?, sent: inout Int) throws -> Data {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: policy.requestTimeout)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -412,6 +487,7 @@ public struct PDTAPIClient {
         let data: Data
         let response: HTTPURLResponse
         do {
+            sent += 1
             (data, response) = try transport.send(request, cancellation: cancellation)
         } catch let error as PDTAPIError {
             throw error
