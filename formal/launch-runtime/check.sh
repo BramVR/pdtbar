@@ -4,7 +4,7 @@
 # Exit 1: a new invariant fails, or an open finding stopped failing (update the list + skill).
 set -euo pipefail
 cd "$(dirname "$0")"
-OPEN_FINDINGS="BackgroundFlagMatchesWork ProbingMenuTellsTruth SetupMenuMeansIdle"
+OPEN_FINDINGS="BackgroundFlagMatchesWork"
 
 out="$(../../Scripts/formal/tlc.sh LaunchRuntime.tla -continue 2>&1)"
 echo "$out" | grep -E 'distinct states found' || { echo "$out"; exit 1; }
