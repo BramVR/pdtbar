@@ -28,7 +28,7 @@ CONSTANTS
     ReapplyOnBgPublish,
     \* TRUE is current code (#270): SnapshotStore.commitCurrentSnapshot
     \* (Persistence.swift:660) removes the read marks of items that re-cross
-    \* against the snapshot on disk (666), then writes the snapshot (669). The
+    \* against the snapshot on disk (664), then writes the snapshot (668). The
     \* reset after the commit only prunes stale marks (569). FALSE replays the
     \* code before #270, which reset re-crossed marks after the commit.
     ResetBeforeSnapshotCommit,
@@ -229,9 +229,9 @@ ResetEffect(to) ==
     /\ UNCHANGED <<pdt, snap, display, wPrior, wNew, wLoaded, mainPc, mainFp,
                    mainLoaded>>
 
-\* SnapshotStore.commitCurrentSnapshot, Persistence.swift:661-667: drop the
+\* SnapshotStore.commitCurrentSnapshot, Persistence.swift:661-666: drop the
 \* marks of items that re-cross against the snapshot on disk, in one
-\* removeReadFingerprints write, before the snapshot write (669). Only the
+\* removeReadFingerprints write, before the snapshot write (668). Only the
 \* running worker writes the snapshot, so snap here is the prior it loaded.
 EarlyResetEffect(to) ==
     /\ store' = store \ Reappeared(wNew, snap)
@@ -240,7 +240,7 @@ EarlyResetEffect(to) ==
     /\ UNCHANGED <<pdt, snap, display, wPrior, wNew, wLoaded, wRead, mainPc,
                    mainFp, mainLoaded, owed>>
 
-\* SnapshotStore.commitCurrentSnapshot, Persistence.swift:669 snapshot write.
+\* SnapshotStore.commitCurrentSnapshot, Persistence.swift:668 snapshot write.
 CommitEffect(to) ==
     /\ snap' = wNew
     \* A reset is owed when this write records a crossing against the

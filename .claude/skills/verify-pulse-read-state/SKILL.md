@@ -21,7 +21,7 @@ Sync commit: `1b6ffd4`. The model describes the code at that commit.
 - `PulseReadStore` 18 (`mutationQueue` 20, `load` 26, `markRead` 38, `removeReadFingerprints` 49) and `OwnerOnlyLocalStore.write` 126 (temp file + rename, so writes are atomic).
 - `PulseReadFilter.apply` 168 and `PulseLifecycleResult.applyingReadState` 271.
 - `PressureRunner.cachedPulse` 343, `run` 411 (read load 429, commit 430), `refreshedPulse` 452 (read load 461, commit 469), `lifecycleResult` 508, `readStateAfterResettingReappearedItems` 569, `staleReadFingerprints` 592.
-- `SnapshotStore.commitCurrentSnapshot` 662. After the sync commit, #270 made it remove the read marks of items that re-cross against the snapshot on disk before it writes (now 660, removal 666, write 669), moved the `run` and `refreshedPulse` read loads below their commits, and narrowed the post-commit reset to stale marks (`readStateAfterPruningStaleItems`).
+- `SnapshotStore.commitCurrentSnapshot` 662. After the sync commit, #270 made it remove the read marks of items that re-cross against the snapshot on disk before it writes (now 660, removal 664, write 668; nothing is computed without a readable prior), moved the `run` and `refreshedPulse` read loads below their commits, and narrowed the post-commit reset to stale marks (`readStateAfterPruningStaleItems`).
 
 `Sources/PDTBarCore/PressureEngine.swift`: `concentrationItems` 210 (`resetsReadState` 233), and since #270 `reappearedReadFingerprints` 210.
 

@@ -658,12 +658,11 @@ public struct SnapshotStore: Sendable {
     /// mark first, so a quit between the two writes leaves the crossing still
     /// detectable on disk instead of recorded with its mark still stored.
     public func commitCurrentSnapshot(_ snapshot: PortfolioSnapshot) throws -> SnapshotCommit {
-        let reappeared = PressureEngine.reappearedReadFingerprints(
-            from: snapshot,
-            priorSnapshot: try loadPriorSnapshotResult().snapshot
-        )
-        if !reappeared.isEmpty {
-            _ = try PulseReadStore(directory: directory).removeReadFingerprints(reappeared)
+        if let priorSnapshot = try loadPriorSnapshotResult().snapshot {
+            let reappeared = PressureEngine.reappearedReadFingerprints(from: snapshot, priorSnapshot: priorSnapshot)
+            if !reappeared.isEmpty {
+                _ = try PulseReadStore(directory: directory).removeReadFingerprints(reappeared)
+            }
         }
         let target = currentSnapshotPath
         try OwnerOnlyLocalStore.write(stableJSONData(snapshot), to: target)

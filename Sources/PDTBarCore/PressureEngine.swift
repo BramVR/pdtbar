@@ -209,7 +209,7 @@ public enum PressureEngine {
 
     static func reappearedReadFingerprints(
         from snapshot: PortfolioSnapshot,
-        priorSnapshot: PortfolioSnapshot?
+        priorSnapshot: PortfolioSnapshot
     ) -> Set<String> {
         Set(concentrationItems(from: snapshot, priorSnapshot: priorSnapshot, readState: nil)
             .filter(\.resetsReadState)
