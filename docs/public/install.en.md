@@ -14,7 +14,7 @@ Homebrew is not supported yet. There is no `brew install` command for PDTBar rig
 
 There is also no public app download attached to GitHub releases yet. For now, use a shared `PDTBar.app.zip` build from the project maintainer. When public downloads are ready, they will appear on the [PDTBar releases page](https://github.com/BramVR/pdtbar/releases).
 
-## Before You Start
+## Before you start
 
 You need:
 
@@ -24,7 +24,7 @@ You need:
 
 PDTBar opens without a connection and asks you to connect to PDT before it shows portfolio data.
 
-## Install The App
+## Install the app
 
 1. Double-click `PDTBar.app.zip` if your Mac does not unzip it automatically.
 2. Drag `PDTBar.app` into Applications.
@@ -32,18 +32,18 @@ PDTBar opens without a connection and asks you to connect to PDT before it shows
 
 If macOS says the app was downloaded from the internet, right-click `PDTBar.app`, choose `Open`, then choose `Open` again. You should only need to do this once.
 
-## First Use
+## First use
 
 After PDTBar opens, look for the small stack icon in the macOS menu bar.
 
 - If you see your portfolio pulse, you are done.
 - If you see `Sign in with PDT`, click it and approve PDTBar on PDT's page in your browser.
 - To use a token instead, choose `Use a PDT token…` and paste a read-only token from PDT's Integrations > API page.
-- If you see `Reconnect to PDT`, PDT stopped accepting the connection. Sign in again or paste a new token; your last pulse stays visible.
+- If you see `Reconnect to PDT`, PDT stopped accepting the connection. Sign in again or paste a new token. Your last pulse stays visible.
 - If you see `PDT access paused`, your PDT subscription has ended. Renew it, then click `Check again`.
 - If you see `Keychain unavailable`, this copy of PDTBar was not signed for the Keychain. Install the signed release instead.
 
-## Daily Use
+## Daily use
 
 - Click the menu-bar icon to see what needs attention.
 - Use `Refresh now` to fetch fresh PDT data.
@@ -52,4 +52,4 @@ After PDTBar opens, look for the small stack icon in the macOS menu bar.
 
 PDTBar is read-only by default. It does not place trades, move money, upload your portfolio to its own backend, or give financial advice.
 
-See the [features guide](features.en.md) for what each menu section does.
+The [features guide](features.en.md) explains what each menu section does.

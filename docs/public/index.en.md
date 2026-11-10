@@ -10,9 +10,9 @@ description: "PDTBar is a quiet macOS menu bar companion for Portfolio Dividend 
 
 # PDTBar
 
-PDTBar is a quiet macOS menu bar companion for your Portfolio Dividend Tracker portfolio. It reads your portfolio straight from PDT, read-only, and surfaces only the few things worth attention right now.
+PDTBar is a quiet macOS menu bar companion for your Portfolio Dividend Tracker portfolio. It reads your portfolio straight from PDT over a read-only connection and shows only the few things worth attention right now.
 
-## What You See
+## What you see
 
 - Concentration: which positions carry the most weight.
 - Income events: dividend and cash-flow moments coming up.
@@ -20,9 +20,9 @@ PDTBar is a quiet macOS menu bar companion for your Portfolio Dividend Tracker p
 - Prices: whether price data is current.
 - All quiet: a calm status when nothing needs attention.
 
-## How It Works
+## How it works
 
-PDTBar uses the same data as PDT, but with the opposite rhythm. PDT remains the full dashboard. PDTBar lives in the menu bar and gives you a short pulse: the two or three facts you would otherwise have to hunt for.
+PDTBar uses the same data as PDT for a different job. PDT remains the full dashboard. PDTBar stays in the menu bar and summarizes the two or three facts you would otherwise have to look for.
 
 PDTBar connects to PDT directly:
 
@@ -34,7 +34,7 @@ fetch read-only PDT data
 show the portfolio pulse
 ```
 
-When PDTBar is not connected, the menu offers `Sign in with PDT` and `Use a PDT token…`. Daily use does not require terminal commands.
+When PDTBar is not connected, the menu offers `Sign in with PDT` and `Use a PDT token…`. You do not need the terminal for daily use.
 
 ## Install
 
@@ -44,13 +44,13 @@ Homebrew is not supported yet. A public app download is not posted yet either, s
 2. Drag `PDTBar.app` into Applications.
 3. Open PDTBar and use the menu-bar icon.
 
-See the [install guide](install.en.md) for first-use steps and setup messages.
+The [install guide](install.en.md) covers first-use steps and setup messages.
 
-See the [features guide](features.en.md) for a deeper walkthrough of Pulse, Allocation, Income, Big movers, Data, and Actions.
+The [features guide](features.en.md) has more detail on Pulse, Allocation, Income, Big movers, Data, and Actions.
 
-## Trust And Privacy
+## Trust and privacy
 
-PDTBar is local and read-only by default. Your PDT connection is stored in this Mac's Keychain only, and `Disconnect from PDT` deletes it. PDTBar does not place trades, move money, upload your portfolio to its own backend, or give financial advice. The pressure engine ranks facts and changes; you decide what they mean.
+PDTBar is local and read-only by default. It stores your PDT connection only in this Mac's Keychain, and `Disconnect from PDT` deletes it. PDTBar does not place trades, move money, upload your portfolio to its own backend, or give financial advice. The pressure engine ranks facts and changes. You decide what they mean.
 
 ## Status
 
