@@ -681,8 +681,6 @@ struct ClaudeLocalConnectionTests {
 
         #expect(result.outcome == .degraded)
         #expect(result.model.portfolioPerformance == PortfolioPerformanceSummary())
-        #expect(result.model.facetSnapshots.dataHealth.diagnostic?.detail
-            == "pdt-get-portfolio-performance; performance; timeout")
         #expect(result.diagnostics == [
             PDTDetailRefreshFailureDiagnostic(
                 toolName: "pdt-get-portfolio-performance",

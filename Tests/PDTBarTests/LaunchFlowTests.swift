@@ -658,26 +658,30 @@ struct PDTLaunchRuntimeTests {
         #expect(rowTitles(in: degraded.descriptor).contains("Fill details again"))
     }
 
-    @Test("A failed background refresh keeps the cached pulse, shows diagnostics, and retries once at a time")
+    @Test("A failed background refresh keeps the cached pulse, says what to do, and retries once at a time")
     func failedBackgroundRefresh() throws {
         let cachedPulse = try cachedQuietFixturePulse()
         let runtime = PDTLaunchRuntime()
-        let diagnostic = PDTDetailRefreshFailureDiagnostic(
-            toolName: "/v1/prices/batch",
-            phase: .priceHistory,
-            attemptCount: 1,
-            category: .transientFailure,
-            argumentShape: ["symbolQuoteIds"]
+        let failure = PDTSyncFailure(
+            phase: .baseHoldings,
+            endpoint: .holdings,
+            kind: .rateLimited(retryAfterSeconds: 120),
+            requestCount: 3
         )
-        _ = launched(runtime, cachedPulse: cachedPulse, status: .connected)
+        let refreshing = launched(runtime, cachedPulse: cachedPulse, status: .connected)
 
-        let failed = runtime.completeBackgroundDetailRefresh(.failed(.unavailable, diagnostic: diagnostic))
-        let diagnosticRow = try #require(healthRow(in: failed.descriptor)?.children.first { $0.id == "dataHealth.diagnostic" })
+        let failed = runtime.completeBackgroundDetailRefresh(.failed(.unavailable, failure: failure))
 
         #expect(runtime.currentPulse?.source == .cachedSnapshot)
         #expect(failed.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
         #expect(rowTitles(in: failed.descriptor).contains("Details fill failed"))
-        #expect(diagnosticRow.detail == "/v1/prices/batch; priceHistory; transientFailure")
+        #expect(healthRow(in: failed.descriptor)?.detail == "Needs attention")
+        #expect(healthDetail("access", in: failed.descriptor) == "Connected")
+        #expect(healthDetail("detailFill", in: failed.descriptor) == "Failed")
+        #expect(healthDetail("diagnostic", in: failed.descriptor) == "Base holdings: PDT rate limit; try again in 2 min")
+        #expect(healthDetail("source", in: failed.descriptor)?.contains("saved copy") == true)
+        #expect(healthDetail("cache", in: failed.descriptor) == healthDetail("cache", in: refreshing.descriptor))
+        #expect(healthDetail("freshness", in: failed.descriptor) == healthDetail("freshness", in: refreshing.descriptor))
         #expect(actionRow("actions.disconnect", in: failed.descriptor) != nil)
 
         let retry = try #require(runtime.retryFirstFetch())
@@ -685,6 +689,47 @@ struct PDTLaunchRuntimeTests {
         #expect(runtime.retryFirstFetch() == nil)
         #expect(rowTitles(in: retry.descriptor).contains("Filling details"))
         #expect(!rowTitles(in: retry.descriptor).contains("Details fill failed"))
+        #expect(healthRow(in: retry.descriptor)?.detail == "Refreshing")
+    }
+
+    @Test("A launch over a saved copy says checking, then refreshing, and is healthy only once a sync commits")
+    func savedCopyIsNeverShownAsVerified() throws {
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launch()
+        let checking = try #require(runtime.completeCachedPulseLoad(try cachedQuietFixturePulse()))
+        #expect(healthRow(in: checking.descriptor)?.detail == "Checking")
+        #expect(healthDetail("access", in: checking.descriptor) == "Checking")
+        #expect(healthDetail("source", in: checking.descriptor)?.contains("saved copy") == true)
+
+        let refreshing = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+        #expect(healthRow(in: refreshing.descriptor)?.detail == "Refreshing")
+        #expect(healthDetail("access", in: refreshing.descriptor) == "Connected")
+        #expect(healthDetail("source", in: refreshing.descriptor)?.contains("saved copy") == true)
+
+        let refreshed = runtime.completeBackgroundDetailRefresh(.succeeded(try quietFixturePulse(), outcome: .completed))
+        #expect(healthRow(in: refreshed.descriptor) == nil)
+    }
+
+    @Test(
+        "A connection screen over a saved copy says in Data health why access stopped",
+        arguments: [
+            (PDTConnectionStatus.needsReconnect(.browserSession, .signInExpired), "Reconnect needed: your PDT sign-in has expired"),
+            (.needsReconnect(.personalToken, .tokenRevoked), "Reconnect needed: PDTBar's access was revoked in PDT"),
+            (.needsReconnect(.personalToken, .readAccessMissing), "Reconnect needed: this connection can't read your portfolio"),
+            (.subscriptionPaused, "Paused: your PDT subscription has ended"),
+            (.keychainUnavailable(.failed), "Keychain unavailable"),
+        ]
+    )
+    func connectionScreenNamesAccessProblem(status: PDTConnectionStatus, access: String) throws {
+        let runtime = PDTLaunchRuntime()
+
+        let screen = launched(runtime, cachedPulse: try cachedQuietFixturePulse(), status: status)
+
+        #expect(screen.descriptor.sections.first?.id == "pdtConnection")
+        #expect(healthRow(in: screen.descriptor)?.detail == "Needs attention")
+        #expect(healthDetail("access", in: screen.descriptor) == access)
+        #expect(healthDetail("source", in: screen.descriptor)?.contains("saved copy") == true)
     }
 
     @Test("Republished fetched pulse keeps live-verified source facts")
@@ -804,6 +849,10 @@ private func healthRow(in descriptor: MenuDescriptor) -> MenuRow? {
         .first { $0.id == "freshness" }?
         .rows
         .first { $0.id == "dataHealth" }
+}
+
+private func healthDetail(_ row: String, in descriptor: MenuDescriptor) -> String? {
+    healthRow(in: descriptor)?.children.first { $0.id == "dataHealth.\(row)" }?.detail
 }
 
 private func freshnessRefreshDetailsAction(in descriptor: MenuDescriptor) -> MenuRow? {
