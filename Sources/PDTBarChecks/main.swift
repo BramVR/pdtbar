@@ -15,6 +15,8 @@ let scriptedResponses = try scriptedConnectorResponses()
 try checkFixtureCorpus(fixtures)
 try checkScriptedConnectorFirstFetch(responses: scriptedResponses, asOf: asOf)
 try checkScriptedBackgroundDetailRefresh(responses: scriptedResponses, asOf: asOf)
+try checkCoalescedAPIFirstFetch()
+try checkAPIBackgroundDetailRefresh()
 try checkPDTAPIDataHealth()
 try checkMcporterPin()
 
@@ -187,6 +189,108 @@ private func checkScriptedBackgroundDetailRefresh(responses: [String: Data], asO
             && repaired.model.facetSnapshots.freshness.latestCompleteDetailFillAsOf == asOf
             && repairedDiagnostic == nil,
         "completed detail retry should restore price data, record latest complete detail fill, and clear diagnostics"
+    )
+}
+
+private func checkCoalescedAPIFirstFetch() throws {
+    let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-api-first-fetch-check")
+    defer {
+        try? FileManager.default.removeItem(at: store.directory)
+    }
+    let transport = ScriptedPDTHTTPTransport([checkHoldingsReply()])
+    let firstFetch = PDTCoalescedFirstPortfolioFetch(
+        dataSource: PDTAPIDataSource(client: checkAPIClient(transport), options: .firstFetch),
+        snapshotStore: store,
+        asOf: "2026-03-28"
+    )
+    let first = try firstFetch.fetch()
+    let second = try firstFetch.fetch()
+
+    try check(first == second, "coalesced API first fetch should return the first result")
+    try check(transport.requests.count == 1, "a coalesced second fetch should send no request")
+    try check(
+        transport.requests.allSatisfy { $0.httpMethod == "GET" && $0.url?.path == "/v1/portfolio/holdings" },
+        "API first fetch should read holdings only, over GET"
+    )
+    try check(
+        first.snapshotCommit.written && FileManager.default.fileExists(atPath: first.snapshotCommit.path),
+        "API first fetch should write a snapshot file before publishing"
+    )
+    try check(
+        first.descriptor.sections.map(\.id).contains("pulse"),
+        "API first fetch should publish a pulse descriptor from normalized data"
+    )
+}
+
+private func checkAPIBackgroundDetailRefresh() throws {
+    let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-api-detail-refresh-check")
+    defer {
+        try? FileManager.default.removeItem(at: store.directory)
+    }
+    let emptyPage = #"{"data":[],"meta":{"currentPage":1,"lastPage":1}}"#
+    let prices = #"{"data":{"prices":[[{"date":"2026-03-27","closeAdjusted":"19.00","closeCurrency":"EUR","symbolQuoteId":1},{"date":"2026-03-28","closeAdjusted":"20.00","closeCurrency":"EUR","symbolQuoteId":1}]]}}"#
+    func replies(prices priceReply: ScriptedPDTHTTPTransport.Reply) -> [ScriptedPDTHTTPTransport.Reply] {
+        [
+            checkHoldingsReply(),
+            checkReply(#"{"data":{"sectors":[{"categoryName":"Technology","totalValue":{"value":"100.00","currency":"EUR"},"percentage":100}],"assetTypes":[]}}"#),
+            checkReply(#"{"data":{"items":[{"weight":25.0}],"hasMore":false}}"#),
+            checkReply(emptyPage),
+            checkReply(emptyPage),
+            priceReply,
+        ]
+    }
+    func refresh(_ replies: [ScriptedPDTHTTPTransport.Reply]) throws -> PDTBackgroundDetailRefreshResult {
+        try PDTAPIBackgroundDetailRefresh(
+            client: checkAPIClient(ScriptedPDTHTTPTransport(replies)),
+            snapshotStore: store,
+            asOf: "2026-03-28"
+        ).refresh()
+    }
+
+    let degraded = try refresh(replies(prices: .response(
+        status: 503,
+        body: Data(#"{"error":{"code":"SERVICE_UNAVAILABLE","message":"m","details":{},"traceId":"t"}}"#.utf8)
+    )))
+    let degradedSnapshot = try require(try store.loadPriorSnapshot(), "a degraded API refresh should commit its snapshot")
+    try check(degraded.outcome == .degraded, "a failed optional price request should degrade, not abort")
+    try check(
+        degraded.model.facetSnapshots.freshness.status == .partial
+            && degraded.model.facetSnapshots.freshness.latestCompleteDetailFillAsOf == nil,
+        "a degraded API refresh should feed partial freshness state"
+    )
+    try check(
+        degradedSnapshot.sectors.count == 1 && degradedSnapshot.xRayHoldings?.count == 1 && degradedSnapshot.priceSeries.isEmpty,
+        "a degraded API refresh should keep the allocation and x-ray phases it completed"
+    )
+    try check(
+        store.lastSyncFailure()?.phase == .priceHistory && store.lastSyncFailure()?.endpoint == .pricesBatch,
+        "a degraded API refresh should store the failed price request as its sync failure"
+    )
+
+    let repaired = try refresh(replies(prices: checkReply(prices)))
+    try check(repaired.outcome == .completed, "a retry after a degraded API refresh should complete")
+    try check(
+        repaired.model.facetSnapshots.bigMovers.priceSeriesCount == 2
+            && repaired.model.facetSnapshots.freshness.status == .fresh
+            && repaired.model.facetSnapshots.freshness.latestCompleteDetailFillAsOf == "2026-03-28"
+            && store.lastSyncFailure() == nil,
+        "a completed API retry should restore prices, record the complete detail fill, and clear the sync failure"
+    )
+}
+
+private func checkHoldingsReply() -> ScriptedPDTHTTPTransport.Reply {
+    checkReply(#"{"data":[{"symbolName":"Check Holding","symbolQuoteId":1,"symbolId":1001,"currentPriceDate":"2026-03-28T23:59:59+00:00","portfolioWeight":"1","closedAt":null,"currentWorthLocal":{"value":"100.00","currency":"EUR"}}]}"#)
+}
+
+private func checkReply(_ body: String) -> ScriptedPDTHTTPTransport.Reply {
+    .response(status: 200, body: Data(body.utf8))
+}
+
+private func checkAPIClient(_ transport: ScriptedPDTHTTPTransport) -> PDTAPIClient {
+    PDTAPIClient(
+        transport: transport,
+        tokenProvider: InMemoryPDTAPITokenProvider(token: PDTAPIToken("pdt_check_token")),
+        policy: PDTAPIRequestPolicy(maxAttempts: 1)
     )
 }
 
