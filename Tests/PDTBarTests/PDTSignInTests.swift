@@ -513,6 +513,36 @@ struct PDTCredentialStorageTests {
         try store.save(.disconnected)
     }
 
+    @Test("The dev file store finishes short and interrupted writes and never reports a zero-byte write as success")
+    func fileStoreWrites() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "pdtbar-credential-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "pdt.json")
+        let stored = PDTConnectionState.connected(.browserSession(
+            session("access-1", "refresh-1", expiresAt: Date(timeIntervalSince1970: 1_800_000_000))
+        ))
+        let calls = Counter()
+        let choppy = FilePDTCredentialStore(url: url) { descriptor, bytes, count in
+            calls.increment()
+            if calls.value % 2 == 1 {
+                errno = EINTR
+                return -1
+            }
+            return Darwin.write(descriptor, bytes, min(count, 7))
+        }
+
+        try choppy.save(stored)
+        #expect(try FilePDTCredentialStore(url: url).load() == stored)
+        #expect(try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int == 0o600)
+
+        let stalled = FilePDTCredentialStore(url: url) { _, _, _ in 0 }
+        #expect(throws: PDTCredentialStoreError.writeFailed(code: EIO)) {
+            try stalled.save(.connected(.personalToken(PDTAPIToken("pdt_other"))))
+        }
+        #expect(try FilePDTCredentialStore(url: url).load() == stored)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0 != "pdt.json" }.isEmpty)
+    }
+
     @Test("Tokens, sessions, states, and fingerprints never print a secret")
     func secretFreeDescriptions() throws {
         let secrets = ["access-secret-value", "refresh-secret-value", "pdt_personal-secret"]

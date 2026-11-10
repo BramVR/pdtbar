@@ -54,10 +54,15 @@ public final class InMemoryPDTCredentialStore: PDTCredentialStore, @unchecked Se
 /// never touches the Keychain (a re-signed dev build would prompt). The
 /// sibling `<name>.lock` file carries the `flock`.
 public struct FilePDTCredentialStore: PDTCredentialStore {
-    public let url: URL
+    /// POSIX `write(2)`: may write fewer bytes than asked, or fail with `EINTR`.
+    public typealias Write = @Sendable (_ descriptor: Int32, _ bytes: UnsafeRawPointer, _ count: Int) -> Int
 
-    public init(url: URL) {
+    public let url: URL
+    private let writeBytes: Write
+
+    public init(url: URL, write: @escaping Write = { Darwin.write($0, $1, $2) }) {
         self.url = url
+        self.writeBytes = write
     }
 
     public func withExclusiveAccess<Value>(_ body: () throws -> Value) throws -> Value {
@@ -90,7 +95,7 @@ public struct FilePDTCredentialStore: PDTCredentialStore {
         guard descriptor >= 0 else {
             throw PDTCredentialStoreError.writeFailed(code: errno)
         }
-        var failure = Self.writeAll(data, to: descriptor)
+        var failure = writeAll(data, to: descriptor)
         // fsync before rename so a crash can't leave an empty file in place of the credential.
         if failure == nil, fsync(descriptor) != 0 {
             failure = errno
@@ -105,11 +110,11 @@ public struct FilePDTCredentialStore: PDTCredentialStore {
         }
     }
 
-    private static func writeAll(_ data: Data, to descriptor: Int32) -> Int32? {
+    private func writeAll(_ data: Data, to descriptor: Int32) -> Int32? {
         data.withUnsafeBytes { buffer -> Int32? in
             var offset = 0
             while offset < buffer.count {
-                let written = write(descriptor, buffer.baseAddress! + offset, buffer.count - offset)
+                let written = writeBytes(descriptor, buffer.baseAddress! + offset, buffer.count - offset)
                 if written > 0 {
                     offset += written
                 } else if written < 0, errno == EINTR {
