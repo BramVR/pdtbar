@@ -6,6 +6,9 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { menuCapture } from "./docs-site/menu-capture.mjs";
+import { strings } from "./docs-site/strings.mjs";
+
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(scriptDir, "..");
 
@@ -54,6 +57,10 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
       "",
       "Nederlandse nested page.",
       "",
+      "## Eerste Stap",
+      "",
+      "Nederlandse sectie.",
+      "",
     ].join("\n"),
     "utf8",
   );
@@ -71,6 +78,10 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
       "# Guide",
       "",
       "English nested page.",
+      "",
+      "## First Step",
+      "",
+      "English section.",
       "",
     ].join("\n"),
     "utf8",
@@ -128,6 +139,7 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
       "llms-full.txt",
       ".nojekyll",
       "pdtbar-hero.png",
+      "pdtbar-menu.png",
     ]) {
       assert.ok(fs.existsSync(path.join(outDir, rel)), `${rel} should exist`);
     }
@@ -149,16 +161,12 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
     assert.doesNotMatch(index, /Een rustig portefeuilleoverzicht|Rustig beeld|in-een-oogopslag/);
     assert.match(index, /href="en\/"/);
     assert.match(index, /aria-label="View this page in English"/);
-    assert.match(index, /id="doc-search"/);
     assert.match(index, /data-theme-toggle/);
-    assert.match(index, /class="nav-toggle"/);
-    assert.match(index, /class="home-hero"/);
     assert.match(index, /Installeer PDTBar/);
     assert.match(index, /Homebrew wordt nog niet ondersteund/);
     assert.match(index, /PDTBar\.app\.zip/);
-    assert.match(index, /class="pulse-art"/);
-    assert.match(index, /src="pdtbar-hero\.png"/);
-    assert.match(index, /alt="PDTBar portfolio pulse interface preview"/);
+    assert.deepEqual(imageNamed(index, "pdtbar-menu.png"), { src: "pdtbar-menu.png", width: "768", height: "1518", alt: strings.nl.captureAlt });
+    assert.deepEqual(imageNamed(english, "pdtbar-menu.png"), { src: "../pdtbar-menu.png", width: "768", height: "1518", alt: strings.en.captureAlt });
     assert.doesNotMatch(index, /pulse-fill/);
     assert.match(index, /application\/ld\+json/);
     assert.match(index, /"@type":"SoftwareApplication"/);
@@ -182,18 +190,43 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
     assert.doesNotMatch(english, /java\tscript:alert/);
 
     assert.match(nestedDutch, /<link rel="icon" href="\.\.\/favicon\.svg"/);
-    assert.match(nestedDutch, /<a class="brand" href="\.\.\/">/);
-    assert.match(nestedDutch, /<a class="btn" href="\.\.\/en\/guide\/" aria-label="View this page in English">English<\/a>/);
-    assert.match(nestedDutch, /<a class="nav-link" href="\.\.\/">PDTBar<\/a>/);
-    assert.match(nestedDutch, /<a class="nav-link active" href=".\/">Gids<\/a>/);
-    assert.doesNotMatch(nestedDutch, /<a class="nav-link" href="\.\.\/en\/">English<\/a>/);
+    assert.ok(hasLink(nestedDutch, { href: "../", name: "PDTBar" }));
+    assert.ok(hasLink(nestedDutch, { href: "../en/guide/", name: "View this page in English" }));
+    assert.ok(hasLink(nestedDutch, { href: "../en/guide/", name: "English" }));
+    assert.ok(hasLink(nestedDutch, { href: "./", name: "Gids", current: "page" }));
+    assert.ok(!hasLink(nestedDutch, { href: "../en/" }));
 
     assert.match(nestedEnglish, /<link rel="icon" href="\.\.\/\.\.\/favicon\.svg"/);
-    assert.match(nestedEnglish, /<a class="brand" href="\.\.\/\.\.\/">/);
-    assert.match(nestedEnglish, /<a class="btn" href="\.\.\/\.\.\/gids\/" aria-label="Bekijk deze pagina in het Nederlands">Nederlands<\/a>/);
-    assert.match(nestedEnglish, /<a class="nav-link" href="\.\.\/">PDTBar<\/a>/);
-    assert.match(nestedEnglish, /<a class="nav-link active" href=".\/">Guide<\/a>/);
-    assert.doesNotMatch(nestedEnglish, /<a class="nav-link" href="\.\.\/\.\.\/">Nederlands<\/a>/);
+    assert.ok(hasLink(nestedEnglish, { href: "../", name: "PDTBar" }));
+    assert.ok(hasLink(nestedEnglish, { href: "../../gids/", name: "Bekijk deze pagina in het Nederlands" }));
+    assert.ok(hasLink(nestedEnglish, { href: "../../gids/", name: "Nederlands" }));
+    assert.ok(hasLink(nestedEnglish, { href: "./", name: "Guide", current: "page" }));
+    assert.ok(!hasLink(nestedEnglish, { href: "../../" }));
+
+    assert.ok(hasLink(index, { href: "./", name: "PDTBar", current: "page" }));
+    assert.ok(hasLink(index, { href: "gids/", name: "Gids" }));
+    assert.ok(!hasLink(index, { current: "page", name: "Gids" }));
+    assert.ok(hasLink(english, { href: "./", name: "PDTBar", current: "page" }));
+
+    assert.doesNotMatch(index, /<details/);
+    assert.match(nestedEnglish, /<details[\s\S]*<summary[^>]*>On this page<\/summary>[\s\S]*<\/details>/);
+    assert.match(nestedDutch, /<summary[^>]*>Op deze pagina<\/summary>/);
+    assert.ok(hasLink(nestedEnglish, { href: "#first-step", name: "First Step" }));
+    assert.ok(hasLink(nestedDutch, { href: "#eerste-stap", name: "Eerste Stap" }));
+
+    for (const [name, html] of Object.entries({ index, english, nestedDutch, nestedEnglish })) {
+      assert.equal(html.match(/<h1[\s>]/g)?.length, 1, `${name} should have exactly one h1`);
+      assert.match(html, /<main id="main"/, `${name} should have a main landmark`);
+      assert.ok(hasLink(html, { href: "#main" }), `${name} should have a skip link`);
+      assert.doesNotMatch(html, /pdtbar-hero/, `${name} should not show the illustrated mock`);
+      assert.doesNotMatch(html, /<script[^>]*\ssrc=|<link[^>]*rel="stylesheet"|@import|@font-face|url\(\s*["']?(?:https?:)?\/\//, `${name} should load no script, stylesheet, or font over the network`);
+
+      const css = html.match(/<style>([\s\S]*?)<\/style>/)[1];
+      assert.match(css, /@media \(prefers-reduced-motion: reduce\)/, `${name} should turn motion off on request`);
+      assert.doesNotMatch(css, /opacity:\s*0(?:\.0*)?(?![.\d])/, `${name} should not hide content at opacity 0`);
+    }
+
+    assert.doesNotMatch(`${nestedDutch}\n${nestedEnglish}`, /Claude|MCP/i);
 
     const combined = `${index}\n${english}\n${llms}\n${llmsFull}`;
     assert.doesNotMatch(combined, /INTERNAL_ONLY_SENTINEL_PDT_PORTFOLIO_PATH/);
@@ -250,6 +283,39 @@ test("pages workflow builds, tests, smoke-checks, and skips disabled Pages safel
 
   assert.match(workflow, /if: github\.event_name != 'pull_request' && github\.ref == 'refs\/heads\/main'/);
 });
+
+test("docs-site template strings exist in both languages", () => {
+  assert.deepEqual(Object.keys(strings.nl).sort(), Object.keys(strings.en).sort());
+  for (const [lang, table] of Object.entries(strings)) {
+    for (const [key, value] of Object.entries(table)) {
+      assert.ok(typeof value === "string" && value.trim(), `${lang}.${key} should be a non-empty string`);
+    }
+    for (const callout of menuCapture.callouts) {
+      assert.ok(table[callout.label], `${lang} should label the ${callout.label} callout`);
+    }
+  }
+});
+
+function links(html) {
+  return [...html.matchAll(/<a\s([^>]*)>([\s\S]*?)<\/a>/g)].map(([, attributes, inner]) => ({
+    href: attribute(attributes, "href"),
+    current: attribute(attributes, "aria-current"),
+    name: attribute(attributes, "aria-label") ?? inner.replace(/<svg[\s\S]*?<\/svg>/g, "").replace(/<[^>]+>/g, "").trim(),
+  }));
+}
+
+function hasLink(html, expected) {
+  return links(html).some((link) => Object.entries(expected).every(([key, value]) => link[key] === value));
+}
+
+function imageNamed(html, file) {
+  const attributes = html.match(new RegExp(`<img\\s([^>]*${escapeRegExp(file)}[^>]*)>`))?.[1] ?? "";
+  return Object.fromEntries(["src", "width", "height", "alt"].map((name) => [name, attribute(attributes, name)]));
+}
+
+function attribute(attributes, name) {
+  return attributes.match(new RegExp(`(?:^|\\s)${name}="([^"]*)"`))?.[1];
+}
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { brandMarkSvg, css, faviconSvg, js, preThemeScript, pulseArtSvg, socialCardSvg, themeToggleHtml } from "./docs-site/graphics.mjs";
+import { brandMarkSvg, faviconSvg, menuBarStripHtml, socialCardSvg, statusIconSvg, themeToggleHtml } from "./docs-site/graphics.mjs";
+import { menuCapture } from "./docs-site/menu-capture.mjs";
+import { strings } from "./docs-site/strings.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const defaultRoot = path.resolve(scriptDir, "..");
@@ -14,6 +16,7 @@ const repoBase = "https://github.com/BramVR/pdtbar";
 const repoSourceBase = `${repoBase}/blob/main/docs`;
 const siteBase = "https://bramvr.github.io/pdtbar";
 const productName = "PDTBar";
+const pdtName = "Portfolio Dividend Tracker";
 const productTagline = "Quiet portfolio pulse.";
 const installHint = "Homebrew is not supported yet. Use a shared PDTBar.app.zip build for now; public app downloads will be listed on GitHub releases once ready.";
 
@@ -27,7 +30,13 @@ const nav = sections
   .map(([name, rels]) => ({ name, pages: rels.map((rel) => pageMap.get(rel)).filter(Boolean) }))
   .filter((section) => section.pages.length);
 const orderedPages = nav.flatMap((section) => section.pages);
-const sectionByRel = new Map(nav.flatMap((section) => section.pages.map((page) => [page.rel, section.name])));
+const siteCss = readSiteAsset("site.css");
+const siteJs = readSiteAsset("site.js");
+const themePrepaintJs = readSiteAsset("theme-prepaint.js");
+const mainHtmlByKind = { home: homeMainHtml, doc: docMainHtml };
+const templateStrings = Object.fromEntries(
+  Object.entries(strings).map(([lang, table]) => [lang, Object.fromEntries(Object.entries(table).map(([key, value]) => [key, escapeAttr(value)]))]),
+);
 
 assertSafeOutDir();
 fs.rmSync(outDir, { recursive: true, force: true });
@@ -36,15 +45,17 @@ fs.mkdirSync(outDir, { recursive: true });
 for (const page of pages) {
   assertSafePageOutRel(page.outRel);
   const html = markdownToHtml(page.markdown, page.rel);
-  const toc = tocFromHtml(html);
   const target = path.join(outDir, page.outRel);
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, layout({ page, html, toc, sectionName: sectionByRel.get(page.rel) || productName }), "utf8");
+  fs.writeFileSync(target, layout(page, html), "utf8");
 }
 
 fs.writeFileSync(path.join(outDir, "favicon.svg"), faviconSvg(), "utf8");
 fs.writeFileSync(path.join(outDir, "social-card.svg"), socialCardSvg(), "utf8");
-fs.copyFileSync(path.join(docsDir, "public", "pdtbar-hero.png"), path.join(outDir, "pdtbar-hero.png"));
+// pdtbar-hero.png is no longer shown on a page, but pages.yml still checks that it ships.
+for (const image of ["pdtbar-hero.png", menuCapture.file]) {
+  fs.copyFileSync(path.join(docsDir, "public", image), path.join(outDir, image));
+}
 fs.writeFileSync(path.join(outDir, ".nojekyll"), "", "utf8");
 fs.writeFileSync(path.join(outDir, "llms.txt"), llmsTxt(), "utf8");
 fs.writeFileSync(path.join(outDir, "llms-full.txt"), llmsFullTxt(), "utf8");
@@ -57,6 +68,10 @@ console.log(`built docs site: ${path.relative(root, outDir)}`);
 function readManifest() {
   const manifestPath = path.join(docsDir, "public-docs.json");
   return JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+}
+
+function readSiteAsset(name) {
+  return fs.readFileSync(path.join(scriptDir, "docs-site", name), "utf8").trim();
 }
 
 function assertSafeOutDir() {
@@ -86,6 +101,10 @@ function assertManifestPagesExist() {
   const missing = [...allowlist].filter((rel) => !pageMap.has(rel));
   if (missing.length) {
     throw new Error(`docs-site manifest references missing pages: ${missing.join(", ")}`);
+  }
+  const untranslated = pages.filter((page) => !strings[page.lang]);
+  if (untranslated.length) {
+    throw new Error(`docs-site pages use a language without template strings: ${untranslated.map((page) => page.rel).join(", ")}`);
   }
 }
 
@@ -334,31 +353,17 @@ function resolveHref(target, currentRel) {
 }
 
 function tocFromHtml(html) {
-  return [...html.matchAll(/<h([23]) id="([^"]+)">(?:<a[^>]+>[^<]+<\/a>)?([\s\S]*?)<\/h\1>/g)].map((match) => ({
-    level: Number(match[1]),
-    id: match[2],
-    title: stripTags(match[3]),
+  return [...html.matchAll(/<h2 id="([^"]+)">(?:<a[^>]+>[^<]+<\/a>)?([\s\S]*?)<\/h2>/g)].map((match) => ({
+    id: match[1],
+    title: stripTags(match[2]),
   }));
 }
 
-function layout({ page, html, toc, sectionName }) {
+function layout(page, html) {
+  const t = templateStrings[page.lang];
   const canonical = canonicalUrl(page);
   const alternate = alternatePage(page);
-  const isDutch = page.lang === "nl";
-  const lede = isDutch
-    ? "Wat er nu toe doet in je portefeuille, direct in de macOS-menubalk."
-    : "A quiet portfolio pulse in the macOS menu bar, read from PDT over a read-only connection.";
-  const searchLabel = isDutch ? "Zoek in de site" : "Search";
-  const searchPlaceholder = isDutch ? "Filter onderwerpen" : "Filter navigation";
-  const noResults = isDutch ? "Niets gevonden." : "No results.";
-  const langHref = hrefBetween(page, alternate);
-  const langLabel = isDutch ? "English" : "Nederlands";
-  const langAria = isDutch ? "View this page in English" : "Bekijk deze pagina in het Nederlands";
-  const installPage = installPageForLang(page.lang);
-  const installHref = hrefBetween(page, installPage);
-  const pulseAnchor = isDutch ? "wat-je-ziet" : "what-you-see";
-  const langHome = homePageForLang(page.lang);
-  const pulseHref = page.rel === langHome.rel ? `#${pulseAnchor}` : `${hrefBetween(page, langHome)}#${pulseAnchor}`;
+  const kind = page.rel === homePageForLang(page.lang).rel ? "home" : "doc";
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
@@ -372,13 +377,14 @@ function layout({ page, html, toc, sectionName }) {
   };
 
   return `<!doctype html>
-<html lang="${escapeAttr(page.lang)}" data-theme="light">
+<html lang="${escapeAttr(page.lang)}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(page.title)} - ${productTagline}</title>
   <meta name="description" content="${escapeAttr(page.description)}">
-  <meta name="theme-color" content="#f7f8f4">
+  <meta name="theme-color" content="#f5f1e8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0c1311" media="(prefers-color-scheme: dark)">
   <meta name="application-name" content="${productName}">
   <link rel="canonical" href="${canonical}">
   <link rel="alternate" hreflang="${escapeAttr(page.lang)}" href="${canonical}">
@@ -389,74 +395,145 @@ function layout({ page, html, toc, sectionName }) {
   <meta property="og:type" content="website">
   <meta property="og:url" content="${canonical}">
   <meta property="og:image" content="${siteBase}/social-card.svg">
-  <script>${preThemeScript()}</script>
-  <style>${css()}</style>
+  <script>${themePrepaintJs}</script>
+  <style>${siteCss}</style>
+  <noscript><style>.theme{display:none}</style></noscript>
   <script type="application/ld+json">${jsonForHtmlScript(jsonLd)}</script>
 </head>
 <body>
-  <button class="nav-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false"><span></span><span></span><span></span></button>
-  ${themeToggleHtml("theme-float")}
-  <div class="shell">
-    <aside class="sidebar">
-      <div class="sidebar-head">
-        <a class="brand" href="${homeHref(page)}">
-          <span class="mark">${brandMarkSvg()}</span>
-          <span><strong>PDTBar</strong><small>${productTagline}</small></span>
-        </a>
-        ${themeToggleHtml()}
-      </div>
-      <div class="lang-switch" aria-label="Language">
-        <a class="${isDutch ? "active" : ""}" href="${hrefBetween(page, homePageForLang("nl"))}">NL</a>
-        <a class="${isDutch ? "" : "active"}" href="${hrefBetween(page, homePageForLang("en"))}">EN</a>
-      </div>
-      <label class="search"><span>${searchLabel}</span><input id="doc-search" type="search" placeholder="${searchPlaceholder}" autocomplete="off"></label>
-      <nav aria-label="Documentation">
-        ${navHtml(page, sectionName)}
-      </nav>
-      <p class="no-results">${noResults}</p>
-    </aside>
-    <main>
-      <header class="home-hero">
-        <div>
-          <p class="eyebrow">${escapeHtml(sectionName)}</p>
-          <h1>PDTBar</h1>
-          <p class="lede">${lede}</p>
-          <div class="actions">
-            <a class="btn primary" href="${escapeAttr(installHref)}">${isDutch ? "Installeer PDTBar" : "Install PDTBar"}</a>
-            <a class="btn" href="${escapeAttr(pulseHref)}">${isDutch ? "Bekijk wat je ziet" : "View the pulse"}</a>
-            <a class="btn" href="${escapeAttr(langHref)}" aria-label="${langAria}">${langLabel}</a>
-            <a class="btn" href="${repoBase}">GitHub</a>
-          </div>
-        </div>
-        <div class="hero-art">${pulseArtSvg(assetHref(page, "pdtbar-hero.png"))}</div>
-        <div class="feature-row" aria-label="Product focus">
-          ${(isDutch ? ["Concentratie", "Inkomsten", "Grote bewegingen", "Recente data", "Geen bijzonderheden"] : ["Concentration", "Income events", "Big movers", "Prices", "All quiet"]).map((label) => `<a class="feature-pill" href="${escapeAttr(pulseHref)}">${label}</a>`).join("")}
-        </div>
-      </header>
-      <div class="doc-grid">
-        <article class="doc">${html}</article>
-        ${tocHtml(toc, isDutch)}
-      </div>
-    </main>
-  </div>
-  <script>${js()}</script>
+  <a class="skip" href="#main">${t.skipLink}</a>
+  ${headerHtml(page, t)}
+  <main id="main" class="wrap ${kind}">
+    ${mainHtmlByKind[kind](page, html, t)}
+  </main>
+  ${footerHtml(page, t)}
+  <script>${siteJs}</script>
 </body>
 </html>`;
 }
 
-function navHtml(currentPage, sectionName) {
-  return nav
-    .map((section) => `<section><h2>${escapeHtml(section.name)}</h2>${section.pages.filter((page) => page.lang === currentPage.lang).map((page) => {
-      const active = page.rel === currentPage.rel ? " active" : "";
-      return `<a class="nav-link${active}" href="${escapeAttr(hrefBetween(currentPage, page))}">${escapeHtml(page.title)}</a>`;
-    }).join("")}</section>`)
-    .join("");
+function headerHtml(page, t) {
+  const home = homePageForLang(page.lang);
+  return `<header class="wrap">
+    <div class="top">
+      <a class="brand" href="${escapeAttr(hrefBetween(page, home))}"${currentAttr(page, home)}>${brandMarkSvg()}${productName}</a>
+      <nav aria-label="${t.siteNav}">
+        ${pageLinksHtml(page)}
+        <a href="${repoBase}">GitHub</a>
+      </nav>
+      <div class="lang" role="group" aria-label="${t.languageSwitch}">${languageSwitchHtml(page)}</div>
+      ${themeToggleHtml(t.themeToggle)}
+    </div>
+  </header>`;
 }
 
-function tocHtml(toc, isDutch) {
+function footerHtml(page, t) {
+  const alternate = alternatePage(page);
+  return `<footer class="wrap">
+    <div class="foot">
+      <a class="brand" href="${escapeAttr(hrefBetween(page, homePageForLang(page.lang)))}">${brandMarkSvg()}${productName}</a>
+      <p>${t.footerLine}</p>
+      <nav aria-label="${t.footerNav}">
+        ${pageLinksHtml(page)}
+        <a href="${repoBase}">GitHub</a>
+        <a href="${escapeAttr(hrefBetween(page, alternate))}" lang="${alternate.lang}" hreflang="${alternate.lang}">${templateStrings[alternate.lang].languageName}</a>
+      </nav>
+    </div>
+  </footer>`;
+}
+
+function pageLinksHtml(currentPage) {
+  const home = homePageForLang(currentPage.lang);
+  return orderedPages
+    .filter((page) => page.lang === currentPage.lang && page.rel !== home.rel)
+    .map((page) => `<a href="${escapeAttr(hrefBetween(currentPage, page))}"${currentAttr(currentPage, page)}>${escapeHtml(page.title)}</a>`)
+    .join("\n        ");
+}
+
+function currentAttr(currentPage, page) {
+  return page.rel === currentPage.rel ? ' aria-current="page"' : "";
+}
+
+function languageSwitchHtml(page) {
+  const alternateHref = escapeAttr(hrefBetween(page, alternatePage(page)));
+  return Object.keys(templateStrings)
+    .map((lang) => {
+      const code = lang.toUpperCase();
+      if (lang === page.lang) return `<span lang="${lang}" aria-current="true">${code}</span>`;
+      return `<a href="${alternateHref}" lang="${lang}" hreflang="${lang}" aria-label="${templateStrings[lang].viewInLanguage}">${code}</a>`;
+    })
+    .join('<span aria-hidden="true">/</span>');
+}
+
+function homeMainHtml(page, html, t) {
+  const bodyWithoutTitle = html.replace(/^<h1[^>]*>[\s\S]*?<\/h1>\n?/, "");
+  return `${heroHtml(page, t)}
+    <article class="prose">
+${bodyWithoutTitle}
+    </article>`;
+}
+
+function docMainHtml(page, html, t) {
+  return `${tocHtml(page, tocFromHtml(html), t)}
+    <article class="prose">
+${html}
+    </article>`;
+}
+
+function heroHtml(page, t) {
+  const { file, width, height, displayWidth, callouts } = menuCapture;
+  const spec = [
+    [t.specAccess, t.specAccessValue],
+    [t.specRequires, t.specRequiresValue],
+    [t.specStatus, t.specStatusValue],
+    [t.specSource, `<a href="${repoBase}">GitHub</a>`],
+  ];
+  return `<section class="hero" aria-labelledby="product">
+      <div class="hero-copy">
+        <p class="eyebrow mono">${t.eyebrowFor} <b>${pdtName}</b></p>
+        <div class="title">
+          <h1 id="product">${productName}</h1>
+          <p class="lede">${t.lede}</p>
+          <div class="cta">
+            <a class="btn" href="${escapeAttr(hrefBetween(page, installPageForLang(page.lang)))}">${t.install}</a>
+            <a class="more" href="#${t.pulseAnchor}">${t.viewPulse}<span aria-hidden="true">&darr;</span></a>
+          </div>
+        </div>
+        <dl class="spec">
+          ${spec.map(([term, value]) => `<div><dt class="mono">${term}</dt><dd>${value}</dd></div>`).join("\n          ")}
+        </dl>
+      </div>
+      <figure class="stage" style="--capture-w:${width};--capture-h:${height};--capture-max:${displayWidth}px">
+        ${menuBarStripHtml()}
+        <div class="hang">
+          <span class="bar-item" aria-hidden="true">${statusIconSvg()}</span>
+          <div class="menu"><img src="${escapeAttr(assetHref(page, file))}" width="${width}" height="${height}" alt="${t.captureAlt}" fetchpriority="high"></div>
+        </div>
+        <ul class="callouts mono">
+          ${callouts.map((callout) => `<li class="${callout.tone}" style="--y:${callout.y}"><span>${t[callout.label]}</span></li>`).join("\n          ")}
+        </ul>
+        <figcaption class="fig"><b class="mono">${t.figureLabel}</b>${t.figureCaption}</figcaption>
+      </figure>
+    </section>`;
+}
+
+function tocHtml(page, toc, t) {
   if (!toc.length) return "";
-  const heading = isDutch ? "Op deze pagina" : "On this page";
-  return `<aside class="toc"><h2>${heading}</h2>${toc.map((item) => `<a class="toc-l${item.level}" href="#${item.id}">${escapeHtml(item.title)}</a>`).join("")}</aside>`;
+  const list = `<ol>${toc.map((item) => `<li><a href="#${item.id}">${escapeHtml(item.title)}</a></li>`).join("")}</ol>`;
+  const installPage = installPageForLang(page.lang);
+  const installLink =
+    installPage.rel === page.rel ? "" : `<a class="next" href="${escapeAttr(hrefBetween(page, installPage))}">${t.install}<span aria-hidden="true">&rarr;</span></a>`;
+  return `<nav class="toc" aria-label="${t.onThisPage}">
+      <div class="rail">
+        <p class="rail-title mono">${t.onThisPage}</p>
+        ${list}
+        ${installLink}
+      </div>
+      <details class="contents">
+        <summary class="mono">${t.onThisPage}</summary>
+        ${list}
+      </details>
+    </nav>`;
 }
 
 function homePageForLang(lang) {
@@ -473,10 +550,6 @@ function alternatePage(page) {
   const nextLang = page.lang === "nl" ? "en" : "nl";
   const alternateRel = page.rel.replace(new RegExp(`\\.${page.lang}\\.md$`), `.${nextLang}.md`);
   return pageMap.get(alternateRel) || pages.find((candidate) => candidate.lang === nextLang && candidate.title === page.title) || homePageForLang(nextLang);
-}
-
-function homeHref(page) {
-  return hrefBetween(page, homePageForLang("nl"));
 }
 
 function assetHref(page, rel) {
