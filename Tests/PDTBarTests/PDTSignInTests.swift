@@ -43,15 +43,26 @@ struct PDTBrowserSignInTests {
         #expect(FakeBrowser.get(try #require(URL(string: query["redirect_uri"]! + "?code=again"))) == nil)
     }
 
-    @Test("A callback with another state is refused before any code exchange")
-    func stateMismatch() throws {
-        let transport = ScriptedPDTHTTPTransport([tokenReply(access: "a", refresh: "r")])
-        let browser = FakeBrowser { _ in ["code": "c", "state": "forged-state"] }
+    @Test("Requests with a wrong, missing, or repeated state get an error page and the listener keeps waiting for the real callback")
+    func strayCallbacksDoNotEndSignIn() throws {
+        let transport = ScriptedPDTHTTPTransport([tokenReply(access: "access-1", refresh: "refresh-1")])
+        let browser = FakeBrowser(callbacks: { state in
+            [
+                "code=forged&state=forged-state",
+                "code=forged",
+                "error=access_denied&state=forged-state",
+                "code=forged&state=\(state)&state=forged-state",
+                "code=forged&code=other&state=\(state)",
+                "state=\(state)",
+                "code=auth-code-1&state=\(state)",
+            ]
+        })
 
-        #expect(throws: PDTSignInError.stateMismatch) {
-            try signIn(transport: transport, browser: browser).run()
-        }
-        #expect(transport.requests.isEmpty)
+        let session = try signIn(transport: transport, browser: browser).run()
+
+        #expect(session.accessToken == PDTAPIToken("access-1"))
+        #expect(browser.waitForCallbackStatuses(count: 7) == [400, 400, 400, 400, 400, 400, 200])
+        #expect(formItems(try #require(transport.requests.only))["code"] == "auth-code-1")
     }
 
     @Test("Deny on the consent screen is access denied; other redirect errors keep their code")
@@ -178,17 +189,127 @@ struct PDTConnectionTests {
         #expect(api.requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer access-2" })
     }
 
-    @Test("A rotated pair that cannot be persisted is never used")
+    @Test("Two connections over one store share one refresh even when the winner's save lands after the loser would have re-read", arguments: [false, true])
+    func concurrentConnectionsOverOneStore(onDisk: Bool) throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "pdtbar-credential-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let initial = PDTConnectionState.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1)))
+        let store: any PDTCredentialStore
+        if onDisk {
+            let file = FilePDTCredentialStore(url: directory.appending(path: "pdt.json"))
+            try file.save(initial)
+            store = file
+        } else {
+            store = InMemoryPDTCredentialStore(initial)
+        }
+        let tokens = ArrivalOrderTransport([(0.3, tokenReply(access: "access-2", refresh: "refresh-2")), (0, oauthError(400, "invalid_grant"))])
+        let connections = [connection(store, tokens), connection(store, tokens)]
+        let results = Results()
+
+        DispatchQueue.concurrentPerform(iterations: 2) { index in
+            results.record(Result { try connections[index].currentToken() })
+        }
+
+        #expect(results.values.map { try? $0.get() } == [PDTAPIToken("access-2"), PDTAPIToken("access-2")])
+        #expect(tokens.requests.count == 1)
+        #expect(try store.load() == .connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600))))
+    }
+
+    @Test("A refresh PDT accepted wins over a concurrent rejection of the pair it rotated, and a stale refresh never regresses the store")
+    func acceptedRefreshWinsOverRejection() throws {
+        let first = session("access-1", "refresh-1", expiresAt: testNow)
+        let second = session("access-2", "refresh-2", expiresAt: testNow + 3600)
+        let third = session("access-3", "refresh-3", expiresAt: testNow + 7200)
+        let refreshedSecond = PDTConnectionEvent.refreshed(second, from: first.refreshToken)
+
+        #expect(PDTConnectionState.connected(.browserSession(first)).applying(refreshedSecond) == .connected(.browserSession(second)))
+        #expect(PDTConnectionState.needsReconnect(.browserSession, .refreshRejected).applying(refreshedSecond) == .connected(.browserSession(second)))
+        #expect(PDTConnectionState.connected(.browserSession(third)).applying(refreshedSecond) == .connected(.browserSession(third)))
+        #expect(PDTConnectionState.connected(.personalToken(PDTAPIToken("p"))).applying(refreshedSecond) == .connected(.personalToken(PDTAPIToken("p"))))
+        #expect(PDTConnectionState.disconnected.applying(refreshedSecond) == .disconnected)
+
+        let store = UnlockedStore(.connected(.browserSession(first)))
+        let tokens = ArrivalOrderTransport([(0.3, tokenReply(access: "access-2", refresh: "refresh-2")), (0, oauthError(400, "invalid_grant"))])
+        let connections = [connection(store, tokens), connection(store, tokens)]
+        let results = Results()
+        DispatchQueue.concurrentPerform(iterations: 2) { index in
+            results.record(Result { try connections[index].currentToken() })
+        }
+
+        #expect(results.values.compactMap { try? $0.get() } == [PDTAPIToken("access-2")])
+        #expect(try store.load() == .connected(.browserSession(second)))
+        #expect(try connections[1].currentToken() == PDTAPIToken("access-2"))
+    }
+
+    @Test("A burst of callers during a failing refresh sends one token request and shares the failure until the backoff ends")
+    func failedRefreshIsNotRetriedPerCaller() throws {
+        let clock = TestClock()
+        let store = InMemoryPDTCredentialStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow + 20))))
+        let tokens = ScriptedPDTHTTPTransport(Array(repeating: .failure(.timedOut), count: 3) + [tokenReply(access: "access-2", refresh: "refresh-2")])
+        let connection = connection(store, tokens, clock: clock)
+        let results = Results()
+
+        DispatchQueue.concurrentPerform(iterations: 8) { _ in
+            results.record(Result { try connection.currentToken() })
+        }
+
+        #expect(results.values.allSatisfy { (try? $0.get()) == PDTAPIToken("access-1") })
+        #expect(tokens.requests.count == 1)
+
+        clock.advance(by: 5)
+        #expect(try connection.currentToken() == PDTAPIToken("access-1"))
+        #expect(tokens.requests.count == 2)
+        #expect(try connection.currentToken() == PDTAPIToken("access-1"))
+        #expect(tokens.requests.count == 2)
+
+        clock.advance(by: 10)
+        #expect(try connection.currentToken() == PDTAPIToken("access-1"))
+        #expect(tokens.requests.count == 3)
+
+        clock.advance(by: 5)
+        #expect(throws: PDTAPIError.transport(code: URLError.timedOut.rawValue)) { try connection.currentToken() }
+        #expect(tokens.requests.count == 3)
+
+        clock.advance(by: 15)
+        #expect(try connection.currentToken() == PDTAPIToken("access-2"))
+        #expect(tokens.requests.count == 4)
+    }
+
+    @Test("A rate-limited refresh waits out Retry-After before the next token request")
+    func rateLimitedRefreshHonorsRetryAfter() throws {
+        let clock = TestClock()
+        let store = InMemoryPDTCredentialStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow + 60))))
+        let tokens = ScriptedPDTHTTPTransport([
+            .response(status: 429, body: Data(), headers: ["Retry-After": "20"]),
+            tokenReply(access: "access-2", refresh: "refresh-2"),
+        ])
+        let connection = connection(store, tokens, clock: clock)
+
+        #expect(try connection.currentToken() == PDTAPIToken("access-1"))
+        clock.advance(by: 19)
+        #expect(try connection.currentToken() == PDTAPIToken("access-1"))
+        #expect(tokens.requests.count == 1)
+        clock.advance(by: 1)
+        #expect(try connection.currentToken() == PDTAPIToken("access-2"))
+        #expect(tokens.requests.count == 2)
+    }
+
+    @Test("A rotated pair that cannot be persisted is never used, and the next call persists it without another refresh")
     func rotatedPairPersistedBeforeUse() throws {
-        let store = FailingSaveStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1))))
+        let store = FailingSaveStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1))), failures: 1)
         let tokens = ScriptedPDTHTTPTransport([tokenReply(access: "access-2", refresh: "refresh-2")])
         let api = ScriptedPDTHTTPTransport([ok])
+        let client = PDTAPIClient(transport: api, tokenProvider: connection(store, tokens))
 
-        #expect(throws: PDTCredentialStoreError.writeFailed(code: EIO)) {
-            try PDTAPIClient(transport: api, tokenProvider: connection(store, tokens)).get(.me)
-        }
+        #expect(throws: PDTCredentialStoreError.writeFailed(code: EIO)) { try client.get(.me) }
         #expect(tokens.requests.count == 1)
         #expect(api.requests.isEmpty)
+
+        _ = try client.get(.me)
+
+        #expect(tokens.requests.count == 1)
+        #expect(api.requests.only?.value(forHTTPHeaderField: "Authorization") == "Bearer access-2")
+        #expect(try store.load() == .connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600))))
     }
 
     @Test("invalid_grant moves the connection to needs-reconnect and stops further refreshes")
@@ -312,11 +433,11 @@ struct PDTConnectionTests {
         #expect(try connection.currentToken() == PDTAPIToken("access-9"))
     }
 
-    private func connection(_ store: any PDTCredentialStore, _ tokens: any PDTHTTPTransport) -> PDTConnection {
+    private func connection(_ store: any PDTCredentialStore, _ tokens: any PDTHTTPTransport, clock: TestClock = TestClock()) -> PDTConnection {
         PDTConnection(
             store: store,
-            tokenEndpoint: PDTTokenEndpoint(client: PDTOAuthClient(id: "test-client", redirectPort: 0), transport: tokens, now: { testNow }),
-            now: { testNow }
+            tokenEndpoint: PDTTokenEndpoint(client: PDTOAuthClient(id: "test-client", redirectPort: 0), transport: tokens, now: { clock.now }),
+            now: { clock.now }
         )
     }
 }
@@ -417,12 +538,25 @@ private extension Array {
 
 private final class FakeBrowser: @unchecked Sendable {
     private let lock = NSLock()
-    private let respond: (@Sendable ([String: String]) -> [String: String])?
+    private let callbacks: (@Sendable (_ state: String) -> [String])?
     private var opened: URL?
-    private var status: Int?
+    private var statuses: [Int?] = []
 
-    init(respond: (@Sendable ([String: String]) -> [String: String])?) {
-        self.respond = respond
+    init(callbacks: (@Sendable (_ state: String) -> [String])?) {
+        self.callbacks = callbacks
+    }
+
+    convenience init(respond: (@Sendable ([String: String]) -> [String: String])?) {
+        guard let respond else {
+            self.init(callbacks: nil)
+            return
+        }
+        self.init(callbacks: { state in
+            let parameters = ["state": state].merging(respond([:])) { _, override in override }
+            var query = URLComponents()
+            query.queryItems = parameters.map { URLQueryItem(name: $0, value: $1) }
+            return [query.percentEncodedQuery ?? ""]
+        })
     }
 
     var authorizeURL: URL? {
@@ -432,36 +566,39 @@ private final class FakeBrowser: @unchecked Sendable {
     }
 
     func waitForCallbackStatus() -> Int? {
+        waitForCallbackStatuses(count: 1).first ?? nil
+    }
+
+    func waitForCallbackStatuses(count: Int) -> [Int?] {
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline {
             lock.lock()
-            let current = status
+            let current = statuses
             lock.unlock()
-            if let current {
+            if current.count >= count {
                 return current
             }
             Thread.sleep(forTimeInterval: 0.02)
         }
-        return nil
+        return []
     }
 
     func open(_ url: URL) throws {
         lock.lock()
         opened = url
         lock.unlock()
-        guard let respond else {
+        guard let callbacks else {
             return
         }
         let query = queryItems(url)
-        var callback = URLComponents(string: query["redirect_uri"]!)!
-        let parameters = ["state": query["state"]!].merging(respond(query)) { _, override in override }
-        callback.queryItems = parameters.map { URLQueryItem(name: $0, value: $1) }
-        let callbackURL = callback.url!
+        let urls = callbacks(query["state"]!).map { URL(string: query["redirect_uri"]! + "?" + $0)! }
         DispatchQueue.global().async {
-            let result = Self.get(callbackURL)
-            self.lock.lock()
-            self.status = result
-            self.lock.unlock()
+            for callbackURL in urls {
+                let result = Self.get(callbackURL)
+                self.lock.lock()
+                self.statuses.append(result)
+                self.lock.unlock()
+            }
         }
     }
 
@@ -517,6 +654,40 @@ private struct PortHolder {
 
 private let testNow = Date(timeIntervalSince1970: 1_800_000_000)
 
+private final class TestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current = testNow
+
+    var now: Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return current
+    }
+
+    func advance(by seconds: TimeInterval) {
+        lock.lock()
+        current += seconds
+        lock.unlock()
+    }
+}
+
+private final class Results: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [Result<PDTAPIToken, Error>] = []
+
+    func record(_ result: Result<PDTAPIToken, Error>) {
+        lock.lock()
+        recorded.append(result)
+        lock.unlock()
+    }
+
+    var values: [Result<PDTAPIToken, Error>] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
+}
+
 private final class Counter: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
@@ -535,18 +706,83 @@ private final class Counter: @unchecked Sendable {
 }
 
 private final class FailingSaveStore: PDTCredentialStore, @unchecked Sendable {
-    private let state: PDTConnectionState
+    private let lock = NSLock()
+    private let backing: InMemoryPDTCredentialStore
+    private var failures: Int
 
-    init(_ state: PDTConnectionState) {
-        self.state = state
+    init(_ state: PDTConnectionState, failures: Int) {
+        backing = InMemoryPDTCredentialStore(state)
+        self.failures = failures
     }
 
     func load() throws -> PDTConnectionState {
-        state
+        try backing.load()
     }
 
-    func save(_: PDTConnectionState) throws {
-        throw PDTCredentialStoreError.writeFailed(code: EIO)
+    func save(_ state: PDTConnectionState) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard failures == 0 else {
+            failures -= 1
+            throw PDTCredentialStoreError.writeFailed(code: EIO)
+        }
+        try backing.save(state)
+    }
+
+    func withExclusiveAccess<Value>(_ body: () throws -> Value) throws -> Value {
+        try backing.withExclusiveAccess(body)
+    }
+}
+
+/// A store whose exclusive access excludes nothing, like two processes whose
+/// lock files do not meet. Only the transition rules protect the pair.
+private final class UnlockedStore: PDTCredentialStore, @unchecked Sendable {
+    private let backing: InMemoryPDTCredentialStore
+
+    init(_ state: PDTConnectionState) {
+        backing = InMemoryPDTCredentialStore(state)
+    }
+
+    func load() throws -> PDTConnectionState {
+        try backing.load()
+    }
+
+    func save(_ state: PDTConnectionState) throws {
+        try backing.save(state)
+    }
+
+    func withExclusiveAccess<Value>(_ body: () throws -> Value) throws -> Value {
+        try body()
+    }
+}
+
+/// The first caller gets the first reply after its delay, even when a later
+/// caller is answered first.
+private final class ArrivalOrderTransport: PDTHTTPTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private let replies: [(delay: TimeInterval, reply: ScriptedPDTHTTPTransport.Reply)]
+    private var recorded: [URLRequest] = []
+
+    init(_ replies: [(TimeInterval, ScriptedPDTHTTPTransport.Reply)]) {
+        self.replies = replies.map { (delay: $0.0, reply: $0.1) }
+    }
+
+    var requests: [URLRequest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
+
+    func send(_ request: URLRequest, cancellation: PDTCancellation?) throws -> (Data, HTTPURLResponse) {
+        lock.lock()
+        let arrival = recorded.count
+        recorded.append(request)
+        lock.unlock()
+        guard arrival < replies.count else {
+            throw URLError(.resourceUnavailable)
+        }
+        Thread.sleep(forTimeInterval: replies[arrival].delay)
+        return try ScriptedPDTHTTPTransport([replies[arrival].reply]).send(request, cancellation: cancellation)
     }
 }
 

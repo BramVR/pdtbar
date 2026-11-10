@@ -4,12 +4,21 @@ import Security
 
 /// The production PDT credential store (ADR-0002): one generic-password item
 /// scoped to PDTBar, readable after first unlock, never synced or migrated to
-/// another Mac. Tests and smokes never construct it.
+/// another Mac. The Keychain has no cross-process mutex, so the store-wide
+/// lock is `pdt-connection.lock` in the given PDTBar-owned directory. Tests
+/// and smokes never construct it.
 public struct KeychainPDTCredentialStore: PDTCredentialStore {
     public static let service = "com.bramvr.pdtbar.pdt-connection"
     private static let account = "pdt"
+    private let lock: PDTCredentialFileLock
 
-    public init() {}
+    public init(lockDirectory: URL) {
+        lock = PDTCredentialFileLock(url: lockDirectory.appending(path: "pdt-connection.lock"))
+    }
+
+    public func withExclusiveAccess<Value>(_ body: () throws -> Value) throws -> Value {
+        try lock.hold(body)
+    }
 
     public func load() throws -> PDTConnectionState {
         var query = Self.itemQuery

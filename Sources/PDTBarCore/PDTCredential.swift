@@ -97,7 +97,8 @@ public enum PDTConnectionState: Sendable, Equatable, Codable {
 public enum PDTConnectionEvent: Sendable {
     case signedIn(PDTBrowserSession)
     case personalTokenEntered(PDTAPIToken)
-    case refreshed(PDTBrowserSession)
+    /// `from` is the refresh token PDT rotated to produce the session.
+    case refreshed(PDTBrowserSession, from: PDTRefreshToken)
     case refreshRejected
     case tokenRejected(PDTAPIToken, reason: String?)
     case disconnected
@@ -106,7 +107,9 @@ public enum PDTConnectionEvent: Sendable {
 public extension PDTConnectionState {
     /// Every connection transition. Events about a credential that is no
     /// longer current (a refresh after a disconnect, a rejection of a token
-    /// that was already rotated) leave the state alone.
+    /// that was already rotated, a refresh of a pair the store has moved past)
+    /// leave the state alone. A refresh PDT accepted proves the chain is live,
+    /// so it wins over a concurrent `refreshRejected` of the same pair.
     func applying(_ event: PDTConnectionEvent) -> PDTConnectionState {
         switch (self, event) {
         case let (_, .signedIn(session)):
@@ -115,7 +118,9 @@ public extension PDTConnectionState {
             return .connected(.personalToken(token))
         case (_, .disconnected):
             return .disconnected
-        case let (.connected(.browserSession), .refreshed(session)):
+        case let (.connected(.browserSession(current)), .refreshed(session, from)) where current.refreshToken == from:
+            return .connected(.browserSession(session))
+        case let (.needsReconnect(.browserSession, .refreshRejected), .refreshed(session, _)):
             return .connected(.browserSession(session))
         case (.connected(.browserSession), .refreshRejected):
             return .needsReconnect(.browserSession, .refreshRejected)

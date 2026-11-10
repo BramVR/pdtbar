@@ -1,17 +1,30 @@
 import Foundation
 
 /// The PDT connection over one credential store, and the token provider the
-/// API client reads. Every state change goes through
-/// `PDTConnectionState.applying` under one lock, so a refresh is single-flight:
-/// callers that arrive while it runs wait, then read the rotated token. The
-/// store is re-read on every call and written before a new token is returned.
+/// API client reads. Every operation holds the store's exclusive access from
+/// load through the token endpoint to save, so a refresh is single-flight
+/// across connections and processes: callers that arrive while it runs wait,
+/// then read the rotated pair from the store. A rotated pair the store
+/// refused stays in `unpersisted` until it is stored, because PDT has already
+/// killed the old one. A refresh that got no answer sets `hold`, and callers
+/// inside it share that failure instead of each sending a refresh.
 public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
     public static let refreshLeeway: TimeInterval = 300
+    private static let refreshRetryBase: TimeInterval = 5
+    private static let refreshRetryCap: TimeInterval = 60
 
     private let store: any PDTCredentialStore
     private let tokenEndpoint: PDTTokenEndpoint
     private let now: @Sendable () -> Date
     private let lock = NSLock()
+    private var unpersisted: (session: PDTBrowserSession, from: PDTRefreshToken)?
+    private var hold: RefreshHold?
+
+    private struct RefreshHold {
+        var until: Date
+        var failure: PDTAPIError
+        var failures: Int
+    }
 
     public init(store: any PDTCredentialStore, tokenEndpoint: PDTTokenEndpoint, now: @escaping @Sendable () -> Date = Date.init) {
         self.store = store
@@ -24,24 +37,25 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
     }
 
     public func signedIn(_ session: PDTBrowserSession) throws {
-        try locked { _ = try transition(.signedIn(session)) }
+        try locked { try replace(with: .signedIn(session)) }
     }
 
     public func connect(personalToken: PDTAPIToken) throws {
-        try locked { _ = try transition(.personalTokenEntered(personalToken)) }
+        try locked { try replace(with: .personalTokenEntered(personalToken)) }
     }
 
     /// Deletes the stored credential. PDT has no API revoke for app tokens,
     /// so this returns the page where the user revokes PDTBar's access.
     @discardableResult
     public func disconnect() throws -> URL {
-        try locked { _ = try transition(.disconnected) }
+        try locked { try replace(with: .disconnected) }
         return PDTOAuthEndpoints.connectedApps
     }
 
     /// Refreshes the browser session now, whatever its expiry.
     public func refresh() throws -> PDTBrowserSession {
         try locked {
+            try persistUnpersisted()
             guard case let .browserSession(session) = try connectedCredential() else {
                 throw PDTAPIError.invalidRequest
             }
@@ -51,6 +65,7 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
 
     public func currentToken() throws -> PDTAPIToken {
         try locked {
+            try persistUnpersisted()
             let credential = try connectedCredential()
             guard case let .browserSession(session) = credential,
                   now() >= session.accessExpiresAt.addingTimeInterval(-Self.refreshLeeway)
@@ -67,6 +82,7 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
 
     public func shouldRetry(afterRejecting token: PDTAPIToken, reason: String?) throws -> Bool {
         try locked {
+            try persistUnpersisted()
             let credential = try connectedCredential()
             if credential.accessToken != token {
                 return true
@@ -82,25 +98,51 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
     }
 
     private func refreshLocked(_ session: PDTBrowserSession) throws -> PDTBrowserSession {
-        let event: PDTConnectionEvent
+        if let hold, now() < hold.until {
+            throw hold.failure
+        }
+        let rotated: PDTBrowserSession
         do {
-            event = try .refreshed(tokenEndpoint.refresh(session.refreshToken))
+            rotated = try tokenEndpoint.refresh(session.refreshToken)
         } catch PDTTokenEndpointError.invalidGrant {
             if let rotated = try sessionRotatedByAnotherProcess(since: session) {
                 return rotated
             }
-            event = .refreshRejected
-        } catch let PDTTokenEndpointError.unavailable(error) {
-            throw error
+            throw try connectionError(transition(.refreshRejected))
+        } catch let PDTTokenEndpointError.unavailable(failure) {
+            let failures = (hold?.failures ?? 0) + 1
+            let delay = failure.retryAfter ?? min(Self.refreshRetryBase * pow(2, Double(failures - 1)), Self.refreshRetryCap)
+            hold = RefreshHold(until: now().addingTimeInterval(delay), failure: failure, failures: failures)
+            throw failure
         } catch let PDTTokenEndpointError.rejected(status, _) {
             throw PDTAPIError.unexpectedStatus(status)
         } catch {
             throw PDTAPIError.invalidResponse
         }
-        guard case let .connected(.browserSession(fresh)) = try transition(event) else {
-            throw try connectionError(store.load())
+        hold = nil
+        unpersisted = (rotated, session.refreshToken)
+        return try persist(rotated, from: session.refreshToken)
+    }
+
+    private func persistUnpersisted() throws {
+        if let unpersisted {
+            _ = try persist(unpersisted.session, from: unpersisted.from)
+        }
+    }
+
+    private func persist(_ rotated: PDTBrowserSession, from: PDTRefreshToken) throws -> PDTBrowserSession {
+        let state = try transition(.refreshed(rotated, from: from))
+        unpersisted = nil
+        guard case let .connected(.browserSession(fresh)) = state else {
+            throw connectionError(state)
         }
         return fresh
+    }
+
+    private func replace(with event: PDTConnectionEvent) throws {
+        unpersisted = nil
+        hold = nil
+        _ = try transition(event)
     }
 
     private func sessionRotatedByAnotherProcess(since session: PDTBrowserSession) throws -> PDTBrowserSession? {
@@ -135,9 +177,9 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
         return next
     }
 
-    private func locked<Value>(_ body: () throws -> Value) rethrows -> Value {
+    private func locked<Value>(_ body: () throws -> Value) throws -> Value {
         lock.lock()
         defer { lock.unlock() }
-        return try body()
+        return try store.withExclusiveAccess(body)
     }
 }

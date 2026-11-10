@@ -10,15 +10,15 @@ public enum PDTSignInError: Error, Equatable, Sendable {
     case accessDenied
     /// PDT redirected back with another OAuth error code, such as `invalid_scope`.
     case authorizationFailed(error: String)
-    case stateMismatch
-    case missingCode
     case timedOut
     case cancelled
     case tokenExchange(PDTTokenEndpointError)
 }
 
 /// Browser sign-in: S256 PKCE, a random `state`, one callback on a loopback
-/// listener, then the code exchange. Opening the browser is injected.
+/// listener, then the code exchange. Opening the browser is injected. The
+/// listener answers requests that do not carry this sign-in's `state` with an
+/// error page and keeps waiting, so a stray or forged request cannot end it.
 public struct PDTBrowserSignIn {
     private let tokenEndpoint: PDTTokenEndpoint
     private let openBrowser: (URL) throws -> Void
@@ -34,7 +34,7 @@ public struct PDTBrowserSignIn {
         let client = tokenEndpoint.client
         let pkce = PDTPKCE.generate()
         let state = PDTOAuthState.generate()
-        let listener = try PDTLoopbackCallbackListener(port: client.redirectPort)
+        let listener = try PDTLoopbackCallbackListener(port: client.redirectPort, state: state)
         defer { listener.close() }
         let redirectURI = PDTOAuthClient.redirectURI(port: listener.port)
 
@@ -54,15 +54,14 @@ public struct PDTBrowserSignIn {
             throw PDTSignInError.browserUnavailable
         }
 
-        let callback = try listener.waitForCallback(timeout: timeout, cancellation: cancellation)
-        guard state.matches(callback["state"]) else {
-            throw PDTSignInError.stateMismatch
-        }
-        if let error = callback["error"] {
-            throw error == "access_denied" ? PDTSignInError.accessDenied : PDTSignInError.authorizationFailed(error: error)
-        }
-        guard let code = callback["code"], !code.isEmpty else {
-            throw PDTSignInError.missingCode
+        let code: String
+        switch try listener.waitForCallback(timeout: timeout, cancellation: cancellation) {
+        case .denied:
+            throw PDTSignInError.accessDenied
+        case let .failed(error):
+            throw PDTSignInError.authorizationFailed(error: error)
+        case let .authorized(authorized):
+            code = authorized
         }
         do {
             return try tokenEndpoint.exchange(code: code, verifier: pkce, redirectURI: redirectURI, cancellation: cancellation)
@@ -73,15 +72,23 @@ public struct PDTBrowserSignIn {
 }
 
 final class PDTLoopbackCallbackListener: @unchecked Sendable {
+    enum Callback: Equatable {
+        case authorized(code: String)
+        case denied
+        case failed(error: String)
+    }
+
     private(set) var port: UInt16 = 0
 
     private let listener: NWListener
+    private let state: PDTOAuthState
     private let queue = DispatchQueue(label: "pdtbar.pdt-sign-in.callback")
     private let lock = NSLock()
-    private var callback: [String: String]?
+    private var callback: Callback?
     private let arrived = DispatchSemaphore(value: 0)
 
-    init(port requestedPort: UInt16) throws {
+    init(port requestedPort: UInt16, state: PDTOAuthState) throws {
+        self.state = state
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(
             host: .ipv4(.loopback),
@@ -123,7 +130,7 @@ final class PDTLoopbackCallbackListener: @unchecked Sendable {
         port = bound
     }
 
-    func waitForCallback(timeout: TimeInterval, cancellation: PDTCancellation?) throws -> [String: String] {
+    func waitForCallback(timeout: TimeInterval, cancellation: PDTCancellation?) throws -> Callback {
         let deadline = Date().addingTimeInterval(timeout)
         while arrived.wait(timeout: .now() + 0.1) == .timedOut {
             if cancellation?.isCancelled == true {
@@ -135,7 +142,10 @@ final class PDTLoopbackCallbackListener: @unchecked Sendable {
         }
         lock.lock()
         defer { lock.unlock() }
-        return callback ?? [:]
+        guard let callback else {
+            throw PDTSignInError.listenerFailed
+        }
+        return callback
     }
 
     func close() {
@@ -165,28 +175,59 @@ final class PDTLoopbackCallbackListener: @unchecked Sendable {
     }
 
     private func respond(on connection: NWConnection, to target: URLComponents) {
-        let isCallback = target.path == "/callback" && deliver(target.queryItems ?? [])
-        let status = isCallback ? "200 OK" : "404 Not Found"
-        let body = isCallback
-            ? "<!doctype html><meta charset=utf-8><title>PDTBar</title><p>Return to PDTBar to finish signing in. You can close this tab.</p>"
-            : "<!doctype html><meta charset=utf-8><title>PDTBar</title><p>Not found.</p>"
+        let status: String
+        let message: String
+        var finished = false
+        if target.path != "/callback" {
+            status = "404 Not Found"
+            message = "Not found."
+        } else if deliver(Self.callback(target.queryItems ?? [], state: state)) {
+            status = "200 OK"
+            message = "Return to PDTBar to finish signing in. You can close this tab."
+            finished = true
+        } else {
+            status = "400 Bad Request"
+            message = "PDTBar did not start this sign-in. Return to PDTBar and start again."
+        }
+        let body = "<!doctype html><meta charset=utf-8><title>PDTBar</title><p>\(message)</p>"
         let response = "HTTP/1.1 \(status)\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\n"
             + "Cache-Control: no-store\r\nConnection: close\r\n\r\n\(body)"
         connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
-        if isCallback {
+        if finished {
             listener.cancel()
         }
     }
 
-    private func deliver(_ items: [URLQueryItem]) -> Bool {
+    private func deliver(_ accepted: Callback?) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard callback == nil else {
+        guard let accepted, callback == nil else {
             return false
         }
-        callback = Dictionary(items.map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { first, _ in first })
+        callback = accepted
         arrived.signal()
         return true
+    }
+
+    /// OAuth forbids repeated parameters, so a repeated name refuses the
+    /// request before `state` is compared.
+    static func callback(_ items: [URLQueryItem], state: PDTOAuthState) -> Callback? {
+        var values: [String: String] = [:]
+        for item in items {
+            guard values.updateValue(item.value ?? "", forKey: item.name) == nil else {
+                return nil
+            }
+        }
+        guard state.matches(values["state"]) else {
+            return nil
+        }
+        if let error = values["error"], !error.isEmpty {
+            return error == "access_denied" ? .denied : .failed(error: error)
+        }
+        if let code = values["code"], !code.isEmpty {
+            return .authorized(code: code)
+        }
+        return nil
     }
 
     private static func requestTarget(_ buffer: Data) -> URLComponents? {

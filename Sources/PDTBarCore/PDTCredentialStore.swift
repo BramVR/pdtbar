@@ -3,23 +3,38 @@ import Foundation
 /// Holds the one PDT connection. Saving `.disconnected` deletes the item.
 /// Production uses the Keychain store in PDTBarAppSupport; tests and smokes
 /// use `InMemoryPDTCredentialStore`, and dev proof uses `FilePDTCredentialStore`.
+///
+/// `withExclusiveAccess` is the store-wide mutex every `PDTConnection` holds
+/// from load through the token endpoint to save, across processes where the
+/// store is shared. PDT rotates the refresh token on every refresh, so two
+/// refreshes of one stored pair leave the loser with a dead token. The lock
+/// is not reentrant.
 public protocol PDTCredentialStore: Sendable {
     func load() throws -> PDTConnectionState
     func save(_ state: PDTConnectionState) throws
+    func withExclusiveAccess<Value>(_ body: () throws -> Value) throws -> Value
 }
 
 public enum PDTCredentialStoreError: Error, Equatable, Sendable {
     case unreadable
     case writeFailed(code: Int32)
+    case lockFailed(code: Int32)
     case keychain(status: Int32)
 }
 
 public final class InMemoryPDTCredentialStore: PDTCredentialStore, @unchecked Sendable {
     private let lock = NSLock()
+    private let exclusive = NSLock()
     private var state: PDTConnectionState
 
     public init(_ state: PDTConnectionState = .disconnected) {
         self.state = state
+    }
+
+    public func withExclusiveAccess<Value>(_ body: () throws -> Value) throws -> Value {
+        exclusive.lock()
+        defer { exclusive.unlock() }
+        return try body()
     }
 
     public func load() throws -> PDTConnectionState {
@@ -36,12 +51,17 @@ public final class InMemoryPDTCredentialStore: PDTCredentialStore, @unchecked Se
 }
 
 /// Dev-only store at an explicit path, written with mode 0600 so live proof
-/// never touches the Keychain (a re-signed dev build would prompt).
+/// never touches the Keychain (a re-signed dev build would prompt). The
+/// sibling `<name>.lock` file carries the `flock`.
 public struct FilePDTCredentialStore: PDTCredentialStore {
     public let url: URL
 
     public init(url: URL) {
         self.url = url
+    }
+
+    public func withExclusiveAccess<Value>(_ body: () throws -> Value) throws -> Value {
+        try PDTCredentialFileLock(url: url.appendingPathExtension("lock")).hold(body)
     }
 
     public func load() throws -> PDTConnectionState {
@@ -77,6 +97,32 @@ public struct FilePDTCredentialStore: PDTCredentialStore {
             unlink(temporary.path)
             throw PDTCredentialStoreError.writeFailed(code: code)
         }
+    }
+}
+
+/// An advisory `flock` on a mode-0600 file. `flock` binds to the open file
+/// description, so every `hold` contends, across threads and processes.
+public struct PDTCredentialFileLock: Sendable {
+    public let url: URL
+
+    public init(url: URL) {
+        self.url = url
+    }
+
+    public func hold<Value>(_ body: () throws -> Value) throws -> Value {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]
+        )
+        let descriptor = open(url.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else {
+            throw PDTCredentialStoreError.lockFailed(code: errno)
+        }
+        defer { close(descriptor) }
+        guard flock(descriptor, LOCK_EX) == 0 else {
+            throw PDTCredentialStoreError.lockFailed(code: errno)
+        }
+        defer { flock(descriptor, LOCK_UN) }
+        return try body()
     }
 }
 

@@ -168,6 +168,15 @@ public enum PDTAPIError: Error, Equatable, Sendable {
         }
     }
 
+    var retryAfter: TimeInterval? {
+        switch self {
+        case let .rateLimited(retryAfter), let .server(_, retryAfter):
+            retryAfter
+        default:
+            nil
+        }
+    }
+
     private static let transientTransportCodes: Set<Int> = [
         URLError.timedOut.rawValue,
         URLError.networkConnectionLost.rawValue,
@@ -555,13 +564,7 @@ public struct PDTAPIClient: Sendable {
     }
 
     private func retryDelay(for error: PDTAPIError, attempt: Int) -> TimeInterval {
-        switch error {
-        case let .rateLimited(retryAfter?), let .server(_, retryAfter?):
-            return retryAfter
-        default:
-            break
-        }
-        return min(policy.maxRetryDelay, policy.baseBackoff * pow(2, Double(attempt - 1)))
+        error.retryAfter ?? min(policy.maxRetryDelay, policy.baseBackoff * pow(2, Double(attempt - 1)))
     }
 
     private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
