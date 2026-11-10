@@ -88,9 +88,12 @@ swift run pdtbar-smoke app-bundle-packaging
 packages `PDTBar.app`, and launches the packaged app. `./Scripts/compile_and_run.sh`
 is the explicit one-shot equivalent. `make stop` stops the packaged app and may
 also clean up old raw SwiftPM debug/release processes from historical runs.
-Normal product login uses the built-in Claude CLI handoff and scrubs inherited
-old scripted handoff env. Deterministic login smokes use the explicit
-`--scripted-claude-login-bin` app launch option through `pdtbar-smoke`.
+Normal product setup is the PDT REST API connection: Sign in with PDT (browser)
+or a pasted PDT token, kept in the Keychain. Launch and the menu never run the
+Claude CLI or an MCP server. Deterministic app smokes launch
+`pdtbar --app-support-dir <isolated> --scripted-pdt <file>` through
+`pdtbar-smoke`; the app refuses `--scripted-pdt` without an isolated app support
+directory.
 
 `pdtbar-dev pdt-sign-in|pdt-status|pdt-refresh|pdt-disconnect --store <file>`
 is the opt-in live PDT sign-in proof. It keeps the credential in a mode-0600
@@ -114,7 +117,7 @@ swift run pdtbar-smoke scripted-pdt-connector
 swift run pdtbar-smoke scripted-api-client
 swift run pdtbar-smoke scripted-api-snapshot
 swift run pdtbar-smoke scripted-api-auth
-swift run pdtbar-smoke scripted-login-handoff
+swift run pdtbar-smoke scripted-sign-in
 swift run pdtbar-smoke scripted-setup-retry
 swift run pdtbar-smoke scripted-pulse-mark-read
 swift run pdtbar-smoke copy-holding-identifier-action
@@ -125,9 +128,9 @@ swift run pdtbar-smoke scripted-returning-launch
 
 Use the commands above as the local deterministic smoke gate. `make check`
 invokes the sharded Swift test runner through `Scripts/test.sh`, which bounds
-suite groups around `swift test`. Run `swift run pdtbar-smoke
-real-claude-flow-ax` separately when an Accessibility-backed UI matrix is
-needed.
+suite groups around `swift test`. The scripted app smokes open the real menu
+through Accessibility only when it is already granted, and otherwise return
+`skipped` after proving launch state from the scripted connection's event log.
 
 First-run packaged regression gate:
 
@@ -151,8 +154,8 @@ Optional local/live checks:
 ```bash
 npm ci
 ./node_modules/.bin/mcporter list <pdt-server> --schema --json > /tmp/pdt-schema.json
-swift run pdtbar-smoke manual-claude-pdt --model opus
-swift run pdtbar-smoke live-pdt
+swift run pdtbar-smoke manual-claude-pdt --model opus   # legacy MCP path (#250)
+swift run pdtbar-smoke live-pdt                         # legacy MCP path (#250)
 swift run pdtbar-smoke logged-out-launch
 swift run pdtbar-smoke ready-launch
 swift run pdtbar-smoke packaged-app --app PDTBar.app --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/packaged-snapshot

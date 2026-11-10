@@ -1,13 +1,13 @@
 # First fetch and pulse
 
-The user signs in to Claude and configures the PDT MCP server, then launches PDTBar with no arguments. The app shows `Fetching portfolio`, reads the 7 required PDT read tools once, writes a local snapshot, and renders the pulse menu.
+The user is connected to PDT (browser sign-in or pasted token) and launches PDTBar. The app checks the connection, shows `Fetching portfolio`, reads holdings from the PDT REST API, writes a local snapshot, renders the pulse menu, and then fills details in the background.
 
-Proof that it works: `<app-support>/pdtbar/state/latest-portfolio-snapshot.json` is written in isolated state with open holdings and as-of `2026-03-29`. The app stays running. With AX granted, the opened menu contains the pulse identifiers (`pdtbar.section.pulse`, `pdtbar.row.pulse.status`). A scenario with a required tool missing writes no snapshot and shows the fetch-failed setup menu.
+Proof that it works: `<app-support>/pdtbar/state/latest-portfolio-snapshot.json` is written in isolated state with open holdings and as-of `2026-06-22`. The app stays running, no `claude` or `mcporter` runs, and the fixture sentinel stays empty. With AX granted, the opened menu contains the pulse identifiers (`pdtbar.section.pulse`, `pdtbar.row.pulse.status`). A scenario whose required holdings request fails writes no snapshot and shows `Could not fetch portfolio` with `Try again`.
 
 ## Sub-features
 
 - Cold first fetch, with the snapshot published only after a complete fetch.
-- Missing required read tool (`pdt-list-dividends`), which blocks publication.
+- A failed required holdings request (503 after every retry), which blocks publication.
 - Returning launch, where the cached pulse stays visible during refresh and is replaced only on success.
 - Progressive background detail fill (`Filling details`, `Step 1/6: Base holdings`), plus `Details fill failed` / `Fill details again`.
 
@@ -25,9 +25,9 @@ swift run pdtbar-smoke scripted-first-fetch --artifacts "$RUN/evidence" --app-su
 Scripts/verify_pdtbar.sh stop "$RUN"
 ```
 
-Read `$RUN/evidence/pdtbar-scripted-first-fetch-proof.json`. Pass requires `snapshotWritten: true`, `openHoldingCount > 0`, and `missingRequiredToolBlockedPublication: true`. When `accessibilityChecked: true`, it also requires `successPulseVisibleThroughAccessibility` and `failureVisibleThroughAccessibility`, with the identifiers in `pdtbar-scripted-first-fetch-{success,failure}-ax.json`.
+Read `$RUN/evidence/pdtbar-scripted-first-fetch-proof.json`. Pass requires `successSnapshotWritten: true`, `successSnapshotAsOf: 2026-06-22`, `successOpenHoldingCount > 0`, `failureSnapshotWritten: false`, `failureReported: true`, and for both launches `cliSpawned: false` and `fixtureSentinelEmpty: true`. When `accessibilityChecked: true`, `successPulseMenu.visible` and `failureMenu.visible` must be true, with the identifiers in `pdtbar-scripted-first-fetch-{success,failure}-ax.json`.
 
-Related prompt-free scenarios: `ready-launch` (the same path, with the logged-out menu skipped) and `scripted-pdt-connector` (connector only, with no app; it proves each required tool is called exactly once and that degraded detail refresh can be retried).
+Related prompt-free scenarios: `ready-launch` (a connected browser session straight to the pulse) and `scripted-returning-launch` (a seeded snapshot stays visible during the background refresh and survives a failed one).
 
 ## Visual proof
 
@@ -43,7 +43,7 @@ The image must show the status item and the open menu with `Pulse` at the top an
 
 ## Gotchas
 
-- The smoke scripts PDT at the production MCP connector boundary (`scripted-pdt-mcp.json`). It does not prove live PDT reachability. That is `live-pdt` or `manual-claude-pdt`, both opt-in, and live PDT is never driven without the user.
+- The smoke scripts PDT at the app's connection boundary (`--scripted-pdt`). It does not prove live PDT reachability, and live PDT is never driven without the user.
 - `scripted-returning-launch` falls back to a full-screen `screencapture` when AX is granted. Treat it as opt-in.
-- The failure scenario sleeps for the full `--timeout` (default 2s) before it checks that nothing was published. That pause is expected, not a hang.
+- After a successful first fetch the app starts a background detail refresh, which also requests holdings. The success launch scripts only one reply, so that refresh fails and logs `background refresh failed`; the pulse stays.
 - With AX granted, the smoke visibly opens and closes the real menu on the current display.
