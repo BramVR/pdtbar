@@ -70,7 +70,9 @@ From [#245 sign-in test results](https://github.com/BramVR/pdtbar/issues/245#iss
 - **Loopback for a verified app.** The developer guide allows `http://localhost` and `http://127.0.0.1` redirects "for development". Ask PDT before verification whether a production app may keep its loopback redirect.
 - **Fixed port.** Only port 47245 is registered, so another app holding it blocks sign-in until it is free; the pasted token is the way around it.
 - **Write-scope labels.** OpenAPI write-scope metadata looks inconsistent. Not blocking: the client is GET-only and never relies on those labels.
-- **Leftover test clients.** "PDTBar redirect test" (DCR), an anonymous DCR client, and the unverified "pdtbar probe" app were left on PDT with no grants.
+- **Leftover test clients.** "PDTBar redirect test" (DCR) and an anonymous DCR client were left on PDT with no grants; the API cannot delete DCR clients. The unverified "pdtbar probe" app was deleted on 2026-11-10.
+- **One connection per store.** The refresh backoff lives in the `PDTConnection` instance, not in the store. The store lock serializes refreshes across processes but does not share a cooldown, so a second process on the same store (in practice only `pdtbar-dev` beside the app) can refresh again inside another process's `Retry-After` window. The app must create one `PDTConnection` per store; persisting the cooldown was judged not worth a larger persisted format for a dev-only case.
+- **Shared token limit.** The 60 requests per minute on the token endpoint is per `client_id`, and every PDTBar install shares the one registered client. Hourly refreshes stay far below it for a small user base, but a fleet-wide retry storm would hit it. Revisit before a wide release (jitter on refresh timing, or ask PDT about the limit).
 
 ## Options considered
 
