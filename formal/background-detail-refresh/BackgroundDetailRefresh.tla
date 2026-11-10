@@ -1,23 +1,23 @@
 ------------------------------ MODULE BackgroundDetailRefresh ------------------------------
 (***************************************************************************)
 (* One run of PDTBackgroundDetailRefresh.refresh                            *)
-(* (Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:166). Line numbers  *)
+(* (Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:173). Line numbers  *)
 (* below are in that file unless a path is given.                           *)
 (*                                                                          *)
 (* The main thread walks the detail phases in order. Each phase is one      *)
-(* Claude CLI tool call with retry (callDecodedWithRetry, :995). Optional   *)
+(* Claude CLI tool call with retry (callDecodedWithRetry, :1008). Optional  *)
 (* phases commit their slice to SnapshotStore when they finish; a failed    *)
 (* optional phase records a diagnostic and degrades the refresh. In the     *)
-(* price-history phase (priceSeries, :840) the main thread starts           *)
+(* price-history phase (priceSeries, :853) the main thread starts           *)
 (* workerCount workers that pull holdings from PDTPriceHistoryWorkTracker   *)
-(* (:1180), record into PDTPriceHistoryAccumulator (:1122), and race a      *)
+(* (:1193), record into PDTPriceHistoryAccumulator (:1135), and race a      *)
 (* deadline. On timeout, cancellation, or an observed setup outage the main *)
 (* thread abandons unfinished holdings and moves on while late workers may  *)
 (* still be running.                                                        *)
 (*                                                                          *)
 (* Cancellation (PDTCancellation, Sources/PDTBarCore/PDTCancellation.swift) *)
 (* is one flag that only turns on. Every throwIfCancelled checkpoint        *)
-(* (:1072) is modeled: a step that passes a checkpoint needs the flag off,  *)
+(* (:1085) is modeled: a step that passes a checkpoint needs the flag off,  *)
 (* and CancelThrow / PriceCancelThrow throw once it is on.                  *)
 (*                                                                          *)
 (* Slice values: "prior" = carried from the previous snapshot, "fresh" =    *)
@@ -29,12 +29,10 @@ CONSTANTS
     HoldingCount,       \* open holdings whose price history is fetched
     Limit,              \* PDTBackgroundDetailRefreshOptions.priceHistoryConcurrencyLimit
     RetryCount,         \* PDTBackgroundDetailRefreshOptions.optionalRetryCount
-    FailureCategories,  \* PDTDetailRefreshFailureCategory values a call may fail with
-    \* Code knob. FALSE in the shipped code. TRUE models the fix.
-    PriceHistoryOutageSetsSkip   \* refresh sets skipRemainingPhasesForUnavailableSetup after :362
+    FailureCategories   \* PDTDetailRefreshFailureCategory values a call may fail with
 
 Holdings == 1 .. HoldingCount
-Workers == 1 .. (IF Limit < HoldingCount THEN Limit ELSE HoldingCount)   \* workerCount, :857
+Workers == 1 .. (IF Limit < HoldingCount THEN Limit ELSE HoldingCount)   \* workerCount, :870
 Slices == {"base", "allocation", "xRay", "income", "priceHistory", "performance"}
 OptionalPhases == {"allocation", "xRay", "income", "priceHistory"}
 RetriedCallPhases == {"base", "allocation", "xRay", "income"}
@@ -55,7 +53,7 @@ VARIABLES
     attempt,       \* `outerAttempts` in callDecodedWithRetry for the current sequential call
     prevCat,       \* category of the failure that caused the current retry
     perfAvail,     \* performance tools were listed by availableReadTools
-    skip,          \* skipRemainingPhasesForUnavailableSetup, :231
+    diagOutage,    \* `diagnostics` holds a setup/auth category; runOptionalPhase's guard, :432
     outcome,       \* PDTBackgroundDetailRefreshOutcome
     snap,          \* in-memory `snapshot` local in refresh()
     store,         \* SnapshotStore current snapshot on disk
@@ -64,9 +62,9 @@ VARIABLES
     \* price-history pool, main side
     ph,            \* "idle" | "wait" | "decide" | "abandon" | "collect" | "done"
     pastDeadline,  \* now() >= deadline (monotonic)
-    timedOut,      \* `timedOut` at :928
-    toRecord,      \* abandoned holdings the main thread has not yet recorded, :946
-    resPoints, resFailed,   \* accumulator.result() as returned, :967
+    timedOut,      \* `timedOut` at :941
+    toRecord,      \* abandoned holdings the main thread has not yet recorded, :959
+    resPoints, resFailed,   \* accumulator.result() as returned, :980
     \* PDTPriceHistoryWorkTracker
     pending, running, finished, abandoned,
     \* PDTPriceHistoryAccumulator
@@ -84,7 +82,7 @@ VARIABLES
     lateRetry,     \* a price-history retry run started after the deadline
     pulls          \* times each holding was handed out by nextQuoteID
 
-mainVars == <<phase, justDone, attempt, prevCat, perfAvail, skip, outcome, snap, store, diagPhases, cancelled>>
+mainVars == <<phase, justDone, attempt, prevCat, perfAvail, diagOutage, outcome, snap, store, diagPhases, cancelled>>
 poolMainVars == <<ph, pastDeadline, timedOut, toRecord, resPoints, resFailed>>
 trackerVars == <<pending, running, finished, abandoned>>
 accVars == <<points, failedQ, accUnavail>>
@@ -102,7 +100,7 @@ Init ==
     /\ attempt = 0
     /\ prevCat = "none"
     /\ perfAvail = FALSE
-    /\ skip = FALSE
+    /\ diagOutage = FALSE
     /\ outcome = "none"
     /\ snap = [s \in Slices |-> "prior"]
     /\ store = [s \in Slices |-> "prior"]
@@ -138,17 +136,17 @@ Init ==
 (* Main thread, sequential phases                                          *)
 
 \* refresh: throwIfCancelled, clearLastDetailRefreshDiagnostic, availableReadTools,
-\* missing-tool guard, :171-195, availableReadTools :455
+\* missing-tool guard, :178-202, availableReadTools :468
 Discover ==
     /\ phase = "discover"
     /\ ~cancelled
     /\ \/ /\ phase' = "base"
           /\ attempt' = 1
-          \* Set(PDTReadTools.performance).isSubset(of: availableTools), :365
+          \* Set(PDTReadTools.performance).isSubset(of: availableTools), :344
           /\ perfAvail' \in BOOLEAN
        \/ /\ phase' = "threw"
           /\ UNCHANGED <<attempt, perfAvail>>
-    /\ UNCHANGED <<justDone, prevCat, skip, outcome, snap, store, diagPhases, cancelled>>
+    /\ UNCHANGED <<justDone, prevCat, diagOutage, outcome, snap, store, diagPhases, cancelled>>
     /\ UNCHANGED <<poolMainVars, trackerVars, accVars, workerVars, ghostVars>>
 
 \* The caller cancels the refresh: PDTCancellation.cancel from
@@ -157,22 +155,22 @@ Cancel ==
     /\ ~cancelled
     /\ phase \notin {"returned", "threw"}
     /\ cancelled' = TRUE
-    /\ UNCHANGED <<phase, justDone, attempt, prevCat, perfAvail, skip, outcome, snap, store, diagPhases>>
+    /\ UNCHANGED <<phase, justDone, attempt, prevCat, perfAvail, diagOutage, outcome, snap, store, diagPhases>>
     /\ UNCHANGED <<poolMainVars, trackerVars, accVars, workerVars, ghostVars>>
 
-\* A throwIfCancelled checkpoint throws: refresh start :171, the base catch and
-\* post-call checks :209/:219, the optional phases' post-call and catch checks
-\* :256/:266, :282/:293, :315/:325, performance :373/:381, before the outcome
-\* :400, and the top of callDecodedWithRetry :1006.
+\* A throwIfCancelled checkpoint throws: refresh start :178, the base catch and
+\* post-call checks :216/:226, the optional phases' post-call checks :249,
+\* :273, :297, runOptionalPhase's catch :438, performance :357/:366, before the
+\* outcome :388, and the top of callDecodedWithRetry :1019.
 CancelThrow ==
     /\ cancelled
     /\ phase \in CancelCheckpointPhases
     /\ phase' = "threw"
-    /\ UNCHANGED <<justDone, attempt, prevCat, perfAvail, skip, outcome, snap, store, diagPhases, cancelled>>
+    /\ UNCHANGED <<justDone, attempt, prevCat, perfAvail, diagOutage, outcome, snap, store, diagPhases, cancelled>>
     /\ UNCHANGED <<poolMainVars, trackerVars, accVars, workerVars, ghostVars>>
 
-\* One CLI run in callDecodedWithRetry (:995) fails and the retry guard at
-\* :1044-1047 starts another run. The guard also needs `now() < retryDeadline`;
+\* One CLI run in callDecodedWithRetry (:1008) fails and the retry guard at
+\* :1057-1060 starts another run. The guard also needs `now() < retryDeadline`;
 \* the sequential phases' deadlines are not modeled, so a guard that refuses on
 \* the deadline shows up as a fail action below.
 SeqRetry ==
@@ -183,11 +181,11 @@ SeqRetry ==
         /\ IsRetryable(c)
         /\ attempt' = attempt + 1
         /\ prevCat' = c
-    /\ UNCHANGED <<phase, justDone, perfAvail, skip, outcome, snap, store, diagPhases, cancelled>>
+    /\ UNCHANGED <<phase, justDone, perfAvail, diagOutage, outcome, snap, store, diagPhases, cancelled>>
     /\ UNCHANGED <<poolMainVars, trackerVars, accVars, workerVars, ghostVars>>
 
 \* baseSnapshot returns; throwIfCancelled, preserveOptionalDetails, then
-\* commitCurrentSnapshot, :201-225, preserveOptionalDetails :482
+\* commitCurrentSnapshot, :208-232, preserveOptionalDetails :495
 BaseSucceeds ==
     /\ phase = "base"
     /\ ~cancelled
@@ -200,22 +198,22 @@ BaseSucceeds ==
        /\ everFresh' = everFresh \cup Fresh(store')
     /\ phase' = "advance"
     /\ justDone' = "base"
-    /\ UNCHANGED <<attempt, prevCat, perfAvail, skip, outcome, diagPhases, cancelled>>
+    /\ UNCHANGED <<attempt, prevCat, perfAvail, diagOutage, outcome, diagPhases, cancelled>>
     /\ UNCHANGED <<poolMainVars, trackerVars, accVars, workerVars>>
     /\ UNCHANGED <<phaseOk, perfDiag, outage, lateStart, lateRetry, pulls>>
 
 \* baseSnapshot throws; throwIfCancelled, saveLastDetailRefreshDiagnostic, then
-\* rethrow, :208-217. Any category: a retryable one ends the call once the
-\* retry budget or the call's deadline (:1013, :1047) runs out.
+\* rethrow, :215-224. Any category: a retryable one ends the call once the
+\* retry budget or the call's deadline (:1026, :1060) runs out.
 BaseFails ==
     /\ phase = "base"
     /\ ~cancelled
     /\ phase' = "threw"
-    /\ UNCHANGED <<justDone, attempt, prevCat, perfAvail, skip, outcome, snap, store, diagPhases, cancelled>>
+    /\ UNCHANGED <<justDone, attempt, prevCat, perfAvail, diagOutage, outcome, snap, store, diagPhases, cancelled>>
     /\ UNCHANGED <<poolMainVars, trackerVars, accVars, workerVars, ghostVars>>
 
 \* allocation / xRay / income call returns, throwIfCancelled, and the slice is
-\* committed with no diagnostic: :248-264, :279-288, :309-323
+\* committed with no diagnostic: :240-258, :264-280, :288-305
 OptionalSucceeds ==
     /\ phase \in {"allocation", "xRay", "income"}
     /\ ~cancelled
@@ -226,15 +224,15 @@ OptionalSucceeds ==
     /\ phaseOk' = phaseOk \cup {phase}
     /\ justDone' = phase
     /\ phase' = "advance"
-    /\ UNCHANGED <<attempt, prevCat, perfAvail, skip, outcome, diagPhases, cancelled>>
+    /\ UNCHANGED <<attempt, prevCat, perfAvail, diagOutage, outcome, diagPhases, cancelled>>
     /\ UNCHANGED <<poolMainVars, trackerVars, accVars, workerVars>>
     /\ UNCHANGED <<perfDiag, outage, lateStart, lateRetry, pulls>>
 
 \* xRay / income return partial data with a .timeout diagnostic: pagination
 \* truncated by the page cap or deadline (truncationDiagnostic,
 \* Sources/PDTBarCore/PDTLiveDataSource.swift:615-631), or the income quote
-\* scan ran out of time (:784). The slice is committed and the diagnostic is
-\* appended without recordOptionalPhaseFailure, :286-291, :320-323.
+\* scan ran out of time (:797). The slice is committed and the body returns the
+\* diagnostic to runOptionalPhase, :280, :305, :436.
 OptionalSucceedsWithDiagnostic ==
     /\ phase \in {"xRay", "income"}
     /\ ~cancelled
@@ -245,19 +243,19 @@ OptionalSucceedsWithDiagnostic ==
     /\ diagPhases' = diagPhases \cup {phase}
     /\ justDone' = phase
     /\ phase' = "advance"
-    /\ UNCHANGED <<attempt, prevCat, perfAvail, skip, outcome, cancelled>>
+    /\ UNCHANGED <<attempt, prevCat, perfAvail, diagOutage, outcome, cancelled>>
     /\ UNCHANGED <<poolMainVars, trackerVars, accVars, workerVars>>
     /\ UNCHANGED <<phaseOk, perfDiag, outage, lateStart, lateRetry, pulls>>
 
-\* allocation / xRay / income throws; throwIfCancelled then
-\* recordOptionalPhaseFailure, :232-243, called from :271, :298, :330.
+\* allocation / xRay / income throws; runOptionalPhase's catch runs
+\* throwIfCancelled and appends the diagnostic, :437-439.
 \* Any category, as in BaseFails.
 OptionalFails ==
     /\ phase \in {"allocation", "xRay", "income"}
     /\ ~cancelled
     /\ \E c \in FailureCategories :
         /\ diagPhases' = diagPhases \cup {phase}
-        /\ skip' = (skip \/ IndicatesUnavailableSetup(c))
+        /\ diagOutage' = (diagOutage \/ IndicatesUnavailableSetup(c))
         /\ outage' = (outage \/ IndicatesUnavailableSetup(c))
     /\ justDone' = phase
     /\ phase' = "advance"
@@ -272,12 +270,12 @@ NextOf(p) ==
       [] p = "income" -> "priceHistory"
       [] p = "priceHistory" -> "performance"
 
-\* The `if !skipRemainingPhasesForUnavailableSetup` gates at :245, :275,
-\* :305, :334, and the performance gate at :364-365. Entering priceHistory
-\* runs the priceSeries setup and launches workers, :840-866.
+\* runOptionalPhase's guard (:432), read before every optional phase, and the
+\* performance tools gate (:344). Entering priceHistory
+\* runs the priceSeries setup and launches workers, :853-879.
 Advance ==
     /\ phase = "advance"
-    /\ LET t == IF skip THEN "finalize"
+    /\ LET t == IF diagOutage THEN "finalize"
                 ELSE IF NextOf(justDone) = "performance" /\ ~perfAvail THEN "finalize"
                 ELSE NextOf(justDone) IN
        /\ phase' = t
@@ -289,14 +287,14 @@ Advance ==
                  /\ pending' = [i \in Holdings |-> i]
                  /\ wpc' = [w \in Workers |-> "check"]
             ELSE UNCHANGED <<ph, pending, wpc>>
-    /\ UNCHANGED <<justDone, perfAvail, skip, outcome, snap, store, diagPhases, cancelled>>
+    /\ UNCHANGED <<justDone, perfAvail, diagOutage, outcome, snap, store, diagPhases, cancelled>>
     /\ UNCHANGED <<pastDeadline, timedOut, toRecord, resPoints, resFailed>>
     /\ UNCHANGED <<running, finished, abandoned, accVars, wq, wattempt, wres, wcat>>
     /\ UNCHANGED <<phaseOk, perfDiag, everFresh, outage, lateRetry, pulls>>
 
-\* performanceSummary (:498) uses callDecoded with no refresh-layer retry.
-\* Success commits (:368-379). Failure clears performance (:385) and appends a
-\* diagnostic only when its category is .timeout (:386-394).
+\* performanceSummary (:511) uses callDecoded with no refresh-layer retry.
+\* Success commits (:351-364). Failure clears performance (:371) and returns a
+\* diagnostic only when its category is .timeout (:374-379).
 Performance ==
     /\ phase = "performance"
     /\ ~cancelled
@@ -312,13 +310,13 @@ Performance ==
           /\ perfDiag' = TRUE
           /\ UNCHANGED <<store, everFresh>>
     /\ phase' = "finalize"
-    /\ UNCHANGED <<justDone, attempt, prevCat, perfAvail, skip, outcome, cancelled>>
+    /\ UNCHANGED <<justDone, attempt, prevCat, perfAvail, diagOutage, outcome, cancelled>>
     /\ UNCHANGED <<poolMainVars, trackerVars, accVars, workerVars>>
     /\ UNCHANGED <<phaseOk, outage, lateStart, lateRetry, pulls>>
 
-\* throwIfCancelled (:400); outcome from `diagnostics.isEmpty` (:405);
-\* PressureRunner.refreshedPulse commits the snapshot (:406); last diagnostic
-\* saved or cleared (:415-419).
+\* throwIfCancelled (:388); outcome from `diagnostics.isEmpty` (:393);
+\* PressureRunner.refreshedPulse commits the snapshot (:394); last diagnostic
+\* saved or cleared (:403-407).
 Finalize ==
     /\ phase = "finalize"
     /\ ~cancelled
@@ -326,12 +324,12 @@ Finalize ==
     /\ store' = snap
     /\ everFresh' = everFresh \cup Fresh(store')
     /\ phase' = "returned"
-    /\ UNCHANGED <<justDone, attempt, prevCat, perfAvail, skip, snap, diagPhases, cancelled>>
+    /\ UNCHANGED <<justDone, attempt, prevCat, perfAvail, diagOutage, snap, diagPhases, cancelled>>
     /\ UNCHANGED <<poolMainVars, trackerVars, accVars, workerVars>>
     /\ UNCHANGED <<phaseOk, perfDiag, outage, lateStart, lateRetry, pulls>>
 
 -----------------------------------------------------------------------------
-(* Price-history pool, main thread side (priceSeries, :840)                *)
+(* Price-history pool, main thread side (priceSeries, :853)                *)
 
 \* The deadline passes. Wall-clock time only moves forward.
 Tick ==
@@ -341,7 +339,7 @@ Tick ==
     /\ UNCHANGED <<mainVars, ph, timedOut, toRecord, resPoints, resFailed>>
     /\ UNCHANGED <<trackerVars, accVars, workerVars, ghostVars>>
 
-\* group.wait returns because every worker left the group, :928-929
+\* group.wait returns because every worker left the group, :941-942
 WaitAllExited ==
     /\ ph = "wait"
     /\ \A w \in Workers : wpc[w] = "exit"
@@ -351,7 +349,7 @@ WaitAllExited ==
     /\ UNCHANGED <<trackerVars, accVars, workerVars, ghostVars>>
 
 \* group.wait times out. Its timeout starts after `deadline` was computed, so
-\* it can only fire once the deadline has passed, :928
+\* it can only fire once the deadline has passed, :941
 WaitTimedOut ==
     /\ ph = "wait"
     /\ pastDeadline
@@ -361,10 +359,10 @@ WaitTimedOut ==
     /\ UNCHANGED <<trackerVars, accVars, workerVars, ghostVars>>
 
 \* `cancelled`, accumulator.unavailableSetupCategory(), then
-\* workTracker.markAbandoned() (:930-942, markAbandoned :1216, one lock
-\* section). priceCancellation.cancel() (:934) adds no state: workers already
+\* workTracker.markAbandoned() (:943-955, markAbandoned :1229, one lock
+\* section). priceCancellation.cancel() (:947) adds no state: workers already
 \* stop on `pastDeadline \/ cancelled`, and timedOut implies pastDeadline. The
-\* extra bounded group.wait (:939) only gives late workers time to finish,
+\* extra bounded group.wait (:952) only gives late workers time to finish,
 \* which the interleavings already cover.
 Decide ==
     /\ ph = "decide"
@@ -381,7 +379,7 @@ Decide ==
     /\ UNCHANGED <<finished, accVars, workerVars, ghostVars>>
 
 \* accumulator.append(diagnostic:failedQuoteID:) for one abandoned holding, in
-\* sorted order, :943-964. The appended category is the outage category or
+\* sorted order, :956-977. The appended category is the outage category or
 \* .timeout, so accUnavail does not change.
 RecordAbandoned ==
     /\ ph = "abandon"
@@ -396,9 +394,9 @@ PoolReturning ==
     \/ ph = "collect"
     \/ ph = "abandon" /\ toRecord = {}
 
-\* accumulator.result() (:967), throwIfCancelled passes (:346), then refresh
-\* merges the series with the prior fallback and appends the diagnostics
-\* (:351-362). No commit here.
+\* accumulator.result() (:980), throwIfCancelled passes (:325), then the
+\* body merges the series with the prior fallback and returns the diagnostics
+\* to runOptionalPhase (:330-341, :436). No commit here.
 Collect ==
     /\ PoolReturning
     /\ phase = "priceHistory"
@@ -410,7 +408,7 @@ Collect ==
     /\ diagPhases' = IF failedQ /= {} THEN diagPhases \cup {"priceHistory"} ELSE diagPhases
     /\ phaseOk' = IF failedQ = {} THEN phaseOk \cup {"priceHistory"} ELSE phaseOk
     /\ outage' = (outage \/ accUnavail)
-    /\ skip' = (skip \/ (PriceHistoryOutageSetsSkip /\ accUnavail))
+    /\ diagOutage' = (diagOutage \/ accUnavail)
     /\ justDone' = "priceHistory"
     /\ phase' = "advance"
     /\ UNCHANGED <<attempt, prevCat, perfAvail, outcome, store, cancelled>>
@@ -418,7 +416,7 @@ Collect ==
     /\ UNCHANGED <<trackerVars, accVars, workerVars>>
     /\ UNCHANGED <<perfDiag, everFresh, lateStart, lateRetry, pulls>>
 
-\* accumulator.result() (:967), then throwIfCancelled throws (:346).
+\* accumulator.result() (:980), then throwIfCancelled throws (:325).
 PriceCancelThrow ==
     /\ PoolReturning
     /\ phase = "priceHistory"
@@ -427,16 +425,16 @@ PriceCancelThrow ==
     /\ resFailed' = failedQ
     /\ ph' = "done"
     /\ phase' = "threw"
-    /\ UNCHANGED <<justDone, attempt, prevCat, perfAvail, skip, outcome, snap, store, diagPhases, cancelled>>
+    /\ UNCHANGED <<justDone, attempt, prevCat, perfAvail, diagOutage, outcome, snap, store, diagPhases, cancelled>>
     /\ UNCHANGED <<pastDeadline, timedOut, toRecord>>
     /\ UNCHANGED <<trackerVars, accVars, workerVars, ghostVars>>
 
 -----------------------------------------------------------------------------
-(* Price-history workers (the queue.async closure at :863-925)             *)
+(* Price-history workers (the queue.async closure at :876-938)             *)
 
 \* while-condition: `now() < deadline`, `!priceCancellation.isCancelled` (it
 \* inherits the caller's flag, PDTCancellation.swift:22-27), and
-\* accumulator.unavailableSetupCategory() == nil, :870-872. The flags only
+\* accumulator.unavailableSetupCategory() == nil, :883-885. The flags only
 \* ever turn on, so reading them in one step loses no outcome.
 WCheck(w) ==
     /\ wpc[w] = "check"
@@ -444,9 +442,9 @@ WCheck(w) ==
     /\ UNCHANGED <<mainVars, poolMainVars, trackerVars, accVars>>
     /\ UNCHANGED <<wq, wattempt, wres, wcat, ghostVars>>
 
-\* workTracker.nextQuoteID() (:873, :1191), then the top of
-\* callDecodedWithRetry (:1006-1021): throwIfCancelled and the deadline guard
-\* throw .timeout without a CLI run; otherwise the first run starts (:1026).
+\* workTracker.nextQuoteID() (:886, :1204), then the top of
+\* callDecodedWithRetry (:1019-1034): throwIfCancelled and the deadline guard
+\* throw .timeout without a CLI run; otherwise the first run starts (:1039).
 \* Nothing between these reads shared state other than the two flags.
 WPull(w) ==
     /\ wpc[w] = "pull"
@@ -469,7 +467,7 @@ WPull(w) ==
     /\ UNCHANGED <<mainVars, poolMainVars, finished, abandoned, accVars>>
     /\ UNCHANGED <<phaseOk, perfDiag, everFresh, outage, lateStart, lateRetry>>
 
-\* The CLI run returns. On failure, the retry guard at :1044-1047 either
+\* The CLI run returns. On failure, the retry guard at :1057-1060 either
 \* throws or goes to backoff. It refuses after the deadline or a cancel.
 WCallReturns(w) ==
     /\ wpc[w] = "call"
@@ -489,9 +487,9 @@ WCallReturns(w) ==
                    /\ UNCHANGED wcat
     /\ UNCHANGED <<mainVars, poolMainVars, trackerVars, accVars, wq, wattempt, ghostVars>>
 
-\* Thread.sleep backoff capped at the deadline (:1054-1060), throwIfCancelled
-\* (:1061), then the next loop iteration's throwIfCancelled and deadline guard
-\* (:1006-1021) throw .timeout, or another full CLI run starts (:1026).
+\* Thread.sleep backoff capped at the deadline (:1067-1073), throwIfCancelled
+\* (:1074), then the next loop iteration's throwIfCancelled and deadline guard
+\* (:1019-1034) throw .timeout, or another full CLI run starts (:1039).
 WBackoffEnds(w) ==
     /\ wpc[w] = "backoff"
     /\ IF cancelled \/ pastDeadline
@@ -506,7 +504,7 @@ WBackoffEnds(w) ==
     /\ UNCHANGED <<phaseOk, perfDiag, everFresh, outage, lateStart, pulls>>
 
 \* workTracker.complete(quoteID, record:) with the accumulator append inside the
-\* tracker lock, :897-899 / :914-916, complete :1203, append :1155 / :1161.
+\* tracker lock, :910-912 / :927-929, complete :1216, append :1168 / :1174.
 \* markCompleted and the progress callback after it are not modeled.
 WComplete(w) ==
     /\ wpc[w] = "complete"

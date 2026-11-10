@@ -231,114 +231,86 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         Self.preserveOptionalDetails(in: &snapshot, from: originalPriorSnapshot)
         _ = try snapshotStore.commitCurrentSnapshot(snapshot)
 
-        // Once one optional phase fails because Claude/PDT is unavailable
-        // (auth or setup outage), every remaining phase would burn the same
-        // full Claude CLI runs on the same outage, so they are skipped and the
-        // refresh degrades with the unavailable diagnostic instead.
-        var skipRemainingPhasesForUnavailableSetup = false
-        func recordOptionalPhaseFailure(
-            _ error: Error,
-            tool: String,
-            phase: BackgroundDetailRefreshPhase,
-            arguments: [String: String] = [:]
+        try runOptionalPhase(
+            .allocation,
+            tool: "pdt-get-portfolio-distributions",
+            cancellation: cancellation,
+            diagnostics: &diagnostics
         ) {
-            let failure = diagnostic(for: error, tool: tool, phase: phase, arguments: arguments)
-            diagnostics.append(failure)
-            if failure.category.indicatesUnavailableSetup {
-                skipRemainingPhasesForUnavailableSetup = true
-            }
+            progress(BackgroundDetailRefreshProgress(phase: .allocation))
+            let distributions: LiveDistributionsEnvelope = try callDecodedWithRetry(
+                "pdt-get-portfolio-distributions",
+                phase: .allocation,
+                arguments: [:],
+                progress: progress,
+                retryDeadline: now().addingTimeInterval(options.effectivePaginationTimeoutSeconds),
+                cancellation: cancellation
+            )
+            try throwIfCancelled(
+                cancellation,
+                tool: "pdt-get-portfolio-distributions",
+                phase: .allocation
+            )
+            let normalized = PDTOptionalDetailNormalizer.normalizeDistributions(distributions.optionalDetailInput)
+            snapshot.sectors = normalized.sectors
+            snapshot.assetTypes = normalized.assetTypes
+            _ = try snapshotStore.commitCurrentSnapshot(snapshot)
+            return []
         }
 
-        if !skipRemainingPhasesForUnavailableSetup {
-            do {
-                progress(BackgroundDetailRefreshProgress(phase: .allocation))
-                let distributions: LiveDistributionsEnvelope = try callDecodedWithRetry(
-                    "pdt-get-portfolio-distributions",
-                    phase: .allocation,
-                    arguments: [:],
-                    progress: progress,
-                    retryDeadline: now().addingTimeInterval(options.effectivePaginationTimeoutSeconds),
-                    cancellation: cancellation
-                )
-                try throwIfCancelled(
-                    cancellation,
-                    tool: "pdt-get-portfolio-distributions",
-                    phase: .allocation
-                )
-                let normalized = PDTOptionalDetailNormalizer.normalizeDistributions(distributions.optionalDetailInput)
-                snapshot.sectors = normalized.sectors
-                snapshot.assetTypes = normalized.assetTypes
-                _ = try snapshotStore.commitCurrentSnapshot(snapshot)
-            } catch {
-                try throwIfCancelled(
-                    cancellation,
-                    tool: "pdt-get-portfolio-distributions",
-                    phase: .allocation
-                )
-                recordOptionalPhaseFailure(error, tool: "pdt-get-portfolio-distributions", phase: .allocation)
-            }
+        try runOptionalPhase(
+            .xRay,
+            tool: "pdt-list-x-ray-holdings",
+            failureArguments: ["limit": "", "offset": ""],
+            cancellation: cancellation,
+            diagnostics: &diagnostics
+        ) {
+            progress(BackgroundDetailRefreshProgress(phase: .xRay))
+            let xRay = try xRayHoldings(
+                cancellation: cancellation,
+                progress: progress
+            )
+            try throwIfCancelled(
+                cancellation,
+                tool: "pdt-list-x-ray-holdings",
+                phase: .xRay
+            )
+            snapshot.xRayHoldings = PDTOptionalDetailNormalizer.normalizeXRayHoldings(xRay.holdings)
+            _ = try snapshotStore.commitCurrentSnapshot(snapshot)
+            return xRay.diagnostic.map { [$0] } ?? []
         }
 
-        if !skipRemainingPhasesForUnavailableSetup {
-            do {
-                progress(BackgroundDetailRefreshProgress(phase: .xRay))
-                let xRay = try xRayHoldings(
-                    cancellation: cancellation,
-                    progress: progress
-                )
-                try throwIfCancelled(
-                    cancellation,
-                    tool: "pdt-list-x-ray-holdings",
-                    phase: .xRay
-                )
-                snapshot.xRayHoldings = PDTOptionalDetailNormalizer.normalizeXRayHoldings(xRay.holdings)
-                _ = try snapshotStore.commitCurrentSnapshot(snapshot)
-                if let diagnostic = xRay.diagnostic {
-                    diagnostics.append(diagnostic)
-                }
-            } catch {
-                try throwIfCancelled(
-                    cancellation,
-                    tool: "pdt-list-x-ray-holdings",
-                    phase: .xRay
-                )
-                recordOptionalPhaseFailure(error, tool: "pdt-list-x-ray-holdings", phase: .xRay, arguments: [
-                    "limit": "",
-                    "offset": "",
-                ])
-            }
+        try runOptionalPhase(
+            .income,
+            tool: "pdt-list-calendar-events",
+            cancellation: cancellation,
+            diagnostics: &diagnostics
+        ) {
+            progress(BackgroundDetailRefreshProgress(phase: .income))
+            let income = try incomeEvents(
+                asOf: snapshotAsOf,
+                holdings: snapshot.openHoldings,
+                priorSnapshot: originalPriorSnapshot,
+                cancellation: cancellation,
+                progress: progress
+            )
+            try throwIfCancelled(
+                cancellation,
+                tool: "pdt-list-calendar-events",
+                phase: .income
+            )
+            snapshot.incomeEvents = income.events
+            snapshot.dividendRowCount = income.dividendRowCount
+            _ = try snapshotStore.commitCurrentSnapshot(snapshot)
+            return income.diagnostics
         }
 
-        if !skipRemainingPhasesForUnavailableSetup {
-            do {
-                progress(BackgroundDetailRefreshProgress(phase: .income))
-                let income = try incomeEvents(
-                    asOf: snapshotAsOf,
-                    holdings: snapshot.openHoldings,
-                    priorSnapshot: originalPriorSnapshot,
-                    cancellation: cancellation,
-                    progress: progress
-                )
-                try throwIfCancelled(
-                    cancellation,
-                    tool: "pdt-list-calendar-events",
-                    phase: .income
-                )
-                snapshot.incomeEvents = income.events
-                snapshot.dividendRowCount = income.dividendRowCount
-                _ = try snapshotStore.commitCurrentSnapshot(snapshot)
-                diagnostics.append(contentsOf: income.diagnostics)
-            } catch {
-                try throwIfCancelled(
-                    cancellation,
-                    tool: "pdt-list-calendar-events",
-                    phase: .income
-                )
-                recordOptionalPhaseFailure(error, tool: "pdt-list-calendar-events", phase: .income)
-            }
-        }
-
-        if !skipRemainingPhasesForUnavailableSetup {
+        try runOptionalPhase(
+            .priceHistory,
+            tool: "pdt-list-symbol-prices",
+            cancellation: cancellation,
+            diagnostics: &diagnostics
+        ) {
             progress(BackgroundDetailRefreshProgress(
                 phase: .priceHistory,
                 completedUnitCount: 0,
@@ -366,42 +338,51 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 }
                 return $0.date < $1.date
             }
-            diagnostics.append(contentsOf: priceHistory.diagnostics)
+            return priceHistory.diagnostics
         }
-        if !skipRemainingPhasesForUnavailableSetup,
-           Set(PDTReadTools.performance).isSubset(of: availableTools)
-        {
-            do {
+
+        if Set(PDTReadTools.performance).isSubset(of: availableTools) {
+            try runOptionalPhase(
+                .performance,
+                tool: "pdt-get-portfolio-performance",
+                cancellation: cancellation,
+                diagnostics: &diagnostics
+            ) {
                 progress(BackgroundDetailRefreshProgress(phase: .performance))
-                let performance = try performanceSummary(
-                    cancellation: cancellation,
-                    progress: progress
-                )
-                try throwIfCancelled(
-                    cancellation,
-                    tool: "pdt-get-portfolio-performance",
-                    phase: .performance
-                )
-                snapshot.performance = performance
-                _ = try snapshotStore.commitCurrentSnapshot(snapshot)
-            } catch {
-                try throwIfCancelled(
-                    cancellation,
-                    tool: "pdt-get-portfolio-performance",
-                    phase: .performance
-                )
-                snapshot.performance = nil
-                let failure = diagnostic(
-                    for: error,
-                    tool: "pdt-get-portfolio-performance",
-                    phase: .performance
-                )
-                if failure.category == .timeout {
-                    diagnostics.append(failure)
+                do {
+                    let performance = try performanceSummary(
+                        cancellation: cancellation,
+                        progress: progress
+                    )
+                    try throwIfCancelled(
+                        cancellation,
+                        tool: "pdt-get-portfolio-performance",
+                        phase: .performance
+                    )
+                    snapshot.performance = performance
+                    _ = try snapshotStore.commitCurrentSnapshot(snapshot)
+                    return []
+                } catch {
+                    try throwIfCancelled(
+                        cancellation,
+                        tool: "pdt-get-portfolio-performance",
+                        phase: .performance
+                    )
+                    snapshot.performance = nil
+                    // Only a performance timeout degrades the refresh; other
+                    // performance failures leave the pulse quietly without it.
+                    let failure = diagnostic(
+                        for: error,
+                        tool: "pdt-get-portfolio-performance",
+                        phase: .performance
+                    )
+                    return failure.category == .timeout ? [failure] : []
                 }
-                progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Performance unavailable"))
             }
-        } else {
+        }
+        // Performance is never carried over from the prior snapshot, so nil
+        // here means the phase failed, was skipped, or its tools are missing.
+        if snapshot.performance == nil {
             progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Performance unavailable"))
         }
         try throwIfCancelled(
@@ -432,6 +413,31 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             descriptor: pulse.descriptor,
             diagnostics: diagnostics
         )
+    }
+
+    /// Runs one optional detail phase unless `diagnostics` already records a
+    /// Claude/PDT auth or setup outage, which would fail every remaining
+    /// phase the same way. This is the only writer of phase failures: the
+    /// body returns what it observed, and a thrown error becomes one
+    /// diagnostic here after cancellation is re-raised. `diagnostics` is
+    /// `inout` so exclusivity checking rejects a body that appends to it.
+    private func runOptionalPhase(
+        _ phase: BackgroundDetailRefreshPhase,
+        tool: String,
+        failureArguments: [String: String] = [:],
+        cancellation: PDTCancellation,
+        diagnostics: inout [PDTDetailRefreshFailureDiagnostic],
+        body: () throws -> [PDTDetailRefreshFailureDiagnostic]
+    ) throws {
+        guard !diagnostics.contains(where: \.category.indicatesUnavailableSetup) else {
+            return
+        }
+        do {
+            diagnostics += try body()
+        } catch {
+            try throwIfCancelled(cancellation, tool: tool, phase: phase)
+            diagnostics.append(diagnostic(for: error, tool: tool, phase: phase, arguments: failureArguments))
+        }
     }
 
     private func baseSnapshot(
