@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed a returning concentration alert staying hidden after PDTBar quit during a background refresh; the old read mark is now cleared before the snapshot that records the holding crossing back above the threshold is saved (#270).
 - Fixed "Log in with Claude" leaving helper processes from `claude auth login` running after the attempt ended, whether it succeeded, failed, timed out or was cancelled; every Claude CLI run now ends its whole process group, so `claude auth status`, `claude -p` and `claude mcp list` helpers no longer outlive their run either (#271).
 - Fixed marking a pulse row read during a background refresh: the refresh progress rows kept stopping and "Refresh now" came back while the refresh still ran, and the row turned unread again when the refresh finished. Marking a row read now changes only the pulse rows, and every published pulse reads the current read state (#268, #269).
 - Fixed "Refresh now" starting a portfolio refresh while PDTBar was still checking Claude setup on a returning launch, which let a setup screen cover a running refresh and could leave "Checking Claude setup" up with no check running; the row now waits for the check, and marking a row read during the check keeps it (#267).

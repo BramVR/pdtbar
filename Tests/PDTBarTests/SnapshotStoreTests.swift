@@ -35,6 +35,42 @@ struct SnapshotStoreTests {
         #expect(try store.loadPriorSnapshot() == snapshot)
     }
 
+    @Test("Committing a concentration re-crossing clears the old read mark before the snapshot lands")
+    func committingRecrossingClearsOldReadMark() throws {
+        let crossing = try ConcentrationCrossing()
+        _ = try crossing.store.commitCurrentSnapshot(crossing.below)
+        try crossing.readStore.markRead(crossing.alert.readFingerprint)
+
+        _ = try crossing.store.commitCurrentSnapshot(crossing.above)
+
+        #expect(!(try crossing.readStore.load()).contains(crossing.alert.readFingerprint))
+        #expect(try crossing.store.loadPriorSnapshot() == crossing.above)
+    }
+
+    @Test("A mark set after the crossing commit survives later commits of the same holdings")
+    func markAfterCrossingSurvivesLaterCommits() throws {
+        let crossing = try ConcentrationCrossing()
+        _ = try crossing.store.commitCurrentSnapshot(crossing.below)
+        _ = try crossing.store.commitCurrentSnapshot(crossing.above)
+        try crossing.readStore.markRead(crossing.alert.readFingerprint)
+
+        _ = try crossing.store.commitCurrentSnapshot(crossing.above)
+
+        #expect((try crossing.readStore.load()).contains(crossing.alert.readFingerprint))
+    }
+
+    @Test("A commit over a corrupt prior snapshot keeps read marks and replaces the snapshot")
+    func commitOverCorruptPriorKeepsReadMarks() throws {
+        let crossing = try ConcentrationCrossing()
+        try Data("not json".utf8).write(to: crossing.store.currentSnapshotPath)
+        try crossing.readStore.markRead(crossing.alert.readFingerprint)
+
+        _ = try crossing.store.commitCurrentSnapshot(crossing.above)
+
+        #expect((try crossing.readStore.load()).contains(crossing.alert.readFingerprint))
+        #expect(try crossing.store.loadPriorSnapshot() == crossing.above)
+    }
+
     @Test("Loading an existing broad snapshot tightens permissions")
     func loadingExistingBroadSnapshotTightensPermissions() throws {
         let directory = FileManager.default.temporaryDirectory
@@ -160,3 +196,28 @@ private let packageRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
     .deletingLastPathComponent()
+
+/// A concentration holding below the threshold in `below` and above it in `above`, with stores in one directory.
+private struct ConcentrationCrossing {
+    let store: SnapshotStore
+    let readStore: PulseReadStore
+    let below: PortfolioSnapshot
+    let above: PortfolioSnapshot
+    let alert: AttentionItem
+
+    init() throws {
+        store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-snapshot-recrossing")
+        readStore = PulseReadStore(directory: store.directory)
+        above = try PDTFixtureDataSource.snapshot(
+            from: packageRoot.appending(path: "docs/pdt/fixtures/concentration-pressure.json")
+        )
+        let alert = try #require(PressureEngine.buildModel(from: above).rankedAttentionItems.first {
+            $0.id.hasPrefix("allocation.concentration.")
+        })
+        self.alert = alert
+        var below = above
+        let index = try #require(below.openHoldings.firstIndex { $0.quoteId == alert.holdingIdentity?.quoteId })
+        below.openHoldings[index].weight = PressureEngine.concentrationThreshold - 0.01
+        self.below = below
+    }
+}

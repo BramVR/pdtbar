@@ -21,9 +21,9 @@ Sync commit: `1b6ffd4`. The model describes the code at that commit.
 - `PulseReadStore` 18 (`mutationQueue` 20, `load` 26, `markRead` 38, `removeReadFingerprints` 49) and `OwnerOnlyLocalStore.write` 126 (temp file + rename, so writes are atomic).
 - `PulseReadFilter.apply` 168 and `PulseLifecycleResult.applyingReadState` 271.
 - `PressureRunner.cachedPulse` 343, `run` 411 (read load 429, commit 430), `refreshedPulse` 452 (read load 461, commit 469), `lifecycleResult` 508, `readStateAfterResettingReappearedItems` 569, `staleReadFingerprints` 592.
-- `SnapshotStore.commitCurrentSnapshot` 662.
+- `SnapshotStore.commitCurrentSnapshot` 662. After the sync commit, #270 made it remove the read marks of items that re-cross against the snapshot on disk before it writes (now 660, removal 664, write 668; nothing is computed without a readable prior), moved the `run` and `refreshedPulse` read loads below their commits, and narrowed the post-commit reset to stale marks (`readStateAfterPruningStaleItems`).
 
-`Sources/PDTBarCore/PressureEngine.swift`: `concentrationItems` 210 (`resetsReadState` 233).
+`Sources/PDTBarCore/PressureEngine.swift`: `concentrationItems` 210 (`resetsReadState` 233), and since #270 `reappearedReadFingerprints` 210.
 
 `Sources/PDTBarCore/PDTLiveDataSource.swift`: `PDTCoalescedFirstPortfolioFetch.fetch` 416.
 
@@ -44,19 +44,20 @@ formal/pulse-read-state/check.sh
 About 15 seconds. It runs each config through `Scripts/formal/tlc.sh` (pinned TLA+ 1.7.4) and compares the result with the expectation listed in the script. Exit code is the number of mismatches. Expected today:
 
 - `PulseReadState_store.cfg`: pass. Current code, `NoLostReadStateUpdate`.
-- `PulseReadState_fixed.cfg`: pass. Both findings fixed in the model (`ReapplyOnBgPublish`, `ResetBeforeSnapshotCommit` TRUE), every invariant.
+- `PulseReadState_fixed.cfg`: pass. Both findings fixed (`ReapplyOnBgPublish`, `ResetBeforeSnapshotCommit` TRUE), every invariant. Same as `PulseReadState.cfg` now that both fixes are current code.
 - `PulseReadState_stale_publish.cfg`: pass. Finding 1, fixed in #269.
-- `PulseReadState_lost_reset.cfg`: `ReadMarkClearedOnRecrossing` violated. Finding 2.
+- `PulseReadState_lost_reset.cfg`: pass. Finding 2, fixed in #270.
 - `PulseReadState_broken_markread.cfg`: `NoLostReadStateUpdate` violated. The "able to fail" mutation: `markRead` outside `mutationQueue`.
 - `PulseReadState_broken_bgpublish.cfg`: `DisplayMatchesStoreWhenIdle` violated. Mutation: the background refresh publishes its worker's read state, as before #269.
+- `PulseReadState_broken_reset_order.cfg`: `ReadMarkClearedOnRecrossing` violated. Mutation: the snapshot commit lands before the re-crossing reset, as before #270.
 
-One config alone: `Scripts/formal/tlc.sh formal/pulse-read-state/PulseReadState.tla formal/pulse-read-state/<config>.cfg`. The default `PulseReadState.cfg` checks every invariant against current code and stops at whichever finding TLC reaches first.
+One config alone: `Scripts/formal/tlc.sh formal/pulse-read-state/PulseReadState.tla formal/pulse-read-state/<config>.cfg`. The default `PulseReadState.cfg` checks every invariant against current code.
 
 Read every TLC result with the `/statechart` skill. It turns a violation into its shortest path in plain words, and on a pass it charts how the state moves. Chart `PulseReadState_fixed.cfg` for the full flow.
 
 ## Current findings
 
-Both reproduce on `1b6ffd4`. Finding 1 is fixed in #269; finding 2 is open. Each was also replayed on the real Swift code with a throwaway sequential test through `PDTBackgroundDetailRefresh` and `PDTLaunchRuntime`.
+Both reproduce on `1b6ffd4`. Finding 1 is fixed in #269, finding 2 in #270. Each was also replayed on the real Swift code with a throwaway sequential test through `PDTBackgroundDetailRefresh` and `PDTLaunchRuntime`.
 
 Finding 1, stale background publish (fixed in #269). Shortest TLC trace on `1b6ffd4` (now `PulseReadState_broken_bgpublish.cfg`, 9 states):
 
@@ -72,7 +73,7 @@ Finding 1, stale background publish (fixed in #269). Shortest TLC trace on `1b6f
 
 The mark-read can also land after step 8, while the worker's `finishBackgroundPortfolioRefresh` block waits in the main queue. Fix (#269): `PDTLaunchRuntime` re-reads the store for every pulse it publishes, so no worker's read state reaches the menu. The related flag bug, where a mark-read during a refresh stopped the progress rows, is fixed in #268 and checked by `verify-launch-runtime`.
 
-Finding 2, reset lost on quit. Shortest TLC trace (`PulseReadState_lost_reset.cfg`, 5 states):
+Finding 2, reset lost on quit (fixed in #270). Shortest TLC trace on `1b6ffd4` (now `PulseReadState_broken_reset_order.cfg`, 5 states):
 
 1. Start (`Init`). The read store holds concentration mark `c1` from an earlier crossing. The snapshot has the holding below threshold. PDT now has it at `c1`.
 2. `BgStart`. `startBackgroundPortfolioRefresh` (main.swift:257).
@@ -80,9 +81,9 @@ Finding 2, reset lost on quit. Shortest TLC trace (`PulseReadState_lost_reset.cf
 4. `BgBaseCommit`. The base commit (225) records the crossing. The reset is owed.
 5. `Relaunch`. The user quits. `applicationWillTerminate` (main.swift:1117) cancels the refresh, which throws at its next `throwIfCancelled` (256-400) before `refreshedPulse` (406). On relaunch `cachedPulse` hides `c1` as read.
 
-After step 5 the prior is already above threshold, so no later refresh sees a crossing and `c1` stays read. A crash or force quit in the same window does the same. `PressureRunner.run` has the same commit-then-reset order (Persistence.swift:430, then 508) with a shorter window. A quit there kills the first-fetch worker at an arbitrary point, since quit neither cancels nor waits for it. Fix direction: remove the re-crossed marks before the commit that records the crossing.
+After step 5 the prior is already above threshold, so no later refresh sees a crossing and `c1` stays read. A crash or force quit in the same window does the same. `PressureRunner.run` has the same commit-then-reset order (Persistence.swift:430, then 508) with a shorter window. A quit there kills the first-fetch worker at an arbitrary point, since quit neither cancels nor waits for it. Fix (#270): `SnapshotStore.commitCurrentSnapshot` removes the marks of items that re-cross against the snapshot on disk before it writes, so every commit site gets the order and no worker owes a reset after a commit. A stop between the two writes leaves the old snapshot below threshold, and the next run removes the mark again, which changes nothing. Later commits of the same holdings compare against the base already on disk, so they do not remove a mark the user set mid refresh. Regression test: `BackgroundDetailRefreshTests` "A returning concentration alert stays unread after a quit mid refresh".
 
-When a finding is fixed, flip its constant to TRUE in `PulseReadState.cfg`, `PulseReadState_store.cfg`, `PulseReadState_stale_publish.cfg`, `PulseReadState_lost_reset.cfg`, and `PulseReadState_broken_markread.cfg`, change that finding's expectation in `check.sh` to `pass`, and update this section. Then `formal/pulse-read-state/check.sh` must exit 0.
+When a new finding is fixed, flip its constant to TRUE in every config except the mutation that replays it, change that finding's expectation in `check.sh` to `pass`, add a `broken_*` config that keeps the old behaviour, and update this section. Then `formal/pulse-read-state/check.sh` must exit 0.
 
 ## Real bug or modelling error
 

@@ -630,6 +630,52 @@ struct BackgroundDetailRefreshTests {
         #expect(!((try readStore.load()).contains(originalItem.readFingerprint)))
     }
 
+    @Test("A returning concentration alert stays unread after a quit mid refresh")
+    func returningConcentrationAlertStaysUnreadAfterQuitMidRefresh() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-quit-read-state-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let readStore = PulseReadStore(directory: store.directory)
+        let currentSnapshot = try testSnapshot(asOf: "2026-03-29")
+        let alert = try #require(
+            PressureEngine.buildModel(from: currentSnapshot).rankedAttentionItems.first {
+                $0.holdingIdentity?.quoteId == 9101
+            }
+        )
+        var priorSnapshot = currentSnapshot
+        priorSnapshot.asOf = "2026-03-28"
+        priorSnapshot.openHoldings[0].weight = 0.19
+        try readStore.markRead(alert.readFingerprint)
+        _ = try store.commitCurrentSnapshot(priorSnapshot)
+
+        let quit = PDTCancellation()
+        #expect(throws: (any Error).self) {
+            try PDTBackgroundDetailRefresh(
+                connector: SelectiveFailingPDTConnector(
+                    responses: try detailRefreshResponses(),
+                    onCall: { tool in
+                        if tool == "pdt-get-portfolio-distributions" {
+                            quit.cancel()
+                        }
+                    }
+                ),
+                snapshotStore: store,
+                pulseReadStore: readStore,
+                asOf: "2026-03-29",
+                options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
+            ).refresh(cancellation: quit)
+        }
+
+        let relaunch = try #require(try PressureRunner.cachedPulse(
+            snapshotStore: store,
+            pulseReadStore: readStore,
+            today: "2026-03-29"
+        ))
+        #expect(relaunch.model.rankedAttentionItems.contains { $0.id == alert.id })
+        #expect(!((try readStore.load()).contains(alert.readFingerprint)))
+    }
+
     @Test("Progress callbacks are phase-aware with price-history totals")
     func progressCallbacksArePhaseAwareWithPriceHistoryTotals() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-progress-test")
