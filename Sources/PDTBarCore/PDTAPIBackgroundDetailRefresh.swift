@@ -11,20 +11,8 @@ public struct PDTBackgroundDetailRefreshResult: Equatable {
     public var model: PortfolioPulseModel
     public var snapshotCommit: SnapshotCommit
     public var descriptor: MenuDescriptor
-    /// Filled by the Claude refresh only.
-    public var diagnostics: [PDTDetailRefreshFailureDiagnostic] = []
-    /// Filled by the PDT API refresh only.
     public var failures: [PDTSyncFailure] = []
 }
-
-public protocol PDTBackgroundDetailRefreshing: Sendable {
-    func refresh(
-        cancellation: PDTCancellation?,
-        progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
-    ) throws -> PDTBackgroundDetailRefreshResult
-}
-
-extension PDTBackgroundDetailRefresh: PDTBackgroundDetailRefreshing {}
 
 /// Background detail refresh over the read-only PDT REST API (ADR-0002).
 ///
@@ -35,7 +23,7 @@ extension PDTBackgroundDetailRefresh: PDTBackgroundDetailRefreshing {}
 /// outcome. Once a failure ends the sync (lost access, or a rate limit that
 /// outlasts the client's retries), every later phase is skipped, price
 /// history included.
-public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing, @unchecked Sendable {
+public final class PDTAPIBackgroundDetailRefresh: @unchecked Sendable {
     private let client: PDTAPIClient
     private let snapshotStore: SnapshotStore
     private let pulseReadStore: PulseReadStore?
@@ -205,8 +193,7 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
         }
 
         // REST performance and gains shapes are not mapped yet (#246 scope),
-        // so this phase reports unavailable without degrading, like a Claude
-        // setup whose performance tools are missing.
+        // so this phase reports unavailable without degrading the outcome.
         progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Performance unavailable"))
         try throwIfCancelled(cancellation)
 
@@ -231,7 +218,7 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
         )
     }
 
-    static func preserveOptionalDetails(in snapshot: inout PortfolioSnapshot, from priorSnapshot: PortfolioSnapshot?) {
+    private static func preserveOptionalDetails(in snapshot: inout PortfolioSnapshot, from priorSnapshot: PortfolioSnapshot?) {
         guard let priorSnapshot else {
             return
         }
@@ -247,7 +234,7 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
         snapshot.latestCompleteDetailFillAsOf = priorSnapshot.latestCompleteDetailFillAsOf
     }
 
-    static func priceSeriesWithPriorFallback(
+    private static func priceSeriesWithPriorFallback(
         refreshed: [PricePoint],
         failedQuoteIDs: Set<Int>,
         priorSnapshot: PortfolioSnapshot?,

@@ -19,18 +19,12 @@ struct SnapshotStoreTests {
             from: packageRoot.appending(path: "docs/pdt/fixtures/quiet-no-pressure.json")
         )
         _ = try store.commitCurrentSnapshot(snapshot)
-        try store.saveLastDetailRefreshDiagnostic(PDTDetailRefreshFailureDiagnostic(
-            toolName: "pdt-list-symbol-prices",
-            phase: .priceHistory,
-            attemptCount: 1,
-            category: .transientFailure,
-            argumentShape: ["date_from", "date_to", "symbol_quote_id"]
-        ))
+        store.setLastSyncFailure(PDTSyncFailure(phase: .priceHistory, endpoint: .pricesBatch, kind: .server(status: 503), requestCount: 1))
         try PulseReadStore(directory: directory).markRead("pulse:v1:sanitized:fingerprint")
 
         #expect(try permissions(of: directory) == 0o700)
         #expect(try permissions(of: store.currentSnapshotPath) == 0o600)
-        #expect(try permissions(of: directory.appending(path: "latest-detail-refresh-diagnostic.json")) == 0o600)
+        #expect(try permissions(of: directory.appending(path: "latest-sync-failure.json")) == 0o600)
         #expect(try permissions(of: directory.appending(path: "pulse-read-state.json")) == 0o600)
         #expect(try store.loadPriorSnapshot() == snapshot)
     }

@@ -1,7 +1,0 @@
-{
-  "name": "pdtbar",
-  "private": true,
-  "devDependencies": {
-    "mcporter": "0.12.2"
-  }
-}

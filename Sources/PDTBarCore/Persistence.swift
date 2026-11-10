@@ -670,31 +670,6 @@ public struct SnapshotStore: Sendable {
         try commitCurrentSnapshot(snapshot)
     }
 
-    public func loadLastDetailRefreshDiagnostic() throws -> PDTDetailRefreshFailureDiagnostic? {
-        let target = detailRefreshDiagnosticFile
-        guard FileManager.default.fileExists(atPath: target.path) else {
-            return nil
-        }
-        try OwnerOnlyLocalStore.protectExistingFile(target)
-        return try JSONDecoder().decode(PDTDetailRefreshFailureDiagnostic.self, from: Data(contentsOf: target))
-    }
-
-    public func saveLastDetailRefreshDiagnostic(_ diagnostic: PDTDetailRefreshFailureDiagnostic) throws {
-        try OwnerOnlyLocalStore.write(stableJSONData(diagnostic), to: detailRefreshDiagnosticFile)
-    }
-
-    public func clearLastDetailRefreshDiagnostic() throws {
-        let target = detailRefreshDiagnosticFile
-        guard FileManager.default.fileExists(atPath: target.path) else {
-            return
-        }
-        try FileManager.default.removeItem(at: target)
-    }
-
-    private var detailRefreshDiagnosticFile: URL {
-        directory.appending(path: "latest-detail-refresh-diagnostic.json")
-    }
-
     /// The last PDT API sync failure. An unreadable file, or one written by
     /// another build with a kind or endpoint this build does not know, is no failure.
     public func lastSyncFailure() -> PDTSyncFailure? {
