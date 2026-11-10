@@ -1215,7 +1215,7 @@ public struct NormalizedHolding: Codable, Equatable {
         self.worth = worth
         self.price = price
         self.priceAsOf = priceAsOf
-        self.copyableIdentifier = safePublicIdentifier(copyableIdentifier)
+        self.copyableIdentifier = PDTBaseHoldingNormalizer.safePublicIdentifier(copyableIdentifier)
         self.isin = PDTBaseHoldingNormalizer.safeISIN(isin)
         self.averageBuyPrice = averageBuyPrice
         self.gainLoss = gainLoss
@@ -1230,7 +1230,7 @@ public struct NormalizedHolding: Codable, Equatable {
         worth = try container.decode(Money.self, forKey: .worth)
         price = validMoney(try? container.decodeIfPresent(Money.self, forKey: .price))
         priceAsOf = try container.decode(String.self, forKey: .priceAsOf)
-        copyableIdentifier = safePublicIdentifier(try? container.decodeIfPresent(String.self, forKey: .copyableIdentifier))
+        copyableIdentifier = PDTBaseHoldingNormalizer.safePublicIdentifier(try? container.decodeIfPresent(String.self, forKey: .copyableIdentifier))
         isin = PDTBaseHoldingNormalizer.safeISIN(try? container.decodeIfPresent(String.self, forKey: .isin))
         averageBuyPrice = validMoney(try? container.decodeIfPresent(Money.self, forKey: .averageBuyPrice))
         gainLoss = validMoney(try? container.decodeIfPresent(Money.self, forKey: .gainLoss))

@@ -1,5 +1,22 @@
 import Foundation
 
+public enum PDTBackgroundDetailRefreshOutcome: String, Codable, Equatable, Sendable {
+    case completed
+    case degraded
+}
+
+public struct PDTBackgroundDetailRefreshResult: Equatable {
+    public var outcome: PDTBackgroundDetailRefreshOutcome
+    public var pulse: PulseLifecycleResult
+    public var model: PortfolioPulseModel
+    public var snapshotCommit: SnapshotCommit
+    public var descriptor: MenuDescriptor
+    /// Filled by the Claude refresh only.
+    public var diagnostics: [PDTDetailRefreshFailureDiagnostic] = []
+    /// Filled by the PDT API refresh only.
+    public var failures: [PDTSyncFailure] = []
+}
+
 public protocol PDTBackgroundDetailRefreshing: Sendable {
     func refresh(
         cancellation: PDTCancellation?,
@@ -70,7 +87,7 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
             currency: PDTBaseHoldingNormalizer.portfolioCurrency(from: holdingInputs, fallback: "EUR"),
             holdings: holdingInputs
         ))
-        PDTBackgroundDetailRefresh.preserveOptionalDetails(in: &snapshot, from: priorSnapshot)
+        Self.preserveOptionalDetails(in: &snapshot, from: priorSnapshot)
         let openQuoteIDs = snapshot.openHoldings.map(\.quoteId)
 
         var failures: [PDTSyncFailure] = []
@@ -177,7 +194,7 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
                 ))
             }
             try throwIfCancelled(cancellation)
-            snapshot.priceSeries = PDTBackgroundDetailRefresh.priceSeriesWithPriorFallback(
+            snapshot.priceSeries = Self.priceSeriesWithPriorFallback(
                 refreshed: points,
                 failedQuoteIDs: failedQuoteIDs,
                 priorSnapshot: priorSnapshot,
@@ -212,6 +229,39 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
             descriptor: pulse.descriptor,
             failures: failures
         )
+    }
+
+    static func preserveOptionalDetails(in snapshot: inout PortfolioSnapshot, from priorSnapshot: PortfolioSnapshot?) {
+        guard let priorSnapshot else {
+            return
+        }
+        let currentQuoteIDs = Set(snapshot.openHoldings.map(\.quoteId))
+        snapshot.sectors = priorSnapshot.sectors
+        snapshot.assetTypes = priorSnapshot.assetTypes
+        snapshot.xRayHoldings = priorSnapshot.xRayHoldings
+        snapshot.incomeEvents = priorSnapshot.incomeEvents
+        snapshot.dividendRowCount = priorSnapshot.dividendRowCount
+        snapshot.priceSeries = priorSnapshot.priceSeries.filter { currentQuoteIDs.contains($0.quoteId) }
+        // Performance is period-bound to the latest report date. Do not carry
+        // an older period forward as if it described the refreshed portfolio.
+        snapshot.latestCompleteDetailFillAsOf = priorSnapshot.latestCompleteDetailFillAsOf
+    }
+
+    static func priceSeriesWithPriorFallback(
+        refreshed: [PricePoint],
+        failedQuoteIDs: Set<Int>,
+        priorSnapshot: PortfolioSnapshot?,
+        currentQuoteIDs: Set<Int>
+    ) -> [PricePoint] {
+        guard let priorSnapshot, !failedQuoteIDs.isEmpty else {
+            return refreshed
+        }
+        let refreshedQuoteIDs = Set(refreshed.map(\.quoteId))
+        let fallbackQuoteIDs = failedQuoteIDs.subtracting(refreshedQuoteIDs)
+        let fallback = priorSnapshot.priceSeries.filter {
+            currentQuoteIDs.contains($0.quoteId) && fallbackQuoteIDs.contains($0.quoteId)
+        }
+        return refreshed + fallback
     }
 
     private func fetch<T>(

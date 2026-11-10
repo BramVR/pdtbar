@@ -81,14 +81,14 @@ private struct PDTFixturePayload: Decodable {
     var getPortfolioHoldingsCurrent: HoldingsEnvelope?
     var getPortfolioPriorSnapshot: HoldingsEnvelope?
     var getPortfolioDistributions: DistributionsEnvelope?
-    var listXRayHoldings: XRayHoldingsEnvelope?
+    var listXRayHoldings: FixtureXRayEnvelope?
     var listCalendarEvents: CalendarEventsEnvelope?
     var listDividends: DividendsEnvelope?
     var listSymbolPrices: PricesEnvelope?
     var getSymbolQuote: SymbolQuoteEnvelope?
     var getSymbolQuotes: [SymbolQuoteEnvelope]?
-    var getPortfolioPerformance: LivePortfolioPerformanceEnvelope?
-    var getPortfolioGains: LivePortfolioGainsEnvelope?
+    var getPortfolioPerformance: FixturePerformanceEnvelope?
+    var getPortfolioGains: FixtureGainsEnvelope?
 
     var symbolQuotes: [SymbolQuoteEnvelope] {
         (getSymbolQuote.map { [$0] } ?? []) + (getSymbolQuotes ?? [])
@@ -242,6 +242,27 @@ private struct FixtureDistribution: Decodable {
     var optionalDetailInput: PDTDistributionInput {
         PDTDistributionInput(categoryName: categoryName, totalValue: totalValue, percentage: percentage)
     }
+}
+
+private struct FixtureXRayEnvelope: Decodable {
+    var items: [FixtureXRayHolding]
+}
+
+private struct FixtureXRayHolding: Decodable {
+    var weight: Double
+
+    var optionalDetailInput: PDTXRayHoldingInput {
+        PDTXRayHoldingInput(weight: weight)
+    }
+}
+
+private struct FixturePerformanceEnvelope: Decodable {
+    var oldestPortfolioDate: String?
+    var latestPortfolioDate: String?
+}
+
+private struct FixtureGainsEnvelope: Decodable {
+    var totalGainsPercentage: Double?
 }
 
 private struct CalendarEventsEnvelope: Decodable {

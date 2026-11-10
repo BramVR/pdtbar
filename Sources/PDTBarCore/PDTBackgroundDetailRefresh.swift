@@ -1,10 +1,5 @@
 import Foundation
 
-public enum PDTBackgroundDetailRefreshOutcome: String, Codable, Equatable, Sendable {
-    case completed
-    case degraded
-}
-
 public enum PDTDetailRefreshFailureCategory: String, Codable, Equatable, Sendable {
     case setupUnavailable
     case transientFailure
@@ -130,18 +125,6 @@ public struct PDTBackgroundDetailRefreshOptions: Equatable, Sendable {
     }
 }
 
-public struct PDTBackgroundDetailRefreshResult: Equatable {
-    public var outcome: PDTBackgroundDetailRefreshOutcome
-    public var pulse: PulseLifecycleResult
-    public var model: PortfolioPulseModel
-    public var snapshotCommit: SnapshotCommit
-    public var descriptor: MenuDescriptor
-    /// Filled by the Claude refresh only.
-    public var diagnostics: [PDTDetailRefreshFailureDiagnostic] = []
-    /// Filled by the PDT API refresh only.
-    public var failures: [PDTSyncFailure] = []
-}
-
 public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
     private let connector: any PDTMCPConnector
     private let snapshotStore: SnapshotStore
@@ -224,7 +207,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             tool: "pdt-get-portfolio-holdings",
             phase: .baseHoldings
         )
-        Self.preserveOptionalDetails(in: &snapshot, from: originalPriorSnapshot)
+        PDTAPIBackgroundDetailRefresh.preserveOptionalDetails(in: &snapshot, from: originalPriorSnapshot)
         _ = try snapshotStore.commitCurrentSnapshot(snapshot)
 
         try runOptionalPhase(
@@ -323,7 +306,7 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 tool: "pdt-list-symbol-prices",
                 phase: .priceHistory
             )
-            snapshot.priceSeries = Self.priceSeriesWithPriorFallback(
+            snapshot.priceSeries = PDTAPIBackgroundDetailRefresh.priceSeriesWithPriorFallback(
                 refreshed: priceHistory.points,
                 failedQuoteIDs: priceHistory.failedQuoteIDs,
                 priorSnapshot: originalPriorSnapshot,
@@ -487,22 +470,6 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
         return tools
     }
 
-    static func preserveOptionalDetails(in snapshot: inout PortfolioSnapshot, from priorSnapshot: PortfolioSnapshot?) {
-        guard let priorSnapshot else {
-            return
-        }
-        let currentQuoteIDs = Set(snapshot.openHoldings.map(\.quoteId))
-        snapshot.sectors = priorSnapshot.sectors
-        snapshot.assetTypes = priorSnapshot.assetTypes
-        snapshot.xRayHoldings = priorSnapshot.xRayHoldings
-        snapshot.incomeEvents = priorSnapshot.incomeEvents
-        snapshot.dividendRowCount = priorSnapshot.dividendRowCount
-        snapshot.priceSeries = priorSnapshot.priceSeries.filter { currentQuoteIDs.contains($0.quoteId) }
-        // Performance is period-bound to the latest report date. Do not carry
-        // an older period forward as if it described the refreshed portfolio.
-        snapshot.latestCompleteDetailFillAsOf = priorSnapshot.latestCompleteDetailFillAsOf
-    }
-
     private func performanceSummary(
         cancellation: PDTCancellation,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void
@@ -550,23 +517,6 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
                 arguments: arguments
             ))
         }
-    }
-
-    static func priceSeriesWithPriorFallback(
-        refreshed: [PricePoint],
-        failedQuoteIDs: Set<Int>,
-        priorSnapshot: PortfolioSnapshot?,
-        currentQuoteIDs: Set<Int>
-    ) -> [PricePoint] {
-        guard let priorSnapshot, !failedQuoteIDs.isEmpty else {
-            return refreshed
-        }
-        let refreshedQuoteIDs = Set(refreshed.map(\.quoteId))
-        let fallbackQuoteIDs = failedQuoteIDs.subtracting(refreshedQuoteIDs)
-        let fallback = priorSnapshot.priceSeries.filter {
-            currentQuoteIDs.contains($0.quoteId) && fallbackQuoteIDs.contains($0.quoteId)
-        }
-        return refreshed + fallback
     }
 
     private func xRayHoldings(
