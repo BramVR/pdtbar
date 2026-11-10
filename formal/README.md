@@ -21,4 +21,4 @@ A pass covers the model and its bounds only. Each skill lists what its model lea
 
 - `launch-runtime`: launch, PDT connection check / sign-in / disconnect, first fetch, cached pulse, background refresh wiring. Skill `verify-launch-runtime`. Check: `formal/launch-runtime/check.sh`. Mutations: `formal/launch-runtime/mutations.sh`.
 - `pulse-read-state`: mark-as-read, read-state reset, snapshot commit ordering. Skill `verify-pulse-read-state`. Check: `formal/pulse-read-state/check.sh`.
-- `background-detail-refresh`: phases, retries, cancellation, outage skip, price-history worker pool and deadline. Skill `verify-background-detail-refresh`. Mutations: `formal/background-detail-refresh/mutations.sh`.
+- `background-detail-refresh`: the PDT API refresh's phases, sync-ending failures, cancellation checkpoints, single snapshot commit, outcome, and stored sync failure. Skill `verify-background-detail-refresh`. Mutations: `formal/background-detail-refresh/mutations.sh`.

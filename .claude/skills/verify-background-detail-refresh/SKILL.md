@@ -1,54 +1,44 @@
 ---
 name: verify-background-detail-refresh
-description: "Check a background detail refresh or price-history worker change against its TLA+ model."
+description: "Check a PDT API background detail refresh change against its TLA+ model."
 ---
 
 # Verify background detail refresh
 
-`formal/background-detail-refresh/BackgroundDetailRefresh.tla` models one run of `PDTBackgroundDetailRefresh.refresh`. It covers the phase sequence, per-phase commits, retry rules, cancellation, the auth/setup outage skip, and the price-history worker pool racing its deadline. TLC checks every interleaving of the main thread, two workers, three holdings, the deadline, and a cancel.
+`formal/background-detail-refresh/BackgroundDetailRefresh.tla` models one run of `PDTAPIBackgroundDetailRefresh.refresh`. It covers the phase order, the `syncEnded` skip, the cancellation checkpoints, the single snapshot commit, the outcome, and the stored sync failure. TLC checks every request outcome in every phase, two price batches, and a cancel landing between any two steps.
 
 ## Promises checked
 
-- `CommittedNeverLost`. A slice committed fresh is never overwritten by a later phase, a later failure, a cancel, or the final commit.
-- `ReturnedHasSucceededPhases`. Every optional phase that finished cleanly is on disk when `refresh` returns. Price history is not committed when its phase ends. Only the performance commit or `PressureRunner.refreshedPulse` writes it.
-- `OutcomeHonest`. The outcome is `degraded` exactly when allocation, X-ray, income, or any price-history holding failed or returned a diagnostic, or the performance phase timed out.
-- `NoDeterministicRetry`. Only `transientFailure`, `timeout`, and `exit` are retried. The list is written out in the property, apart from `isRetryable`, so a classifier change shows up.
-- `NoPhaseAfterOutage`. Once a `setupUnavailable` or `unavailable` diagnostic is recorded, no later phase starts a Claude CLI run.
-- `ConcurrencyBound`. At most `priceHistoryConcurrencyLimit` price-history runs are in flight.
-- `PullAtMostOnce`. `nextQuoteID` hands each holding out at most once.
-- `ExactlyOnceAtReturn`. When `priceSeries` returns, each holding is either refreshed or failed, never both and never neither.
-- `ResultFrozen`. Late workers never change the accumulator after `priceSeries` returned it.
-- `NoRetryAfterDeadline`. No price-history retry starts a new Claude CLI run after the deadline.
-- `Terminates`. The refresh always returns or throws, even when the deadline fires or a cancel lands mid-flight.
+- `OneCommitAtEnd`. The snapshot is written at most once, and only by `PressureRunner.refreshedPulse` after the last phase. A counter of snapshot writes carries the check.
+- `AbortWritesNothing`. A failed base fetch, or a cancel that lands before the last `throwIfCancelled`, leaves the snapshot and the pulse read state untouched.
+- `NoRequestAfterSyncEnded`. Once a failure that ends the sync is recorded, no later phase or price batch sends a request. The kinds that end it are written out in the model apart from `PDTSyncFailure.Kind.endsSync`, so a classifier change shows up.
+- `FailedSliceKeepsPrior`. A facet or price batch that failed or was skipped keeps the prior snapshot's data. Nothing is lost.
+- `OutcomeHonest`. The outcome is `degraded` exactly when some facet or price batch was not refreshed.
+- `StoredFailureIsThisRuns`. After the first checkpoint, `SnapshotStore.lastSyncFailure()` never holds an earlier run's failure, and a returned refresh leaves `failures.last`, or none.
+- `Terminates`. The refresh always returns or throws.
 
 ## Covered code and sync commit
 
-Sync commit: `2e6ea94`. The model was last confirmed against the code at this commit.
+Sync commit: `33b5faa`. The model was last confirmed against the code at this commit.
 
-- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:8-41`. `PDTDetailRefreshFailureCategory`, `isRetryable`, `indicatesUnavailableSetup`.
-- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:90-130`. `PDTBackgroundDetailRefreshOptions` (concurrency limit, retry count, timeouts).
-- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:173-441`. `refresh` and `runOptionalPhase`: cancellation checkpoints, tool discovery, base phase, the one outage gate and failure channel, per-phase commits, pagination diagnostics, performance and its timeout diagnostic, outcome, final commit.
-- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:468-509`. `availableReadTools`, `preserveOptionalDetails`.
-- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:511-558`. `performanceSummary`, `callPerformanceDecoded`.
-- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:577-663`. `xRayHoldings`, `incomeEvents` (only whether they return a diagnostic).
-- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:853-981`. `priceSeries`: worker loop, deadline, cancellation, `group.wait`, abandonment.
-- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:983-1102`. `callDecoded`, `callDecodedWithRetry`, `throwIfCancelled`.
-- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:1135-1243`. `PDTPriceHistoryAccumulator`, `PDTPriceHistoryWorkTracker`.
-- `Sources/PDTBarCore/PDTLiveDataSource.swift:605-678`. `PDTListPaginationResult.truncationDiagnostic`, `paginatePDTList` (only the `.timeout` truncation diagnostic).
-- `Sources/PDTBarCore/PDTCancellation.swift`. The cancel flag and its parent link.
-- `Sources/PDTBarCore/LaunchRuntime.swift:213`. `BackgroundDetailRefreshPhase` (phase order only).
+- `PDTAPIBackgroundDetailRefresh.refresh` in `Sources/PDTBarCore/PDTAPIBackgroundDetailRefresh.swift`: the checkpoints, `setLastSyncFailure(nil)`, the base fetch and its catch, `record`, `optionalPhase`, the three facet closures, the price batch loop, the performance progress and final checkpoint, the outcome, the `refreshedPulse` call, `setLastSyncFailure(failures.last)`. Also `fetch` and `throwIfCancelled` in the same type.
+- `PDTAPIBackgroundDetailRefresh.preserveOptionalDetails` and `priceSeriesWithPriorFallback`. #250 moved these statics from the deleted Claude `PDTBackgroundDetailRefresh` without a behavior change.
+- `PDTSyncFailure.Kind.endsSync` in `Sources/PDTBarCore/PDTSyncFailure.swift`.
+- `PDTAPIClient.send` and `sendOnce` in `Sources/PDTBarCore/PDTAPIClient.swift`. Only the cancel check before each request is modeled, and the fact that every failure reaches `fetch` as a `PDTAPIRequestFailure`.
+- `PressureRunner.refreshedPulse` and `SnapshotStore.commitCurrentSnapshot`, `setLastSyncFailure` in `Sources/PDTBarCore/Persistence.swift`.
+- `PDTCancellation` in `Sources/PDTBarCore/PDTCancellation.swift`.
 
-Every action in the spec names the Swift lines it models. To see whether a change touches this model, run:
+Every action's comment names the statement or symbol it models. To see whether a change touches this model, run:
 
 ```bash
-git diff 2e6ea94 -- Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift Sources/PDTBarCore/PDTCancellation.swift Sources/PDTBarCore/PDTLiveDataSource.swift | grep -n '^@@'
+git diff 33b5faa -- Sources/PDTBarCore/PDTAPIBackgroundDetailRefresh.swift Sources/PDTBarCore/PDTSyncFailure.swift Sources/PDTBarCore/PDTAPIClient.swift Sources/PDTBarCore/Persistence.swift Sources/PDTBarCore/PDTCancellation.swift
 ```
 
-If a hunk falls in a range above, recheck the model. Line numbers drift with unrelated edits, so match by function name when they do.
+Recheck the model when a hunk falls inside one of the symbols above.
 
 ## Run
 
-Needs a JDK 11+. The runner pins TLA+ 1.7.4 and runs one TLC worker unless `PDTBAR_TLC_WORKERS` is set.
+Needs a JDK 11+. The runner pins TLA+ 1.7.4.
 
 ```bash
 Scripts/formal/tlc.sh formal/background-detail-refresh/BackgroundDetailRefresh.tla
@@ -57,14 +47,25 @@ formal/background-detail-refresh/mutations.sh
 
 Expected at the sync commit:
 
-- The model run prints `No error has been found` with 3,290,492 distinct states. It takes about 3 minutes on one worker, or about 1 minute with `PDTBAR_TLC_WORKERS=4`. Any failure means the change broke something or the model needs updating.
-- `mutations.sh` prints one row per mutation, each with the invariant it expects to be violated, and exits 0 in about 2 minutes. A row that reports `No error has been found` means the model lost its teeth.
+- The model run prints `No error has been found` with 1,453 states generated, 990 distinct, depth 15, in about a second. Any failure means the change broke something or the model needs updating.
+- `mutations.sh` prints one row per mutation with the invariant it expects to be violated, and exits 0 in about 6 seconds. A row that reports `No error has been found` means the model lost its teeth.
 
-## Retired findings
+## Mutations
 
-- `NoPhaseAfterOutage` (#272). Only a phase that threw reached `recordOptionalPhaseFailure`, the one writer of `skipRemainingPhasesForUnavailableSetup`. Price history never throws. It returns its per-holding diagnostics, so an outage seen there let the performance phase start one more doomed CLI run. TLC's shortest trace had 21 states: base and the first three optional phases succeed, a price-history worker gets `setupUnavailable`, the main thread abandons the rest, `Collect` leaves the flag false, and `Advance` enters performance. Fixed by `2e6ea94`. Every optional phase now runs through `runOptionalPhase`, which is the only writer of `diagnostics` and skips the phase when `diagnostics` already holds an outage category. The boolean is gone. In the model, `skip` became `diagOutage` ("`diagnostics` holds an outage"), and both `OptionalFails` and `Collect` set it. The knob and `BackgroundDetailRefreshFindingsFixed.cfg` are gone. Making `Collect` leave `diagOutage` unchanged reproduces the 21-state trace.
+Each row breaks one statement of the model the way a code change could. Each was confirmed at `33b5faa`.
 
-- `NoRetryAfterDeadline`. `priceSeries` called `callDecodedWithRetry` without `retryDeadline`, so a transient price-history failure past the deadline started another full CLI run. Fixed by `f11cf27` (#236), which passes `retryDeadline: deadline`. `a4ffe5a` (#239) made `retryDeadline` required for every call. The knob is gone and the property stays as a guard. Dropping `~pastDeadline` from the retry guard in `WCallReturns` and from `WBackoffEnds`, which mirrors deleting `now() < retryDeadline` at `:1047` and the guard at `:1013`, fails it.
+- `perPhaseCommit`: an optional phase that refreshed its facet commits it, the Claude refresh's shape. Caught by `OneCommitAtEnd`.
+- `optionalIgnoresSyncEnded`: `optionalPhase` loses `guard !syncEnded`. Caught by `NoRequestAfterSyncEnded`.
+- `priceIgnoresSyncEnded`: the batch loop loses its `if syncEnded`. Caught by `NoRequestAfterSyncEnded` (an ending failure in batch 1, then batch 2 sends).
+- `rateLimitKeepsSyncing`: `endsSync` drops `.rateLimited`. Caught by `NoRequestAfterSyncEnded`.
+- `failedPhaseDropsPrior`: a failed optional phase clears its facet. Caught by `FailedSliceKeepsPrior`.
+- `outcomeIgnoresFailures`: the outcome stops reading `failures`. Caught by `OutcomeHonest`.
+- `noFailureClearAtStart`: `refresh` stops calling `setLastSyncFailure(nil)` first. Caught by `StoredFailureIsThisRuns`.
+- `noFinalCancelCheck`: the `throwIfCancelled` before `refreshedPulse` is dropped. Caught by `AbortWritesNothing`. TLC's shortest trace: income fails with an ending kind, price history is skipped with no checkpoint, the cancel lands, and the commit runs.
+
+Dropping the `if !syncEnded` around the price block fails nothing, and the model is right about that. The per-batch gate already stops every request, and skipping the block leaves the same prior series.
+
+A mutation that makes an action unsatisfiable passes silently. An example is adding `writes' = writes + 1` to an action that also lists `writes` under `UNCHANGED`. Read a new row's TLC trace once to see that it reaches the break.
 
 ## Reading a result
 
@@ -72,62 +73,47 @@ Read every TLC result with the `/statechart` skill. A violation comes back as it
 
 ## Real bug or modeling error
 
-Replay the trace against the Swift code, one action at a time, using the line numbers in each action's comment.
+Replay the trace against `refresh`, one action at a time, using each action's comment.
 
-- It is a real bug when each step is something the code can do, in that order, with no lock or check between steps that the model leaves out. Report it with the trace in the code's names. Do not weaken the property or change product code unless asked.
-- It is a modeling error when a step does something the code cannot do. Examples: two actions the code runs under one lock, split apart in the model. A value the model lets change that the code keeps fixed. A category the code never produces at that call site. Fix the model and say what you fixed.
+- It is a real bug when each step is something the code can do, in that order. Report it with the trace in the code's names. Do not weaken the property or change product code unless asked.
+- It is a modeling error when a step does something the code cannot do. Examples: a request outcome the client never returns at that call site, or a checkpoint the model places where the code has none. Fix the model and say what you fixed.
 
 Atomicity the model relies on:
 
-- `WComplete` is one step because `PDTPriceHistoryWorkTracker.complete` runs the accumulator append inside its own lock.
-- `Decide` is one step because `markAbandoned` empties pending and marks running holdings under one lock. It reads `cancelled` and the outage category first. Those flags only turn on, so reading them a little earlier reaches no other branch.
-- `WCheck` reads the deadline, the cancel flag, and the outage flag in one step. All three only ever turn on.
-- `WPull` merges `nextQuoteID` with the top of `callDecodedWithRetry` (cancel check, deadline guard) and the first CLI run. Nothing between them reads shared state other than those flags.
-- `WBackoffEnds` merges the post-backoff cancel check, the next iteration's deadline guard, and the next run's start.
-- A main-thread step that passes a `throwIfCancelled` checkpoint needs `~cancelled`. A cancel that lands just after a checkpoint is the same as the step running first and `Cancel` after it.
+- The refresh is sequential. The only other actor is the cancel.
+- One optional-phase step covers its requests, the `record` of a failure, and the `throwIfCancelled` after the phase. Nothing between them writes a file or reads the flag except the client's own check.
+- A request step in a cancelled run throws. The client checks the flag before it sends, and `fetch`'s catch rethrows it as `PDTAPIError.cancelled`, which no phase catches.
+- A cancel that lands just after a step's checkpoint is the same as the step running first and `Cancel` after it. The ghost `cancelEarly` records whether the cancel landed before the final checkpoint.
 
 ## Modeling choices
 
-- `RetryCount = 1`. The app uses the default `optionalRetryCount: 0`, so the connector owns retries and the refresh layer never retries. Tests set it to 1. With 1, every behavior of 0 is still reachable up to the failure category, because a fail action may end a call with any category (the call's deadline can refuse a retry). The retry guards are only exercised with 1.
-- The sequential phases' own deadlines (`effectivePaginationTimeoutSeconds`) are not clocks in the model. A guard that refuses a retry on the deadline shows up as the phase failing.
-- X-ray and income can succeed with a `.timeout` diagnostic (`OptionalSucceedsWithDiagnostic`): pagination truncated by the page cap or deadline, or the income quote scan out of time. The slice is committed and the refresh degrades, but no outage is recorded.
-- Cancellation is one flag. `priceCancellation` adds no state, because it is cancelled only when the caller cancelled or the deadline passed.
+- Each request is one `PDTAPIClient` call whose retries, pages, backoff, token refresh retry, and semaphore wait are folded into its final outcome: success or one `PDTSyncFailure.Kind`.
+- Income's two requests and X-ray's pages are one call per phase. A change that sends income's dividends request after the calendar request ended the sync would not show.
+- `Kinds = {"reconnect", "rateLimited", "server"}`: lost access, the 429 that outlasted the client's retries, and a failure that does not end the sync. The other ending kinds behave like `reconnect`.
+- `ChunkCount = 2`: the smallest count where an ending failure in one batch can be followed by another batch.
+- The base failure's kind does not matter. It always throws.
+
+Bounds live in `BackgroundDetailRefresh.cfg`. The state space is small, so raising `ChunkCount` or adding kinds is cheap.
 
 ## Updating the model
 
-When a covered function changes on purpose:
+When a covered symbol changes on purpose:
 
-1. Edit the matching action so it does what the new code does, and update its line comment.
-2. New shared state or a new lock section becomes a new variable or a new action. Keep one action per lock section.
+1. Edit the matching action so it does what the new code does, and update its comment.
+2. A new checkpoint, gate, or write becomes its own step or variable.
 3. Run the model and `mutations.sh`. Compare against the expected results above.
 4. Prove a changed property can still fail. Break the new code path in a scratch edit, mirror the break in the model, see TLC fail, then revert both. Add the model break as a `mutations.sh` row.
-5. Move the sync commit and the line ranges forward only after you confirm the model describes the code at the new commit.
-
-Bounds live in the `.cfg` files: `HoldingCount = 3`, `Limit = 2`, `RetryCount = 1`, `FailureCategories = {"transientFailure", "decode", "setupUnavailable"}`, one representative per retry class. Raising `HoldingCount` to 4 or adding categories grows the state space fast, so run that once, not on every change.
-
-## How the properties were shown to fail
-
-At `1b6ffd4`, a scratch change to the real code dropped `!abandonedQuoteIDs.contains(quoteID)` from `PDTPriceHistoryWorkTracker.complete` (`:1209`). `swift build` still passed. With the matching model edit (`record == h \notin finished` in `WComplete`), the config failed with `ResultFrozen`. Each other property also fails when its line in the model is broken this way:
-
-- `CommittedNeverLost`. `Finalize` commits the prior snapshot instead of `snap`.
-- `ReturnedHasSucceededPhases`. `Finalize` skips the commit (`store' = store`).
-- `OutcomeHonest`. `Collect` drops the price-history diagnostics, or `Performance` drops its timeout diagnostic.
-- `NoPhaseAfterOutage`. `Collect` leaves `diagOutage` unchanged (the #272 bug, 21 states), `OptionalFails` leaves it unchanged, or `Advance` ignores it.
-
-`mutations.sh` replays the `NoPhaseAfterOutage`, `ReturnedHasSucceededPhases`, `OutcomeHonest` (`Collect`), `NoDeterministicRetry`, and `ConcurrencyBound` rows. Each was confirmed at `2e6ea94`. The other rows above were confirmed by hand at `1b6ffd4`.
-- `NoDeterministicRetry`. `IsRetryable` includes `"decode"`.
-- `ConcurrencyBound`. `Workers == 1 .. HoldingCount`, so the `min` with the limit is dropped.
-- `PullAtMostOnce`. `WPull` does not pop `pending`.
-- `ExactlyOnceAtReturn`. `markAbandoned` ignores pending holdings.
-- `NoRetryAfterDeadline`. The retry guard in `WCallReturns` and `WBackoffEnds` ignore `pastDeadline`.
-- `Terminates`. `RecordAbandoned` never runs. Run with `-deadlock` to see the temporal failure instead of the deadlock.
+5. Move the sync commit forward only after you confirm the model describes the code at the new commit.
 
 ## Out of scope
 
-- Pagination page by page. Each optional phase is one action that succeeds, succeeds with a truncation diagnostic, or fails. Snapshot contents are not modeled, so a truncated slice still counts as fresh.
-- The income quote scan's own deadline. Only its timeout diagnostic is modeled. `BackgroundDetailRefreshTests.swift` covers the rest.
-- The connector's own retry in `ClaudeLocalConnection.callReadTool` and `ClaudeToolCallRetryPolicy`, and how a cancel kills the running CLI process. Each model run is one connector call that can return any category.
-- `markCompleted` and the progress callbacks, including progress sent after the phase ended.
-- Store write errors. A throwing `PressureRunner.refreshedPulse` would lose the uncommitted price history.
-- The app side: `PDTLaunchRuntime`, `portfolioRefreshInFlight`, `activeRefreshCancellation`, and runs that overlap a later refresh.
-- Snapshot contents. Slices are only `prior`, `fresh`, or `none`.
+- Store write errors. A throwing `refreshedPulse` makes `refresh` throw with the stored failure still cleared.
+- The read-state order inside `commitCurrentSnapshot`. `formal/pulse-read-state` checks it.
+- The app side: `startBackgroundPortfolioRefresh`, `applicationWillTerminate`'s wait, and `PDTLaunchRuntime`. `formal/launch-runtime` checks the wiring.
+- `PDTAPIClient` internals: retry delays, the `Retry-After` cap, the token refresh retry, and the request semaphore. `PDTAPIClientTests` cover them.
+- A `URLError.cancelled` without the flag set. It becomes a recorded `.cancelled` failure that does not end the sync.
+- Progress callbacks, snapshot contents beyond `prior` / `fresh` / `none`, and performance, which is always unavailable and never carried.
+
+## History
+
+Until #250 this model described the Claude CLI refresh, `PDTBackgroundDetailRefresh`, with its price-history worker pool, phase deadlines, per-phase commits, and category retries. Its retired findings (#272, the outage gate, and #236, retries after the price deadline) are in the git history of this file before #250.
