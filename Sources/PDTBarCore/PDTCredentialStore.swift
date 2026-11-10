@@ -90,12 +90,35 @@ public struct FilePDTCredentialStore: PDTCredentialStore {
         guard descriptor >= 0 else {
             throw PDTCredentialStoreError.writeFailed(code: errno)
         }
-        let complete = data.withUnsafeBytes { write(descriptor, $0.baseAddress, $0.count) } == data.count
+        var failure = Self.writeAll(data, to: descriptor)
+        // fsync before rename so a crash can't leave an empty file in place of the credential.
+        if failure == nil, fsync(descriptor) != 0 {
+            failure = errno
+        }
         close(descriptor)
-        guard complete, rename(temporary.path, url.path) == 0 else {
-            let code = errno
+        if failure == nil, rename(temporary.path, url.path) != 0 {
+            failure = errno
+        }
+        if let failure {
             unlink(temporary.path)
-            throw PDTCredentialStoreError.writeFailed(code: code)
+            throw PDTCredentialStoreError.writeFailed(code: failure)
+        }
+    }
+
+    private static func writeAll(_ data: Data, to descriptor: Int32) -> Int32? {
+        data.withUnsafeBytes { buffer -> Int32? in
+            var offset = 0
+            while offset < buffer.count {
+                let written = write(descriptor, buffer.baseAddress! + offset, buffer.count - offset)
+                if written > 0 {
+                    offset += written
+                } else if written < 0, errno == EINTR {
+                    continue
+                } else {
+                    return written < 0 ? errno : EIO
+                }
+            }
+            return nil
         }
     }
 }
