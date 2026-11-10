@@ -83,21 +83,43 @@ public enum PDTAPIResource: Equatable, Sendable {
     }
 }
 
-public struct PDTAPIToken: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
+/// A bearer token. It never prints: `description`, `debugDescription`, and
+/// `Mirror` are redacted, and `fingerprint` is the only diagnostic view.
+public struct PDTAPIToken: Sendable, Equatable, Codable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     let secret: String
 
     public init(_ secret: String) {
         self.secret = secret
     }
 
+    public init(from decoder: Decoder) throws {
+        secret = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(secret)
+    }
+
+    public var fingerprint: PDTSecretFingerprint { PDTSecretFingerprint(secret) }
     public var description: String { "PDTAPIToken(redacted)" }
     public var debugDescription: String { description }
+    public var customMirror: Mirror { Mirror(self, children: []) }
 }
 
-/// Supplies the bearer token per request. Production backs this with the
-/// Keychain (ADR-0002); tests and smokes use `InMemoryPDTAPITokenProvider`.
+/// Supplies the bearer token per request. Production backs this with
+/// `PDTConnection` (ADR-0002); tests and smokes may use `InMemoryPDTAPITokenProvider`.
 public protocol PDTAPITokenProvider {
     func currentToken() throws -> PDTAPIToken
+    /// PDT answered `401 TOKEN_INVALID` for `token`. Return true to resend the
+    /// request once with `currentToken()`.
+    func shouldRetry(afterRejecting token: PDTAPIToken, reason: String?) throws -> Bool
+}
+
+public extension PDTAPITokenProvider {
+    func shouldRetry(afterRejecting _: PDTAPIToken, reason _: String?) throws -> Bool {
+        false
+    }
 }
 
 public struct InMemoryPDTAPITokenProvider: PDTAPITokenProvider {
@@ -241,6 +263,39 @@ public struct PDTAPIRequestPolicy: Sendable {
 
 public protocol PDTHTTPTransport {
     func send(_ request: URLRequest, cancellation: PDTCancellation?) throws -> (Data, HTTPURLResponse)
+}
+
+extension PDTHTTPTransport {
+    func sendClassifyingFailures(_ request: URLRequest, cancellation: PDTCancellation?) throws -> (Data, HTTPURLResponse) {
+        do {
+            return try send(request, cancellation: cancellation)
+        } catch let error as PDTAPIError {
+            throw error
+        } catch let error as URLError {
+            throw error.code == .cancelled ? PDTAPIError.cancelled : PDTAPIError.transport(code: error.code.rawValue)
+        } catch {
+            throw PDTAPIError.transport(code: URLError.unknown.rawValue)
+        }
+    }
+}
+
+extension HTTPURLResponse {
+    var lowercasedHeaders: [String: String] {
+        Dictionary(
+            allHeaderFields.compactMap { key, value in
+                (key as? String).map { ($0.lowercased(), "\(value)") }
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+}
+
+/// PDT sits behind Cloudflare, which rejects some default user agents (error 1010).
+enum PDTUserAgent {
+    static let value: String = {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        return "pdtbar/\(version ?? "dev")"
+    }()
 }
 
 public protocol PDTAPISleeper {
@@ -451,12 +506,19 @@ public struct PDTAPIClient {
         let url = components.url!
 
         var attempt = 1
+        var retriedRejectedToken = false
         while true {
             if cancellation?.isCancelled == true {
                 throw PDTAPIError.cancelled
             }
+            let token = try tokenProvider.currentToken()
             do {
-                return try sendOnce(url: url, cancellation: cancellation, sent: &sent)
+                return try sendOnce(url: url, token: token, cancellation: cancellation, sent: &sent)
+            } catch let PDTAPIError.tokenInvalid(reason) where !retriedRejectedToken {
+                guard try tokenProvider.shouldRetry(afterRejecting: token, reason: reason) else {
+                    throw PDTAPIError.tokenInvalid(reason: reason)
+                }
+                retriedRejectedToken = true
             } catch let error as PDTAPIError where error.isRetryable && attempt < policy.maxAttempts {
                 let delay = retryDelay(for: error, attempt: attempt)
                 guard delay <= policy.maxRetryDelay else {
@@ -468,11 +530,11 @@ public struct PDTAPIClient {
         }
     }
 
-    private func sendOnce(url: URL, cancellation: PDTCancellation?, sent: inout Int) throws -> Data {
+    private func sendOnce(url: URL, token: PDTAPIToken, cancellation: PDTCancellation?, sent: inout Int) throws -> Data {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: policy.requestTimeout)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let token = try tokenProvider.currentToken()
+        request.setValue(PDTUserAgent.value, forHTTPHeaderField: "User-Agent")
         request.setValue("Bearer \(token.secret)", forHTTPHeaderField: "Authorization")
 
         while gate.wait(timeout: .now() + 0.1) == .timedOut {
@@ -484,28 +546,12 @@ public struct PDTAPIClient {
         if cancellation?.isCancelled == true {
             throw PDTAPIError.cancelled
         }
-        let data: Data
-        let response: HTTPURLResponse
-        do {
-            sent += 1
-            (data, response) = try transport.send(request, cancellation: cancellation)
-        } catch let error as PDTAPIError {
-            throw error
-        } catch let error as URLError {
-            throw error.code == .cancelled ? PDTAPIError.cancelled : PDTAPIError.transport(code: error.code.rawValue)
-        } catch {
-            throw PDTAPIError.transport(code: URLError.unknown.rawValue)
-        }
+        sent += 1
+        let (data, response) = try transport.sendClassifyingFailures(request, cancellation: cancellation)
         if (200..<300).contains(response.statusCode) {
             return data
         }
-        let headers = Dictionary(
-            response.allHeaderFields.compactMap { key, value in
-                (key as? String).map { ($0.lowercased(), "\(value)") }
-            },
-            uniquingKeysWith: { first, _ in first }
-        )
-        throw PDTAPIError.classify(status: response.statusCode, body: data, headers: headers, now: now())
+        throw PDTAPIError.classify(status: response.statusCode, body: data, headers: response.lowercasedHeaders, now: now())
     }
 
     private func retryDelay(for error: PDTAPIError, attempt: Int) -> TimeInterval {
@@ -558,8 +604,9 @@ public struct PDTAPIClient {
     }
 }
 
-/// Production transport. Refuses every redirect so the bearer token can never
-/// follow a response to another origin.
+/// Production transport. Sends `GET`s, plus the `POST` to PDT's token endpoint,
+/// and refuses every redirect so a token can never follow a response to
+/// another origin.
 public final class URLSessionPDTHTTPTransport: NSObject, PDTHTTPTransport, URLSessionTaskDelegate, @unchecked Sendable {
     private let configuration: URLSessionConfiguration
 
@@ -573,7 +620,7 @@ public final class URLSessionPDTHTTPTransport: NSObject, PDTHTTPTransport, URLSe
     }
 
     public func send(_ request: URLRequest, cancellation: PDTCancellation?) throws -> (Data, HTTPURLResponse) {
-        guard request.httpMethod == "GET" else {
+        guard request.httpMethod == "GET" || PDTOAuthEndpoints.isTokenRequest(request) else {
             throw PDTAPIError.invalidRequest
         }
         let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
