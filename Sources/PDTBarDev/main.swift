@@ -52,6 +52,8 @@ do {
                 snapshotStore: SnapshotStore(directory: URL(fileURLWithPath: arguments[4]))
             )
         )
+    } else if let command = arguments.first, PDTConnectionCommand.names.contains(command) {
+        output = Data(try PDTConnectionCommand.run(arguments).joined(separator: "\n").utf8)
     } else {
         throw CommandError.usage
     }
@@ -65,6 +67,7 @@ do {
             usage: pdtbar-dev model --fixture <path>
                    pdtbar-dev descriptor --fixture <path> [--portfolio-values <visible|hidden>]
                    pdtbar-dev <run|seed-prior> --fixture <path> --snapshot-dir <path>
+                   pdtbar-dev <pdt-sign-in|pdt-status|pdt-refresh|pdt-disconnect> --store <path>
             """.utf8
         )
     )
@@ -74,6 +77,6 @@ do {
     Foundation.exit(1)
 }
 
-private enum CommandError: Error {
+enum CommandError: Error {
     case usage
 }
