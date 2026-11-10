@@ -1237,7 +1237,7 @@ private struct TTYCommandRunner {
             try? secondaryHandle.close()
         }
         let child: ChildProcessGroup
-        do {
+        do throws(ChildSpawnError) {
             child = try ChildProcessGroup.spawn(ChildLaunch(
                 executable: resolved,
                 arguments: options.extraArgs,

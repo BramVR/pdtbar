@@ -47,33 +47,33 @@ struct ChildProcessGroup: ~Copyable {
 
     static func spawn(_ launch: ChildLaunch) throws(ChildSpawnError) -> ChildProcessGroup {
         var attributes: posix_spawnattr_t?
-        posix_spawnattr_init(&attributes)
+        try check(posix_spawnattr_init(&attributes))
         defer { posix_spawnattr_destroy(&attributes) }
         var defaultSignals = sigset_t()
         sigfillset(&defaultSignals)
         var emptyMask = sigset_t()
         sigemptyset(&emptyMask)
-        posix_spawnattr_setsigdefault(&attributes, &defaultSignals)
-        posix_spawnattr_setsigmask(&attributes, &emptyMask)
-        posix_spawnattr_setpgroup(&attributes, 0)
+        try check(posix_spawnattr_setsigdefault(&attributes, &defaultSignals))
+        try check(posix_spawnattr_setsigmask(&attributes, &emptyMask))
+        try check(posix_spawnattr_setpgroup(&attributes, 0))
         let flags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_CLOEXEC_DEFAULT
-        posix_spawnattr_setflags(&attributes, Int16(flags))
+        try check(posix_spawnattr_setflags(&attributes, Int16(flags)))
 
         var actions: posix_spawn_file_actions_t?
-        posix_spawn_file_actions_init(&actions)
+        try check(posix_spawn_file_actions_init(&actions))
         defer { posix_spawn_file_actions_destroy(&actions) }
         switch launch.stdio {
         case let .terminal(descriptor):
             for target: Int32 in 0...2 {
-                posix_spawn_file_actions_adddup2(&actions, descriptor, target)
+                try check(posix_spawn_file_actions_adddup2(&actions, descriptor, target))
             }
         case let .pipes(stdout, stderr):
-            posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
-            posix_spawn_file_actions_adddup2(&actions, stdout.fileHandleForWriting.fileDescriptor, 1)
-            posix_spawn_file_actions_adddup2(&actions, stderr.fileHandleForWriting.fileDescriptor, 2)
+            try check(posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0))
+            try check(posix_spawn_file_actions_adddup2(&actions, stdout.fileHandleForWriting.fileDescriptor, 1))
+            try check(posix_spawn_file_actions_adddup2(&actions, stderr.fileHandleForWriting.fileDescriptor, 2))
         }
         if let workingDirectory = launch.workingDirectory {
-            posix_spawn_file_actions_addchdir_np(&actions, workingDirectory.path)
+            try check(posix_spawn_file_actions_addchdir_np(&actions, workingDirectory.path))
         }
 
         let argv = ([launch.executable] + launch.arguments).map { strdup($0) } + [nil]
@@ -89,15 +89,16 @@ struct ChildProcessGroup: ~Copyable {
             try? stdout.fileHandleForWriting.close()
             try? stderr.fileHandleForWriting.close()
         }
-        guard result == 0 else {
-            throw ChildSpawnError(code: result)
-        }
+        try check(result)
         return ChildProcessGroup(pid: pid)
     }
 
     /// Polls without reaping, so the group ID stays reserved.
     var isRunning: Bool {
-        Self.naturalExitStatus(of: pid) == nil
+        if case .unreaped(_, exitStatus: nil) = RootObservation.observe(pid) {
+            return true
+        }
+        return false
     }
 
     /// Ends the group and returns the root's exit status if the root had exited on its own,
@@ -113,29 +114,61 @@ struct ChildProcessGroup: ~Copyable {
     }
 
     private static func terminate(pid: pid_t) -> Int32? {
-        let naturalStatus = naturalExitStatus(of: pid)
-        kill(-pid, SIGTERM)
-        if naturalStatus == nil {
-            let deadline = Date().addingTimeInterval(terminationGrace)
-            while naturalExitStatus(of: pid) == nil, Date() < deadline {
-                usleep(50000)
-            }
+        guard case let .unreaped(group, naturalStatus) = RootObservation.observe(pid) else {
+            return nil
+        }
+        group.signal(SIGTERM)
+        var latest = RootObservation.observe(pid)
+        let deadline = Date().addingTimeInterval(terminationGrace)
+        while case .unreaped(_, exitStatus: nil) = latest, Date() < deadline {
+            usleep(50000)
+            latest = RootObservation.observe(pid)
+        }
+        guard case let .unreaped(group, _) = latest else {
+            return nil
         }
         // Unconditional: helpers that ignore SIGTERM or outlived the root are still in the group.
-        kill(-pid, SIGKILL)
-        var status: Int32 = 0
-        while waitpid(pid, &status, 0) == -1, errno == EINTR {}
+        group.signal(SIGKILL)
+        group.reapLeader()
         return naturalStatus
     }
 
-    /// The root's exit code (or terminating signal, as Foundation reports it) once it has exited.
-    private static func naturalExitStatus(of pid: pid_t) -> Int32? {
+    private static func check(_ code: Int32) throws(ChildSpawnError) {
+        guard code == 0 else {
+            throw ChildSpawnError(code: code)
+        }
+    }
+}
+
+/// What a non-reaping wait says about the root.
+private enum RootObservation {
+    /// The root is still this process's unreaped child, running or a zombie, so its group ID is
+    /// reserved. `exitStatus` is the exit code (or terminating signal, as Foundation reports it)
+    /// once it has exited.
+    case unreaped(ReservedGroup, exitStatus: Int32?)
+    /// The root is no longer this process's child (ECHILD: something else reaped it). Its group
+    /// ID may already belong to an unrelated group, so nothing may signal it.
+    case lost
+
+    static func observe(_ pid: pid_t) -> RootObservation {
         var info = siginfo_t()
         while waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT) == -1 {
-            // ECHILD: something else reaped the root, so it is not running.
-            guard errno == EINTR else { return -1 }
+            guard errno == EINTR else { return .lost }
         }
-        guard info.si_pid == pid else { return nil }
-        return info.si_status
+        return .unreaped(ReservedGroup(leader: pid), exitStatus: info.si_pid == pid ? info.si_status : nil)
+    }
+}
+
+/// The only way to signal a process group: a value that exists only inside an `.unreaped` observation.
+private struct ReservedGroup {
+    fileprivate let leader: pid_t
+
+    func signal(_ signal: Int32) {
+        kill(-leader, signal)
+    }
+
+    func reapLeader() {
+        var status: Int32 = 0
+        while waitpid(leader, &status, 0) == -1, errno == EINTR {}
     }
 }

@@ -44,7 +44,7 @@ Sync commit: `35b1343`. The model was last confirmed against the code at this co
 
 `Sources/PDTBarAppSupport/ChildProcessGroup.swift`:
 
-- `ChildProcessGroup.spawn` (48-96) starts root as the leader of a new process group. `isRunning` (99) polls without reaping. `end()` (105) and `deinit` (111) both run `terminate` (115-129): SIGTERM the group, wait up to 2 s for root, SIGKILL the group, reap root. Modelled by `Launch`, `LoopProcessExited`, `CleanTerm`, `CleanWait`, and `CleanReap`.
+- `ChildProcessGroup.spawn` (48-95) starts root as the leader of a new process group and throws on any failed spawn attribute or file action. `isRunning` (97) polls without reaping. `end()` (106) and `deinit` (112) both run `terminate` (116-134): SIGTERM the group, wait up to 2 s for root, SIGKILL the group, reap root. Only a `RootObservation.unreaped` value (144-160) carries the `ReservedGroup` (163-174) that can signal the group. Modelled by `Launch`, `LoopProcessExited`, `CleanTerm`, `CleanWait`, and `CleanReap`.
 
 Every action in the `.tla` carries a comment naming the Swift line it models (`M:` main.swift, `C:` ClaudeLocalConnection.swift, `G:` ChildProcessGroup.swift, `L:` LaunchRuntime.swift).
 
@@ -113,5 +113,6 @@ When a change is intended:
 - Refresh cancellation from #239 and app quit. `applicationWillTerminate` cancels only the background refresh, not a running login.
 - What `launchRuntime.beginLoginHandoff` and `completeLoginHandoff` do with the result, and what happens to other menu states while a login runs.
 - The PTY byte stream: the rolling needle buffer, send-on-substring answers, cursor queries, URL detection, and partial reads of the success marker at the deadline.
+- A foreign reaper. If something else in PDTBar reaped root, `RootObservation.lost` makes cleanup signal nothing, because the group id may already be reused. The app has no other reaper, so the model leaves this state out.
 - Processes that leave root's process group (`setsid`, daemonizing helpers), a group member that forks at the instant the group SIGKILL is sent, and a root process that cannot be killed by SIGKILL.
 - Bounds: two clicks and one spawned helper per attempt.

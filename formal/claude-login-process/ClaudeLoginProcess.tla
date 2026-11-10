@@ -139,7 +139,7 @@ LaunchFails(a) ==
                    marker, exitStatus, pending, applied, staleApplied>>
 
 \* C:1297 cancellation check after the initial delay. A throw ends the
-\* child through its deinit (G:111) before run() returns.
+\* child through its deinit (G:112) before run() returns.
 AfterDelay(a) ==
     /\ pc[a] = "delay"
     /\ IF cancelled[a]
@@ -166,7 +166,7 @@ LoopStopOnMarker(a) ==
                    marker, exitStatus, outcome, pending, applied,
                    staleApplied>>
 
-\* C:1435 `if !child.isRunning { break }`, a non-reaping poll (G:99).
+\* C:1435 `if !child.isRunning { break }`, a non-reaping poll (G:97).
 LoopProcessExited(a) ==
     /\ pc[a] = "loop"
     /\ root[a] = "dead"
@@ -185,7 +185,7 @@ LoopDeadline(a) ==
 
 \* C:1439 cancellation check after the loop, then C:1472-1482 build the
 \* Result from end()'s natural exit status and C:820-826 runBlocking
-\* classifies it. end() reads that status (G:116) before it signals, so it
+\* classifies it. end() reads that status (G:117) before it signals, so it
 \* matches root's state here. The settle (C:1445) and drain (C:1464) read
 \* any marker already written, so `marker` stands for "the buffer holds a
 \* success substring".
@@ -201,8 +201,8 @@ PostLoop(a) ==
     /\ UNCHANGED <<clicks, gateActive, handoffActive, cancelled, root, kid,
                    marker, exitStatus, pending, applied, staleApplied>>
 
-\* G:115 terminate(), reached from end() (C:1472) or, on a throw, from the
-\* deinit (G:111). G:116 reads root's natural exit, then G:117
+\* G:116 terminate(), reached from end() (C:1472) or, on a throw, from the
+\* deinit (G:112). G:117 reads root's natural exit, then G:120
 \* kill(-pid, SIGTERM) signals the whole group. Each live process may exit
 \* now or keep running (it handles or ignores SIGTERM).
 CleanTerm(a) ==
@@ -219,7 +219,7 @@ CleanTerm(a) ==
     /\ UNCHANGED <<clicks, gateActive, handoffActive, cancelled, marker,
                    outcome, pending, applied, staleApplied>>
 
-\* G:118-122 wait up to 2 s for root to exit, then G:125 kill(-pid, SIGKILL)
+\* G:121-126 wait up to 2 s for root to exit, then G:131 kill(-pid, SIGKILL)
 \* on every path, whether or not root is still running.
 CleanWait(a) ==
     /\ pc[a] = "cleanWait"
@@ -231,7 +231,7 @@ CleanWait(a) ==
     /\ UNCHANGED <<clicks, gateActive, handoffActive, cancelled, marker,
                    outcome, pending, applied, staleApplied>>
 
-\* G:127 waitpid reaps root, which releases the group id; then run()
+\* G:132 waitpid reaps root, which releases the group id; then run()
 \* returns or rethrows.
 CleanReap(a) ==
     /\ pc[a] = "cleanReap"
