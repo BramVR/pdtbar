@@ -61,6 +61,28 @@ token never leaves the PDT origin. `getReportingAttempts` and
 and pages included, and throw `PDTAPIRequestFailure` with that count, so
 refresh diagnostics persist real attempt counts.
 
+`PDTConnection` (#245) is the PDT credential layer, not yet wired into the
+app (#248). The stored value is `PDTConnectionState`: `disconnected`,
+`connected(PDTCredential)` (a browser session or a pasted personal token), or
+`needsReconnect(kind, reason)`, and `PDTConnectionState.applying` holds every
+transition. `PDTConnection` is the API client's token provider: it re-reads
+the store on each call, refreshes the browser session shortly before expiry or
+on `401 TOKEN_INVALID` while holding the store's exclusive access (an in-process
+lock, or `flock` on a lock file for the file and Keychain stores) from load
+through the token endpoint to save, writes the rotated pair before returning
+it, keeps a pair the store refused until it is stored or a sign-in, pasted
+token, or disconnect is stored in its place, backs off after a refresh that
+got no answer, and moves to `needsReconnect` on `invalid_grant`. That state
+names the rejected refresh token by SHA-256, so only a refresh of that pair
+reconnects it.
+`PDTBrowserSignIn` runs S256 PKCE with a random `state`, opens the injected
+browser, and waits on a `127.0.0.1:47245` loopback listener for the callback
+that carries that `state`; other requests get an error page. Stores are
+`InMemoryPDTCredentialStore` (tests, smokes), `FilePDTCredentialStore` (dev
+proof, mode 0600, sibling `.lock`), and `KeychainPDTCredentialStore` in app
+support (production, lock file in a given directory). Tokens print only as
+redacted descriptions or SHA-256 fingerprints.
+
 `PDTAPIDataSource` (#246) is the `PortfolioDataSource` over that client, also not
 yet wired in: it decodes REST envelopes into the existing normalization inputs,
 requires holdings, and degrades the snapshot when an optional facet fails.

@@ -75,6 +75,7 @@ make check
 swift run pdtbar-dev model --fixture docs/pdt/fixtures/quiet-no-pressure.json
 swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.json --portfolio-values visible
 swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.json --portfolio-values hidden
+swift run pdtbar-dev pdt-status --store <file>
 swift build --product pdtbar
 ./Scripts/package_app.sh
 ARCHES="$(uname -m)" ./Scripts/package_release_app.sh v0.0.0-test
@@ -91,6 +92,13 @@ Normal product login uses the built-in Claude CLI handoff and scrubs inherited
 old scripted handoff env. Deterministic login smokes use the explicit
 `--scripted-claude-login-bin` app launch option through `pdtbar-smoke`.
 
+`pdtbar-dev pdt-sign-in|pdt-status|pdt-refresh|pdt-disconnect --store <file>`
+is the opt-in live PDT sign-in proof. It keeps the credential in a mode-0600
+file at the given path, never the Keychain, and prints only states, expiry,
+statuses, key names, and token fingerprints. `pdt-sign-in ... --no-browser`
+prints the authorize URL instead of opening it, for shells whose `open` does
+not reach the user's browser. See `docs/smoke-checks.md`.
+
 Historical workaround only: launching raw `.build/debug/pdtbar`, keeping it
 alive in a foreground shell, `tmux`, or `nohup`, and checking truncated process
 names were temporary first-run incident workarounds. Normal first-run UX testing
@@ -105,6 +113,7 @@ swift run pdtbar-checks
 swift run pdtbar-smoke scripted-pdt-connector
 swift run pdtbar-smoke scripted-api-client
 swift run pdtbar-smoke scripted-api-snapshot
+swift run pdtbar-smoke scripted-api-auth
 swift run pdtbar-smoke scripted-login-handoff
 swift run pdtbar-smoke scripted-setup-retry
 swift run pdtbar-smoke scripted-pulse-mark-read

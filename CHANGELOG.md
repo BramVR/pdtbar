@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added the PDT sign-in layer behind the REST path, not yet in the app: browser sign-in with PKCE and a `127.0.0.1:47245` callback that ignores requests without its `state`, token refresh that is single-flight across PDTBar processes through a store lock, stores the rotated pair before use, keeps a pair the store refused until it is stored or replaced, and backs off after a refresh that got no answer, a pasted read-only token fallback, Keychain and dev file stores, disconnect, and `pdtbar-dev pdt-*` commands for live proof (#245).
 - Fixed a Claude/PDT setup outage seen while fetching price history still starting the performance phase, which spent one more doomed Claude CLI run (up to its timeout) before the refresh degraded; an outage seen in any background detail phase now skips every later phase (#272).
 - Fixed a returning concentration alert staying hidden after PDTBar quit during a background refresh; the old read mark is now cleared before the snapshot that records the holding crossing back above the threshold is saved (#270).
 - Fixed "Log in with Claude" leaving helper processes from `claude auth login` running after the attempt ended, whether it succeeded, failed, timed out or was cancelled; every Claude CLI run now ends its whole process group, so `claude auth status`, `claude -p` and `claude mcp list` helpers no longer outlive their run either (#271).
