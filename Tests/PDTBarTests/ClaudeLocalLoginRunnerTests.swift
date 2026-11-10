@@ -1,6 +1,8 @@
+import Darwin
 import Foundation
-import Testing
 import PDTBarAppSupport
+import PDTBarCore
+import Testing
 
 @Suite("Claude local login runner")
 struct ClaudeLocalLoginRunnerTests {
@@ -104,6 +106,79 @@ struct ClaudeLocalLoginRunnerTests {
 
         #expect(outcome == .failed(.failed, "claude auth login exited with status 42"))
     }
+
+    enum AttemptEnd: String, CaseIterable, Sendable {
+        case success
+        case failure
+        case timeout
+        case cancel
+    }
+
+    @Test(
+        "No helper from the login process tree outlives the attempt",
+        arguments: AttemptEnd.allCases
+    )
+    func noHelperOutlivesTheAttempt(end: AttemptEnd) async throws {
+        let directory = try temporaryDirectory(prefix: "pdtbar-login-helper-\(end.rawValue)")
+        let pidFile = directory.appending(path: "helper.pid")
+        let rootEnding = switch end {
+        case .success: "printf 'Successfully logged in\\n'; exit 0"
+        case .failure: "printf 'Claude login failed\\n'; exit 42"
+        case .timeout, .cancel: "printf 'Waiting for browser\\n'; exec sleep 30"
+        }
+        // The subshell exits at once, so the helper is reparented to launchd
+        // before any descendant scan can see it, and it ignores SIGTERM.
+        let script = try writeLoginScript(
+            directory: directory,
+            name: "login.sh",
+            body: """
+            #!/bin/sh
+            ( /bin/sh -c 'trap "" TERM; exec sleep 30' & echo $! > "\(pidFile.path)" )
+            \(rootEnding)
+            """
+        )
+        let cancellation = PDTCancellation()
+        if end == .cancel {
+            DispatchQueue.global().async {
+                let deadline = Date().addingTimeInterval(5)
+                while !FileManager.default.fileExists(atPath: pidFile.path), Date() < deadline {
+                    Thread.sleep(forTimeInterval: 0.05)
+                }
+                cancellation.cancel()
+            }
+        }
+        let runner = ClaudeLocalLoginRunner(environment: ["PATH": "/usr/bin:/bin"], binary: script.path)
+
+        let outcome = await runner.run(
+            timeout: end == .timeout ? 1.0 : 10,
+            cancellation: cancellation,
+            onPhaseChange: { _ in }
+        )
+
+        let expected: ClaudeLocalLoginOutcome = switch end {
+        case .success: .success
+        case .failure: .failed(.failed, "claude auth login exited with status 42")
+        case .timeout: .failed(.timedOut, "Claude login timed out")
+        case .cancel: .cancelled
+        }
+        #expect(outcome == expected)
+        let helperPID = try #require(pid_t(
+            String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        ))
+        defer { kill(helperPID, SIGKILL) }
+        #expect(processHasExited(helperPID), "helper \(helperPID) outlived the \(end.rawValue) attempt")
+    }
+}
+
+private func processHasExited(_ pid: pid_t) -> Bool {
+    let deadline = Date().addingTimeInterval(1.0)
+    repeat {
+        if kill(pid, 0) != 0, errno == ESRCH {
+            return true
+        }
+        Thread.sleep(forTimeInterval: 0.05)
+    } while Date() < deadline
+    return false
 }
 
 private func temporaryDirectory(prefix: String) throws -> URL {
