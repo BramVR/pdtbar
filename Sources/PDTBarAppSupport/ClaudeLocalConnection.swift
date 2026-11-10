@@ -1228,79 +1228,27 @@ private struct TTYCommandRunner {
         }
 
         let baseEnv = options.baseEnvironment ?? ProcessInfo.processInfo.environment
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: resolved)
-        proc.arguments = options.extraArgs
-        proc.standardInput = secondaryHandle
-        proc.standardOutput = secondaryHandle
-        proc.standardError = secondaryHandle
         var env = Self.enrichedEnvironment(baseEnv: baseEnv, home: baseEnv["HOME"] ?? NSHomeDirectory())
         if let workingDirectory = options.workingDirectory {
-            proc.currentDirectoryURL = workingDirectory
             env["PWD"] = workingDirectory.path
         }
-        proc.environment = env
-
-        var cleanedUp = false
-        var didLaunch = false
-        var processGroup: pid_t?
-        func cleanup() {
-            guard !cleanedUp else { return }
-            if didLaunch, proc.isRunning {
-                try? writeAllToPrimary(Data("/exit\n".utf8))
-            }
+        defer {
             try? primaryHandle.close()
             try? secondaryHandle.close()
-            guard didLaunch else {
-                cleanedUp = true
-                return
-            }
-            let descendants = ClaudeLocalProcessTreeTerminator.descendantPIDs(of: proc.processIdentifier)
-            if proc.isRunning {
-                proc.terminate()
-            }
-            ClaudeLocalProcessTreeTerminator.terminateProcessTree(
-                rootPID: proc.processIdentifier,
-                processGroup: processGroup,
-                signal: SIGTERM,
-                knownDescendants: descendants
-            )
-            let waitDeadline = Date().addingTimeInterval(2.0)
-            while proc.isRunning, Date() < waitDeadline {
-                usleep(100_000)
-            }
-            if proc.isRunning {
-                ClaudeLocalProcessTreeTerminator.terminateProcessTree(
-                    rootPID: proc.processIdentifier,
-                    processGroup: processGroup,
-                    signal: SIGKILL,
-                    knownDescendants: descendants
-                )
-            } else {
-                for pid in descendants where pid > 0 {
-                    kill(pid, SIGKILL)
-                }
-            }
-            if didLaunch {
-                proc.waitUntilExit()
-            }
-            cleanedUp = true
         }
-
-        defer { cleanup() }
-
-        do {
-            try proc.run()
-            didLaunch = true
-            debugLog?.append("process launched pid=\(proc.processIdentifier)")
+        let child: ChildProcessGroup
+        do throws(ChildSpawnError) {
+            child = try ChildProcessGroup.spawn(ChildLaunch(
+                executable: resolved,
+                arguments: options.extraArgs,
+                environment: env,
+                workingDirectory: options.workingDirectory,
+                stdio: .terminal(secondaryFD)
+            ))
+            debugLog?.append("process launched pid=\(child.pid)")
         } catch {
-            debugLog?.append("launch failed: \(error.localizedDescription)")
-            throw Error.launchFailed(error.localizedDescription)
-        }
-
-        let pid = proc.processIdentifier
-        if setpgid(pid, pid) == 0 {
-            processGroup = pid
+            debugLog?.append("launch failed: \(error.message)")
+            throw Error.launchFailed(error.message)
         }
 
         func send(_ text: String) throws {
@@ -1484,8 +1432,7 @@ private struct TTYCommandRunner {
                 lastEnter = Date()
             }
 
-            if case .closed = readResult, !proc.isRunning { break }
-            if !proc.isRunning { break }
+            if !child.isRunning { break }
             usleep(60000)
         }
 
@@ -1511,7 +1458,7 @@ private struct TTYCommandRunner {
                     usleep(50000)
                 }
             }
-        } else if !proc.isRunning {
+        } else if !child.isRunning {
             let drainFor = max(0, min(0.2, deadline.timeIntervalSinceNow))
             if drainFor > 0 {
                 Self.drainRemainingOutput(
@@ -1522,8 +1469,8 @@ private struct TTYCommandRunner {
             }
         }
 
-        let terminationStatus = proc.isRunning ? nil : proc.terminationStatus
-        debugLog?.append("finished running=\(proc.isRunning) status=\(terminationStatus.map(String.init) ?? "nil")")
+        let terminationStatus = child.end()
+        debugLog?.append("finished status=\(terminationStatus.map(String.init) ?? "nil (ended by cleanup)")")
         let text = String(data: buffer, encoding: .utf8) ?? ""
         if text.isEmpty, let terminationStatus {
             return Result(text: text, terminationStatus: terminationStatus)
@@ -1621,55 +1568,6 @@ private struct TTYCommandRunner {
         }
         return env
     }
-}
-
-struct ClaudeLocalProcessTreeTerminator {
-    static func descendantPIDs(of rootPID: pid_t) -> [pid_t] {
-        guard rootPID > 0 else { return [] }
-        var seen: Set<pid_t> = [rootPID]
-        var pending = currentChildPIDs(of: rootPID)
-        var descendants: [pid_t] = []
-
-        while let pid = pending.popLast() {
-            guard pid > 0, seen.insert(pid).inserted else { continue }
-            descendants.append(pid)
-            pending.append(contentsOf: currentChildPIDs(of: pid))
-        }
-
-        return descendants
-    }
-
-    static func currentChildPIDs(of parentPID: pid_t) -> [pid_t] {
-        guard parentPID > 0 else { return [] }
-        var pids = [pid_t](repeating: 0, count: 128)
-        let byteCount = Int32(pids.count * MemoryLayout<pid_t>.stride)
-        let childCount = proc_listchildpids(parentPID, &pids, byteCount)
-        guard childCount > 0 else { return [] }
-        return Array(pids.prefix(min(Int(childCount), pids.count))).filter { $0 > 0 }
-    }
-
-    static func terminateProcessTree(
-        rootPID: pid_t,
-        processGroup: pid_t?,
-        signal: Int32,
-        knownDescendants: [pid_t] = []
-    ) {
-        guard rootPID > 0 else { return }
-
-        var seen: Set<pid_t> = [rootPID]
-        let descendants = knownDescendants + descendantPIDs(of: rootPID)
-        for pid in descendants where pid > 0 && seen.insert(pid).inserted {
-            kill(pid, signal)
-        }
-        if let processGroup {
-            kill(-processGroup, signal)
-        }
-        kill(rootPID, signal)
-    }
-}
-
-func setProcessGroup(_ pid: pid_t) -> pid_t? {
-    setpgid(pid, pid) == 0 ? pid : nil
 }
 
 private extension ClaudeLocalProcessResult {
