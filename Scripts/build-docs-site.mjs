@@ -16,6 +16,12 @@ const repoBase = "https://github.com/BramVR/pdtbar";
 const repoSourceBase = `${repoBase}/blob/main/docs`;
 const siteBase = "https://bramvr.github.io/pdtbar";
 const productName = "PDTBar";
+// The default language owns the site root and is the x-default alternate; every other language lives under /<lang>/.
+const defaultLang = "nl";
+const languages = {
+  nl: { englishName: "Dutch", ogLocale: "nl_NL" },
+  en: { englishName: "English", ogLocale: "en_US" },
+};
 const pdtName = "Portfolio Dividend Tracker";
 const imagesCheckedByPagesWorkflow = ["pdtbar-hero.png"];
 const productTagline = "Quiet portfolio pulse.";
@@ -375,6 +381,7 @@ function layout(page, html) {
     applicationCategory: "FinanceApplication",
     operatingSystem: "macOS",
     description: page.description,
+    inLanguage: page.lang,
     url: canonical,
     codeRepository: repoBase,
     isAccessibleForFree: true,
@@ -391,13 +398,14 @@ function layout(page, html) {
   <meta name="theme-color" content="#0c1311" media="(prefers-color-scheme: dark)">
   <meta name="application-name" content="${productName}">
   <link rel="canonical" href="${canonical}">
-  <link rel="alternate" hreflang="${escapeAttr(page.lang)}" href="${canonical}">
-  <link rel="alternate" hreflang="${escapeAttr(alternate.lang)}" href="${canonicalUrl(alternate)}">
+${hreflangAlternates(page).map(({ hreflang, href }) => `  <link rel="alternate" hreflang="${hreflang}" href="${href}">`).join("\n")}
   <link rel="icon" href="${assetHref(page, "favicon.svg")}" type="image/svg+xml">
   <meta property="og:title" content="${escapeAttr(page.title)}">
   <meta property="og:description" content="${escapeAttr(page.description)}">
   <meta property="og:type" content="website">
   <meta property="og:url" content="${canonical}">
+  <meta property="og:locale" content="${languages[page.lang].ogLocale}">
+  <meta property="og:locale:alternate" content="${languages[alternate.lang].ogLocale}">
   <meta property="og:image" content="${siteBase}/social-card.svg">
   <script>${themePrepaintJs}</script>
   <style>${siteCss}</style>
@@ -460,7 +468,7 @@ function currentAttr(currentPage, page) {
 
 function languageSwitchHtml(page) {
   const alternateHref = escapeAttr(hrefBetween(page, alternatePage(page)));
-  return Object.keys(templateStrings)
+  return languageOrder()
     .map((lang) => {
       const code = lang.toUpperCase();
       if (lang === page.lang) return `<span lang="${lang}" aria-current="true">${code}</span>`;
@@ -540,18 +548,34 @@ function tocHtml(page, toc, t) {
     </nav>`;
 }
 
+function languageOrder() {
+  return [defaultLang, ...Object.keys(languages).filter((lang) => lang !== defaultLang)];
+}
+
+function hreflangAlternates(page) {
+  const byLang = { [page.lang]: page, [alternatePage(page).lang]: alternatePage(page) };
+  return [
+    ...languageOrder().filter((lang) => byLang[lang]).map((lang) => ({ hreflang: lang, href: canonicalUrl(byLang[lang]) })),
+    { hreflang: "x-default", href: canonicalUrl(byLang[defaultLang]) },
+  ];
+}
+
+function langPrefix(lang) {
+  return lang === defaultLang ? "" : `${lang}/`;
+}
+
 function homePageForLang(lang) {
-  const homeOutRel = lang === "nl" ? "index.html" : `${lang}/index.html`;
+  const homeOutRel = `${langPrefix(lang)}index.html`;
   return pages.find((page) => page.lang === lang && page.outRel === homeOutRel) || pages.find((page) => page.lang === lang) || pages[0];
 }
 
 function installPageForLang(lang) {
-  const installOutRel = lang === "nl" ? "install/index.html" : `${lang}/install/index.html`;
+  const installOutRel = `${langPrefix(lang)}install/index.html`;
   return pages.find((page) => page.lang === lang && page.outRel === installOutRel) || homePageForLang(lang);
 }
 
 function alternatePage(page) {
-  const nextLang = page.lang === "nl" ? "en" : "nl";
+  const nextLang = Object.keys(languages).find((lang) => lang !== page.lang);
   const alternateRel = page.rel.replace(new RegExp(`\\.${page.lang}\\.md$`), `.${nextLang}.md`);
   return pageMap.get(alternateRel) || pages.find((candidate) => candidate.lang === nextLang && candidate.title === page.title) || homePageForLang(nextLang);
 }
@@ -610,7 +634,9 @@ function llmsTxt() {
     "# PDTBar Public Docs",
     "",
     "Canonical public documentation URLs:",
-    ...orderedPages.map((page) => `- PDTBar (${page.lang === "nl" ? "Dutch" : "English"}): ${canonicalUrl(page)}`),
+    ...orderedPages.map((page) => `- PDTBar (${languages[page.lang].englishName}): ${canonicalUrl(page)}`),
+    "",
+    `Default language: ${languages[defaultLang].englishName} (${defaultLang}), served from the site root. ${languageOrder().slice(1).map((lang) => `${languages[lang].englishName} (${lang}) pages live under /${lang}/.`).join(" ")}`,
     "",
     "Public Markdown source URLs:",
     ...orderedPages.map((page) => `- ${page.title} (${page.lang}): ${sourceUrl(page)}`),
@@ -629,9 +655,12 @@ function llmsFullTxt() {
 
 function sitemapXml() {
   const urls = orderedPages
-    .map((page) => `  <url><loc>${canonicalUrl(page)}</loc></url>`)
+    .map((page) => {
+      const alternates = hreflangAlternates(page).map(({ hreflang, href }) => `<xhtml:link rel="alternate" hreflang="${hreflang}" href="${href}"/>`).join("");
+      return `  <url><loc>${canonicalUrl(page)}</loc>${alternates}</url>`;
+    })
     .join("\n");
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">\n${urls}\n</urlset>\n`;
 }
 
 function robotsTxt() {

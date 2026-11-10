@@ -244,6 +244,26 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
     assert.match(llmsFull, /Source: https:\/\/github\.com\/BramVR\/pdtbar\/blob\/main\/docs\/public\/index\.nl\.md/);
     assert.match(sitemap, /<loc>https:\/\/bramvr\.github\.io\/pdtbar\/<\/loc>/);
     assert.match(sitemap, /<loc>https:\/\/bramvr\.github\.io\/pdtbar\/en\/<\/loc>/);
+
+    const site = "https://bramvr.github.io/pdtbar";
+    const alternates = (html) => Object.fromEntries([...html.matchAll(/<link rel="alternate" hreflang="([^"]+)" href="([^"]+)">/g)].map((match) => [match[1], match[2]]));
+    for (const [name, html, dutchUrl, englishUrl] of [
+      ["index", index, `${site}/`, `${site}/en/`],
+      ["english", english, `${site}/`, `${site}/en/`],
+      ["nestedDutch", nestedDutch, `${site}/gids/`, `${site}/en/guide/`],
+      ["nestedEnglish", nestedEnglish, `${site}/gids/`, `${site}/en/guide/`],
+    ]) {
+      assert.deepEqual(alternates(html), { nl: dutchUrl, en: englishUrl, "x-default": dutchUrl }, `${name} should name Dutch as the default alternate`);
+    }
+    assert.match(index, /<meta property="og:locale" content="nl_NL">/);
+    assert.match(index, /<meta property="og:locale:alternate" content="en_US">/);
+    assert.match(english, /<meta property="og:locale" content="en_US">/);
+    assert.match(index, /"inLanguage":"nl"/);
+    assert.match(english, /"inLanguage":"en"/);
+    assert.match(index, /aria-current="true">NL<\/span>[\s\S]*?<a href="en\/"[^>]*>EN<\/a>/, "the Dutch root should offer English as the option");
+    assert.match(sitemap, new RegExp(`<loc>${site}/en/</loc><xhtml:link rel="alternate" hreflang="nl" href="${site}/"/>.*hreflang="x-default" href="${site}/"/>`));
+    assert.ok(sitemap.indexOf(`<loc>${site}/</loc>`) < sitemap.indexOf(`<loc>${site}/en/</loc>`), "the default language should come first in the sitemap");
+    assert.match(llms, /Default language: Dutch \(nl\), served from the site root\. English \(en\) pages live under \/en\/\./);
     assert.match(robots, /Sitemap: https:\/\/bramvr\.github\.io\/pdtbar\/sitemap\.xml/);
     assert.match(social, /PDTBar/);
     assert.match(social, /quiet portfolio pulse/i);
