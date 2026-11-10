@@ -208,6 +208,9 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
     assert.ok(!hasLink(index, { current: "page", name: "Gids" }));
     assert.ok(hasLink(english, { href: "./", name: "PDTBar", current: "page" }));
 
+    assert.match(index, /<h1 id="pdtbar">/, "/#pdtbar should still land on the home heading");
+    assert.match(english, /<h1 id="pdtbar">/, "/en/#pdtbar should still land on the home heading");
+
     assert.doesNotMatch(index, /<details/);
     assert.match(nestedEnglish, /<details[\s\S]*<summary[^>]*>On this page<\/summary>[\s\S]*<\/details>/);
     assert.match(nestedDutch, /<summary[^>]*>Op deze pagina<\/summary>/);

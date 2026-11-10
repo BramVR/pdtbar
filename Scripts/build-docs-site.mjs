@@ -492,11 +492,11 @@ function heroHtml(page, t) {
     [t.specStatus, t.specStatusValue],
     [t.specSource, `<a href="${repoBase}">GitHub</a>`],
   ];
-  return `<section class="hero" aria-labelledby="product">
+  return `<section class="hero" aria-labelledby="pdtbar">
       <div class="hero-copy">
         <p class="eyebrow mono">${t.eyebrowFor} <b>${pdtName}</b></p>
         <div class="title">
-          <h1 id="product">${productName}</h1>
+          <h1 id="pdtbar">${productName}</h1>
           <p class="lede">${t.lede}</p>
           <div class="cta">
             <a class="btn" href="${escapeAttr(hrefBetween(page, installPageForLang(page.lang)))}">${t.install}</a>
