@@ -70,8 +70,11 @@ the store on each call, refreshes the browser session shortly before expiry or
 on `401 TOKEN_INVALID` while holding the store's exclusive access (an in-process
 lock, or `flock` on a lock file for the file and Keychain stores) from load
 through the token endpoint to save, writes the rotated pair before returning
-it, keeps a pair the store refused until it is stored, backs off after a
-refresh that got no answer, and moves to `needsReconnect` on `invalid_grant`.
+it, keeps a pair the store refused until it is stored or a sign-in, pasted
+token, or disconnect is stored in its place, backs off after a refresh that
+got no answer, and moves to `needsReconnect` on `invalid_grant`. That state
+names the rejected refresh token by SHA-256, so only a refresh of that pair
+reconnects it.
 `PDTBrowserSignIn` runs S256 PKCE with a random `state`, opens the injected
 browser, and waits on a `127.0.0.1:47245` loopback listener for the callback
 that carries that `state`; other requests get an error page. Stores are
