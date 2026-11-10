@@ -247,6 +247,28 @@ struct DataHealthTests {
         #expect(healthDetail("diagnostic", in: cached.descriptor) == "None recorded")
     }
 
+    @Test("A Claude-era diagnostic file left by an older build never reaches Data health")
+    func claudeEraDiagnosticFileNeverReachesDataHealth() throws {
+        var degraded = snapshot()
+        degraded.latestDetailFillOutcome = .degraded
+        let store = try SnapshotStore.temporaryTestStore(prefix: "data-health-claude-era-file")
+        _ = try store.commitCurrentSnapshot(degraded)
+        try store.saveLastDetailRefreshDiagnostic(PDTDetailRefreshFailureDiagnostic(
+            toolName: "pdt-list-symbol-prices",
+            phase: .priceHistory,
+            attemptCount: 2,
+            category: .transientFailure,
+            argumentShape: ["symbol_quote_id"]
+        ))
+
+        let cached = try #require(try PressureRunner.cachedPulse(snapshotStore: store))
+
+        #expect(healthDetail("diagnostic", in: cached.descriptor) == "None recorded")
+        let rendered = String(decoding: try stableJSONData(cached.descriptor), as: UTF8.self)
+        #expect(!rendered.contains("pdt-list-symbol-prices"))
+        #expect(!rendered.contains("symbol_quote_id"))
+    }
+
     @Test("A stored sync failure reads back as written")
     func storedSyncFailureRoundTrips() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "data-health-failure-round-trip")
