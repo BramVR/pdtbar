@@ -109,7 +109,7 @@ public struct PDTAPIToken: Sendable, Equatable, Codable, CustomStringConvertible
 
 /// Supplies the bearer token per request. Production backs this with
 /// `PDTConnection` (ADR-0002); tests and smokes may use `InMemoryPDTAPITokenProvider`.
-public protocol PDTAPITokenProvider {
+public protocol PDTAPITokenProvider: Sendable {
     func currentToken() throws -> PDTAPIToken
     /// PDT answered `401 TOKEN_INVALID` for `token`. Return true to resend the
     /// request once with `currentToken()`.
@@ -261,7 +261,7 @@ public struct PDTAPIRequestPolicy: Sendable {
     }
 }
 
-public protocol PDTHTTPTransport {
+public protocol PDTHTTPTransport: Sendable {
     func send(_ request: URLRequest, cancellation: PDTCancellation?) throws -> (Data, HTTPURLResponse)
 }
 
@@ -298,7 +298,7 @@ enum PDTUserAgent {
     }()
 }
 
-public protocol PDTAPISleeper {
+public protocol PDTAPISleeper: Sendable {
     func sleep(seconds: TimeInterval, cancellation: PDTCancellation?) throws
 }
 
@@ -335,7 +335,7 @@ public struct PDTAPIRequestFailure: Error, CustomStringConvertible {
     }
 }
 
-public struct PDTAPIClient {
+public struct PDTAPIClient: Sendable {
     public static let baseURL = URL(string: "https://api.portfoliodividendtracker.com/v1/")!
 
     private let transport: any PDTHTTPTransport
