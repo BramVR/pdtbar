@@ -23,7 +23,7 @@ description: "Check a background detail refresh or price-history worker change a
 
 ## Covered code and sync commit
 
-Sync commit: `3f0860d`. The model was last confirmed against the code at this commit.
+Sync commit: `2e6ea94`. The model was last confirmed against the code at this commit.
 
 - `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:8-41`. `PDTDetailRefreshFailureCategory`, `isRetryable`, `indicatesUnavailableSetup`.
 - `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:90-130`. `PDTBackgroundDetailRefreshOptions` (concurrency limit, retry count, timeouts).
@@ -41,7 +41,7 @@ Sync commit: `3f0860d`. The model was last confirmed against the code at this co
 Every action in the spec names the Swift lines it models. To see whether a change touches this model, run:
 
 ```bash
-git diff 3f0860d -- Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift Sources/PDTBarCore/PDTCancellation.swift Sources/PDTBarCore/PDTLiveDataSource.swift | grep -n '^@@'
+git diff 2e6ea94 -- Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift Sources/PDTBarCore/PDTCancellation.swift Sources/PDTBarCore/PDTLiveDataSource.swift | grep -n '^@@'
 ```
 
 If a hunk falls in a range above, recheck the model. Line numbers drift with unrelated edits, so match by function name when they do.
@@ -52,13 +52,17 @@ Needs a JDK 11+. The runner pins TLA+ 1.7.4 and runs one TLC worker unless `PDTB
 
 ```bash
 Scripts/formal/tlc.sh formal/background-detail-refresh/BackgroundDetailRefresh.tla
+formal/background-detail-refresh/mutations.sh
 ```
 
-Expected at the sync commit: `No error has been found`, 3,290,492 distinct states, about 3 minutes on one worker or about 1 minute with `PDTBAR_TLC_WORKERS=4`. Any failure means the change broke something or the model needs updating.
+Expected at the sync commit:
+
+- The model run prints `No error has been found` with 3,290,492 distinct states. It takes about 3 minutes on one worker, or about 1 minute with `PDTBAR_TLC_WORKERS=4`. Any failure means the change broke something or the model needs updating.
+- `mutations.sh` prints one row per mutation, each with the invariant it expects to be violated, and exits 0 in about 2 minutes. A row that reports `No error has been found` means the model lost its teeth.
 
 ## Retired findings
 
-- `NoPhaseAfterOutage` (#272). Only a phase that threw reached `recordOptionalPhaseFailure`, the one writer of `skipRemainingPhasesForUnavailableSetup`. Price history never throws. It returns its per-holding diagnostics, so an outage seen there let the performance phase start one more doomed CLI run. TLC's shortest trace had 21 states: base and the first three optional phases succeed, a price-history worker gets `setupUnavailable`, the main thread abandons the rest, `Collect` leaves the flag false, and `Advance` enters performance. Fixed by `3f0860d`. Every optional phase now runs through `runOptionalPhase`, which is the only writer of `diagnostics` and skips the phase when `diagnostics` already holds an outage category. The boolean is gone. In the model, `skip` became `diagOutage` ("`diagnostics` holds an outage"), and both `OptionalFails` and `Collect` set it. The knob and `BackgroundDetailRefreshFindingsFixed.cfg` are gone. Making `Collect` leave `diagOutage` unchanged reproduces the 21-state trace.
+- `NoPhaseAfterOutage` (#272). Only a phase that threw reached `recordOptionalPhaseFailure`, the one writer of `skipRemainingPhasesForUnavailableSetup`. Price history never throws. It returns its per-holding diagnostics, so an outage seen there let the performance phase start one more doomed CLI run. TLC's shortest trace had 21 states: base and the first three optional phases succeed, a price-history worker gets `setupUnavailable`, the main thread abandons the rest, `Collect` leaves the flag false, and `Advance` enters performance. Fixed by `2e6ea94`. Every optional phase now runs through `runOptionalPhase`, which is the only writer of `diagnostics` and skips the phase when `diagnostics` already holds an outage category. The boolean is gone. In the model, `skip` became `diagOutage` ("`diagnostics` holds an outage"), and both `OptionalFails` and `Collect` set it. The knob and `BackgroundDetailRefreshFindingsFixed.cfg` are gone. Making `Collect` leave `diagOutage` unchanged reproduces the 21-state trace.
 
 - `NoRetryAfterDeadline`. `priceSeries` called `callDecodedWithRetry` without `retryDeadline`, so a transient price-history failure past the deadline started another full CLI run. Fixed by `f11cf27` (#236), which passes `retryDeadline: deadline`. `a4ffe5a` (#239) made `retryDeadline` required for every call. The knob is gone and the property stays as a guard. Dropping `~pastDeadline` from the retry guard in `WCallReturns` and from `WBackoffEnds`, which mirrors deleting `now() < retryDeadline` at `:1047` and the guard at `:1013`, fails it.
 
@@ -95,8 +99,8 @@ When a covered function changes on purpose:
 
 1. Edit the matching action so it does what the new code does, and update its line comment.
 2. New shared state or a new lock section becomes a new variable or a new action. Keep one action per lock section.
-3. Run both configs. Compare against the expected results above.
-4. Prove a changed property can still fail. Break the new code path in a scratch edit, mirror the break in the model, see TLC fail, then revert both.
+3. Run the model and `mutations.sh`. Compare against the expected results above.
+4. Prove a changed property can still fail. Break the new code path in a scratch edit, mirror the break in the model, see TLC fail, then revert both. Add the model break as a `mutations.sh` row.
 5. Move the sync commit and the line ranges forward only after you confirm the model describes the code at the new commit.
 
 Bounds live in the `.cfg` files: `HoldingCount = 3`, `Limit = 2`, `RetryCount = 1`, `FailureCategories = {"transientFailure", "decode", "setupUnavailable"}`, one representative per retry class. Raising `HoldingCount` to 4 or adding categories grows the state space fast, so run that once, not on every change.
@@ -108,7 +112,9 @@ At `1b6ffd4`, a scratch change to the real code dropped `!abandonedQuoteIDs.cont
 - `CommittedNeverLost`. `Finalize` commits the prior snapshot instead of `snap`.
 - `ReturnedHasSucceededPhases`. `Finalize` skips the commit (`store' = store`).
 - `OutcomeHonest`. `Collect` drops the price-history diagnostics, or `Performance` drops its timeout diagnostic.
-- `NoPhaseAfterOutage`. `Collect` leaves `diagOutage` unchanged (the #272 bug, 21 states), `OptionalFails` leaves it unchanged, or `Advance` ignores it. Rechecked at `3f0860d` with the #272, `ReturnedHasSucceededPhases`, `OutcomeHonest` (`Collect`), `NoDeterministicRetry`, and `ConcurrencyBound` mutations above. Each failed with its own invariant.
+- `NoPhaseAfterOutage`. `Collect` leaves `diagOutage` unchanged (the #272 bug, 21 states), `OptionalFails` leaves it unchanged, or `Advance` ignores it.
+
+`mutations.sh` replays the `NoPhaseAfterOutage`, `ReturnedHasSucceededPhases`, `OutcomeHonest` (`Collect`), `NoDeterministicRetry`, and `ConcurrencyBound` rows. Each was confirmed at `2e6ea94`. The other rows above were confirmed by hand at `1b6ffd4`.
 - `NoDeterministicRetry`. `IsRetryable` includes `"decode"`.
 - `ConcurrencyBound`. `Workers == 1 .. HoldingCount`, so the `min` with the limit is dropped.
 - `PullAtMostOnce`. `WPull` does not pop `pending`.
