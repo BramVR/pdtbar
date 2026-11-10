@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Switched launch and the menu to the PDT connection: `Sign in with PDT` in the browser or `Use a PDT token…`, then a read-only first fetch that saves before it shows the pulse. The menu now names each connection state (not connected, signing in, reconnect with the reason, PDT access paused, Keychain unavailable), keeps the last pulse visible when PDT stops accepting the connection, and offers `Check again` and `Disconnect from PDT`. Claude login, Claude CLI checks, and PDT MCP setup are gone from launch and the menu (#248).
+- Release builds sign a keychain access group from a Developer ID provisioning profile; a build without it shows `Keychain unavailable` instead of using the login keychain (#248).
 - Added the PDT sign-in layer behind the REST path, not yet in the app: browser sign-in with PKCE and a `127.0.0.1:47245` callback that ignores requests without its `state`, token refresh that is single-flight across PDTBar processes through a store lock, stores the rotated pair before use, keeps a pair the store refused until it is stored or replaced, and backs off after a refresh that got no answer, a pasted read-only token fallback, Keychain and dev file stores, disconnect, and `pdtbar-dev pdt-*` commands for live proof (#245).
 - Fixed a Claude/PDT setup outage seen while fetching price history still starting the performance phase, which spent one more doomed Claude CLI run (up to its timeout) before the refresh degraded; an outage seen in any background detail phase now skips every later phase (#272).
 - Fixed a returning concentration alert staying hidden after PDTBar quit during a background refresh; the old read mark is now cleared before the snapshot that records the holding crossing back above the threshold is saved (#270).

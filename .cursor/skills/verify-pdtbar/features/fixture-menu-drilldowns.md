@@ -22,12 +22,12 @@ Click the menu bar icon. Hover a row with a chevron to open its submenu.
 RUN=$(Scripts/verify_pdtbar.sh launch docs/pdt/fixtures/big-mover.json | sed -n 's/^ready: //p')
 Scripts/verify_pdtbar.sh doctor "$RUN"
 swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/big-mover.json > "$RUN/evidence/descriptor.json"
-swift run pdtbar-smoke real-claude-flow-ax --artifacts "$RUN/evidence" --app-support-dir "$RUN/smoke-app-support"
+swift run pdtbar-smoke ready-launch --artifacts "$RUN/evidence" --app-support-dir "$RUN/smoke-app-support"
 swift run pdtbar-smoke fixture-proof --fixture docs/pdt/fixtures/big-mover.json --output "$RUN/evidence/fixture-proof.svg"
 Scripts/verify_pdtbar.sh stop "$RUN"
 ```
 
-`real-claude-flow-ax` opens the real menu through AX for setup, fetching, all-quiet, pressure, Data/Prices, Data health, and retryable-error surfaces. It does not capture the screen.
+`ready-launch` opens the real pulse menu through AX after a scripted PDT first fetch. Setup and retryable-error menus are covered by `logged-out-launch`, `scripted-setup-retry`, and `scripted-first-fetch`. No prompt-free smoke opens the Data/Prices or Data health submenus through AX; read their rows from the descriptor above. None of these captures the screen.
 
 Opt-in pixel proof captures the screen, so ask the user first: `swift run pdtbar-smoke real-user-pulse --fixture <f> --snapshot-dir "$RUN/real-user-pulse" --artifacts "$RUN/evidence" --peekaboo /opt/homebrew/bin/peekaboo`.
 

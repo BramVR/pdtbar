@@ -6,6 +6,7 @@ import Foundation
 import ImageIO
 import PDTBarAppSupport
 import PDTBarCore
+import Security
 
 private struct SmokeReport: Codable {
     var name: String
@@ -23,6 +24,7 @@ private enum SmokeStatus {
 private let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
 private let defaultFixture = packageRoot.appending(path: "docs/pdt/fixtures/quiet-no-pressure.json")
 private let pinnedMcporterVersion = "0.12.2"
+private let scriptedPDTAsOf = "2026-06-22"
 
 do {
     let arguments = Array(CommandLine.arguments.dropFirst())
@@ -50,8 +52,8 @@ do {
         report = try scriptedFirstFetchSmoke(arguments: Array(arguments.dropFirst()))
     case "scripted-returning-launch":
         report = try scriptedReturningLaunchSmoke(arguments: Array(arguments.dropFirst()))
-    case "scripted-login-handoff":
-        report = try scriptedLoginHandoffSmoke(arguments: Array(arguments.dropFirst()))
+    case "scripted-sign-in":
+        report = try scriptedSignInSmoke(arguments: Array(arguments.dropFirst()))
     case "scripted-setup-retry":
         report = try scriptedSetupRetrySmoke(arguments: Array(arguments.dropFirst()))
     case "scripted-pulse-mark-read":
@@ -60,8 +62,6 @@ do {
         report = try loggedOutLaunchSmoke(arguments: Array(arguments.dropFirst()))
     case "ready-launch":
         report = try readyLaunchSmoke(arguments: Array(arguments.dropFirst()))
-    case "real-claude-flow-ax":
-        report = try realClaudeFlowAXSmoke(arguments: Array(arguments.dropFirst()))
     case "app-bundle-packaging":
         report = try appBundlePackagingSmoke(arguments: Array(arguments.dropFirst()))
     case "packaged-onboarding":
@@ -98,12 +98,11 @@ do {
       pdtbar-smoke copy-holding-identifier-action
       pdtbar-smoke scripted-first-fetch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-returning-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke scripted-login-handoff [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
+      pdtbar-smoke scripted-sign-in [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-setup-retry [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-pulse-mark-read [--artifacts <dir>]
       pdtbar-smoke logged-out-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke ready-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke real-claude-flow-ax [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke app-bundle-packaging [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke packaged-onboarding [--app <path-to-PDTBar.app>] [--app-support-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
       pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]
@@ -126,777 +125,932 @@ do {
     Foundation.exit(1)
 }
 
-private func readyLaunchSmoke(arguments: [String]) throws -> SmokeReport {
-    let options = try SmokeOptions(arguments: arguments)
-    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
-    guard FileManager.default.isExecutableFile(atPath: app.path) else {
-        return SmokeReport(
-            name: "ready-launch",
-            status: SmokeStatus.failed,
-            detail: "app executable missing; run swift build --product pdtbar first or pass --app <path>",
-            artifacts: []
-        )
+// MARK: - Scripted PDT connection launches
+
+/// One app launch over `--scripted-pdt` with isolated app support. The fixture
+/// environment and a fake `claude`/`mcporter` first on PATH are traps: a
+/// correct launch never writes the fixture sentinel or the CLI marker.
+private struct ScriptedPDTLaunch {
+    let appSupportDirectory: URL
+    let script: URL
+    let eventLog: URL
+    let stderrLog: URL
+    let snapshot: URL
+    let fixtureSentinel: URL
+    let cliMarker: URL
+    let process: Process
+
+    var fixtureSentinelEmpty: Bool {
+        ((try? FileManager.default.contentsOfDirectory(atPath: fixtureSentinel.path)) ?? []).isEmpty
     }
 
-    let appSupportDirectory = try options.isolatedAppSupportDirectory(prefix: "ready-launch-app-support")
-    let responses = try scriptedPDTConnectorResponses()
-    let configuration = ScriptedPDTMCPConnectorConfiguration(
-        responses: responses.mapValues { String(decoding: $0, as: UTF8.self) },
-        asOf: "2026-03-29"
-    )
-    try writeFirstFetchAppScript(configuration: configuration, appSupportDirectory: appSupportDirectory)
-    let expectedStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-ready-launch-expected")
-    defer {
-        try? FileManager.default.removeItem(at: expectedStore.directory)
+    var cliSpawned: Bool {
+        FileManager.default.fileExists(atPath: cliMarker.path)
     }
-    let expectedRun = try PDTCoalescedFirstPortfolioFetch(
-        dataSource: PDTMCPConnectorDataSource(connector: configuration.connector()),
-        snapshotStore: expectedStore,
-        asOf: configuration.asOf
+
+    var snapshotWritten: Bool {
+        FileManager.default.fileExists(atPath: snapshot.path)
+    }
+
+    var arguments: [String] {
+        ["--app-support-dir", artifactPath(appSupportDirectory), "--scripted-pdt", artifactPath(script)]
+    }
+
+    func eventCount(_ event: String) -> Int {
+        guard let content = try? String(contentsOf: eventLog, encoding: .utf8) else {
+            return 0
+        }
+        return content.split(separator: "\n").filter { $0 == event }.count
+    }
+
+    func waitForEventCount(_ event: String, atLeast count: Int, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if eventCount(event) >= count {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        } while Date() < deadline
+        return eventCount(event) >= count
+    }
+
+    func stderrContains(_ needle: String) -> Bool {
+        ((try? String(contentsOf: stderrLog, encoding: .utf8)) ?? "").contains(needle)
+    }
+}
+
+private struct ScriptedPDTFiles {
+    let script: URL
+    let eventLog: URL
+}
+
+/// Writes the script into `<appSupport>/scripted-pdt.json` with its event log beside it.
+private func writeScriptedPDT(_ script: ScriptedPDTConnection, appSupportDirectory: URL) throws -> ScriptedPDTFiles {
+    let eventLog = appSupportDirectory.appending(path: "scripted-pdt-events.log")
+    var script = script
+    script.eventLog = eventLog.path
+    let scriptURL = appSupportDirectory.appending(path: "scripted-pdt.json")
+    try stableJSONData(script).write(to: scriptURL, options: .atomic)
+    return ScriptedPDTFiles(script: scriptURL, eventLog: eventLog)
+}
+
+private func launchScriptedPDTApp(
+    _ app: URL,
+    script: ScriptedPDTConnection,
+    options: SmokeOptions,
+    prefix: String,
+    seed: PortfolioSnapshot? = nil
+) throws -> ScriptedPDTLaunch {
+    let appSupportDirectory = try options.isolatedAppSupportDirectory(prefix: "\(prefix)-app-support")
+    let stateDirectory = appSupportDirectory.appending(path: "pdtbar/state")
+    if let seed {
+        _ = try SnapshotStore(directory: stateDirectory).commitCurrentSnapshot(seed)
+    }
+    let files = try writeScriptedPDT(script, appSupportDirectory: appSupportDirectory)
+    let fixtureSentinel = try options.temporarySnapshotDirectory(prefix: "\(prefix)-fixture-sentinel")
+    let cliMarker = appSupportDirectory.appending(path: "cli-spawned.log")
+    let fakeBin = appSupportDirectory.appending(path: "fake-cli-bin")
+    try FileManager.default.createDirectory(at: fakeBin, withIntermediateDirectories: true)
+    for name in ["claude", "mcporter"] {
+        let fake = fakeBin.appending(path: name)
+        let body = "#!/bin/sh\nprintf '%s %s\\n' \"$(basename \"$0\")\" \"$*\" >> '\(cliMarker.path)'\nexit 1\n"
+        try Data(body.utf8).write(to: fake, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+    }
+    let stderrLog = appSupportDirectory.appending(path: "pdtbar-stderr.log")
+    FileManager.default.createFile(atPath: stderrLog.path, contents: nil)
+
+    let process = Process()
+    process.executableURL = app
+    process.arguments = ["--app-support-dir", appSupportDirectory.path, "--scripted-pdt", files.script.path]
+    var environment = ProcessInfo.processInfo.environment
+    environment.removeValue(forKey: "PDTBAR_APP_SUPPORT_DIR")
+    process.environment = environment.merging([
+        "PDTBAR_FIXTURE": defaultFixture.path,
+        "PDTBAR_SNAPSHOT_DIR": fixtureSentinel.path,
+        "PATH": "\(fakeBin.path):\(environment["PATH"] ?? "/usr/bin:/bin")",
+    ]) { _, new in new }
+    process.standardError = try FileHandle(forWritingTo: stderrLog)
+    try process.run()
+    return ScriptedPDTLaunch(
+        appSupportDirectory: appSupportDirectory,
+        script: files.script,
+        eventLog: files.eventLog,
+        stderrLog: stderrLog,
+        snapshot: stateDirectory.appending(path: "latest-portfolio-snapshot.json"),
+        fixtureSentinel: fixtureSentinel,
+        cliMarker: cliMarker,
+        process: process
+    )
+}
+
+private func scriptedHoldingsResponse() throws -> ScriptedPDTAPIConfiguration.Response {
+    let holdings = packageRoot.appending(path: "docs/pdt/fixtures/api/full/01-holdings.json")
+    return ScriptedPDTAPIConfiguration.Response(body: String(decoding: try Data(contentsOf: holdings), as: UTF8.self))
+}
+
+private func scriptedAPIError(_ status: Int, _ code: String, headers: [String: String]? = nil) -> ScriptedPDTAPIConfiguration.Response {
+    ScriptedPDTAPIConfiguration.Response(
+        status: status,
+        body: #"{"error":{"code":"\#(code)","message":"m","details":{},"traceId":"t"}}"#,
+        headers: headers
+    )
+}
+
+/// Enough 503s to exhaust the client's retries on the required holdings request.
+private func scriptedHoldingsUnavailable() -> [ScriptedPDTAPIConfiguration.Response] {
+    Array(
+        repeating: scriptedAPIError(503, "SERVICE_UNAVAILABLE", headers: ["Retry-After": "0"]),
+        count: PDTAPIRequestPolicy().maxAttempts
+    )
+}
+
+/// The pulse the app's first fetch builds from the same scripted replies.
+private func expectedFirstFetchPulse(_ api: ScriptedPDTAPIConfiguration) throws -> PulseLifecycleResult {
+    let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-scripted-first-fetch-expected")
+    defer {
+        try? FileManager.default.removeItem(at: store.directory)
+    }
+    return try PDTCoalescedFirstPortfolioFetch(
+        dataSource: PDTAPIDataSource(
+            client: PDTAPIClient(
+                transport: api.transport(),
+                tokenProvider: InMemoryPDTAPITokenProvider(token: PDTAPIToken("scripted"))
+            ),
+            options: .firstFetch
+        ),
+        snapshotStore: store,
+        asOf: api.asOf
     ).fetch()
-    let firstFetchSnapshot = appSupportDirectory.appending(path: "pdtbar/state/latest-portfolio-snapshot.json")
-    let fixtureSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "ready-launch-fixture-sentinel")
-    let fixtureSnapshot = fixtureSnapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
-    let process = Process()
-    process.executableURL = app
-    process.arguments = []
-    var environment = ProcessInfo.processInfo.environment
-    environment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
-    process.environment = environment.merging([
-        "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
-        "PDTBAR_FIXTURE": defaultFixture.path,
-        "PDTBAR_SNAPSHOT_DIR": fixtureSnapshotDirectory.path,
-        "PDTBAR_DISABLE_REAL_CLAUDE": "1",
-    ]) { _, new in new }
-    try process.run()
-    defer {
-        terminate(process)
-    }
-    let snapshotWritten = waitForFile(firstFetchSnapshot, timeout: options.timeout)
-    guard process.isRunning else {
-        process.waitUntilExit()
-        return SmokeReport(
-            name: "ready-launch",
-            status: SmokeStatus.failed,
-            detail: "scripted ready app exited before the smoke timeout",
-            artifacts: [artifactPath(appSupportDirectory)]
-        )
-    }
-    guard snapshotWritten else {
-        return SmokeReport(
-            name: "ready-launch",
-            status: SmokeStatus.failed,
-            detail: "scripted ready launch did not complete the first portfolio fetch",
-            artifacts: [artifactPath(appSupportDirectory)]
-        )
-    }
-    guard !FileManager.default.fileExists(atPath: fixtureSnapshot.path) else {
-        return SmokeReport(
-            name: "ready-launch",
-            status: SmokeStatus.failed,
-            detail: "scripted ready launch consumed fixture environment and wrote fixture snapshot state",
-            artifacts: [artifactPath(fixtureSnapshot)]
-        )
-    }
-
-    guard AXIsProcessTrusted() else {
-        return SmokeReport(
-            name: "ready-launch",
-            status: SmokeStatus.skipped,
-            detail: "scripted ready app completed first fetch and ignored fixture env; macOS Accessibility permission missing for pulse menu inspection",
-            artifacts: [artifactPath(firstFetchSnapshot)]
-        )
-    }
-
-    let surface = MenuBarSurfaceRenderer.render(descriptor: expectedRun.descriptor)
-    let expectedTargets = requiredPulseMenuTargets(in: surface)
-    let expectedMenuIdentifiers = Set(expectedTargets.map(\.accessibilityIdentifier))
-    let appElement = AXUIElementCreateApplication(process.processIdentifier)
-    guard let statusElement = waitForAccessibilityElement(
-        in: appElement,
-        identifier: surface.status.accessibilityIdentifier,
-        timeout: options.timeout
-    ) else {
-        return SmokeReport(
-            name: "ready-launch",
-            status: SmokeStatus.failed,
-            detail: "scripted ready app launched, but Accessibility could not find status item \(surface.status.accessibilityIdentifier)",
-            artifacts: [artifactPath(appSupportDirectory)]
-        )
-    }
-    let openedMenu = openStatusMenu(
-        statusElement,
-        appElement: appElement,
-        expectedMenuIdentifiers: expectedMenuIdentifiers,
-        timeout: options.timeout
-    )
-    let menuSnapshot = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
-        expectedMenuIdentifiers,
-        in: appElement,
-        timeout: options.timeout
-    )
-    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
-    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-    let evidence = artifacts.appending(path: "pdtbar-ready-launch-ax.json")
-    try writeAccessibilityEvidence(
-        snapshot: menuSnapshot,
-        expected: expectedTargets,
-        statusIdentifier: surface.status.accessibilityIdentifier,
-        statusText: accessibilityTexts(in: statusElement),
-        output: evidence
-    )
-    let missingTargets = expectedTargets.filter { !menuSnapshot.identifiers.contains($0.accessibilityIdentifier) }
-    let forbiddenTexts = Set(["Not connected", "Log in with Claude"]).intersection(menuSnapshot.texts)
-    guard missingTargets.isEmpty && forbiddenTexts.isEmpty else {
-        let missingLabels = missingTargets
-            .map { "\($0.accessibilityIdentifier) (\($0.title))" }
-            .joined(separator: ", ")
-        return SmokeReport(
-            name: "ready-launch",
-            status: SmokeStatus.failed,
-            detail: "scripted ready launch did not publish the first pulse cleanly after \(openedMenu.attempts.joined(separator: ", ")); missing selectors: \(missingLabels); forbidden login text: \(forbiddenTexts.sorted().joined(separator: ", "))",
-            artifacts: [artifactPath(evidence)]
-        )
-    }
-
-    return SmokeReport(
-        name: "ready-launch",
-        status: SmokeStatus.passed,
-        detail: "scripted Claude/PDT readiness skipped logged-out UI, completed first fetch, and rendered the first real pulse without consuming fixture state",
-        artifacts: [artifactPath(evidence), artifactPath(firstFetchSnapshot)]
-    )
 }
 
-private func loggedOutLaunchSmoke(arguments: [String]) throws -> SmokeReport {
-    let options = try SmokeOptions(arguments: arguments)
-    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
-    guard FileManager.default.isExecutableFile(atPath: app.path) else {
-        return SmokeReport(
-            name: "logged-out-launch",
-            status: SmokeStatus.failed,
-            detail: "app executable missing; run swift build --product pdtbar first or pass --app <path>",
-            artifacts: []
-        )
-    }
+private struct MenuCheck: Codable {
+    var name: String
+    var visible: Bool
+    var openAttempt: String?
+    var evidencePath: String?
+}
 
-    let appSupportDirectory = try options.isolatedAppSupportDirectory(prefix: "logged-out-launch-app-support")
-    let setupStateDirectory = appSupportDirectory.appending(path: "pdtbar")
-    try FileManager.default.createDirectory(at: setupStateDirectory, withIntermediateDirectories: true)
-    try Data("{".utf8).write(
-        to: setupStateDirectory.appending(path: "claude-setup.json"),
-        options: .atomic
-    )
-    let fixtureSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "logged-out-fixture-sentinel")
-    let fixtureSnapshot = fixtureSnapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
-    let process = Process()
-    process.executableURL = app
-    process.arguments = []
-    var environment = ProcessInfo.processInfo.environment
-    environment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
-    process.environment = environment.merging([
-        "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
-        "PDTBAR_FIXTURE": defaultFixture.path,
-        "PDTBAR_SNAPSHOT_DIR": fixtureSnapshotDirectory.path,
-        "PDTBAR_DISABLE_REAL_CLAUDE": "1",
-    ]) { _, new in new }
-    try process.run()
-    defer {
-        if process.isRunning {
-            process.terminate()
-            process.waitUntilExit()
-        }
-    }
-    Thread.sleep(forTimeInterval: options.timeout)
-    guard process.isRunning else {
-        process.waitUntilExit()
-        return SmokeReport(
-            name: "logged-out-launch",
-            status: SmokeStatus.failed,
-            detail: "no-argument app exited before the smoke timeout",
-            artifacts: [artifactPath(appSupportDirectory)]
-        )
-    }
-    guard !FileManager.default.fileExists(atPath: fixtureSnapshot.path) else {
-        return SmokeReport(
-            name: "logged-out-launch",
-            status: SmokeStatus.failed,
-            detail: "no-argument app consumed fixture environment and wrote fixture snapshot state",
-            artifacts: [artifactPath(fixtureSnapshot)]
-        )
-    }
-
-    guard AXIsProcessTrusted() else {
-        return SmokeReport(
-            name: "logged-out-launch",
-            status: SmokeStatus.skipped,
-            detail: "no-argument app stayed running with isolated app support and ignored fixture env; macOS Accessibility permission missing for setup menu inspection",
-            artifacts: [artifactPath(appSupportDirectory)]
-        )
-    }
-
-    let descriptor = ClaudeSetupMenuDescriptor.loggedOut()
+/// Opens the status menu and checks it shows `descriptor`'s rows and `texts`.
+private func checkMenu(
+    _ name: String,
+    descriptor: MenuDescriptor,
+    pulse: Bool = false,
+    texts: [String] = [],
+    forbiddenTexts: [String] = [],
+    process: Process,
+    timeout: TimeInterval,
+    artifacts: URL
+) throws -> MenuCheck {
     let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
-    let expectedTargets = requiredSetupMenuTargets(in: surface)
-    let expectedMenuIdentifiers = Set(expectedTargets.map(\.accessibilityIdentifier))
+    let targets = pulse ? requiredPulseMenuTargets(in: surface) : requiredSetupMenuTargets(in: surface)
+    let identifiers = Set(targets.map(\.accessibilityIdentifier))
     let appElement = AXUIElementCreateApplication(process.processIdentifier)
-    guard let statusElement = waitForAccessibilityElement(
-        in: appElement,
-        identifier: surface.status.accessibilityIdentifier,
-        timeout: options.timeout
-    ) else {
-        return SmokeReport(
-            name: "logged-out-launch",
-            status: SmokeStatus.failed,
-            detail: "no-argument app launched, but Accessibility could not find status item \(surface.status.accessibilityIdentifier)",
-            artifacts: [artifactPath(appSupportDirectory)]
-        )
+    _ = waitForStatusText(descriptor.statusTitle, in: appElement, statusIdentifier: surface.status.accessibilityIdentifier, timeout: timeout)
+    guard let status = waitForAccessibilityElement(in: appElement, identifier: surface.status.accessibilityIdentifier, timeout: timeout) else {
+        return MenuCheck(name: name, visible: false, openAttempt: "status item missing", evidencePath: nil)
     }
-    let openedMenu = openStatusMenu(
-        statusElement,
-        appElement: appElement,
-        expectedMenuIdentifiers: expectedMenuIdentifiers,
-        timeout: options.timeout
-    )
-    let menuSnapshot = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
-        expectedMenuIdentifiers,
-        in: appElement,
-        timeout: options.timeout
-    )
-    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
-    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-    let evidence = artifacts.appending(path: "pdtbar-logged-out-launch-ax.json")
+    let opened = openStatusMenu(status, appElement: appElement, expectedMenuIdentifiers: identifiers, timeout: timeout)
+    let snapshot = opened.snapshot ?? waitForAccessibilityIdentifiers(identifiers, in: appElement, timeout: timeout)
+    let evidence = artifacts.appending(path: "pdtbar-\(name)-ax.json")
     try writeAccessibilityEvidence(
-        snapshot: menuSnapshot,
-        expected: expectedTargets,
+        snapshot: snapshot,
+        expected: targets,
         statusIdentifier: surface.status.accessibilityIdentifier,
-        statusText: accessibilityTexts(in: statusElement),
+        statusText: accessibilityTexts(in: status),
         output: evidence
     )
-    let expectedTexts = Set(["Not connected", "Log in with Claude", "Quit PDTBar"])
-    let missingTargets = expectedTargets.filter { !menuSnapshot.identifiers.contains($0.accessibilityIdentifier) }
-    let missingTexts = expectedTexts.filter { expectedText in
-        !menuSnapshot.texts.contains { observedText in
-            observedText.contains(expectedText)
-        }
-    }
-    guard missingTargets.isEmpty && missingTexts.isEmpty else {
-        let missingLabels = missingTargets
-            .map { "\($0.accessibilityIdentifier) (\($0.title))" }
-            .joined(separator: ", ")
-        let missingCopy = missingTexts.sorted().joined(separator: ", ")
-        return SmokeReport(
-            name: "logged-out-launch",
-            status: SmokeStatus.failed,
-            detail: "could not verify logged-out setup menu after \(openedMenu.attempts.joined(separator: ", ")); missing selectors: \(missingLabels); missing text: \(missingCopy)",
-            artifacts: [artifactPath(evidence)]
-        )
-    }
-
-    return SmokeReport(
-        name: "logged-out-launch",
-        status: SmokeStatus.passed,
-        detail: "no-argument app launched real Claude-first setup with isolated app support, ignored fixture env, and rendered Not connected, Log in with Claude, and Quit PDTBar",
-        artifacts: [artifactPath(evidence)]
+    pressEscape()
+    Thread.sleep(forTimeInterval: 0.2)
+    let visible = identifiers.isSubset(of: snapshot.identifiers)
+        && texts.allSatisfy { text in snapshot.texts.contains { $0.contains(text) } }
+        && forbiddenTexts.allSatisfy { text in !snapshot.texts.contains { $0.contains(text) } }
+    return MenuCheck(
+        name: name,
+        visible: visible,
+        openAttempt: opened.successfulAttempt ?? opened.attempts.joined(separator: "; "),
+        evidencePath: artifactPath(evidence)
     )
 }
 
-private func realClaudeFlowAXSmoke(arguments: [String]) throws -> SmokeReport {
+/// Clicks a menu row through Accessibility while the menu shows `descriptor`.
+private func clickMenuRow(_ rowID: String, descriptor: MenuDescriptor, process: Process, timeout: TimeInterval) -> String? {
+    let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
+    let identifiers = Set(requiredSetupMenuTargets(in: surface).map(\.accessibilityIdentifier))
+    let appElement = AXUIElementCreateApplication(process.processIdentifier)
+    guard let status = waitForAccessibilityElement(in: appElement, identifier: surface.status.accessibilityIdentifier, timeout: timeout) else {
+        return nil
+    }
+    return pressMenuRow(
+        statusElement: status,
+        appElement: appElement,
+        rowIdentifier: "pdtbar.row.\(rowID)",
+        expectedMenuIdentifiers: identifiers,
+        timeout: timeout
+    )
+}
+
+private func missingAppReport(_ name: String) -> SmokeReport {
+    SmokeReport(
+        name: name,
+        status: SmokeStatus.failed,
+        detail: "app executable missing; run swift build --product pdtbar first or pass --app <path>",
+        artifacts: []
+    )
+}
+
+private func smokeArtifacts(_ options: SmokeOptions) throws -> URL {
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    return artifacts
+}
+
+private struct ScriptedLaunchIsolation: Codable {
+    var appArguments: [String]
+    var processStillRunning: Bool
+    var cliSpawned: Bool
+    var fixtureSentinelEmpty: Bool
+}
+
+private func isolation(_ launch: ScriptedPDTLaunch) -> ScriptedLaunchIsolation {
+    ScriptedLaunchIsolation(
+        appArguments: launch.arguments,
+        processStillRunning: launch.process.isRunning,
+        cliSpawned: launch.cliSpawned,
+        fixtureSentinelEmpty: launch.fixtureSentinelEmpty
+    )
+}
+
+private extension ScriptedLaunchIsolation {
+    var clean: Bool { processStillRunning && !cliSpawned && fixtureSentinelEmpty }
+}
+
+// MARK: scripted-first-fetch
+
+private struct ScriptedFirstFetchProof: Codable {
+    var success: ScriptedLaunchIsolation
+    var successSnapshotPath: String
+    var successSnapshotWritten: Bool
+    var successSnapshotAsOf: String?
+    var successOpenHoldingCount: Int
+    var successHoldingsRequests: Int
+    var successPulseMenu: MenuCheck?
+    var failure: ScriptedLaunchIsolation
+    var failureHoldingsRequests: Int
+    var failureSnapshotWritten: Bool
+    var failureReported: Bool
+    var failureMenu: MenuCheck?
+    var accessibilityChecked: Bool
+    var rawPortfolioPayloadsRedacted: Bool
+}
+
+private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport {
+    let name = "scripted-first-fetch"
     let options = try SmokeOptions(arguments: arguments)
     let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
     guard FileManager.default.isExecutableFile(atPath: app.path) else {
-        return SmokeReport(
-            name: "real-claude-flow-ax",
-            status: SmokeStatus.failed,
-            detail: "app executable missing; run swift build --product pdtbar first or pass --app <path>",
-            artifacts: []
-        )
+        return missingAppReport(name)
     }
+    let artifacts = try smokeArtifacts(options)
+    let proof = artifacts.appending(path: "pdtbar-scripted-first-fetch-proof.json")
+    let accessibilityChecked = AXIsProcessTrusted()
 
-    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
-    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-    let proof = artifacts.appending(path: "pdtbar-real-claude-flow-ax-proof.json")
-    var proofPayload = RealClaudeFlowAXProof(
-        appArguments: [],
-        fixtureModeUsed: false,
-        scenarios: [],
-        rawClaudeCredentialsUsed: false,
+    let successAPI = ScriptedPDTAPIConfiguration(responses: [try scriptedHoldingsResponse()], asOf: scriptedPDTAsOf)
+    let expectedPulse = try expectedFirstFetchPulse(successAPI)
+    let success = try launchScriptedPDTApp(
+        app,
+        script: ScriptedPDTConnection(connection: .personalToken, api: successAPI),
+        options: options,
+        prefix: "\(name)-success"
+    )
+    defer { terminate(success.process) }
+    let successSnapshotWritten = waitForFile(success.snapshot, timeout: options.timeout + 3.0)
+    let publishedSnapshot = try? JSONDecoder().decode(PortfolioSnapshot.self, from: Data(contentsOf: success.snapshot))
+    let successPulseMenu = accessibilityChecked
+        ? try checkMenu(
+            "\(name)-success",
+            descriptor: expectedPulse.descriptor,
+            pulse: true,
+            process: success.process,
+            timeout: options.timeout,
+            artifacts: artifacts
+        )
+        : nil
+    let successIsolation = isolation(success)
+    terminate(success.process)
+
+    let failure = try launchScriptedPDTApp(
+        app,
+        script: ScriptedPDTConnection(
+            connection: .personalToken,
+            api: ScriptedPDTAPIConfiguration(responses: scriptedHoldingsUnavailable(), asOf: scriptedPDTAsOf)
+        ),
+        options: options,
+        prefix: "\(name)-failure"
+    )
+    defer { terminate(failure.process) }
+    let attempts = PDTAPIRequestPolicy().maxAttempts
+    _ = failure.waitForEventCount("request /v1/portfolio/holdings", atLeast: attempts, timeout: options.timeout + 3.0)
+    let failureReported = waitForFileContent(failure.stderrLog, contains: "first fetch failed", timeout: options.timeout + 3.0)
+    let failureMenu = accessibilityChecked
+        ? try checkMenu(
+            "\(name)-failure",
+            descriptor: PDTLaunchMenu.descriptor(for: .connected(.failed)),
+            texts: ["Could not fetch portfolio", "Try again"],
+            process: failure.process,
+            timeout: options.timeout,
+            artifacts: artifacts
+        )
+        : nil
+    let failureIsolation = isolation(failure)
+
+    let proofPayload = ScriptedFirstFetchProof(
+        success: successIsolation,
+        successSnapshotPath: artifactPath(success.snapshot),
+        successSnapshotWritten: successSnapshotWritten,
+        successSnapshotAsOf: publishedSnapshot?.asOf,
+        successOpenHoldingCount: publishedSnapshot?.openHoldings.count ?? 0,
+        successHoldingsRequests: success.eventCount("request /v1/portfolio/holdings"),
+        successPulseMenu: successPulseMenu,
+        failure: failureIsolation,
+        failureHoldingsRequests: failure.eventCount("request /v1/portfolio/holdings"),
+        failureSnapshotWritten: failure.snapshotWritten,
+        failureReported: failureReported,
+        failureMenu: failureMenu,
+        accessibilityChecked: accessibilityChecked,
         rawPortfolioPayloadsRedacted: true
     )
-
-    guard AXIsProcessTrusted() else {
-        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
-        return SmokeReport(
-            name: "real-claude-flow-ax",
-            status: SmokeStatus.skipped,
-            detail: "macOS Accessibility permission missing for real Claude-flow menu-bar smoke; grant Accessibility in System Settings > Privacy & Security > Accessibility to the app running this command, then rerun",
-            artifacts: [artifactPath(proof)]
-        )
-    }
-
-    let pressureResponses = try scriptedPDTConnectorResponses().mapValues { String(decoding: $0, as: UTF8.self) }
-    let quietResponses = try scriptedQuietPDTConnectorResponses().mapValues { String(decoding: $0, as: UTF8.self) }
-
-    let fetchingConfiguration = ScriptedPDTMCPConnectorConfiguration(
-        responses: quietResponses,
-        asOf: "2026-03-29",
-        initialCallDelaySeconds: max(options.timeout * 4.0, 6.0)
-    )
-    let quietConfiguration = ScriptedPDTMCPConnectorConfiguration(
-        responses: quietResponses,
-        asOf: "2026-03-29"
-    )
-    let pressureConfiguration = ScriptedPDTMCPConnectorConfiguration(
-        responses: pressureResponses,
-        asOf: "2026-03-29"
-    )
-    let retryableErrorConfiguration = ScriptedPDTMCPConnectorConfiguration(
-        responses: quietResponses,
-        asOf: "2026-03-29",
-        failure: "transientFailure",
-        failureMessage: "Claude call timed out"
-    )
-
-    let quietExpectedStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-real-claude-flow-quiet-expected")
-    let pressureExpectedStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-real-claude-flow-pressure-expected")
-    defer {
-        try? FileManager.default.removeItem(at: quietExpectedStore.directory)
-        try? FileManager.default.removeItem(at: pressureExpectedStore.directory)
-    }
-    let quietExpectedRun = try PDTCoalescedFirstPortfolioFetch(
-        dataSource: PDTMCPConnectorDataSource(connector: quietConfiguration.connector()),
-        snapshotStore: quietExpectedStore,
-        asOf: quietConfiguration.asOf
-    ).fetch()
-    let pressureExpectedRun = try PDTCoalescedFirstPortfolioFetch(
-        dataSource: PDTMCPConnectorDataSource(connector: pressureConfiguration.connector()),
-        snapshotStore: pressureExpectedStore,
-        asOf: pressureConfiguration.asOf
-    ).fetch()
-
-    proofPayload.scenarios = [
-        try realClaudeFlowAXScenario(
-            name: "setup",
-            app: app,
-            options: options,
-            artifacts: artifacts,
-            readiness: "missingClaudeLogin",
-            configuration: nil,
-            descriptor: ClaudeLaunchFlow.descriptor(for: .missingClaudeLogin),
-            targetMode: .setup,
-            expectedTexts: ["Not connected", "Log in with Claude", "Check again"]
-        ),
-        try realClaudeFlowAXScenario(
-            name: "fetching",
-            app: app,
-            options: options,
-            artifacts: artifacts,
-            readiness: nil,
-            configuration: fetchingConfiguration,
-            descriptor: ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio),
-            targetMode: .setup,
-            expectedTexts: ["Fetching portfolio"]
-        ),
-        try realClaudeFlowAXScenario(
-            name: "all-quiet",
-            app: app,
-            options: options,
-            artifacts: artifacts,
-            readiness: nil,
-            configuration: quietConfiguration,
-            descriptor: quietExpectedRun.descriptor,
-            targetMode: .pulse,
-            expectedTexts: ["All quiet - No attention items right now.", "No income events"],
-            expectedSnapshotAsOf: "2026-03-29"
-        ),
-        try realClaudeFlowAXScenario(
-            name: "pressure",
-            app: app,
-            options: options,
-            artifacts: artifacts,
-            readiness: nil,
-            configuration: pressureConfiguration,
-            descriptor: pressureExpectedRun.descriptor,
-            targetMode: .pulse,
-            expectedTexts: ["Scripted Adapter Co concentration"],
-            expectedSnapshotAsOf: "2026-03-29"
-        ),
-        try realClaudeFlowAXScenario(
-            name: "retryable-error",
-            app: app,
-            options: options,
-            artifacts: artifacts,
-            readiness: nil,
-            configuration: retryableErrorConfiguration,
-            descriptor: ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed),
-            targetMode: .setup,
-            expectedTexts: ["Could not fetch portfolio", "Try again"]
-        ),
-    ]
     try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+    let artifactsList = [artifactPath(proof)] + [successPulseMenu, failureMenu].compactMap { $0?.evidencePath }
 
-    guard proofPayload.scenarios.allSatisfy(\.passed) else {
+    guard successIsolation.clean,
+          successSnapshotWritten,
+          proofPayload.successSnapshotAsOf == scriptedPDTAsOf,
+          proofPayload.successOpenHoldingCount > 0,
+          proofPayload.successHoldingsRequests >= 1,
+          failureIsolation.clean,
+          proofPayload.failureHoldingsRequests == attempts,
+          !proofPayload.failureSnapshotWritten,
+          failureReported,
+          successPulseMenu?.visible ?? true,
+          failureMenu?.visible ?? true
+    else {
         return SmokeReport(
-            name: "real-claude-flow-ax",
+            name: name,
             status: SmokeStatus.failed,
-            detail: "real app Claude-flow Accessibility matrix did not verify every setup/fetching/all-quiet/pressure/retryable-error surface",
-            artifacts: [artifactPath(proof)] + proofPayload.scenarios.map(\.evidencePath)
+            detail: "scripted PDT first fetch did not prove publish-on-success, no snapshot on a failed holdings fetch, and no CLI or fixture fallback",
+            artifacts: artifactsList
         )
     }
-
+    guard accessibilityChecked else {
+        return SmokeReport(
+            name: name,
+            status: SmokeStatus.skipped,
+            detail: "connected first fetch wrote the snapshot; failed holdings fetch wrote none and reported the failure; no CLI spawned, no fixture state; macOS Accessibility permission missing for menu inspection",
+            artifacts: artifactsList
+        )
+    }
     return SmokeReport(
-        name: "real-claude-flow-ax",
+        name: name,
         status: SmokeStatus.passed,
-        detail: "real app no-argument Claude flow opened the menu through Accessibility and verified stable status/menu identifiers across setup, fetching, all-quiet, pressure, and retryable error surfaces",
-        artifacts: [artifactPath(proof)] + proofPayload.scenarios.map(\.evidencePath)
+        detail: "connected first fetch wrote the snapshot and showed the pulse; failed holdings fetch wrote none and showed Could not fetch portfolio; no CLI spawned, no fixture state",
+        artifacts: artifactsList
     )
 }
 
-private func scriptedLoginHandoffSmoke(arguments: [String]) throws -> SmokeReport {
+// MARK: scripted-setup-retry
+
+private struct ScriptedSetupRetryScenarioProof: Codable {
+    var name: String
+    var isolation: ScriptedLaunchIsolation
+    var initialChecks: Int
+    var initialHoldingsRequests: Int
+    var initialMenu: MenuCheck?
+    var checkAgainClicks: [String?]
+    var finalChecks: Int
+    var finalHoldingsRequests: Int
+    var snapshotWritten: Bool
+    var passed: Bool
+}
+
+private struct ScriptedSetupRetryProof: Codable {
+    var accessibilityChecked: Bool
+    var scenarios: [ScriptedSetupRetryScenarioProof]
+    var rawPortfolioPayloadsRedacted: Bool
+}
+
+private struct SetupRetryScenario {
+    var name: String
+    var script: ScriptedPDTConnection
+    var state: PDTLaunchState
+    /// Holdings requests the launch makes before the user acts.
+    var initialHoldingsRequests: Int
+    /// Whether Check again reaches a successful fetch.
+    var reachesFetch: Bool
+}
+
+private func scriptedSetupRetrySmoke(arguments: [String]) throws -> SmokeReport {
+    let name = "scripted-setup-retry"
     let options = try SmokeOptions(arguments: arguments)
     let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
     guard FileManager.default.isExecutableFile(atPath: app.path) else {
-        return SmokeReport(
-            name: "scripted-login-handoff",
-            status: SmokeStatus.failed,
-            detail: "app executable missing; run swift build --product pdtbar first or pass --app <path>",
-            artifacts: []
+        return missingAppReport(name)
+    }
+    let artifacts = try smokeArtifacts(options)
+    let proof = artifacts.appending(path: "pdtbar-scripted-setup-retry-proof.json")
+    let accessibilityChecked = AXIsProcessTrusted()
+    let holdings = try scriptedHoldingsResponse()
+    let scenarios = [
+        SetupRetryScenario(
+            name: "reconnect",
+            script: ScriptedPDTConnection(connection: .tokenRevoked, api: ScriptedPDTAPIConfiguration(responses: [holdings], asOf: scriptedPDTAsOf)),
+            state: .needsReconnect(.personalToken, .tokenRevoked),
+            initialHoldingsRequests: 0,
+            reachesFetch: false
+        ),
+        SetupRetryScenario(
+            name: "subscription-paused",
+            script: ScriptedPDTConnection(
+                connection: .personalToken,
+                api: ScriptedPDTAPIConfiguration(responses: [scriptedAPIError(403, "API_ACCESS_PAUSED"), holdings], asOf: scriptedPDTAsOf)
+            ),
+            state: .subscriptionPaused,
+            initialHoldingsRequests: 1,
+            reachesFetch: true
+        ),
+        SetupRetryScenario(
+            name: "keychain-missing-entitlement",
+            script: ScriptedPDTConnection(connection: .personalToken, keychainStatus: errSecMissingEntitlement),
+            state: .keychainUnavailable(.missingEntitlement),
+            initialHoldingsRequests: 0,
+            reachesFetch: false
+        ),
+    ]
+
+    var results: [ScriptedSetupRetryScenarioProof] = []
+    for scenario in scenarios {
+        let launch = try launchScriptedPDTApp(app, script: scenario.script, options: options, prefix: "\(name)-\(scenario.name)")
+        defer { terminate(launch.process) }
+        _ = launch.waitForEventCount("check", atLeast: 1, timeout: options.timeout + 3.0)
+        if scenario.initialHoldingsRequests > 0 {
+            _ = launch.waitForEventCount("request /v1/portfolio/holdings", atLeast: scenario.initialHoldingsRequests, timeout: options.timeout + 3.0)
+        }
+        Thread.sleep(forTimeInterval: 0.5)
+        let initialChecks = launch.eventCount("check")
+        let initialHoldingsRequests = launch.eventCount("request /v1/portfolio/holdings")
+        let descriptor = PDTLaunchMenu.descriptor(for: scenario.state)
+        var initialMenu: MenuCheck?
+        var clicks: [String?] = []
+        if accessibilityChecked {
+            initialMenu = try checkMenu(
+                "\(name)-\(scenario.name)",
+                descriptor: descriptor,
+                texts: [PDTLaunchMenu.descriptor(for: scenario.state).statusTitle, "Check again"],
+                process: launch.process,
+                timeout: options.timeout,
+                artifacts: artifacts
+            )
+            // A second click lands while the check or fetch runs, when the row is gone or refused.
+            clicks.append(clickMenuRow("pdtConnection.check", descriptor: descriptor, process: launch.process, timeout: options.timeout))
+            clicks.append(clickMenuRow("pdtConnection.check", descriptor: descriptor, process: launch.process, timeout: 0.5))
+            _ = launch.waitForEventCount("check", atLeast: 2, timeout: options.timeout + 3.0)
+            if scenario.reachesFetch {
+                _ = waitForFile(launch.snapshot, timeout: options.timeout + 3.0)
+                _ = launch.waitForEventCount("request /v1/portfolio/holdings", atLeast: scenario.initialHoldingsRequests + 2, timeout: options.timeout)
+            }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        let finalChecks = launch.eventCount("check")
+        let finalHoldingsRequests = launch.eventCount("request /v1/portfolio/holdings")
+        let scenarioIsolation = isolation(launch)
+        let initialStateProved = initialChecks == 1 && initialHoldingsRequests == scenario.initialHoldingsRequests
+        let retryProved = !accessibilityChecked || (
+            initialMenu?.visible == true
+                && clicks.first.flatMap { $0 } != nil
+                && finalChecks == 2
+                // A fetch after Check again is the first fetch plus the background detail refresh it starts,
+                // each reading holdings once; a duplicate fetch would add another.
+                && finalHoldingsRequests == scenario.initialHoldingsRequests + (scenario.reachesFetch ? 2 : 0)
+                && launch.snapshotWritten == scenario.reachesFetch
         )
+        results.append(ScriptedSetupRetryScenarioProof(
+            name: scenario.name,
+            isolation: scenarioIsolation,
+            initialChecks: initialChecks,
+            initialHoldingsRequests: initialHoldingsRequests,
+            initialMenu: initialMenu,
+            checkAgainClicks: clicks,
+            finalChecks: finalChecks,
+            finalHoldingsRequests: finalHoldingsRequests,
+            snapshotWritten: launch.snapshotWritten,
+            passed: scenarioIsolation.clean && initialStateProved && retryProved
+                && (accessibilityChecked || !launch.snapshotWritten)
+        ))
+        terminate(launch.process)
     }
 
-    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
-    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-    let proof = artifacts.appending(path: "pdtbar-scripted-login-handoff-proof.json")
+    try stableJSONData(ScriptedSetupRetryProof(
+        accessibilityChecked: accessibilityChecked,
+        scenarios: results,
+        rawPortfolioPayloadsRedacted: true
+    )).write(to: proof, options: .atomic)
+    let artifactsList = [artifactPath(proof)] + results.compactMap { $0.initialMenu?.evidencePath }
+
+    guard results.allSatisfy(\.passed) else {
+        return SmokeReport(
+            name: name,
+            status: SmokeStatus.failed,
+            detail: "scripted setup retry did not prove reconnect, paused, and Keychain states with one check per Check again and no duplicate fetch",
+            artifacts: artifactsList
+        )
+    }
+    guard accessibilityChecked else {
+        return SmokeReport(
+            name: name,
+            status: SmokeStatus.skipped,
+            detail: "reconnect, paused, and Keychain launches each ran one check and stopped before a snapshot; macOS Accessibility permission missing for Check again click proof",
+            artifacts: artifactsList
+        )
+    }
+    return SmokeReport(
+        name: name,
+        status: SmokeStatus.passed,
+        detail: "reconnect, paused, and Keychain rows rendered; Check again reran one check per click, paused reached the fetch, and a duplicate click started no second fetch",
+        artifacts: artifactsList
+    )
+}
+
+// MARK: scripted-sign-in
+
+private struct ScriptedSignInProof: Codable {
+    var success: ScriptedLaunchIsolation
+    var successIdleBeforeClick: Bool
+    var successSetupMenu: MenuCheck?
+    var successClick: String?
+    var successSignInStarted: Bool
+    var successSigningInVisible: Bool
+    var successSnapshotWritten: Bool
+    var successSnapshotAsOf: String?
+    var denied: ScriptedLaunchIsolation
+    var deniedClick: String?
+    var deniedMenu: MenuCheck?
+    var deniedHoldingsRequests: Int
+    var deniedSnapshotWritten: Bool
+    var rawPortfolioPayloadsRedacted: Bool
+}
+
+private func scriptedSignInSmoke(arguments: [String]) throws -> SmokeReport {
+    let name = "scripted-sign-in"
+    let options = try SmokeOptions(arguments: arguments)
+    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
+    guard FileManager.default.isExecutableFile(atPath: app.path) else {
+        return missingAppReport(name)
+    }
+    let artifacts = try smokeArtifacts(options)
+    let proof = artifacts.appending(path: "pdtbar-scripted-sign-in-proof.json")
+    let api = ScriptedPDTAPIConfiguration(responses: [try scriptedHoldingsResponse()], asOf: scriptedPDTAsOf)
+    let notConnected = PDTLaunchMenu.descriptor(for: .notConnected)
+
+    let success = try launchScriptedPDTApp(
+        app,
+        script: ScriptedPDTConnection(connection: .notConnected, signIn: .succeeds, signInDelaySeconds: max(options.timeout, 1.5), api: api),
+        options: options,
+        prefix: "\(name)-success"
+    )
+    defer { terminate(success.process) }
+    _ = success.waitForEventCount("check", atLeast: 1, timeout: options.timeout + 3.0)
+    Thread.sleep(forTimeInterval: 0.5)
+    let successIdle = success.eventCount("sign-in") == 0 && success.eventCount("request /v1/portfolio/holdings") == 0
+        && !success.snapshotWritten
 
     guard AXIsProcessTrusted() else {
+        let successIsolation = isolation(success)
+        terminate(success.process)
+        try stableJSONData(ScriptedSignInProof(
+            success: successIsolation,
+            successIdleBeforeClick: successIdle,
+            successSetupMenu: nil,
+            successClick: nil,
+            successSignInStarted: false,
+            successSigningInVisible: false,
+            successSnapshotWritten: false,
+            successSnapshotAsOf: nil,
+            denied: successIsolation,
+            deniedClick: nil,
+            deniedMenu: nil,
+            deniedHoldingsRequests: 0,
+            deniedSnapshotWritten: false,
+            rawPortfolioPayloadsRedacted: true
+        )).write(to: proof, options: .atomic)
+        guard successIdle, successIsolation.clean else {
+            return SmokeReport(name: name, status: SmokeStatus.failed, detail: "not-connected launch did not stay idle before a sign-in click", artifacts: [artifactPath(proof)])
+        }
         return SmokeReport(
-            name: "scripted-login-handoff",
+            name: name,
             status: SmokeStatus.skipped,
-            detail: "macOS Accessibility permission missing for user-initiated Log in with Claude menu-click proof",
-            artifacts: []
-        )
-    }
-
-    let successAppSupport = try options.isolatedAppSupportDirectory(prefix: "scripted-login-handoff-success-app-support")
-    let successMarker = successAppSupport.appending(path: "pdtbar/claude-handoff-started")
-    let successInvocationLog = successMarker.appendingPathExtension("log")
-    let successResult = successAppSupport.appending(path: "pdtbar/claude-handoff-result")
-    let successProbeLog = successAppSupport.appending(path: "pdtbar/readiness-probes.log")
-    let successScript = try writeHandoffScript(
-        in: successAppSupport,
-        name: "handoff-success.sh",
-        delay: max(options.timeout + 3.0, 4.0),
-        postSuccessDelay: max(options.timeout + 12.0, 16.0),
-        exitStatus: 0
-    )
-    let successProcess = try launchLoginHandoffApp(
-        app,
-        appSupportDirectory: successAppSupport,
-        handoffScript: successScript,
-        marker: successMarker,
-        result: successResult,
-        resultValue: "success",
-        probeLog: successProbeLog
-    )
-    defer {
-        terminate(successProcess)
-    }
-
-    let loginSurface = MenuBarSurfaceRenderer.render(descriptor: ClaudeSetupMenuDescriptor.loggedOut())
-    let loginTargets = requiredSetupMenuTargets(in: loginSurface)
-    let loginIDs = Set(loginTargets.map(\.accessibilityIdentifier))
-    let successAppElement = AXUIElementCreateApplication(successProcess.processIdentifier)
-    guard let successStatus = waitForAccessibilityElement(
-        in: successAppElement,
-        identifier: loginSurface.status.accessibilityIdentifier,
-        timeout: options.timeout
-    ) else {
-        return SmokeReport(
-            name: "scripted-login-handoff",
-            status: SmokeStatus.failed,
-            detail: "scripted success launch did not reach logged-out setup before handoff",
-            artifacts: [artifactPath(successAppSupport)]
-        )
-    }
-    let successWasIdleBeforeClick = !FileManager.default.fileExists(atPath: successMarker.path)
-    let successInitialReadinessProbed = waitForReadinessProbeCount(
-        successProbeLog,
-        expectedCount: 1,
-        timeout: options.timeout
-    )
-    let successClick = pressMenuRow(
-        statusElement: successStatus,
-        appElement: successAppElement,
-        rowIdentifier: "pdtbar.row.claudeSetup.login",
-        expectedMenuIdentifiers: loginIDs,
-        timeout: options.timeout
-    )
-    let successScriptInvoked = waitForFile(successMarker, timeout: options.timeout)
-    let progressVisible = waitForStatusText(
-        "Signing in with Claude",
-        in: successAppElement,
-        statusIdentifier: "pdtbar.status",
-        timeout: options.timeout
-    )
-    let openingSurface = MenuBarSurfaceRenderer.render(descriptor: ClaudeLaunchFlow.descriptor(for: .openingClaude))
-    let openingTargets = requiredSetupMenuTargets(in: openingSurface)
-    let openingIDs = Set(openingTargets.map(\.accessibilityIdentifier))
-    let progressMenu = openStatusMenu(
-        successStatus,
-        appElement: successAppElement,
-        expectedMenuIdentifiers: openingIDs,
-        timeout: options.timeout
-    )
-    let progressRetryVisible = openingIDs.isSubset(of: progressMenu.snapshot?.identifiers ?? [])
-        && (progressMenu.snapshot?.texts.contains("Try login again") ?? false)
-    let successRetryClick = pressMenuRow(
-        statusElement: successStatus,
-        appElement: successAppElement,
-        rowIdentifier: "pdtbar.row.claudeSetup.login",
-        expectedMenuIdentifiers: openingIDs,
-        timeout: options.timeout
-    )
-    let successRetryInvoked = waitForHandoffInvocationCount(
-        successInvocationLog,
-        expectedCount: 2,
-        timeout: options.timeout
-    )
-    let successSupersededAttemptTerminated = waitForFileContent(
-        successInvocationLog,
-        contains: "terminated",
-        timeout: options.timeout + 2.0
-    )
-    let successLoginArgsIncluded = waitForFileContent(
-        successMarker,
-        contains: "auth login",
-        timeout: options.timeout
-    )
-    let successConfiguration = ScriptedPDTMCPConnectorConfiguration(
-        responses: try scriptedPDTConnectorResponses().mapValues { String(decoding: $0, as: UTF8.self) },
-        asOf: "2026-03-29",
-        initialCallDelaySeconds: max(options.timeout + 2.0, 4.0)
-    )
-    try writeFirstFetchAppScript(configuration: successConfiguration, appSupportDirectory: successAppSupport)
-    let successCompleted = waitForFile(successResult, timeout: options.timeout + 8.0)
-    let successReadinessRechecked = waitForReadinessProbeCount(
-        successProbeLog,
-        expectedCount: 2,
-        timeout: options.timeout + 6.0
-    )
-    let successReadinessProbeCount = readinessProbeCount(in: successProbeLog)
-    let successFetchingVisible = waitForStatusText(
-        "Fetching portfolio",
-        in: successAppElement,
-        statusIdentifier: "pdtbar.status",
-        timeout: options.timeout
-    )
-    let fetchingSurface = MenuBarSurfaceRenderer.render(descriptor: ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio))
-    let fetchingTargets = requiredSetupMenuTargets(in: fetchingSurface)
-    let fetchingIDs = Set(fetchingTargets.map(\.accessibilityIdentifier))
-    let fetchingStatus = waitForAccessibilityElement(
-        in: successAppElement,
-        identifier: fetchingSurface.status.accessibilityIdentifier,
-        timeout: options.timeout
-    )
-    let fetchingMenu = fetchingStatus.map {
-        openStatusMenu(
-            $0,
-            appElement: successAppElement,
-            expectedMenuIdentifiers: fetchingIDs,
-            timeout: options.timeout
-        )
-    } ?? OpenMenuResult(
-        snapshot: nil,
-        successfulAttempt: nil,
-        attempts: ["status item missing: \(fetchingSurface.status.accessibilityIdentifier)"]
-    )
-    let successFetchingMenuVisible = fetchingIDs.isSubset(of: fetchingMenu.snapshot?.identifiers ?? [])
-        && (fetchingMenu.snapshot?.texts.contains("Fetching portfolio") ?? false)
-    pressEscape()
-    let successFirstFetchSnapshot = successAppSupport.appending(path: "pdtbar/state/latest-portfolio-snapshot.json")
-    let successFirstFetchSnapshotWritten = waitForSnapshotAsOf(
-        successFirstFetchSnapshot,
-        asOf: "2026-03-29",
-        timeout: options.timeout + 8.0
-    )
-    let successStoppedAfterOutput = waitForHandoffTerminationCount(
-        successInvocationLog,
-        expectedCount: 2,
-        timeout: options.timeout + 2.0
-    )
-    let successFirstFetchAsOf = snapshotAsOf(successFirstFetchSnapshot)
-    terminate(successProcess)
-
-    let failureAppSupport = try options.isolatedAppSupportDirectory(prefix: "scripted-login-handoff-failure-app-support")
-    let failureMarker = failureAppSupport.appending(path: "pdtbar/claude-handoff-started")
-    let failureResult = failureAppSupport.appending(path: "pdtbar/claude-handoff-result")
-    let failureScript = try writeHandoffScript(
-        in: failureAppSupport,
-        name: "handoff-failure.sh",
-        delay: 0.1,
-        promptBeforeURL: false,
-        exitStatus: 42
-    )
-    let failureProcess = try launchLoginHandoffApp(
-        app,
-        appSupportDirectory: failureAppSupport,
-        handoffScript: failureScript,
-        marker: failureMarker,
-        result: failureResult,
-        resultValue: "failure"
-    )
-    defer {
-        terminate(failureProcess)
-    }
-
-    let failureAppElement = AXUIElementCreateApplication(failureProcess.processIdentifier)
-    guard let failureStatus = waitForAccessibilityElement(
-        in: failureAppElement,
-        identifier: loginSurface.status.accessibilityIdentifier,
-        timeout: options.timeout
-    ) else {
-        return SmokeReport(
-            name: "scripted-login-handoff",
-            status: SmokeStatus.failed,
-            detail: "scripted failure launch did not reach logged-out setup before handoff",
-            artifacts: [artifactPath(failureAppSupport)]
-        )
-    }
-    let failureWasIdleBeforeClick = !FileManager.default.fileExists(atPath: failureMarker.path)
-    let failureClick = pressMenuRow(
-        statusElement: failureStatus,
-        appElement: failureAppElement,
-        rowIdentifier: "pdtbar.row.claudeSetup.login",
-        expectedMenuIdentifiers: loginIDs,
-        timeout: options.timeout
-    )
-    let failureScriptInvoked = waitForFile(failureMarker, timeout: options.timeout)
-    let failureLoginArgsIncluded = waitForFileContent(
-        failureMarker,
-        contains: "auth login",
-        timeout: options.timeout
-    )
-    let failureCompleted = waitForFile(failureResult, timeout: options.timeout + 2.0)
-    let missingClaudeSurface = MenuBarSurfaceRenderer.render(
-        descriptor: ClaudeLaunchFlow.descriptor(forLoginFailure: .failed)
-    )
-    let missingClaudeTargets = requiredSetupMenuTargets(in: missingClaudeSurface)
-    let missingClaudeIDs = Set(missingClaudeTargets.map(\.accessibilityIdentifier))
-    let missingClaudeStatusVisible = waitForStatusText(
-        "Claude login failed",
-        in: failureAppElement,
-        statusIdentifier: missingClaudeSurface.status.accessibilityIdentifier,
-        timeout: options.timeout
-    )
-    if missingClaudeStatusVisible {
-        Thread.sleep(forTimeInterval: 0.3)
-    }
-    let missingClaudeMenu: AccessibilitySnapshot
-    let missingClaudeOpenAttempt: String?
-    if let missingClaudeStatus = waitForAccessibilityElement(
-        in: failureAppElement,
-        identifier: missingClaudeSurface.status.accessibilityIdentifier,
-        timeout: options.timeout
-    ) {
-        let openedMenu = openStatusMenu(
-            missingClaudeStatus,
-            appElement: failureAppElement,
-            expectedMenuIdentifiers: missingClaudeIDs,
-            timeout: options.timeout
-        )
-        missingClaudeOpenAttempt = openedMenu.successfulAttempt ?? openedMenu.attempts.joined(separator: "; ")
-        missingClaudeMenu = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
-            missingClaudeIDs,
-            in: failureAppElement,
-            timeout: options.timeout
-        )
-    } else {
-        missingClaudeOpenAttempt = nil
-        missingClaudeMenu = waitForAccessibilityIdentifiers(
-            missingClaudeIDs,
-            in: failureAppElement,
-            timeout: options.timeout
-        )
-    }
-    let missingClaudeMenuVisible = missingClaudeIDs.isSubset(of: missingClaudeMenu.identifiers)
-        && missingClaudeMenu.texts.contains { $0.contains("Claude login failed") }
-        && missingClaudeMenu.texts.contains { $0.contains("Log in with Claude") }
-
-    let proofPayload = ScriptedLoginHandoffProof(
-        successIdleBeforeClick: successWasIdleBeforeClick,
-        successInitialReadinessProbed: successInitialReadinessProbed,
-        successClickAttempt: successClick,
-        successScriptInvoked: successScriptInvoked,
-        successLoginArgsIncluded: successLoginArgsIncluded,
-        successProgressVisible: progressVisible,
-        successProgressRetryVisible: progressRetryVisible,
-        successProgressMenuOpenAttempt: progressMenu.successfulAttempt,
-        successProgressObservedIdentifiers: progressMenu.snapshot?.identifiers.sorted() ?? [],
-        successProgressObservedTexts: progressMenu.snapshot?.texts.sorted() ?? [],
-        successRetryClickAttempt: successRetryClick,
-        successRetryInvoked: successRetryInvoked,
-        successSupersededAttemptTerminated: successSupersededAttemptTerminated,
-        successStoppedAfterOutput: successStoppedAfterOutput,
-        successCompleted: successCompleted,
-        successReadinessRechecked: successReadinessRechecked,
-        successReadinessProbeCount: successReadinessProbeCount,
-        successFetchingVisible: successFetchingVisible,
-        successFetchingMenuVisible: successFetchingMenuVisible,
-        successFetchingMenuOpenAttempt: fetchingMenu.successfulAttempt ?? fetchingMenu.attempts.joined(separator: "; "),
-        successFetchingObservedIdentifiers: fetchingMenu.snapshot?.identifiers.sorted() ?? [],
-        successFetchingObservedTexts: fetchingMenu.snapshot?.texts.sorted() ?? [],
-        successFirstFetchSnapshotWritten: successFirstFetchSnapshotWritten,
-        successFirstFetchAsOf: successFirstFetchAsOf,
-        failureIdleBeforeClick: failureWasIdleBeforeClick,
-        failureClickAttempt: failureClick,
-        failureScriptInvoked: failureScriptInvoked,
-        failureLoginArgsIncluded: failureLoginArgsIncluded,
-        failureCompleted: failureCompleted,
-        failureMissingClaudeStatusVisible: missingClaudeStatusVisible,
-        failureMissingClaudeMenuVisible: missingClaudeMenuVisible,
-        failureMissingClaudeOpenAttempt: missingClaudeOpenAttempt,
-        failureMissingClaudeObservedIdentifiers: missingClaudeMenu.identifiers.sorted(),
-        failureMissingClaudeObservedTexts: missingClaudeMenu.texts.sorted(),
-        rawClaudeCredentialsUsed: false
-    )
-    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
-
-    guard successWasIdleBeforeClick,
-          successInitialReadinessProbed,
-          successClick != nil,
-          successScriptInvoked,
-          successLoginArgsIncluded,
-          progressVisible,
-          progressRetryVisible,
-          successRetryClick != nil,
-          successRetryInvoked,
-          successSupersededAttemptTerminated,
-          successStoppedAfterOutput,
-          successCompleted,
-          successReadinessRechecked,
-          successReadinessProbeCount == 2,
-          successFetchingMenuVisible,
-          successFirstFetchSnapshotWritten,
-          successFirstFetchAsOf == "2026-03-29",
-          failureWasIdleBeforeClick,
-          failureClick != nil,
-          failureScriptInvoked,
-          failureLoginArgsIncluded,
-          failureCompleted,
-          missingClaudeStatusVisible,
-          missingClaudeMenuVisible
-    else {
-        return SmokeReport(
-            name: "scripted-login-handoff",
-            status: SmokeStatus.failed,
-            detail: "scripted login handoff did not prove user-initiated success, in-flight retry supersession, readiness recheck, first fetch, and missing-Claude failure states",
+            detail: "not-connected launch stayed idle with no sign-in, request, CLI, or fixture state; macOS Accessibility permission missing for Sign in with PDT click proof",
             artifacts: [artifactPath(proof)]
         )
     }
 
+    let setupMenu = try checkMenu(
+        "\(name)-not-connected",
+        descriptor: notConnected,
+        texts: ["Not connected", "Sign in with PDT", "Use a PDT token"],
+        process: success.process,
+        timeout: options.timeout,
+        artifacts: artifacts
+    )
+    let successClick = clickMenuRow("pdtConnection.signIn", descriptor: notConnected, process: success.process, timeout: options.timeout)
+    let signInStarted = success.waitForEventCount("sign-in", atLeast: 1, timeout: options.timeout)
+    let appElement = AXUIElementCreateApplication(success.process.processIdentifier)
+    let signingInVisible = waitForStatusText("Signing in with PDT", in: appElement, statusIdentifier: "pdtbar.status", timeout: options.timeout)
+    let successSnapshotWritten = waitForSnapshotAsOf(success.snapshot, asOf: scriptedPDTAsOf, timeout: options.timeout + 6.0)
+    let successIsolation = isolation(success)
+    terminate(success.process)
+
+    let denied = try launchScriptedPDTApp(
+        app,
+        script: ScriptedPDTConnection(connection: .notConnected, signIn: .denied, api: api),
+        options: options,
+        prefix: "\(name)-denied"
+    )
+    defer { terminate(denied.process) }
+    _ = denied.waitForEventCount("check", atLeast: 1, timeout: options.timeout + 3.0)
+    let deniedClick = clickMenuRow("pdtConnection.signIn", descriptor: notConnected, process: denied.process, timeout: options.timeout)
+    _ = denied.waitForEventCount("sign-in", atLeast: 1, timeout: options.timeout)
+    let deniedMenu = try checkMenu(
+        "\(name)-denied",
+        descriptor: PDTLaunchMenu.descriptor(for: .notConnected, notice: .signInFailed(.denied)),
+        texts: ["Sign-in failed", "PDT sign-in was declined", "Sign in with PDT"],
+        process: denied.process,
+        timeout: options.timeout,
+        artifacts: artifacts
+    )
+    let deniedIsolation = isolation(denied)
+
+    let proofPayload = ScriptedSignInProof(
+        success: successIsolation,
+        successIdleBeforeClick: successIdle,
+        successSetupMenu: setupMenu,
+        successClick: successClick,
+        successSignInStarted: signInStarted,
+        successSigningInVisible: signingInVisible,
+        successSnapshotWritten: successSnapshotWritten,
+        successSnapshotAsOf: snapshotAsOf(success.snapshot),
+        denied: deniedIsolation,
+        deniedClick: deniedClick,
+        deniedMenu: deniedMenu,
+        deniedHoldingsRequests: denied.eventCount("request /v1/portfolio/holdings"),
+        deniedSnapshotWritten: denied.snapshotWritten,
+        rawPortfolioPayloadsRedacted: true
+    )
+    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+    let artifactsList = [artifactPath(proof)] + [setupMenu, deniedMenu].compactMap(\.evidencePath)
+
+    guard successIdle,
+          successIsolation.clean,
+          setupMenu.visible,
+          successClick != nil,
+          signInStarted,
+          signingInVisible,
+          successSnapshotWritten,
+          deniedIsolation.clean,
+          deniedClick != nil,
+          deniedMenu.visible,
+          proofPayload.deniedHoldingsRequests == 0,
+          !proofPayload.deniedSnapshotWritten
+    else {
+        return SmokeReport(
+            name: name,
+            status: SmokeStatus.failed,
+            detail: "scripted sign-in did not prove click-only sign-in, the first fetch after success, and the declined notice without a fetch",
+            artifacts: artifactsList
+        )
+    }
     return SmokeReport(
-        name: "scripted-login-handoff",
+        name: name,
         status: SmokeStatus.passed,
-        detail: "Log in with Claude invoked scripted claude auth login only after menu click, superseded an in-flight auth retry, rechecked readiness once, started first fetch, and rendered failed-login state on login failure",
+        detail: "Sign in with PDT started the scripted sign-in only after the click, showed Signing in with PDT, then fetched; a declined sign-in showed Sign-in failed and fetched nothing",
+        artifacts: artifactsList
+    )
+}
+
+// MARK: logged-out-launch / ready-launch
+
+private func loggedOutLaunchSmoke(arguments: [String]) throws -> SmokeReport {
+    let name = "logged-out-launch"
+    let options = try SmokeOptions(arguments: arguments)
+    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
+    guard FileManager.default.isExecutableFile(atPath: app.path) else {
+        return missingAppReport(name)
+    }
+    let artifacts = try smokeArtifacts(options)
+    let launch = try launchScriptedPDTApp(app, script: ScriptedPDTConnection(connection: .notConnected), options: options, prefix: name)
+    defer { terminate(launch.process) }
+    _ = launch.waitForEventCount("check", atLeast: 1, timeout: options.timeout + 3.0)
+    Thread.sleep(forTimeInterval: options.timeout)
+    let launchIsolation = isolation(launch)
+    guard launchIsolation.clean,
+          launch.eventCount("check") == 1,
+          launch.eventCount("request /v1/portfolio/holdings") == 0,
+          !launch.snapshotWritten
+    else {
+        return SmokeReport(
+            name: name,
+            status: SmokeStatus.failed,
+            detail: "not-connected launch exited, spawned a CLI, wrote fixture or snapshot state, or fetched without a connection",
+            artifacts: [artifactPath(launch.appSupportDirectory)]
+        )
+    }
+    guard AXIsProcessTrusted() else {
+        return SmokeReport(
+            name: name,
+            status: SmokeStatus.skipped,
+            detail: "not-connected launch stayed running, checked once, fetched nothing, and ignored fixture env; macOS Accessibility permission missing for setup menu inspection",
+            artifacts: [artifactPath(launch.appSupportDirectory)]
+        )
+    }
+    let menu = try checkMenu(
+        name,
+        descriptor: PDTLaunchMenu.descriptor(for: .notConnected),
+        texts: ["Not connected", "Sign in with PDT", "Use a PDT token", "Quit PDTBar"],
+        process: launch.process,
+        timeout: options.timeout,
+        artifacts: artifacts
+    )
+    let artifactsList = [menu.evidencePath].compactMap { $0 }
+    guard menu.visible else {
+        return SmokeReport(name: name, status: SmokeStatus.failed, detail: "could not verify the not-connected setup menu after \(menu.openAttempt ?? "no attempt")", artifacts: artifactsList)
+    }
+    return SmokeReport(
+        name: name,
+        status: SmokeStatus.passed,
+        detail: "not-connected launch rendered Not connected, Sign in with PDT, Use a PDT token, and Quit PDTBar without a CLI or fixture state",
+        artifacts: artifactsList
+    )
+}
+
+private func readyLaunchSmoke(arguments: [String]) throws -> SmokeReport {
+    let name = "ready-launch"
+    let options = try SmokeOptions(arguments: arguments)
+    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
+    guard FileManager.default.isExecutableFile(atPath: app.path) else {
+        return missingAppReport(name)
+    }
+    let artifacts = try smokeArtifacts(options)
+    let api = ScriptedPDTAPIConfiguration(responses: [try scriptedHoldingsResponse()], asOf: scriptedPDTAsOf)
+    let expectedPulse = try expectedFirstFetchPulse(api)
+    let launch = try launchScriptedPDTApp(app, script: ScriptedPDTConnection(connection: .browserSession, api: api), options: options, prefix: name)
+    defer { terminate(launch.process) }
+    let snapshotWritten = waitForFile(launch.snapshot, timeout: options.timeout + 3.0)
+    let launchIsolation = isolation(launch)
+    guard launchIsolation.clean, snapshotWritten else {
+        return SmokeReport(
+            name: name,
+            status: SmokeStatus.failed,
+            detail: "connected launch did not stay running, finish the first fetch, or avoid CLI and fixture state",
+            artifacts: [artifactPath(launch.appSupportDirectory)]
+        )
+    }
+    guard AXIsProcessTrusted() else {
+        return SmokeReport(
+            name: name,
+            status: SmokeStatus.skipped,
+            detail: "connected launch completed the first fetch without a CLI or fixture state; macOS Accessibility permission missing for pulse menu inspection",
+            artifacts: [artifactPath(launch.snapshot)]
+        )
+    }
+    let menu = try checkMenu(
+        name,
+        descriptor: expectedPulse.descriptor,
+        pulse: true,
+        forbiddenTexts: ["Not connected", "Sign in with PDT"],
+        process: launch.process,
+        timeout: options.timeout,
+        artifacts: artifacts
+    )
+    let artifactsList = [menu.evidencePath, artifactPath(launch.snapshot)].compactMap { $0 }
+    guard menu.visible else {
+        return SmokeReport(name: name, status: SmokeStatus.failed, detail: "connected launch did not publish the first pulse cleanly after \(menu.openAttempt ?? "no attempt")", artifacts: artifactsList)
+    }
+    return SmokeReport(
+        name: name,
+        status: SmokeStatus.passed,
+        detail: "connected launch skipped setup, completed the first fetch, and rendered the pulse without a CLI or fixture state",
+        artifacts: artifactsList
+    )
+}
+
+// MARK: packaged-onboarding
+
+private struct PackagedOnboardingProof: Codable {
+    var appBundlePath: String
+    var appExecutablePath: String
+    var launch: ScriptedLaunchIsolation
+    var accessibilityChecked: Bool
+    var idleBeforeClick: Bool
+    var setupMenu: MenuCheck?
+    var signInClick: String?
+    var signInStarted: Bool
+    var signingInVisible: Bool
+    var firstFetchSnapshotWritten: Bool
+    var screenshotPaths: [String]
+    var rawPortfolioPayloadsRedacted: Bool
+}
+
+private func packagedOnboardingSmoke(arguments: [String]) throws -> SmokeReport {
+    let name = "packaged-onboarding"
+    let options = try SmokeOptions(arguments: arguments)
+    let appBundle = options.app ?? packageRoot.appending(path: "PDTBar.app")
+    guard appBundle.pathExtension == "app",
+          let app = appBundleExecutable(in: appBundle),
+          FileManager.default.isExecutableFile(atPath: app.path)
+    else {
+        return SmokeReport(
+            name: name,
+            status: SmokeStatus.failed,
+            detail: "packaged PDTBar.app missing; run ./Scripts/package_app.sh or pass --app <path-to-PDTBar.app>",
+            artifacts: []
+        )
+    }
+    let artifacts = try smokeArtifacts(options)
+    let proof = artifacts.appending(path: "pdtbar-packaged-onboarding-proof.json")
+    let api = ScriptedPDTAPIConfiguration(responses: [try scriptedHoldingsResponse()], asOf: scriptedPDTAsOf)
+    let launch = try launchScriptedPDTApp(
+        app,
+        script: ScriptedPDTConnection(connection: .notConnected, signIn: .succeeds, signInDelaySeconds: max(options.timeout, 1.5), api: api),
+        options: options,
+        prefix: name
+    )
+    defer { terminate(launch.process) }
+    _ = launch.waitForEventCount("check", atLeast: 1, timeout: options.timeout + 3.0)
+    Thread.sleep(forTimeInterval: 0.5)
+    var proofPayload = PackagedOnboardingProof(
+        appBundlePath: artifactPath(appBundle),
+        appExecutablePath: artifactPath(app),
+        launch: isolation(launch),
+        accessibilityChecked: AXIsProcessTrusted(),
+        idleBeforeClick: launch.eventCount("sign-in") == 0 && !launch.snapshotWritten,
+        setupMenu: nil,
+        signInClick: nil,
+        signInStarted: false,
+        signingInVisible: false,
+        firstFetchSnapshotWritten: false,
+        screenshotPaths: [],
+        rawPortfolioPayloadsRedacted: true
+    )
+    guard proofPayload.launch.clean, proofPayload.idleBeforeClick else {
+        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+        return SmokeReport(name: name, status: SmokeStatus.failed, detail: "packaged app exited, spawned a CLI, wrote fixture state, or signed in before a click", artifacts: [artifactPath(proof)])
+    }
+    guard proofPayload.accessibilityChecked else {
+        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+        return SmokeReport(
+            name: name,
+            status: SmokeStatus.skipped,
+            detail: "packaged PDTBar.app launched with the scripted PDT connection, stayed idle, and ignored fixture env; macOS Accessibility permission missing for Sign in with PDT click proof",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+
+    let notConnected = PDTLaunchMenu.descriptor(for: .notConnected)
+    proofPayload.setupMenu = try checkMenu(
+        name,
+        descriptor: notConnected,
+        texts: ["Not connected", "Sign in with PDT"],
+        process: launch.process,
+        timeout: options.timeout,
+        artifacts: artifacts
+    )
+    proofPayload.signInClick = clickMenuRow("pdtConnection.signIn", descriptor: notConnected, process: launch.process, timeout: options.timeout)
+    proofPayload.signInStarted = launch.waitForEventCount("sign-in", atLeast: 1, timeout: options.timeout)
+    let appElement = AXUIElementCreateApplication(launch.process.processIdentifier)
+    proofPayload.signingInVisible = waitForStatusText("Signing in with PDT", in: appElement, statusIdentifier: "pdtbar.status", timeout: options.timeout)
+    if let screenshot = captureFullScreenScreenshot(
+        name: "pdtbar-packaged-onboarding-signing-in",
+        artifacts: artifacts,
+        peekaboo: options.peekaboo.flatMap(peekabooScreenshotTool)
+    ) {
+        proofPayload.screenshotPaths.append(artifactPath(screenshot))
+    }
+    proofPayload.firstFetchSnapshotWritten = waitForSnapshotAsOf(launch.snapshot, asOf: scriptedPDTAsOf, timeout: options.timeout + 6.0)
+    proofPayload.launch = isolation(launch)
+    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
+
+    guard proofPayload.launch.clean,
+          proofPayload.setupMenu?.visible == true,
+          proofPayload.signInClick != nil,
+          proofPayload.signInStarted,
+          proofPayload.signingInVisible,
+          proofPayload.firstFetchSnapshotWritten
+    else {
+        return SmokeReport(name: name, status: SmokeStatus.failed, detail: "packaged onboarding did not prove the Sign in with PDT click, scripted sign-in, and first fetch", artifacts: [artifactPath(proof)])
+    }
+    return SmokeReport(
+        name: name,
+        status: SmokeStatus.passed,
+        detail: "packaged PDTBar.app with the scripted PDT connection ignored fixture env, clicked Sign in with PDT through Accessibility, and completed the first fetch",
         artifacts: [artifactPath(proof)]
     )
 }
@@ -997,14 +1151,12 @@ private func appBundlePackagingSmoke(arguments: [String]) throws -> SmokeReport 
 
     let appSupportDirectory = try options.isolatedAppSupportDirectory(prefix: "app-bundle-packaging-app-support")
     proofPayload.appSupportPath = artifactPath(appSupportDirectory)
-    try writeReadinessScript(result: "missingClaudeLogin", appSupportDirectory: appSupportDirectory)
+    let scripted = try writeScriptedPDT(ScriptedPDTConnection(connection: .notConnected), appSupportDirectory: appSupportDirectory)
 
     let runningApp = try launchAppBundleWithLaunchServices(
         appBundle,
-        environment: [
-            "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
-            "PDTBAR_DISABLE_REAL_CLAUDE": "1",
-        ],
+        arguments: ["--app-support-dir", appSupportDirectory.path, "--scripted-pdt", scripted.script.path],
+        environment: [:],
         timeout: max(options.timeout, 2.0)
     )
     proofPayload.launchedViaLaunchServices = true
@@ -1026,7 +1178,7 @@ private func appBundlePackagingSmoke(arguments: [String]) throws -> SmokeReport 
         )
     }
 
-    let loginSurface = MenuBarSurfaceRenderer.render(descriptor: ClaudeSetupMenuDescriptor.missingClaudeLogin())
+    let loginSurface = MenuBarSurfaceRenderer.render(descriptor: PDTLaunchMenu.descriptor(for: .notConnected))
     let expectedTargets = requiredSetupMenuTargets(in: loginSurface)
     let expectedMenuIdentifiers = Set(expectedTargets.map(\.accessibilityIdentifier))
     proofPayload.statusIdentifier = loginSurface.status.accessibilityIdentifier
@@ -1071,7 +1223,7 @@ private func appBundlePackagingSmoke(arguments: [String]) throws -> SmokeReport 
     proofPayload.observedStatusText = accessibilityTexts(in: statusElement).sorted()
     proofPayload.observedMenuIdentifiers = menuSnapshot.identifiers.sorted()
     proofPayload.menuBarSurfaceVisible = expectedMenuIdentifiers.isSubset(of: menuSnapshot.identifiers)
-        && menuSnapshot.texts.contains("Log in with Claude")
+        && menuSnapshot.texts.contains("Sign in with PDT")
         && menuSnapshot.texts.contains { $0.contains("Not connected") }
     try stableJSONData(proofPayload).write(to: proof, options: .atomic)
 
@@ -1088,380 +1240,6 @@ private func appBundlePackagingSmoke(arguments: [String]) throws -> SmokeReport 
         name: "app-bundle-packaging",
         status: SmokeStatus.passed,
         detail: "PDTBar.app was packaged, signed, launched through LaunchServices, matched the bundle executable, and exposed the setup menu-bar surface",
-        artifacts: [artifactPath(proof)]
-    )
-}
-
-private func packagedOnboardingSmoke(arguments: [String]) throws -> SmokeReport {
-    let options = try SmokeOptions(arguments: arguments)
-    let appBundle = options.app ?? packageRoot.appending(path: "PDTBar.app")
-    guard appBundle.pathExtension == "app",
-          let app = appBundleExecutable(in: appBundle),
-          FileManager.default.isExecutableFile(atPath: app.path)
-    else {
-        return SmokeReport(
-            name: "packaged-onboarding",
-            status: SmokeStatus.failed,
-            detail: "packaged PDTBar.app missing; run ./Scripts/package_app.sh or pass --app <path-to-PDTBar.app>",
-            artifacts: []
-        )
-    }
-
-    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
-    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-    let proof = artifacts.appending(path: "pdtbar-packaged-onboarding-proof.json")
-    let appSupportDirectory = try options.isolatedAppSupportDirectory(prefix: "packaged-onboarding-app-support")
-    let fixtureSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "packaged-onboarding-fixture-sentinel")
-    let fixtureSnapshot = fixtureSnapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
-    let marker = appSupportDirectory.appending(path: "pdtbar/claude-handoff-started")
-    let result = appSupportDirectory.appending(path: "pdtbar/claude-handoff-result")
-    let probeLog = appSupportDirectory.appending(path: "pdtbar/readiness-probes.log")
-    let handoffScript = try writeHandoffScript(
-        in: appSupportDirectory,
-        name: "packaged-onboarding-handoff-success.sh",
-        delay: max(options.timeout, 1.0),
-        exitStatus: 0
-    )
-
-    var proofPayload = PackagedOnboardingProof(
-        appBundlePath: artifactPath(appBundle),
-        appExecutablePath: artifactPath(app),
-        appArguments: ["--scripted-claude-login-bin", artifactPath(handoffScript)],
-        appSupportPath: artifactPath(appSupportDirectory),
-        fixtureSnapshotPath: artifactPath(fixtureSnapshot),
-        fixtureEnvInjected: true,
-        fixtureSnapshotWritten: false,
-        accessibilityChecked: AXIsProcessTrusted(),
-        setupMenuVisible: false,
-        loginClickAttempt: nil,
-        handoffScriptInvoked: false,
-        loginArgsIncluded: false,
-        openingStatusVisible: false,
-        readinessProbeCount: 0,
-        readinessRechecked: false,
-        fetchingVisibleAfterReadiness: false,
-        firstFetchSnapshotWritten: false,
-        postReadinessState: nil,
-        expectedSelectors: [],
-        observedSelectors: [],
-        observedStatusText: [],
-        screenshotPaths: [],
-        rawClaudeCredentialsUsed: false,
-        rawPortfolioPayloadsRedacted: true
-    )
-    let screenshotTool = options.peekaboo.flatMap(peekabooScreenshotTool)
-
-    let process = try launchPackagedOnboardingApp(
-        app,
-        appSupportDirectory: appSupportDirectory,
-        fixtureSnapshotDirectory: fixtureSnapshotDirectory,
-        handoffScript: handoffScript,
-        marker: marker,
-        result: result,
-        probeLog: probeLog
-    )
-    defer {
-        terminate(process)
-    }
-
-    let loginSurface = MenuBarSurfaceRenderer.render(descriptor: ClaudeSetupMenuDescriptor.loggedOut())
-    let loginTargets = requiredSetupMenuTargets(in: loginSurface)
-    let loginIDs = Set(loginTargets.map(\.accessibilityIdentifier))
-    let appElement = AXUIElementCreateApplication(process.processIdentifier)
-    _ = waitForReadinessProbeCount(probeLog, expectedCount: 1, timeout: options.timeout)
-    Thread.sleep(forTimeInterval: 0.2)
-
-    guard process.isRunning else {
-        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
-        return SmokeReport(
-            name: "packaged-onboarding",
-            status: SmokeStatus.failed,
-            detail: "packaged PDTBar.app exited before onboarding setup proof",
-            artifacts: [artifactPath(proof), artifactPath(appSupportDirectory)]
-        )
-    }
-
-    proofPayload.fixtureSnapshotWritten = FileManager.default.fileExists(atPath: fixtureSnapshot.path)
-    proofPayload.readinessProbeCount = readinessProbeCount(in: probeLog)
-    guard !proofPayload.fixtureSnapshotWritten else {
-        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
-        return SmokeReport(
-            name: "packaged-onboarding",
-            status: SmokeStatus.failed,
-            detail: "packaged no-argument onboarding consumed fixture environment and wrote fixture snapshot state",
-            artifacts: [artifactPath(proof)]
-        )
-    }
-
-    guard proofPayload.accessibilityChecked else {
-        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
-        return SmokeReport(
-            name: "packaged-onboarding",
-            status: SmokeStatus.skipped,
-            detail: "packaged PDTBar.app launched with isolated app support and ignored fixture env; macOS Accessibility permission missing for Log in with Claude click proof",
-            artifacts: [artifactPath(proof)]
-        )
-    }
-
-    guard let statusElement = waitForAccessibilityElement(
-        in: appElement,
-        identifier: loginSurface.status.accessibilityIdentifier,
-        timeout: options.timeout
-    ) else {
-        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
-        return SmokeReport(
-            name: "packaged-onboarding",
-            status: SmokeStatus.failed,
-            detail: "packaged PDTBar.app launched, but Accessibility could not find setup status item \(loginSurface.status.accessibilityIdentifier)",
-            artifacts: [artifactPath(proof)]
-        )
-    }
-
-    let openedMenu = openStatusMenu(
-        statusElement,
-        appElement: appElement,
-        expectedMenuIdentifiers: loginIDs,
-        timeout: options.timeout
-    )
-    let setupSnapshot = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
-        loginIDs,
-        in: appElement,
-        timeout: options.timeout
-    )
-    if loginIDs.isSubset(of: setupSnapshot.identifiers),
-       let screenshot = try? captureMenuScreenshot(
-           name: "pdtbar-packaged-onboarding-setup",
-           snapshot: setupSnapshot,
-           expectedMenuIdentifiers: loginIDs,
-           artifacts: artifacts,
-           peekaboo: screenshotTool
-       )
-    {
-        proofPayload.screenshotPaths.append(artifactPath(screenshot))
-    }
-    proofPayload.setupMenuVisible = loginIDs.isSubset(of: setupSnapshot.identifiers)
-        && setupSnapshot.texts.contains("Log in with Claude")
-        && setupSnapshot.texts.contains { $0.contains("Not connected") }
-    proofPayload.expectedSelectors = loginIDs.sorted()
-    proofPayload.observedSelectors = setupSnapshot.identifiers.sorted()
-    proofPayload.observedStatusText = accessibilityTexts(in: statusElement).sorted()
-
-    let configuration = ScriptedPDTMCPConnectorConfiguration(
-        responses: try scriptedPDTConnectorResponses().mapValues { String(decoding: $0, as: UTF8.self) },
-        asOf: "2026-03-29",
-        initialCallDelaySeconds: max(options.timeout, 1.0)
-    )
-    try writeFirstFetchAppScript(configuration: configuration, appSupportDirectory: appSupportDirectory)
-
-    proofPayload.loginClickAttempt = pressMenuRow(
-        statusElement: statusElement,
-        appElement: appElement,
-        rowIdentifier: "pdtbar.row.claudeSetup.login",
-        expectedMenuIdentifiers: loginIDs,
-        timeout: options.timeout
-    )
-    proofPayload.handoffScriptInvoked = waitForFile(marker, timeout: options.timeout)
-    proofPayload.loginArgsIncluded = waitForFileContent(
-        marker,
-        contains: "auth login",
-        timeout: options.timeout
-    )
-    proofPayload.openingStatusVisible = waitForStatusText(
-        "Signing in with Claude",
-        in: appElement,
-        statusIdentifier: "pdtbar.status",
-        timeout: options.timeout
-    )
-    let openingSurface = MenuBarSurfaceRenderer.render(descriptor: ClaudeLaunchFlow.descriptor(for: .openingClaude))
-    let openingTargets = requiredSetupMenuTargets(in: openingSurface)
-    let openingIDs = Set(openingTargets.map(\.accessibilityIdentifier))
-    if let openingStatus = waitForAccessibilityElement(
-        in: appElement,
-        identifier: openingSurface.status.accessibilityIdentifier,
-        timeout: min(options.timeout, 2.0)
-    ) {
-        let openingMenu = openStatusMenu(
-            openingStatus,
-            appElement: appElement,
-            expectedMenuIdentifiers: openingIDs,
-            timeout: min(options.timeout, 2.0)
-        )
-        if let openingSnapshot = openingMenu.snapshot,
-           openingIDs.isSubset(of: openingSnapshot.identifiers),
-           let screenshot = try? captureMenuScreenshot(
-               name: "pdtbar-packaged-onboarding-opening",
-               snapshot: openingSnapshot,
-               expectedMenuIdentifiers: openingIDs,
-               artifacts: artifacts,
-               peekaboo: screenshotTool
-           )
-        {
-            proofPayload.screenshotPaths.append(artifactPath(screenshot))
-        }
-    }
-    pressEscape()
-    Thread.sleep(forTimeInterval: 0.2)
-
-    let completed = waitForFile(result, timeout: options.timeout + 3.0)
-    proofPayload.readinessRechecked = waitForReadinessProbeCount(
-        probeLog,
-        expectedCount: 2,
-        timeout: options.timeout + 4.0
-    )
-    proofPayload.readinessProbeCount = readinessProbeCount(in: probeLog)
-    proofPayload.fetchingVisibleAfterReadiness = waitForStatusText(
-        "Fetching portfolio",
-        in: appElement,
-        statusIdentifier: "pdtbar.status",
-        timeout: options.timeout + 2.0
-    )
-    if proofPayload.fetchingVisibleAfterReadiness {
-        proofPayload.postReadinessState = "fetchingPortfolio"
-        pressEscape()
-        Thread.sleep(forTimeInterval: 0.2)
-        let fetchingSurface = MenuBarSurfaceRenderer.render(descriptor: ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio))
-        let fetchingTargets = requiredSetupMenuTargets(in: fetchingSurface)
-        let fetchingIDs = Set(fetchingTargets.map(\.accessibilityIdentifier))
-        if let fetchingStatus = waitForAccessibilityElement(
-            in: appElement,
-            identifier: fetchingSurface.status.accessibilityIdentifier,
-            timeout: min(options.timeout, 2.0)
-        ) {
-            let fetchingMenu = openStatusMenu(
-                fetchingStatus,
-                appElement: appElement,
-                expectedMenuIdentifiers: fetchingIDs,
-                timeout: min(options.timeout, 2.0)
-            )
-            if let fetchingSnapshot = fetchingMenu.snapshot,
-               fetchingIDs.isSubset(of: fetchingSnapshot.identifiers),
-               let screenshot = try? captureMenuScreenshot(
-                   name: "pdtbar-packaged-onboarding-fetching",
-                   snapshot: fetchingSnapshot,
-                   expectedMenuIdentifiers: fetchingIDs,
-                   artifacts: artifacts,
-                   peekaboo: screenshotTool
-               )
-            {
-                proofPayload.screenshotPaths.append(artifactPath(screenshot))
-            }
-        }
-    }
-    let firstFetchSnapshot = appSupportDirectory.appending(path: "pdtbar/state/latest-portfolio-snapshot.json")
-    proofPayload.firstFetchSnapshotWritten = waitForFile(
-        firstFetchSnapshot,
-        timeout: options.timeout + 6.0
-    )
-    proofPayload.fixtureSnapshotWritten = FileManager.default.fileExists(atPath: fixtureSnapshot.path)
-    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
-
-    guard proofPayload.setupMenuVisible,
-          proofPayload.loginClickAttempt != nil,
-          proofPayload.handoffScriptInvoked,
-          proofPayload.loginArgsIncluded,
-          completed,
-          proofPayload.openingStatusVisible,
-          proofPayload.readinessRechecked,
-          proofPayload.readinessProbeCount >= 2,
-          proofPayload.fetchingVisibleAfterReadiness,
-          proofPayload.firstFetchSnapshotWritten,
-          !proofPayload.fixtureSnapshotWritten
-    else {
-        return SmokeReport(
-            name: "packaged-onboarding",
-            status: SmokeStatus.failed,
-            detail: "packaged onboarding did not prove setup click, explicit scripted handoff success, readiness recheck, and post-recheck first fetch",
-            artifacts: [artifactPath(proof)]
-        )
-    }
-
-    return SmokeReport(
-        name: "packaged-onboarding",
-        status: SmokeStatus.passed,
-        detail: "packaged PDTBar.app with explicit scripted login handoff ignored fixture env, opened setup through Accessibility, clicked Log in with Claude, rechecked readiness, and started scripted first fetch",
-        artifacts: [artifactPath(proof)]
-    )
-}
-
-private func scriptedSetupRetrySmoke(arguments: [String]) throws -> SmokeReport {
-    let options = try SmokeOptions(arguments: arguments)
-    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
-    guard FileManager.default.isExecutableFile(atPath: app.path) else {
-        return SmokeReport(
-            name: "scripted-setup-retry",
-            status: SmokeStatus.failed,
-            detail: "app executable missing; run swift build --product pdtbar first or pass --app <path>",
-            artifacts: []
-        )
-    }
-
-    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
-    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-    let proof = artifacts.appending(path: "pdtbar-scripted-setup-retry-proof.json")
-    let missingLoginDescriptor = ClaudeLaunchFlow.descriptor(for: .missingClaudeLogin)
-    let missingPDTMCPDescriptor = ClaudeLaunchFlow.descriptor(for: .missingPDTMCP)
-    let gate = ClaudeReadinessProbeGate()
-    let gateFirstBegin = gate.begin()
-    let gateRejectedDuplicate = !gate.begin()
-    gate.finish()
-    let gateRetryBegin = gate.begin()
-    gate.finish()
-
-    var proofPayload = ScriptedSetupRetryProof(
-        missingLoginRows: missingLoginDescriptor.sections.flatMap(\.rows).map(\.title),
-        missingPDTMCPRows: missingPDTMCPDescriptor.sections.flatMap(\.rows).map(\.title),
-        gateRejectedDuplicateProbe: gateFirstBegin && gateRejectedDuplicate && gateRetryBegin,
-        scenarios: [],
-        rawClaudeCredentialsUsed: false,
-        rawPortfolioPayloadsRedacted: true
-    )
-
-    guard AXIsProcessTrusted() else {
-        try stableJSONData(proofPayload).write(to: proof, options: .atomic)
-        return SmokeReport(
-            name: "scripted-setup-retry",
-            status: SmokeStatus.skipped,
-            detail: "macOS Accessibility permission missing for Check again menu-click proof; descriptor and duplicate-probe gate proof written",
-            artifacts: [artifactPath(proof)]
-        )
-    }
-
-    let missingLoginScenario = try scriptedSetupRetryScenario(
-        name: "missing-claude-login",
-        initialReadiness: "missingClaudeLogin",
-        descriptor: missingLoginDescriptor,
-        expectedTexts: ["Not connected", "Log in with Claude", "Check again"],
-        options: options,
-        app: app,
-        artifacts: artifacts
-    )
-    let missingPDTMCPScenario = try scriptedSetupRetryScenario(
-        name: "missing-pdt-mcp",
-        initialReadiness: "missingPDTMCP",
-        descriptor: missingPDTMCPDescriptor,
-        expectedTexts: ["Add the PDT MCP server to Claude", "Log in with Claude", "Check again"],
-        options: options,
-        app: app,
-        artifacts: artifacts
-    )
-    proofPayload.scenarios = [missingLoginScenario, missingPDTMCPScenario]
-    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
-
-    guard proofPayload.gateRejectedDuplicateProbe,
-          proofPayload.scenarios.allSatisfy(\.passed)
-    else {
-        return SmokeReport(
-            name: "scripted-setup-retry",
-            status: SmokeStatus.failed,
-            detail: "scripted setup retry did not prove both missing setup states and Check again readiness retry",
-            artifacts: [artifactPath(proof)]
-        )
-    }
-
-    return SmokeReport(
-        name: "scripted-setup-retry",
-        status: SmokeStatus.passed,
-        detail: "missing Claude login and missing PDT MCP rendered retryable setup states; Check again reran readiness once and reached first fetch with redacted scripted data",
         artifacts: [artifactPath(proof)]
     )
 }
@@ -2003,218 +1781,6 @@ private func scriptedPulseMarkReadSmoke(arguments: [String]) throws -> SmokeRepo
     )
 }
 
-private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport {
-    let options = try SmokeOptions(arguments: arguments)
-    let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
-    guard FileManager.default.isExecutableFile(atPath: app.path) else {
-        return SmokeReport(
-            name: "scripted-first-fetch",
-            status: SmokeStatus.failed,
-            detail: "app executable missing; run swift build --product pdtbar first or pass --app <path>",
-            artifacts: []
-        )
-    }
-
-    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
-    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-    let proof = artifacts.appending(path: "pdtbar-scripted-first-fetch-proof.json")
-    let responses = try scriptedPDTConnectorResponses()
-    let responseStrings = responses.mapValues { String(decoding: $0, as: UTF8.self) }
-    let completeConfiguration = ScriptedPDTMCPConnectorConfiguration(
-        responses: responseStrings,
-        asOf: "2026-03-29"
-    )
-    let expectedStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-scripted-first-fetch-expected")
-    defer {
-        try? FileManager.default.removeItem(at: expectedStore.directory)
-    }
-    let expectedRun = try PDTCoalescedFirstPortfolioFetch(
-        dataSource: PDTMCPConnectorDataSource(connector: completeConfiguration.connector()),
-        snapshotStore: expectedStore,
-        asOf: completeConfiguration.asOf
-    ).fetch()
-    let expectedSurface = MenuBarSurfaceRenderer.render(descriptor: expectedRun.descriptor)
-
-    let missingConfiguration = ScriptedPDTMCPConnectorConfiguration(
-        availableTools: PDTReadTools.requiredV1.filter { $0 != "pdt-list-dividends" },
-        responses: responseStrings,
-        asOf: "2026-03-29"
-    )
-    let missingDirectStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-scripted-first-fetch-missing")
-    defer {
-        try? FileManager.default.removeItem(at: missingDirectStore.directory)
-    }
-    let missingDirectBlocked: Bool
-    do {
-        _ = try PDTCoalescedFirstPortfolioFetch(
-            dataSource: PDTMCPConnectorDataSource(connector: missingConfiguration.connector()),
-            snapshotStore: missingDirectStore,
-            asOf: missingConfiguration.asOf
-        ).fetch()
-        missingDirectBlocked = false
-    } catch PDTMCPConnectorError.missingRequiredReadTools(let missing) {
-        missingDirectBlocked = missing == ["pdt-list-dividends"]
-            && !FileManager.default.fileExists(
-                atPath: missingDirectStore.directory.appending(path: "latest-portfolio-snapshot.json").path
-            )
-    }
-
-    let successAppSupport = try options.isolatedAppSupportDirectory(prefix: "scripted-first-fetch-success-app-support")
-    try writeFirstFetchAppScript(
-        configuration: completeConfiguration,
-        appSupportDirectory: successAppSupport
-    )
-    let successFixtureSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "scripted-first-fetch-success-fixture-sentinel")
-    let successFixtureSnapshot = successFixtureSnapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
-    let successStateDirectory = successAppSupport.appending(path: "pdtbar/state")
-    let successSnapshot = successStateDirectory.appending(path: "latest-portfolio-snapshot.json")
-    let successProcess = try launchFirstFetchApp(
-        app,
-        appSupportDirectory: successAppSupport,
-        fixtureSnapshotDirectory: successFixtureSnapshotDirectory
-    )
-    defer {
-        terminate(successProcess)
-    }
-    let successSnapshotWritten = waitForFile(successSnapshot, timeout: options.timeout)
-    guard successProcess.isRunning,
-          successSnapshotWritten,
-          !FileManager.default.fileExists(atPath: successFixtureSnapshot.path)
-    else {
-        return SmokeReport(
-            name: "scripted-first-fetch",
-            status: SmokeStatus.failed,
-            detail: "complete scripted first fetch did not stay running, write isolated state, or avoid fixture state",
-            artifacts: [artifactPath(successAppSupport), artifactPath(successFixtureSnapshotDirectory)]
-        )
-    }
-    let publishedSnapshot = try JSONDecoder().decode(
-        PortfolioSnapshot.self,
-        from: Data(contentsOf: successSnapshot)
-    )
-    let accessibilityChecked = AXIsProcessTrusted()
-    var successAXVisible = false
-    var axArtifacts: [String] = []
-    if accessibilityChecked {
-        let appElement = AXUIElementCreateApplication(successProcess.processIdentifier)
-        if let statusElement = waitForAccessibilityElement(
-            in: appElement,
-            identifier: expectedSurface.status.accessibilityIdentifier,
-            timeout: options.timeout
-        ) {
-            let targets = requiredPulseMenuTargets(in: expectedSurface)
-            let openedMenu = openStatusMenu(
-                statusElement,
-                appElement: appElement,
-                expectedMenuIdentifiers: Set(targets.map(\.accessibilityIdentifier)),
-                timeout: options.timeout
-            )
-            if let snapshot = openedMenu.snapshot {
-                let evidence = artifacts.appending(path: "pdtbar-scripted-first-fetch-success-ax.json")
-                try writeAccessibilityEvidence(
-                    snapshot: snapshot,
-                    expected: targets,
-                    statusIdentifier: expectedSurface.status.accessibilityIdentifier,
-                    statusText: accessibilityTexts(in: statusElement),
-                    output: evidence
-                )
-                axArtifacts.append(artifactPath(evidence))
-                successAXVisible = Set(targets.map(\.accessibilityIdentifier)).isSubset(of: snapshot.identifiers)
-            }
-        }
-    }
-    terminate(successProcess)
-
-    let failureAppSupport = try options.isolatedAppSupportDirectory(prefix: "scripted-first-fetch-failure-app-support")
-    try writeFirstFetchAppScript(
-        configuration: missingConfiguration,
-        appSupportDirectory: failureAppSupport
-    )
-    let failureFixtureSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "scripted-first-fetch-failure-fixture-sentinel")
-    let failureFixtureSnapshot = failureFixtureSnapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
-    let failureSnapshot = failureAppSupport.appending(path: "pdtbar/state/latest-portfolio-snapshot.json")
-    let failureProcess = try launchFirstFetchApp(
-        app,
-        appSupportDirectory: failureAppSupport,
-        fixtureSnapshotDirectory: failureFixtureSnapshotDirectory
-    )
-    defer {
-        terminate(failureProcess)
-    }
-    Thread.sleep(forTimeInterval: options.timeout)
-    let missingToolPreventedPublication = failureProcess.isRunning
-        && missingDirectBlocked
-        && !FileManager.default.fileExists(atPath: failureSnapshot.path)
-        && !FileManager.default.fileExists(atPath: failureFixtureSnapshot.path)
-    var failureAXVisible = false
-    if accessibilityChecked {
-        let expectedFailureSurface = MenuBarSurfaceRenderer.render(
-            descriptor: ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed)
-        )
-        let appElement = AXUIElementCreateApplication(failureProcess.processIdentifier)
-        if let statusElement = waitForAccessibilityElement(
-            in: appElement,
-            identifier: expectedFailureSurface.status.accessibilityIdentifier,
-            timeout: options.timeout
-        ) {
-            let targets = requiredSetupMenuTargets(in: expectedFailureSurface)
-            let openedMenu = openStatusMenu(
-                statusElement,
-                appElement: appElement,
-                expectedMenuIdentifiers: Set(targets.map(\.accessibilityIdentifier)),
-                timeout: options.timeout
-            )
-            if let snapshot = openedMenu.snapshot {
-                let evidence = artifacts.appending(path: "pdtbar-scripted-first-fetch-failure-ax.json")
-                try writeAccessibilityEvidence(
-                    snapshot: snapshot,
-                    expected: targets,
-                    statusIdentifier: expectedFailureSurface.status.accessibilityIdentifier,
-                    statusText: accessibilityTexts(in: statusElement),
-                    output: evidence
-                )
-                axArtifacts.append(artifactPath(evidence))
-                failureAXVisible = Set(targets.map(\.accessibilityIdentifier)).isSubset(of: snapshot.identifiers)
-            }
-        }
-    }
-
-    let proofPayload = ScriptedFirstFetchProof(
-        snapshotPath: artifactPath(successSnapshot),
-        snapshotWritten: successSnapshotWritten,
-        snapshotAsOf: publishedSnapshot.asOf,
-        openHoldingCount: publishedSnapshot.openHoldings.count,
-        expectedRenderedSectionIDs: expectedRun.descriptor.sections.map(\.id),
-        missingRequiredToolBlockedPublication: missingToolPreventedPublication,
-        accessibilityChecked: accessibilityChecked,
-        successPulseVisibleThroughAccessibility: successAXVisible,
-        failureVisibleThroughAccessibility: failureAXVisible,
-        rawPortfolioPayloadsRedacted: true
-    )
-    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
-
-    guard successSnapshotWritten,
-          publishedSnapshot.openHoldings.count > 0,
-          expectedRun.descriptor.sections.map(\.id).contains("pulse"),
-          missingToolPreventedPublication,
-          !accessibilityChecked || (successAXVisible && failureAXVisible)
-    else {
-        return SmokeReport(
-            name: "scripted-first-fetch",
-            status: SmokeStatus.failed,
-            detail: "scripted first-fetch did not prove complete publication and required-tool blocking",
-            artifacts: [artifactPath(proof)] + axArtifacts
-        )
-    }
-
-    return SmokeReport(
-        name: "scripted-first-fetch",
-        status: SmokeStatus.passed,
-        detail: "complete scripted first fetch wrote isolated state and produced the pulse descriptor; missing required tool wrote no snapshot and published no pulse",
-        artifacts: [artifactPath(proof)] + axArtifacts
-    )
-}
-
 private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
     let app = options.resolvedAppExecutable(defaultExecutable: packageRoot.appending(path: ".build/debug/pdtbar"))
@@ -2253,32 +1819,27 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
         asOf: refreshConfiguration.asOf
     ).refresh()
 
-    let successAppSupport = try options.isolatedAppSupportDirectory(prefix: "scripted-returning-launch-success-app-support")
-    let successStore = SnapshotStore(directory: successAppSupport.appending(path: "pdtbar/state"))
-    let successSeed = try successStore.commitCurrentSnapshot(staleSnapshot)
-    try writeFirstFetchAppScript(configuration: refreshConfiguration, appSupportDirectory: successAppSupport)
-    let successFixtureSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "scripted-returning-launch-success-fixture-sentinel")
-    let successFixtureSnapshot = successFixtureSnapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
-    let successSnapshot = successStore.directory.appending(path: "latest-portfolio-snapshot.json")
-    let successProcess = try launchFirstFetchApp(
+    let successLaunch = try launchScriptedPDTApp(
         app,
-        appSupportDirectory: successAppSupport,
-        fixtureSnapshotDirectory: successFixtureSnapshotDirectory,
-        scriptedBackgroundRefresh: true
+        script: ScriptedPDTConnection(connection: .browserSession, api: refreshConfiguration),
+        options: options,
+        prefix: "scripted-returning-launch-success",
+        seed: staleSnapshot
     )
+    let successProcess = successLaunch.process
+    let successSnapshot = successLaunch.snapshot
     defer {
         terminate(successProcess)
     }
 
-    guard successProcess.isRunning,
-          snapshotAsOf(successSnapshot) == staleSnapshot.asOf,
-          !FileManager.default.fileExists(atPath: successFixtureSnapshot.path)
+    guard isolation(successLaunch).clean,
+          snapshotAsOf(successSnapshot) == staleSnapshot.asOf
     else {
         return SmokeReport(
             name: "scripted-returning-launch",
             status: SmokeStatus.failed,
-            detail: "returning launch did not start with the seeded local snapshot preserved",
-            artifacts: [artifactPath(URL(fileURLWithPath: successSeed.path))]
+            detail: "returning launch did not start with the seeded local snapshot preserved, or spawned a CLI or wrote fixture state",
+            artifacts: [artifactPath(successSnapshot)]
         )
     }
 
@@ -2295,7 +1856,7 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
     if accessibilityChecked {
         let staleAXTimeout = min(refreshDelay - 1.0, max(options.timeout, 5.0))
         let refreshingSurface = MenuBarSurfaceRenderer.render(
-            descriptor: ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+            descriptor: PDTLaunchMenu.descriptorForBackgroundDetailProgress(
                 cachedPulse: cachedDescriptor,
                 progress: BackgroundDetailRefreshProgress(phase: .baseHoldings)
             )
@@ -2407,30 +1968,26 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
         responses: Array(repeating: unavailable, count: PDTAPIRequestPolicy().maxAttempts),
         asOf: "2026-03-29"
     )
-    let failureAppSupport = try options.isolatedAppSupportDirectory(prefix: "scripted-returning-launch-failure-app-support")
-    let failureStore = SnapshotStore(directory: failureAppSupport.appending(path: "pdtbar/state"))
-    _ = try failureStore.commitCurrentSnapshot(staleSnapshot)
-    try writeFirstFetchAppScript(configuration: failureConfiguration, appSupportDirectory: failureAppSupport)
-    let failureFixtureSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "scripted-returning-launch-failure-fixture-sentinel")
-    let failureFixtureSnapshot = failureFixtureSnapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
-    let failureSnapshot = failureStore.directory.appending(path: "latest-portfolio-snapshot.json")
-    let failureProcess = try launchFirstFetchApp(
+    let failureLaunch = try launchScriptedPDTApp(
         app,
-        appSupportDirectory: failureAppSupport,
-        fixtureSnapshotDirectory: failureFixtureSnapshotDirectory,
-        scriptedBackgroundRefresh: true
+        script: ScriptedPDTConnection(connection: .browserSession, api: failureConfiguration),
+        options: options,
+        prefix: "scripted-returning-launch-failure",
+        seed: staleSnapshot
     )
+    let failureProcess = failureLaunch.process
+    let failureSnapshot = failureLaunch.snapshot
     defer {
         terminate(failureProcess)
     }
-    Thread.sleep(forTimeInterval: options.timeout)
-    let failurePreservedSnapshot = failureProcess.isRunning
+    _ = waitForFileContent(failureLaunch.stderrLog, contains: "background refresh failed", timeout: options.timeout + 3.0)
+    let failurePreservedSnapshot = isolation(failureLaunch).clean
+        && failureLaunch.stderrContains("background refresh failed")
         && snapshotAsOf(failureSnapshot) == staleSnapshot.asOf
-        && !FileManager.default.fileExists(atPath: failureFixtureSnapshot.path)
 
     if accessibilityChecked {
         let failureSurface = MenuBarSurfaceRenderer.render(
-            descriptor: ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(cachedPulse: cachedDescriptor)
+            descriptor: PDTLaunchMenu.descriptorForBackgroundRefreshFailure(cachedPulse: cachedDescriptor)
         )
         let targets = requiredSetupMenuTargets(in: failureSurface)
         let appElement = AXUIElementCreateApplication(failureProcess.processIdentifier)
@@ -2459,7 +2016,7 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
                 failurePulseVisible = identifiers.isSubset(of: snapshot.identifiers)
                 failureRetryVisible = snapshot.identifiers.contains("pdtbar.row.portfolioFetch.retry")
                     && snapshot.texts.contains("Fill details again")
-                    && !snapshot.texts.contains("Log in with Claude")
+                    && !snapshot.texts.contains("Sign in with PDT")
             }
         }
     }
@@ -3623,11 +3180,11 @@ private func menuPolishProof(arguments: [String]) throws -> SmokeReport {
         snapshotDirectory: pressureStore.directory
     ).descriptor
     let cards = [
-        MenuProofCard(title: "Setup", descriptor: ClaudeLaunchFlow.descriptor(for: .missingClaudeLogin)),
-        MenuProofCard(title: "Fetching", descriptor: ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio)),
+        MenuProofCard(title: "Setup", descriptor: PDTLaunchMenu.descriptor(for: .notConnected)),
+        MenuProofCard(title: "Fetching", descriptor: PDTLaunchMenu.descriptor(for: .connected(.fetching))),
         MenuProofCard(title: "All quiet", descriptor: quietDescriptor),
         MenuProofCard(title: "Pressure", descriptor: pressureDescriptor),
-        MenuProofCard(title: "Error", descriptor: ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed)),
+        MenuProofCard(title: "Error", descriptor: PDTLaunchMenu.descriptor(for: .connected(.failed))),
     ]
     try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
     try menuProofSVG(cards: cards).write(to: output, atomically: true, encoding: .utf8)
@@ -3810,40 +3367,6 @@ private struct ScriptedPulseMarkReadProof: Codable {
     var rawPortfolioPayloadsRedacted: Bool
 }
 
-private struct ScriptedFirstFetchProof: Codable {
-    var snapshotPath: String
-    var snapshotWritten: Bool
-    var snapshotAsOf: String
-    var openHoldingCount: Int
-    var expectedRenderedSectionIDs: [String]
-    var missingRequiredToolBlockedPublication: Bool
-    var accessibilityChecked: Bool
-    var successPulseVisibleThroughAccessibility: Bool
-    var failureVisibleThroughAccessibility: Bool
-    var rawPortfolioPayloadsRedacted: Bool
-}
-
-private struct ScriptedSetupRetryProof: Codable {
-    var missingLoginRows: [String]
-    var missingPDTMCPRows: [String]
-    var gateRejectedDuplicateProbe: Bool
-    var scenarios: [ScriptedSetupRetryScenarioProof]
-    var rawClaudeCredentialsUsed: Bool
-    var rawPortfolioPayloadsRedacted: Bool
-}
-
-private struct ScriptedSetupRetryScenarioProof: Codable {
-    var name: String
-    var initialStatusVisible: Bool
-    var initialMenuVisible: Bool
-    var retryClickAttempt: String?
-    var readinessProbeCount: Int
-    var firstFetchSnapshotWritten: Bool
-    var firstFetchAsOf: String?
-    var fixtureSnapshotWritten: Bool
-    var passed: Bool
-}
-
 private struct ScriptedReturningLaunchProof: Codable {
     var seededSnapshotPath: String
     var staleSnapshotAsOf: String
@@ -3858,71 +3381,6 @@ private struct ScriptedReturningLaunchProof: Codable {
     var transientFailurePreservedSnapshot: Bool
     var transientFailurePulseVisible: Bool
     var transientFailureRetryVisible: Bool
-    var rawPortfolioPayloadsRedacted: Bool
-}
-
-private struct ScriptedLoginHandoffProof: Codable {
-    var successIdleBeforeClick: Bool
-    var successInitialReadinessProbed: Bool
-    var successClickAttempt: String?
-    var successScriptInvoked: Bool
-    var successLoginArgsIncluded: Bool
-    var successProgressVisible: Bool
-    var successProgressRetryVisible: Bool
-    var successProgressMenuOpenAttempt: String?
-    var successProgressObservedIdentifiers: [String]
-    var successProgressObservedTexts: [String]
-    var successRetryClickAttempt: String?
-    var successRetryInvoked: Bool
-    var successSupersededAttemptTerminated: Bool
-    var successStoppedAfterOutput: Bool
-    var successCompleted: Bool
-    var successReadinessRechecked: Bool
-    var successReadinessProbeCount: Int
-    var successFetchingVisible: Bool
-    var successFetchingMenuVisible: Bool
-    var successFetchingMenuOpenAttempt: String?
-    var successFetchingObservedIdentifiers: [String]
-    var successFetchingObservedTexts: [String]
-    var successFirstFetchSnapshotWritten: Bool
-    var successFirstFetchAsOf: String?
-    var failureIdleBeforeClick: Bool
-    var failureClickAttempt: String?
-    var failureScriptInvoked: Bool
-    var failureLoginArgsIncluded: Bool
-    var failureCompleted: Bool
-    var failureMissingClaudeStatusVisible: Bool
-    var failureMissingClaudeMenuVisible: Bool
-    var failureMissingClaudeOpenAttempt: String?
-    var failureMissingClaudeObservedIdentifiers: [String]
-    var failureMissingClaudeObservedTexts: [String]
-    var rawClaudeCredentialsUsed: Bool
-}
-
-private struct PackagedOnboardingProof: Codable {
-    var appBundlePath: String
-    var appExecutablePath: String
-    var appArguments: [String]
-    var appSupportPath: String
-    var fixtureSnapshotPath: String
-    var fixtureEnvInjected: Bool
-    var fixtureSnapshotWritten: Bool
-    var accessibilityChecked: Bool
-    var setupMenuVisible: Bool
-    var loginClickAttempt: String?
-    var handoffScriptInvoked: Bool
-    var loginArgsIncluded: Bool
-    var openingStatusVisible: Bool
-    var readinessProbeCount: Int
-    var readinessRechecked: Bool
-    var fetchingVisibleAfterReadiness: Bool
-    var firstFetchSnapshotWritten: Bool
-    var postReadinessState: String?
-    var expectedSelectors: [String]
-    var observedSelectors: [String]
-    var observedStatusText: [String]
-    var screenshotPaths: [String]
-    var rawClaudeCredentialsUsed: Bool
     var rawPortfolioPayloadsRedacted: Bool
 }
 
@@ -3982,28 +3440,6 @@ private final class LaunchServicesOpenResultBox: @unchecked Sendable {
         }
         return (application, error, isComplete)
     }
-}
-
-private struct RealClaudeFlowAXProof: Codable {
-    var appArguments: [String]
-    var fixtureModeUsed: Bool
-    var scenarios: [RealClaudeFlowAXScenarioProof]
-    var rawClaudeCredentialsUsed: Bool
-    var rawPortfolioPayloadsRedacted: Bool
-}
-
-private struct RealClaudeFlowAXScenarioProof: Codable {
-    var name: String
-    var statusIdentifier: String
-    var expectedMenuIdentifiers: [String]
-    var observedStatusText: [String]
-    var observedMenuTexts: [String]
-    var observedMenuIdentifiers: [String]
-    var openedMenuVia: String?
-    var snapshotAsOf: String?
-    var fixtureSnapshotWritten: Bool
-    var evidencePath: String
-    var passed: Bool
 }
 
 private struct ScriptedPDTConnectorScenarioResult: Codable {
@@ -5039,287 +4475,6 @@ private func snapshotAsOf(_ url: URL) -> String? {
     return snapshot.asOf
 }
 
-private enum RealClaudeFlowAXTargetMode {
-    case setup
-    case pulse
-}
-
-private func realClaudeFlowAXScenario(
-    name: String,
-    app: URL,
-    options: SmokeOptions,
-    artifacts: URL,
-    readiness: String?,
-    configuration: ScriptedPDTMCPConnectorConfiguration?,
-    descriptor: MenuDescriptor,
-    targetMode: RealClaudeFlowAXTargetMode,
-    expectedTexts: Set<String>,
-    expectedSnapshotAsOf: String? = nil
-) throws -> RealClaudeFlowAXScenarioProof {
-    let appSupportDirectory = try options.isolatedAppSupportDirectory(prefix: "real-claude-flow-\(name)-app-support")
-    let fixtureSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "real-claude-flow-\(name)-fixture-sentinel")
-    let fixtureSnapshot = fixtureSnapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
-    if let configuration {
-        try writeFirstFetchAppScript(configuration: configuration, appSupportDirectory: appSupportDirectory)
-    } else if let readiness {
-        try writeReadinessScript(result: readiness, appSupportDirectory: appSupportDirectory)
-    }
-
-    let process = try launchFirstFetchApp(
-        app,
-        appSupportDirectory: appSupportDirectory,
-        fixtureSnapshotDirectory: fixtureSnapshotDirectory
-    )
-    defer {
-        terminate(process)
-    }
-
-    let stateSnapshot = appSupportDirectory.appending(path: "pdtbar/state/latest-portfolio-snapshot.json")
-    if let expectedSnapshotAsOf {
-        _ = waitForSnapshotAsOf(
-            stateSnapshot,
-            asOf: expectedSnapshotAsOf,
-            timeout: options.timeout + 3.0
-        )
-    }
-
-    let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
-    let expectedTargets: [PulseTarget]
-    switch targetMode {
-    case .setup:
-        expectedTargets = requiredSetupMenuTargets(in: surface)
-    case .pulse:
-        expectedTargets = requiredPulseMenuTargets(in: surface)
-    }
-    let expectedMenuIdentifiers = Set(expectedTargets.map(\.accessibilityIdentifier))
-    let appElement = AXUIElementCreateApplication(process.processIdentifier)
-    let expectedStatusTextVisible = waitForStatusText(
-        surface.status.accessibilityLabel,
-        in: appElement,
-        statusIdentifier: surface.status.accessibilityIdentifier,
-        timeout: options.timeout + 1.0
-    )
-    let statusElement = waitForAccessibilityElement(
-        in: appElement,
-        identifier: surface.status.accessibilityIdentifier,
-        timeout: options.timeout + 1.0
-    )
-    let statusText = statusElement.map(accessibilityTexts) ?? []
-    let openedMenu: OpenMenuResult
-    let menuSnapshot: AccessibilitySnapshot
-    if let statusElement {
-        openedMenu = openStatusMenu(
-            statusElement,
-            appElement: appElement,
-            expectedMenuIdentifiers: expectedMenuIdentifiers,
-            timeout: options.timeout + 1.0
-        )
-        menuSnapshot = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
-            expectedMenuIdentifiers,
-            in: appElement,
-            timeout: options.timeout
-        )
-    } else {
-        openedMenu = OpenMenuResult(snapshot: nil, successfulAttempt: nil, attempts: ["status item missing"])
-        menuSnapshot = accessibilitySnapshot(in: appElement)
-    }
-
-    let evidence = artifacts.appending(path: "pdtbar-real-claude-flow-\(name)-ax.json")
-    try writeAccessibilityEvidence(
-        snapshot: menuSnapshot,
-        expected: expectedTargets,
-        statusIdentifier: surface.status.accessibilityIdentifier,
-        statusText: statusText,
-        output: evidence
-    )
-
-    let statusVisible = expectedStatusTextVisible
-        && statusText.contains { observed in
-            observed == surface.status.accessibilityLabel ||
-                observed == surface.status.title ||
-                observed.hasPrefix("\(surface.status.accessibilityLabel) ") ||
-                observed.hasPrefix("\(surface.status.title) ")
-        }
-    let menuIdentifiersVisible = expectedMenuIdentifiers.isSubset(of: menuSnapshot.identifiers)
-    let menuTextVisible = expectedTexts.allSatisfy { expected in
-        menuSnapshot.texts.contains { observed in
-            observed.contains(expected)
-        }
-    }
-    let snapshotMatches = expectedSnapshotAsOf.map { snapshotAsOf(stateSnapshot) == $0 } ?? true
-    let fixtureSnapshotWritten = FileManager.default.fileExists(atPath: fixtureSnapshot.path)
-    return RealClaudeFlowAXScenarioProof(
-        name: name,
-        statusIdentifier: surface.status.accessibilityIdentifier,
-        expectedMenuIdentifiers: expectedMenuIdentifiers.sorted(),
-        observedStatusText: statusText.sorted(),
-        observedMenuTexts: menuSnapshot.texts.sorted(),
-        observedMenuIdentifiers: menuSnapshot.identifiers.sorted(),
-        openedMenuVia: openedMenu.successfulAttempt,
-        snapshotAsOf: snapshotAsOf(stateSnapshot),
-        fixtureSnapshotWritten: fixtureSnapshotWritten,
-        evidencePath: artifactPath(evidence),
-        passed: process.isRunning
-            && statusElement != nil
-            && statusVisible
-            && menuIdentifiersVisible
-            && menuTextVisible
-            && snapshotMatches
-            && !fixtureSnapshotWritten
-    )
-}
-
-private func scriptedSetupRetryScenario(
-    name: String,
-    initialReadiness: String,
-    descriptor: MenuDescriptor,
-    expectedTexts: Set<String>,
-    options: SmokeOptions,
-    app: URL,
-    artifacts: URL
-) throws -> ScriptedSetupRetryScenarioProof {
-    let appSupportDirectory = try options.isolatedAppSupportDirectory(prefix: "scripted-setup-retry-\(name)-app-support")
-    let fixtureSnapshotDirectory = try options.temporarySnapshotDirectory(prefix: "scripted-setup-retry-\(name)-fixture-sentinel")
-    let fixtureSnapshot = fixtureSnapshotDirectory.appending(path: "latest-portfolio-snapshot.json")
-    let probeLog = appSupportDirectory.appending(path: "pdtbar/readiness-probes.log")
-    try writeReadinessScript(result: initialReadiness, appSupportDirectory: appSupportDirectory)
-    let process = try launchSetupRetryApp(
-        app,
-        appSupportDirectory: appSupportDirectory,
-        fixtureSnapshotDirectory: fixtureSnapshotDirectory,
-        probeLog: probeLog
-    )
-    defer {
-        terminate(process)
-    }
-
-    let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
-    let expectedTargets = requiredSetupMenuTargets(in: surface)
-    let expectedIDs = Set(expectedTargets.map(\.accessibilityIdentifier))
-    let appElement = AXUIElementCreateApplication(process.processIdentifier)
-    let initialStatusVisible = waitForStatusText(
-        descriptor.statusTitle,
-        in: appElement,
-        statusIdentifier: surface.status.accessibilityIdentifier,
-        timeout: options.timeout
-    )
-    var initialMenuVisible = false
-    var retryClickAttempt: String?
-    if let status = waitForAccessibilityElement(
-        in: appElement,
-        identifier: surface.status.accessibilityIdentifier,
-        timeout: options.timeout
-    ) {
-        let openedMenu = openStatusMenu(
-            status,
-            appElement: appElement,
-            expectedMenuIdentifiers: expectedIDs,
-            timeout: options.timeout
-        )
-        let menuSnapshot = openedMenu.snapshot ?? waitForAccessibilityIdentifiers(
-            expectedIDs,
-            in: appElement,
-            timeout: options.timeout
-        )
-        let evidence = artifacts.appending(path: "pdtbar-scripted-setup-retry-\(name)-ax.json")
-        try writeAccessibilityEvidence(
-            snapshot: menuSnapshot,
-            expected: expectedTargets,
-            statusIdentifier: surface.status.accessibilityIdentifier,
-            statusText: accessibilityTexts(in: status),
-            output: evidence
-        )
-        initialMenuVisible = expectedIDs.isSubset(of: menuSnapshot.identifiers)
-            && expectedTexts.allSatisfy { expected in
-                menuSnapshot.texts.contains { observed in
-                    observed.contains(expected)
-                }
-            }
-
-        let configuration = ScriptedPDTMCPConnectorConfiguration(
-            responses: try scriptedPDTConnectorResponses().mapValues { String(decoding: $0, as: UTF8.self) },
-            asOf: "2026-03-29"
-        )
-        try writeFirstFetchAppScript(configuration: configuration, appSupportDirectory: appSupportDirectory)
-        retryClickAttempt = pressMenuRow(
-            statusElement: status,
-            appElement: appElement,
-            rowIdentifier: "pdtbar.row.claudeSetup.retry",
-            expectedMenuIdentifiers: expectedIDs,
-            timeout: options.timeout
-        )
-    }
-
-    let firstFetchSnapshot = appSupportDirectory.appending(path: "pdtbar/state/latest-portfolio-snapshot.json")
-    let firstFetchSnapshotWritten = waitForSnapshotAsOf(
-        firstFetchSnapshot,
-        asOf: "2026-03-29",
-        timeout: options.timeout + 3.0
-    )
-    let firstFetchAsOf = snapshotAsOf(firstFetchSnapshot)
-    let probeCount = readinessProbeCount(in: probeLog)
-    let fixtureSnapshotWritten = FileManager.default.fileExists(atPath: fixtureSnapshot.path)
-    return ScriptedSetupRetryScenarioProof(
-        name: name,
-        initialStatusVisible: initialStatusVisible,
-        initialMenuVisible: initialMenuVisible,
-        retryClickAttempt: retryClickAttempt,
-        readinessProbeCount: probeCount,
-        firstFetchSnapshotWritten: firstFetchSnapshotWritten,
-        firstFetchAsOf: firstFetchAsOf,
-        fixtureSnapshotWritten: fixtureSnapshotWritten,
-        passed: initialStatusVisible
-            && initialMenuVisible
-            && retryClickAttempt != nil
-            && probeCount == 2
-            && firstFetchSnapshotWritten
-            && firstFetchAsOf == "2026-03-29"
-            && !fixtureSnapshotWritten
-    )
-}
-
-private func writeReadinessScript(result: String, appSupportDirectory: URL) throws {
-    let directory = appSupportDirectory.appending(path: "pdtbar")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let payload = #"{"result":"\#(result)"}"#
-    try Data(payload.utf8).write(
-        to: directory.appending(path: "claude-readiness.json"),
-        options: .atomic
-    )
-}
-
-private func writeFirstFetchAppScript(
-    configuration: ScriptedPDTMCPConnectorConfiguration,
-    appSupportDirectory: URL
-) throws {
-    let directory = appSupportDirectory.appending(path: "pdtbar")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    try Data(#"{"result":"ready"}"#.utf8).write(
-        to: directory.appending(path: "claude-readiness.json"),
-        options: .atomic
-    )
-    try stableJSONData(configuration).write(
-        to: directory.appending(path: "scripted-pdt-mcp.json"),
-        options: .atomic
-    )
-}
-
-private func writeFirstFetchAppScript(
-    configuration: ScriptedPDTAPIConfiguration,
-    appSupportDirectory: URL
-) throws {
-    let directory = appSupportDirectory.appending(path: "pdtbar")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    try Data(#"{"result":"ready"}"#.utf8).write(
-        to: directory.appending(path: "claude-readiness.json"),
-        options: .atomic
-    )
-    try stableJSONData(configuration).write(
-        to: directory.appending(path: "scripted-pdt-api.json"),
-        options: .atomic
-    )
-}
-
 /// The `full` API fixture in background-refresh request order. Symbol-quote
 /// lookups belong to the first fetch only.
 private func scriptedAPIBackgroundRefreshResponses() throws -> [ScriptedPDTAPIConfiguration.Response] {
@@ -5328,209 +4483,6 @@ private func scriptedAPIBackgroundRefreshResponses() throws -> [ScriptedPDTAPICo
         .filter { $0.pathExtension == "json" && !$0.lastPathComponent.contains("symbol-quotes") }
         .sorted { $0.lastPathComponent < $1.lastPathComponent }
         .map { ScriptedPDTAPIConfiguration.Response(body: String(decoding: try Data(contentsOf: $0), as: UTF8.self)) }
-}
-
-private func launchSetupRetryApp(
-    _ app: URL,
-    appSupportDirectory: URL,
-    fixtureSnapshotDirectory: URL,
-    probeLog: URL
-) throws -> Process {
-    let process = Process()
-    process.executableURL = app
-    process.arguments = []
-    var environment = ProcessInfo.processInfo.environment
-    environment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
-    process.environment = environment.merging([
-        "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
-        "PDTBAR_FIXTURE": defaultFixture.path,
-        "PDTBAR_SNAPSHOT_DIR": fixtureSnapshotDirectory.path,
-        "PDTBAR_CLAUDE_READINESS_LOG": probeLog.path,
-    ]) { _, new in new }
-    try process.run()
-    return process
-}
-
-private func launchFirstFetchApp(
-    _ app: URL,
-    appSupportDirectory: URL,
-    fixtureSnapshotDirectory: URL,
-    scriptedBackgroundRefresh: Bool = false
-) throws -> Process {
-    let process = Process()
-    process.executableURL = app
-    process.arguments = []
-    var environment = ProcessInfo.processInfo.environment
-    environment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
-    process.environment = environment.merging([
-        "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
-        "PDTBAR_FIXTURE": defaultFixture.path,
-        "PDTBAR_SNAPSHOT_DIR": fixtureSnapshotDirectory.path,
-        "PDTBAR_SCRIPTED_BACKGROUND_REFRESH": scriptedBackgroundRefresh ? "1" : "0",
-    ]) { _, new in new }
-    try process.run()
-    return process
-}
-
-private func readinessProbeCount(in log: URL) -> Int {
-    guard let content = try? String(contentsOf: log, encoding: .utf8) else {
-        return 0
-    }
-    return content
-        .split(separator: "\n")
-        .filter { $0 == "probe" }
-        .count
-}
-
-private func waitForReadinessProbeCount(_ log: URL, expectedCount: Int, timeout: TimeInterval) -> Bool {
-    let deadline = Date().addingTimeInterval(timeout)
-    repeat {
-        if readinessProbeCount(in: log) >= expectedCount {
-            return true
-        }
-        Thread.sleep(forTimeInterval: 0.1)
-    } while Date() < deadline
-    return readinessProbeCount(in: log) >= expectedCount
-}
-
-private func handoffInvocationCount(in log: URL) -> Int {
-    guard let content = try? String(contentsOf: log, encoding: .utf8) else {
-        return 0
-    }
-    return content
-        .split(separator: "\n")
-        .filter { $0.hasPrefix("started ") }
-        .count
-}
-
-private func waitForHandoffInvocationCount(_ log: URL, expectedCount: Int, timeout: TimeInterval) -> Bool {
-    let deadline = Date().addingTimeInterval(timeout)
-    repeat {
-        if handoffInvocationCount(in: log) >= expectedCount {
-            return true
-        }
-        Thread.sleep(forTimeInterval: 0.1)
-    } while Date() < deadline
-    return handoffInvocationCount(in: log) >= expectedCount
-}
-
-private func handoffTerminationCount(in log: URL) -> Int {
-    guard let content = try? String(contentsOf: log, encoding: .utf8) else {
-        return 0
-    }
-    return content
-        .split(separator: "\n")
-        .filter { $0.hasPrefix("terminated ") }
-        .count
-}
-
-private func waitForHandoffTerminationCount(_ log: URL, expectedCount: Int, timeout: TimeInterval) -> Bool {
-    let deadline = Date().addingTimeInterval(timeout)
-    repeat {
-        if handoffTerminationCount(in: log) >= expectedCount {
-            return true
-        }
-        Thread.sleep(forTimeInterval: 0.1)
-    } while Date() < deadline
-    return handoffTerminationCount(in: log) >= expectedCount
-}
-
-private func launchLoginHandoffApp(
-    _ app: URL,
-    appSupportDirectory: URL,
-    handoffScript: URL,
-    marker: URL,
-    result: URL,
-    resultValue: String,
-    probeLog: URL? = nil
-) throws -> Process {
-    let process = Process()
-    process.executableURL = app
-    process.arguments = ["--scripted-claude-login-bin", handoffScript.path]
-    var environment = ProcessInfo.processInfo.environment
-    environment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
-    var scriptedEnvironment = [
-        "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
-        "PDTBAR_CLAUDE_HANDOFF_MARKER": marker.path,
-        "PDTBAR_CLAUDE_HANDOFF_RESULT": result.path,
-        "PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE": resultValue,
-        "PDTBAR_DISABLE_REAL_CLAUDE": "1",
-    ]
-    if let probeLog {
-        scriptedEnvironment["PDTBAR_CLAUDE_READINESS_LOG"] = probeLog.path
-    }
-    process.environment = environment.merging(scriptedEnvironment) { _, new in new }
-    try process.run()
-    return process
-}
-
-private func launchPackagedOnboardingApp(
-    _ app: URL,
-    appSupportDirectory: URL,
-    fixtureSnapshotDirectory: URL,
-    handoffScript: URL,
-    marker: URL,
-    result: URL,
-    probeLog: URL
-) throws -> Process {
-    let process = Process()
-    process.executableURL = app
-    process.arguments = ["--scripted-claude-login-bin", handoffScript.path]
-    var environment = ProcessInfo.processInfo.environment
-    environment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
-    process.environment = environment.merging([
-        "PDTBAR_APP_SUPPORT_DIR": appSupportDirectory.path,
-        "PDTBAR_FIXTURE": defaultFixture.path,
-        "PDTBAR_SNAPSHOT_DIR": fixtureSnapshotDirectory.path,
-        "PDTBAR_CLAUDE_HANDOFF_MARKER": marker.path,
-        "PDTBAR_CLAUDE_HANDOFF_RESULT": result.path,
-        "PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE": "success",
-        "PDTBAR_CLAUDE_READINESS_LOG": probeLog.path,
-        "PDTBAR_DISABLE_REAL_CLAUDE": "1",
-    ]) { _, new in new }
-    try process.run()
-    return process
-}
-
-private func writeHandoffScript(
-    in appSupportDirectory: URL,
-    name: String,
-    delay: TimeInterval,
-    promptBeforeURL: Bool = true,
-    postSuccessDelay: TimeInterval = 0,
-    exitStatus: Int32
-) throws -> URL {
-    let directory = appSupportDirectory.appending(path: "pdtbar")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let script = directory.appending(path: name)
-    let content = """
-    #!/bin/sh
-    printf 'started %s pid=%s\\n' "$*" "$$" >> "$PDTBAR_CLAUDE_HANDOFF_MARKER.log"
-    trap 'printf "terminated pid=%s\\n" "$$" >> "$PDTBAR_CLAUDE_HANDOFF_MARKER.log"; exit 143' TERM INT HUP
-    printf 'started %s' "$*" > "$PDTBAR_CLAUDE_HANDOFF_MARKER"
-    if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
-    \(promptBeforeURL ? "  printf 'press ENTER to open in browser\\n'" : "  :")
-      printf 'https://claude.ai/login\\n'
-      IFS= read -r _ || true
-      if [ \(exitStatus) -eq 0 ]; then
-        :
-      else
-        printf 'Claude login failed\\n'
-      fi
-    fi
-    sleep \(String(format: "%.2f", delay))
-    if [ "$1" = "auth" ] && [ "$2" = "login" ] && [ \(exitStatus) -eq 0 ]; then
-      printf "%s" "$PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE" > "$PDTBAR_CLAUDE_HANDOFF_RESULT"
-      printf 'Successfully logged in\\n'
-      sleep \(String(format: "%.2f", postSuccessDelay))
-    else
-      printf "%s" "$PDTBAR_CLAUDE_HANDOFF_RESULT_VALUE" > "$PDTBAR_CLAUDE_HANDOFF_RESULT"
-    fi
-    exit \(exitStatus)
-    """
-    try Data(content.utf8).write(to: script, options: .atomic)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
-    return script
 }
 
 private func terminate(_ process: Process) {
@@ -5689,6 +4641,7 @@ private func verifyCodeSignature(_ appBundle: URL, timeout: TimeInterval) throws
 
 private func launchAppBundleWithLaunchServices(
     _ appBundle: URL,
+    arguments: [String] = [],
     environment: [String: String],
     timeout: TimeInterval
 ) throws -> NSRunningApplication {
@@ -5696,9 +4649,8 @@ private func launchAppBundleWithLaunchServices(
     configuration.activates = false
     configuration.allowsRunningApplicationSubstitution = false
     configuration.createsNewApplicationInstance = true
-    var launchEnvironment = ProcessInfo.processInfo.environment
-    launchEnvironment.removeValue(forKey: "PDTBAR_CLAUDE_READINESS")
-    configuration.environment = launchEnvironment.merging(environment) { _, new in new }
+    configuration.arguments = arguments
+    configuration.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
 
     let result = LaunchServicesOpenResultBox()
     NSWorkspace.shared.openApplication(at: appBundle, configuration: configuration) { application, error in

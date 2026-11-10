@@ -20,6 +20,10 @@ public enum PDTCredentialStoreError: Error, Equatable, Sendable {
     case writeFailed(code: Int32)
     case lockFailed(code: Int32)
     case keychain(status: Int32)
+    /// `errSecMissingEntitlement` (-34018): this build is not signed with the
+    /// keychain access entitlement the data protection keychain requires.
+    /// Never answered by falling back to the login keychain (ADR-0002).
+    case missingKeychainEntitlement
 }
 
 public final class InMemoryPDTCredentialStore: PDTCredentialStore, @unchecked Sendable {

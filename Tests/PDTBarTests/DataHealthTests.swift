@@ -202,7 +202,7 @@ struct DataHealthTests {
     @Test("Cached refresh and degraded descriptors preserve pulse while surfacing health")
     func cachedRefreshAndDegradedDescriptorsPreservePulseWhileSurfacingHealth() throws {
         let cached = MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: snapshot()))
-        let refreshing = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+        let refreshing = PDTLaunchMenu.descriptorForBackgroundDetailProgress(
             cachedPulse: cached,
             progress: BackgroundDetailRefreshProgress(
                 phase: .priceHistory,
@@ -210,7 +210,7 @@ struct DataHealthTests {
                 totalUnitCount: 9
             )
         )
-        let degraded = ClaudeLaunchFlow.descriptorForBackgroundDetailDegraded(cachedPulse: cached)
+        let degraded = PDTLaunchMenu.descriptorForBackgroundDetailDegraded(cachedPulse: cached)
 
         #expect(refreshing.statusTitle == cached.statusTitle)
         #expect(refreshing.sections.map(\.id).contains("pulse"))
@@ -218,10 +218,6 @@ struct DataHealthTests {
         #expect(degraded.statusTitle == cached.statusTitle)
         #expect(degraded.statusVisual.filledBarCount == cached.statusVisual.filledBarCount)
         #expect(healthRow(in: degraded)?.children.first { $0.id == "dataHealth.detailFill" }?.detail == "Degraded")
-
-        let probing = ClaudeLaunchFlow.descriptor(for: .probingClaude, cachedPulse: cached)
-        #expect(healthRow(in: probing)?.detail == "Checking")
-        #expect(healthRow(in: probing)?.children.first { $0.id == "dataHealth.source" }?.detail == "Claude checking; PDT unknown; read tools unknown; policy unknown")
     }
 
     @Test("Cached pulse does not claim connector readiness from cache alone")
@@ -316,7 +312,7 @@ struct DataHealthTests {
 
         #expect(healthRow(in: fetched.descriptor) == nil)
 
-        let refreshing = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+        let refreshing = PDTLaunchMenu.descriptorForBackgroundDetailProgress(
             cachedPulse: fetched.descriptor,
             progress: BackgroundDetailRefreshProgress(
                 phase: .priceHistory,
@@ -329,12 +325,6 @@ struct DataHealthTests {
         #expect(refreshingHealth.children.first { $0.id == "dataHealth.source" }?.detail == "Claude ready; PDT ready; 7/7 read tools; read-only")
         #expect(refreshingHealth.children.first { $0.id == "dataHealth.detailFill" }?.detail == "Price history 2/9")
         #expect(refreshingHealth.children.contains { $0.id == "dataHealth.readState" } == false)
-
-        let probing = ClaudeLaunchFlow.descriptor(for: .probingClaude, cachedPulse: fetched.descriptor)
-        let probingHealth = try #require(healthRow(in: probing))
-        #expect(probingHealth.detail == "Checking")
-        #expect(probingHealth.children.first { $0.id == "dataHealth.source" }?.detail == "Claude checking; PDT unknown; read tools unknown; policy unknown")
-        #expect(probingHealth.children.contains { $0.id == "dataHealth.readState" } == false)
     }
 
     @Test("Runtime health overlay preserves cached diagnostics and cache state")
@@ -355,12 +345,12 @@ struct DataHealthTests {
             detailRefreshDiagnostic: diagnostic
         ).descriptor
 
-        let refreshing = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+        let refreshing = PDTLaunchMenu.descriptorForBackgroundDetailProgress(
             cachedPulse: cached,
             progress: BackgroundDetailRefreshProgress(phase: .priceHistory, completedUnitCount: 1, totalUnitCount: 3)
         )
-        let degraded = ClaudeLaunchFlow.descriptorForBackgroundDetailDegraded(cachedPulse: cached)
-        let failedWithoutDiagnostic = ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(cachedPulse: cached)
+        let degraded = PDTLaunchMenu.descriptorForBackgroundDetailDegraded(cachedPulse: cached)
+        let failedWithoutDiagnostic = PDTLaunchMenu.descriptorForBackgroundRefreshFailure(cachedPulse: cached)
 
         let refreshingHealth = try #require(healthRow(in: refreshing))
         #expect(refreshingHealth.detail == "Refreshing")

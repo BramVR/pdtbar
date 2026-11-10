@@ -4,8 +4,8 @@ import PDTBarCore
 
 @Suite("Launch options")
 struct LaunchOptionTests {
-    @Test("No-argument launch uses Claude-first mode and ignores fixture environment")
-    func noArgumentLaunchUsesClaudeFirstMode() throws {
+    @Test("No-argument launch uses the PDT API and ignores fixture environment")
+    func noArgumentLaunchUsesPDTAPI() throws {
         let appSupport = "/tmp/pdtbar-tests-app-support"
         let fixture = packageRoot.appending(path: "docs/pdt/fixtures/quiet-no-pressure.json")
 
@@ -18,35 +18,65 @@ struct LaunchOptionTests {
             ]
         )
 
-        #expect(options.mode == .claudeFirst)
+        #expect(options.mode == .pdtAPI)
         #expect(options.snapshotDirectory == nil)
         #expect(options.appSupportDirectory == URL(fileURLWithPath: appSupport))
-        #expect(options.claudeLoginBinaryOverride == nil)
+        #expect(options.scriptedConnection == nil)
     }
 
-    @Test("No-argument launch ignores scripted Claude login binary environment")
-    func noArgumentLaunchIgnoresScriptedClaudeLoginBinaryEnvironment() throws {
-        let options = try PDTBarLaunchOptionParser.parse(
-            arguments: [],
-            environment: [
-                "PDTBAR_CLAUDE_BIN": "/tmp/pdtbar-tests-handoff-script",
-                "PDTBAR_CLAUDE_LOGIN_BIN": "/tmp/pdtbar-tests-login-script",
-            ]
-        )
+    @Test("A scripted PDT connection runs only against an isolated app support directory")
+    func scriptedConnectionNeedsIsolatedAppSupport() throws {
+        #expect(throws: PDTBarLaunchOptionError.usage) {
+            try PDTBarLaunchOptionParser.parse(arguments: ["--scripted-pdt", "/tmp/script.json"], environment: [:])
+        }
 
-        #expect(options.mode == .claudeFirst)
-        #expect(options.claudeLoginBinaryOverride == nil)
-    }
-
-    @Test("Explicit scripted login handoff option carries debug binary")
-    func explicitScriptedLoginHandoffOptionCarriesDebugBinary() throws {
         let options = try PDTBarLaunchOptionParser.parse(
-            arguments: ["--scripted-claude-login-bin", "/tmp/pdtbar-tests-login-script"],
+            arguments: ["--app-support-dir", "/tmp/pdtbar-isolated", "--scripted-pdt", "/tmp/script.json"],
             environment: [:]
         )
 
-        #expect(options.mode == .claudeFirst)
-        #expect(options.claudeLoginBinaryOverride == "/tmp/pdtbar-tests-login-script")
+        #expect(options.mode == .pdtAPI)
+        #expect(options.scriptedConnection == URL(fileURLWithPath: "/tmp/script.json"))
+        #expect(options.appSupportDirectory == URL(fileURLWithPath: "/tmp/pdtbar-isolated"))
+    }
+
+    @Test("A dev credential file runs only against an isolated app support directory and never with a script")
+    func credentialFileNeedsIsolatedAppSupport() throws {
+        for arguments in [
+            ["--pdt-credential-file", "/tmp/pdt.json"],
+            ["--app-support-dir", "/tmp/a", "--pdt-credential-file", "/tmp/pdt.json", "--scripted-pdt", "/tmp/s.json"],
+            ["--fixture", "/tmp/f.json", "--app-support-dir", "/tmp/a", "--pdt-credential-file", "/tmp/pdt.json"],
+        ] {
+            #expect(throws: PDTBarLaunchOptionError.usage, "\(arguments)") {
+                try PDTBarLaunchOptionParser.parse(arguments: arguments, environment: [:])
+            }
+        }
+
+        let options = try PDTBarLaunchOptionParser.parse(
+            arguments: ["--app-support-dir", "/tmp/pdtbar-isolated", "--pdt-credential-file", "/tmp/pdt.json"],
+            environment: [:]
+        )
+
+        #expect(options.mode == .pdtAPI)
+        #expect(options.credentialFile == URL(fileURLWithPath: "/tmp/pdt.json"))
+        #expect(options.scriptedConnection == nil)
+    }
+
+    @Test("A scripted PDT connection cannot be combined with a fixture launch")
+    func scriptedConnectionRejectsFixture() {
+        #expect(throws: PDTBarLaunchOptionError.usage) {
+            try PDTBarLaunchOptionParser.parse(
+                arguments: ["--fixture", "/tmp/f.json", "--app-support-dir", "/tmp/a", "--scripted-pdt", "/tmp/s.json"],
+                environment: [:]
+            )
+        }
+    }
+
+    @Test("The removed Claude login override is a usage error")
+    func removedClaudeLoginOverrideIsRejected() {
+        #expect(throws: PDTBarLaunchOptionError.usage) {
+            try PDTBarLaunchOptionParser.parse(arguments: ["--scripted-claude-login-bin", "/tmp/login"], environment: [:])
+        }
     }
 
     @Test("Fixture launch requires explicit flag and may use snapshot directory")
@@ -70,126 +100,120 @@ struct LaunchOptionTests {
     }
 }
 
-@Suite("Claude launch flow")
-struct ClaudeLaunchFlowTests {
-    @Test("Readiness probe states map to product launch states")
-    func readinessProbeStatesMapToLaunchStates() {
-        #expect(ClaudeLaunchFlow.state(afterReadinessProbe: nil) == .probingClaude)
-        #expect(ClaudeLaunchFlow.state(afterReadinessProbe: .ready) == .fetchingPortfolio)
-        #expect(ClaudeLaunchFlow.state(afterReadinessProbe: .notReady) == .loggedOut)
-        #expect(ClaudeLaunchFlow.state(afterReadinessProbe: .missingClaudeLogin) == .missingClaudeLogin)
-        #expect(ClaudeLaunchFlow.state(afterReadinessProbe: .missingPDTMCP) == .missingPDTMCP)
-        #expect(ClaudeLaunchFlow.state(afterReadinessProbe: .failed) == .probeFailed)
-    }
-
-    @Test("Successful login handoff resumes readiness")
-    func successfulLoginHandoffResumesReadiness() {
-        #expect(ClaudeLaunchFlow.action(afterLoginHandoff: .succeeded) == .recheckReadiness)
-        #expect(ClaudeLaunchFlow.action(afterLoginHandoff: .failed) == .showMissingClaude)
-    }
-
-    @Test("Successful login handoff can land on missing PDT setup after readiness recheck")
-    func successfulLoginHandoffCanLandOnMissingPDTSetupAfterReadinessRecheck() {
-        var readinessResults: [ClaudeReadinessProbeResult] = [.missingClaudeLogin, .missingPDTMCP]
-        var renderedTitles: [String] = []
-        var fetchCalls = 0
-
-        let runner = PDTOnboardingRunner(
-            dependencies: PDTOnboardingRunnerDependencies(
-                loadCachedPulse: { nil },
-                readinessProbe: { readinessResults.removeFirst() },
-                loginHandoff: { .succeeded },
-                firstFetch: {
-                    fetchCalls += 1
-                    return .failed("unexpected fetch")
-                }
+@Suite("PDT launch menu")
+struct PDTLaunchMenuTests {
+    @Test("Each connection state names itself and offers only the actions that state accepts")
+    func connectionStatesOfferTheirActions() {
+        let cases: [(PDTLaunchState, String, [String])] = [
+            (.checkingConnection, "Checking PDT connection", []),
+            (.connecting, "Signing in with PDT", ["pdtConnection.cancel"]),
+            (.disconnecting, "Disconnecting from PDT", []),
+            (.notConnected, "Not connected", ["pdtConnection.signIn", "pdtConnection.token"]),
+            (
+                .needsReconnect(.browserSession, .signInExpired),
+                "Reconnect to PDT",
+                ["pdtConnection.signIn", "pdtConnection.token", "pdtConnection.check", "pdtConnection.disconnect"]
             ),
-            render: { renderedTitles.append($0.descriptor.statusTitle) }
-        )
+            (
+                .subscriptionPaused,
+                "PDT access paused",
+                ["pdtConnection.signIn", "pdtConnection.token", "pdtConnection.check", "pdtConnection.disconnect"]
+            ),
+            (.keychainUnavailable(.missingEntitlement), "Keychain unavailable", ["pdtConnection.check"]),
+            (.keychainUnavailable(.failed), "Could not read the Keychain", ["pdtConnection.check"]),
+        ]
 
-        runner.launch()
-        runner.loginWithClaude()
+        for (state, title, actions) in cases {
+            let descriptor = PDTLaunchMenu.descriptor(for: state)
+            let rows = descriptor.sections.flatMap(\.rows)
 
-        #expect(renderedTitles == [
-            "Checking Claude",
-            "Not connected",
-            "Signing in with Claude",
-            "Checking Claude",
-            "Add the PDT MCP server to Claude",
-        ])
-        #expect(readinessResults.isEmpty)
-        #expect(fetchCalls == 0)
+            #expect(descriptor.statusTitle == title, "\(state)")
+            #expect(descriptor.statusVisual.isDimmed, "\(state)")
+            #expect(rows.first?.id == "pdtConnection.status", "\(state)")
+            #expect(rows.first?.title == title, "\(state)")
+            #expect(rows.dropFirst().map(\.id) == actions, "\(state)")
+        }
     }
 
-    @Test("Probing Claude descriptor keeps login action available")
-    func probingDescriptorKeepsLoginActionAvailable() {
-        let descriptor = ClaudeLaunchFlow.descriptor(for: .probingClaude)
-        let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
-
-        #expect(descriptor.statusTitle == "Checking Claude")
-        #expect(descriptor.statusVisual.isDimmed)
-        #expect(descriptor.statusVisual.filledBarCount == 0)
-        #expect(surface.sections.flatMap(\.rows).map(\.title) == [
-            "Checking Claude setup",
-            "Log in with Claude",
-        ])
-        #expect(surface.sections.flatMap(\.rows).map(\.detail) == [
-            "No prompts opened",
-            nil,
-        ])
-        #expect(surface.sections.flatMap(\.rows).last?.role == .setupLogin)
+    @Test("Reconnect copy names why PDT stopped accepting the connection")
+    func reconnectCopyNamesTheCause() {
+        let details: [(PDTReconnectCause, String)] = [
+            (.signInExpired, "Your PDT sign-in has expired"),
+            (.tokenExpired, "Your PDT token has expired"),
+            (.tokenRevoked, "PDTBar's access was revoked in PDT"),
+            (.tokenInvalid, "PDT no longer accepts this connection"),
+            (.readAccessMissing, "This connection can't read your portfolio"),
+        ]
+        for (cause, detail) in details {
+            let status = PDTLaunchMenu.descriptor(for: .needsReconnect(.personalToken, cause)).sections.first?.rows.first
+            #expect(status?.detail == detail)
+        }
     }
 
-    @Test("Setup descriptors expose retryable onboarding actions")
-    func setupDescriptorsExposeRetryableOnboardingActions() {
-        let openingClaude = ClaudeLaunchFlow.descriptor(for: .openingClaude)
-        let missingLogin = ClaudeLaunchFlow.descriptor(for: .missingClaudeLogin)
-        let missingPDTMCP = ClaudeLaunchFlow.descriptor(for: .missingPDTMCP)
-        let missingClaude = ClaudeLaunchFlow.descriptor(for: .missingClaude)
-
-        #expect(rowTitles(in: openingClaude) == ["Signing in with Claude", "Try login again"])
-        #expect(openingClaude.sections.flatMap(\.rows).last?.role == .setupLogin)
-        #expect(rowTitles(in: missingLogin) == ["Not connected", "Log in with Claude", "Check again"])
-        #expect(missingLogin.sections.flatMap(\.rows).last?.role == .setupRetry)
-        #expect(rowTitles(in: missingPDTMCP) == ["Add the PDT MCP server to Claude", "Log in with Claude", "Check again"])
-        #expect(missingPDTMCP.sections.flatMap(\.rows).last?.role == .setupRetry)
-        #expect(rowTitles(in: missingClaude) == ["Claude CLI not found", "Log in with Claude"])
-    }
-
-    @Test("Login failure descriptors use Claude CLI result copy")
-    func loginFailureDescriptorsUseClaudeCLIResultCopy() {
-        #expect(rowTitles(in: ClaudeLaunchFlow.descriptor(forLoginFailure: .missingBinary)) == [
-            "Claude CLI not found",
-            "Log in with Claude",
-        ])
-        #expect(rowTitles(in: ClaudeLaunchFlow.descriptor(forLoginFailure: .timedOut)) == [
-            "Claude login timed out",
-            "Log in with Claude",
-        ])
-        #expect(rowTitles(in: ClaudeLaunchFlow.descriptor(forLoginFailure: .failed)) == [
-            "Claude login failed",
-            "Log in with Claude",
-        ])
-        #expect(rowTitles(in: ClaudeLaunchFlow.descriptor(forLoginFailure: .launchFailed)) == [
-            "Could not start claude auth login",
-            "Log in with Claude",
-        ])
-    }
-
-    @Test("Fetch descriptors keep login UI out of ready path")
-    func fetchDescriptorsKeepLoginUIOutOfReadyPath() throws {
-        let firstFetch = ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio)
-        let fetchFailed = ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed)
+    @Test("Reconnect, paused, and Keychain screens keep a cached pulse visible; not connected hides it")
+    func connectionScreensAndCachedPulse() throws {
         let cachedPulse = try quietFixtureDescriptor()
-        let cachedRefresh = ClaudeLaunchFlow.descriptor(for: .fetchingPortfolio, cachedPulse: cachedPulse)
-        let cachedFailure = ClaudeLaunchFlow.descriptor(for: .portfolioFetchFailed, cachedPulse: cachedPulse)
-        let cachedRefreshAction = ClaudeLaunchFlow.descriptorWithRefreshDetailsAction(cachedPulse: cachedPulse)
-        let backgroundFailure = ClaudeLaunchFlow.descriptorForBackgroundRefreshFailure(cachedPulse: cachedPulse)
 
-        #expect(rowTitles(in: firstFetch) == ["Fetching portfolio"])
-        #expect(!rowTitles(in: firstFetch).contains("Log in with Claude"))
-        #expect(rowTitles(in: fetchFailed) == ["Could not fetch portfolio", "Try again", "Log in with Claude"])
-        #expect(MenuBarSurfaceRenderer.render(descriptor: fetchFailed).status.visual.isDimmed)
+        for state in [
+            PDTLaunchState.checkingConnection,
+            .needsReconnect(.personalToken, .tokenRevoked),
+            .subscriptionPaused,
+            .keychainUnavailable(.missingEntitlement),
+        ] {
+            let descriptor = PDTLaunchMenu.descriptor(for: state, cachedPulse: cachedPulse)
+            #expect(descriptor.sections.first?.id == "pdtConnection", "\(state)")
+            #expect(descriptor.sections.map(\.id).contains("pulse"), "\(state)")
+            #expect(descriptor.statusVisual.isDimmed, "\(state)")
+            #expect(actionRow("actions.refreshNow", in: descriptor)?.role == .fetchStatus, "\(state)")
+        }
+
+        let notConnected = PDTLaunchMenu.descriptor(for: .notConnected, cachedPulse: cachedPulse)
+        #expect(notConnected.sections.map(\.id) == ["pdtConnection"])
+        #expect(notConnected.statusTitle == "Not connected")
+    }
+
+    @Test("A failed sign-in shows its reason above the sign-in actions")
+    func signInFailureNotice() {
+        let descriptor = PDTLaunchMenu.descriptor(for: .notConnected, notice: .signInFailed(.denied))
+        let rows = descriptor.sections.flatMap(\.rows)
+
+        #expect(rows.map(\.id) == ["pdtConnection.status", "pdtConnection.signInFailed", "pdtConnection.signIn", "pdtConnection.token"])
+        #expect(rows[1].title == "Sign-in failed")
+        #expect(rows[1].detail == "PDT sign-in was declined")
+    }
+
+    @Test("After a disconnect the menu links to the PDT page where access is removed")
+    func disconnectNoticeLinksRevokePage() {
+        let descriptor = PDTLaunchMenu.descriptor(for: .notConnected, notice: .disconnected(revokeAt: PDTOAuthEndpoints.integrations))
+        let revoke = descriptor.sections.flatMap(\.rows).first { $0.id == "pdtConnection.revoke" }
+
+        #expect(revoke?.role == .connectionRevoke)
+        #expect(revoke?.actionPayload == PDTOAuthEndpoints.integrations.absoluteString)
+    }
+
+    @Test("First fetch descriptors show progress and a retryable failure without a pulse")
+    func firstFetchDescriptors() {
+        let fetching = PDTLaunchMenu.descriptor(for: .connected(.fetching))
+        let elapsed = PDTLaunchMenu.descriptor(for: .connected(.fetching), fetchingElapsedSeconds: 12)
+        let failed = PDTLaunchMenu.descriptor(for: .connected(.failed))
+
+        #expect(rowTitles(in: fetching) == ["Fetching portfolio"])
+        #expect(elapsed.statusTitle == "Fetching portfolio 0:12")
+        #expect(elapsed.sections.flatMap(\.rows).map(\.detail) == ["Read-only from PDT - working for 0:12"])
+        #expect(MenuBarSurfaceRenderer.render(descriptor: elapsed).status.accessibilityLabel == "PDTBar Fetching portfolio 0:12")
+        #expect(failed.statusTitle == "Could not fetch portfolio")
+        #expect(rowTitles(in: failed) == ["Could not fetch portfolio", "Try again", "Disconnect from PDT"])
+        #expect(rowRoles(in: failed) == [.fetchStatus, .fetchRetry, .connectionDisconnect])
+        #expect(MenuBarSurfaceRenderer.render(descriptor: failed).status.visual.isDimmed)
+    }
+
+    @Test("Refresh descriptors over a cached pulse keep the pulse and its actions")
+    func cachedRefreshDescriptors() throws {
+        let cachedPulse = try quietFixtureDescriptor()
+        let cachedRefresh = PDTLaunchMenu.descriptor(for: .connected(.fetching), cachedPulse: cachedPulse)
+        let cachedFailure = PDTLaunchMenu.descriptor(for: .connected(.failed), cachedPulse: cachedPulse)
+        let cachedRefreshAction = PDTLaunchMenu.descriptorWithRefreshDetailsAction(cachedPulse: cachedPulse)
+
         #expect(cachedRefresh.statusTitle == cachedPulse.statusTitle)
         #expect(cachedRefresh.sections.first?.id == "portfolioFetch")
         #expect(cachedRefresh.sections.map(\.id).contains("pulse"))
@@ -199,27 +223,18 @@ struct ClaudeLaunchFlowTests {
         #expect(actionRow("actions.openPDT", in: cachedRefresh)?.role == .openPDT)
         #expect(cachedFailure.statusVisual.isDimmed)
         #expect(cachedFailure.statusVisual.barHeights == cachedPulse.statusVisual.barHeights)
-        #expect(cachedFailure.statusVisual.filledBarCount == cachedPulse.statusVisual.filledBarCount)
         #expect(rowTitles(in: cachedFailure).contains("Details fill failed"))
         #expect(rowTitles(in: cachedFailure).contains("Fill details again"))
-        #expect(!rowTitles(in: cachedFailure).contains("Log in with Claude"))
         #expect(actionRow("actions.refreshNow", in: cachedFailure)?.role == .fetchRetry)
-        #expect(actionRow("actions.openPDT", in: cachedFailure)?.title == "Open PDT")
         #expect(freshnessRefreshDetailsAction(in: cachedRefreshAction)?.role == .fetchRetry)
         #expect(actionRow("actions.refreshNow", in: cachedRefreshAction)?.title == "Refresh now")
-        #expect(actionRow("actions.openPDT", in: cachedRefreshAction)?.role == .openPDT)
         #expect(!cachedRefreshAction.sections.map(\.id).contains("portfolioFetch"))
-        #expect(cachedRefreshAction.sections.first?.id == cachedPulse.sections.first?.id)
-        #expect(backgroundFailure.sections.first?.id == "portfolioFetch")
-        #expect(rowTitles(in: backgroundFailure).contains("Details fill failed"))
-        #expect(rowTitles(in: backgroundFailure).contains("Fill details again"))
-        #expect(!rowTitles(in: backgroundFailure).contains("Log in with Claude"))
     }
 
     @Test("Background detail retry renders active phase progress instead of stale failure")
     func backgroundDetailRetryRendersActivePhaseProgress() throws {
         let cachedPulse = try quietFixtureDescriptor()
-        let descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+        let descriptor = PDTLaunchMenu.descriptorForBackgroundDetailProgress(
             cachedPulse: cachedPulse,
             progress: BackgroundDetailRefreshProgress(
                 phase: .priceHistory,
@@ -252,7 +267,7 @@ struct ClaudeLaunchFlowTests {
     @Test("Background detail progress renders tool discovery substep")
     func backgroundDetailProgressRendersToolDiscoverySubstep() throws {
         let cachedPulse = try quietFixtureDescriptor()
-        let descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailProgress(
+        let descriptor = PDTLaunchMenu.descriptorForBackgroundDetailProgress(
             cachedPulse: cachedPulse,
             progress: BackgroundDetailRefreshProgress(
                 phase: .baseHoldings,
@@ -271,7 +286,7 @@ struct ClaudeLaunchFlowTests {
     @Test("Background degraded completion keeps pulse rows and exposes retry")
     func backgroundDegradedCompletionKeepsPulseRowsAndExposesRetry() throws {
         let cachedPulse = try quietFixtureDescriptor()
-        let descriptor = ClaudeLaunchFlow.descriptorForBackgroundDetailDegraded(cachedPulse: cachedPulse)
+        let descriptor = PDTLaunchMenu.descriptorForBackgroundDetailDegraded(cachedPulse: cachedPulse)
 
         #expect(descriptor.statusTitle == cachedPulse.statusTitle)
         #expect(descriptor.sections.first?.id == "portfolioFetch")
@@ -281,166 +296,38 @@ struct ClaudeLaunchFlowTests {
         #expect(!rowTitles(in: descriptor).contains("Details fill failed"))
     }
 
-    @Test("Claude auth status parser reads logged-in JSON from stdout")
-    func claudeAuthStatusParserReadsLoggedInJSONFromStdout() {
-        let noisyStdout = """
-        notice
-        {"loggedIn":true,"authMethod":"oauth"}
-        """
-
-        #expect(ClaudeAuthStatusParser.isLoggedIn(stdout: #"{"loggedIn":true}"#))
-        #expect(ClaudeAuthStatusParser.isLoggedIn(stdout: noisyStdout))
-        #expect(!ClaudeAuthStatusParser.isLoggedIn(stdout: #"{"loggedIn":false}"#))
-        #expect(!ClaudeAuthStatusParser.isLoggedIn(stdout: "not json"))
-        #expect(ClaudeAuthStatusParser.loggedInStatus(stdout: "not json") == nil)
-    }
-
-    @Test("Fetching descriptor exposes elapsed working time")
-    func fetchingDescriptorExposesElapsedWorkingTime() {
-        let descriptor = ClaudeLaunchFlow.descriptor(
-            for: .fetchingPortfolio,
-            fetchingElapsedSeconds: 12
-        )
-
-        #expect(descriptor.statusTitle == "Fetching portfolio 0:12")
-        #expect(rowTitles(in: descriptor) == ["Fetching portfolio"])
-        #expect(descriptor.sections.flatMap(\.rows).map(\.detail) == ["Read-only through Claude - working for 0:12"])
-        #expect(MenuBarSurfaceRenderer.render(descriptor: descriptor).status.accessibilityLabel == "PDTBar Fetching portfolio 0:12")
-    }
-
-    @Test("Readiness probe gate serializes setup probes")
-    func readinessProbeGateSerializesSetupProbes() {
-        let gate = ClaudeReadinessProbeGate()
-
-        #expect(gate.begin())
-        #expect(!gate.begin())
-        gate.finish()
-        #expect(gate.begin())
-        gate.finish()
-    }
-
-    @Test("Login attempt gate ignores stale completions after retry")
-    func loginAttemptGateIgnoresStaleCompletionsAfterRetry() {
-        let gate = ClaudeLoginAttemptGate()
-
-        let firstAttempt = gate.begin()
-        let retryAttempt = gate.begin()
-
-        #expect(!gate.finish(firstAttempt))
-        #expect(gate.finish(retryAttempt))
-        #expect(!gate.finish(retryAttempt))
-
-        let laterAttempt = gate.begin()
-        #expect(laterAttempt != firstAttempt)
-        #expect(!gate.finish(firstAttempt))
-        #expect(gate.finish(laterAttempt))
-    }
 }
 
-@Suite("PDT onboarding runner")
-struct PDTOnboardingRunnerTests {
-    @Test("Launch runtime publishes first fetched pulse after ready no-argument launch")
-    func launchRuntimePublishesFirstFetchedPulseAfterReadyNoArgumentLaunch() throws {
-        let pulse = try quietFixturePulse()
+@Suite("PDT launch runtime")
+struct PDTLaunchRuntimeTests {
+    @Test("Launch loads the cached pulse first, then checks the connection")
+    func launchLoadsCachedPulseThenChecks() throws {
         let runtime = PDTLaunchRuntime()
 
-        let launch = runtime.launch(cachedPulse: nil)
-        let ready = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        let complete = runtime.completeFirstFetch(.succeeded(pulse))
+        let launch = runtime.launch()
+        #expect(launch.effect == .loadCachedPulse)
+        #expect(launch.descriptor.statusTitle == "Checking PDT connection")
+        #expect(runtime.signIn() == nil)
+        #expect(runtime.checkAgain() == nil)
 
-        #expect(launch.effect == .probeReadiness)
-        #expect(launch.descriptor.statusTitle == "Checking Claude")
-        #expect(ready.effect == .startFirstFetch)
-        #expect(ready.descriptor.statusTitle == "Fetching portfolio")
-        #expect(complete.effect == .none)
-        #expect(complete.descriptor.statusTitle == pulse.descriptor.statusTitle)
-        #expect(freshnessRefreshDetailsAction(in: complete.descriptor)?.role == .fetchRetry)
-        #expect(runtime.currentPulse?.source == .fetchedSnapshot)
+        let loaded = try #require(runtime.completeCachedPulseLoad(nil))
+        #expect(loaded.effect == .checkConnection)
+        #expect(loaded.state == .checkingConnection)
+        #expect(runtime.completeCachedPulseLoad(nil) == nil)
     }
 
-    @Test("Launch runtime keeps cached pulse visible while probing and filling details")
-    func launchRuntimeKeepsCachedPulseVisibleWhileProbingAndFillingDetails() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        let launch = runtime.launch(cachedPulse: cachedPulse)
-        let ready = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-
-        #expect(runtime.currentPulse?.source == .cachedSnapshot)
-        #expect(launch.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: launch.descriptor).contains("Checking Claude setup"))
-        #expect(ready.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: ready.descriptor).contains("Filling details"))
-        #expect(rowTitles(in: ready.descriptor).contains("Step 1/6: Base holdings"))
-    }
-
-    @Test("Refresh waits for the Claude setup check on a returning launch")
-    func refreshWaitsForClaudeSetupCheckOnReturningLaunch() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        let probing = runtime.launch(cachedPulse: cachedPulse)
-        #expect(actionRow("actions.refreshNow", in: probing.descriptor)?.title == "Refresh now")
-        #expect(!rowRoles(in: probing.descriptor).contains(.fetchRetry))
-        #expect(runtime.retryFirstFetch() == nil)
-
-        let setup = runtime.completeReadinessProbe(.missingClaudeLogin, for: runtime.readinessAttempt)
-        #expect(setup.state == .missingClaudeLogin)
-        #expect(!runtime.backgroundDetailRefreshInFlight)
-
-        _ = try #require(runtime.retryReadiness())
-        let ready = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        #expect(ready.state == .fetchingPortfolio)
-        #expect(ready.effect == .startBackgroundDetailRefresh)
-    }
-
-    @Test("Mark-read republish during the Claude setup check keeps the check")
-    func markReadRepublishDuringClaudeSetupCheckKeepsTheCheck() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: cachedPulse)
-        let republished = try #require(runtime.pulseReadStateDidChange())
-
-        #expect(republished.state == .probingClaude)
-        #expect(rowTitles(in: republished.descriptor).contains("Checking Claude setup"))
-        #expect(!rowRoles(in: republished.descriptor).contains(.fetchRetry))
-        #expect(runtime.retryFirstFetch() == nil)
-    }
-
-    @Test("Launch runtime can install cached pulse after initial probing paint")
-    func launchRuntimeCanInstallCachedPulseAfterInitialProbingPaint() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        let launch = runtime.launch(cachedPulse: nil)
-        let cached = try #require(runtime.completeCachedPulseLoad(cachedPulse))
-        let ready = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-
-        #expect(launch.descriptor.statusTitle == "Checking Claude")
-        #expect(runtime.currentPulse?.source == .cachedSnapshot)
-        #expect(cached.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: cached.descriptor).contains("Checking Claude setup"))
-        #expect(ready.effect == .startBackgroundDetailRefresh)
-        #expect(rowTitles(in: ready.descriptor).contains("Filling details"))
-    }
-
-    @Test("Launch runtime first paint is independent of large cached snapshot decode")
-    func launchRuntimeFirstPaintIsIndependentOfLargeCachedSnapshotDecode() throws {
+    @Test("First paint does not wait for a large cached snapshot to decode")
+    func firstPaintIsIndependentOfLargeCachedSnapshotDecode() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-large-cached-launch-test")
-        defer {
-            try? FileManager.default.removeItem(at: store.directory)
-        }
+        defer { try? FileManager.default.removeItem(at: store.directory) }
         let largeSnapshot = try largeCachedSnapshot(repeatingHoldings: 2_500)
-        let encodedSnapshot = try stableJSONData(largeSnapshot)
+        #expect(try stableJSONData(largeSnapshot).count > 1_000_000)
         _ = try store.commitCurrentSnapshot(largeSnapshot)
         let runtime = PDTLaunchRuntime()
 
-        let launch = runtime.launch(cachedPulse: nil)
+        let launch = runtime.launch()
 
-        #expect(encodedSnapshot.count > 1_000_000)
-        #expect(launch.descriptor.statusTitle == "Checking Claude")
-        #expect(rowTitles(in: launch.descriptor) == ["Checking Claude setup", "Log in with Claude"])
+        #expect(rowTitles(in: launch.descriptor) == ["Checking PDT connection"])
         #expect(runtime.currentPulse == nil)
 
         let cachedPulse = try #require(try PressureRunner.cachedPulse(
@@ -451,313 +338,125 @@ struct PDTOnboardingRunnerTests {
 
         #expect(runtime.currentPulse?.source == .cachedSnapshot)
         #expect(cached.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: cached.descriptor).contains("Checking Claude setup"))
+        #expect(rowTitles(in: cached.descriptor).contains("Checking PDT connection"))
     }
 
-    @Test("Launch runtime ignores late cached pulse after fresh fetch publishes")
-    func launchRuntimeIgnoresLateCachedPulseAfterFreshFetchPublishes() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let fetchedPulse = try quietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: nil)
-        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        let fetched = runtime.completeFirstFetch(.succeeded(fetchedPulse))
-        let lateCache = runtime.completeCachedPulseLoad(cachedPulse)
-
-        #expect(fetched.descriptor.statusTitle == fetchedPulse.descriptor.statusTitle)
-        #expect(lateCache == nil)
-        #expect(runtime.currentPulse?.source == .fetchedSnapshot)
-        #expect(runtime.currentPulse?.descriptor.statusTitle == fetchedPulse.descriptor.statusTitle)
-    }
-
-    @Test("Launch runtime ignores ready completion after login handoff starts")
-    func launchRuntimeIgnoresReadyCompletionAfterLoginHandoffStarts() {
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: nil)
-        let attempt = runtime.readinessAttempt
-        let login = runtime.beginLoginHandoff()
-        let staleReady = runtime.completeReadinessProbe(.ready, for: attempt)
-
-        #expect(login.descriptor.statusTitle == "Signing in with Claude")
-        #expect(staleReady.descriptor.statusTitle == "Signing in with Claude")
-        #expect(staleReady.effect == .none)
-        #expect(!runtime.firstFetchInFlight)
-    }
-
-    @Test("Launch runtime starts returning cached detail refresh and reports progress")
-    func launchRuntimeStartsReturningCachedDetailRefreshAndReportsProgress() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: cachedPulse)
-        let ready = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        let progress = try #require(runtime.backgroundDetailRefreshProgress(
-            BackgroundDetailRefreshProgress(
-                phase: .priceHistory,
-                completedUnitCount: 12,
-                totalUnitCount: 19
-            )
-        ))
-
-        #expect(ready.effect == .startBackgroundDetailRefresh)
-        #expect(ready.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: ready.descriptor).contains("Filling details"))
-        #expect(progress.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: progress.descriptor).contains("Step 5/6: Price history"))
-        #expect(rowTitles(in: progress.descriptor).contains("12/19 price histories checked"))
-        #expect(!rowTitles(in: progress.descriptor).contains("Details fill failed"))
-    }
-
-    @Test("Launch runtime preserves cached normal refresh when background detail refresh is disabled")
-    func launchRuntimePreservesCachedNormalRefreshWhenBackgroundDetailRefreshIsDisabled() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: cachedPulse)
-        let ready = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt, allowsBackgroundDetailRefresh: false)
-
-        #expect(ready.effect == .startFirstFetch)
-        #expect(runtime.firstFetchInFlight)
-        #expect(!runtime.backgroundDetailRefreshInFlight)
-        #expect(ready.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: ready.descriptor).contains("Refreshing portfolio"))
-        #expect(!rowTitles(in: ready.descriptor).contains("Filling details"))
-    }
-
-    @Test("Launch runtime publishes completed background detail refresh")
-    func launchRuntimePublishesCompletedBackgroundDetailRefresh() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let refreshedPulse = try quietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: cachedPulse)
-        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        let completed = runtime.completeBackgroundDetailRefresh(.succeeded(refreshedPulse, outcome: .completed))
-
-        #expect(!runtime.backgroundDetailRefreshInFlight)
-        #expect(runtime.currentPulse?.source == .fetchedSnapshot)
-        #expect(completed.descriptor.statusTitle == refreshedPulse.descriptor.statusTitle)
-        #expect(freshnessRefreshDetailsAction(in: completed.descriptor)?.role == .fetchRetry)
-        #expect(!rowTitles(in: completed.descriptor).contains("Details partially filled"))
-        #expect(!rowTitles(in: completed.descriptor).contains("Details fill failed"))
-    }
-
-    @Test("Launch runtime renders degraded background detail completion")
-    func launchRuntimeRendersDegradedBackgroundDetailCompletion() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let refreshedPulse = try quietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: cachedPulse)
-        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        let degraded = runtime.completeBackgroundDetailRefresh(.succeeded(refreshedPulse, outcome: .degraded))
-
-        #expect(!runtime.backgroundDetailRefreshInFlight)
-        #expect(runtime.currentPulse?.source == .fetchedSnapshot)
-        #expect(degraded.descriptor.statusTitle == refreshedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: degraded.descriptor).contains("Details partially filled"))
-        #expect(rowTitles(in: degraded.descriptor).contains("Fill details again"))
-        #expect(!rowTitles(in: degraded.descriptor).contains("Details fill failed"))
-    }
-
-    @Test("Launch runtime preserves cached pulse after background detail failure")
-    func launchRuntimePreservesCachedPulseAfterBackgroundDetailFailure() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: cachedPulse)
-        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        let failed = runtime.completeBackgroundDetailRefresh(.failed("scripted detail fill failed"))
-
-        #expect(!runtime.backgroundDetailRefreshInFlight)
-        #expect(runtime.currentPulse?.source == .cachedSnapshot)
-        #expect(failed.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: failed.descriptor).contains("Details fill failed"))
-        #expect(rowTitles(in: failed.descriptor).contains("Fill details again"))
-        #expect(!rowTitles(in: failed.descriptor).contains("Log in with Claude"))
-    }
-
-    @Test("Launch runtime surfaces background detail failure diagnostics")
-    func launchRuntimeSurfacesBackgroundDetailFailureDiagnostics() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-        let diagnostic = PDTDetailRefreshFailureDiagnostic(
-            toolName: "pdt-list-symbol-prices",
-            phase: .priceHistory,
-            attemptCount: 1,
-            category: .transientFailure,
-            argumentShape: ["symbol_quote_id"]
-        )
-
-        _ = runtime.launch(cachedPulse: cachedPulse)
-        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        let failed = runtime.completeBackgroundDetailRefresh(.failed("scripted detail fill failed", diagnostic: diagnostic))
-        let diagnosticRow = try #require(healthRow(in: failed.descriptor)?.children.first { $0.id == "dataHealth.diagnostic" })
-
-        #expect(failed.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
-        #expect(diagnosticRow.detail == "pdt-list-symbol-prices; priceHistory; transientFailure")
-        #expect(diagnosticRow.children.first?.actionTarget?.copyText?.contains("argument_keys: symbol_quote_id") == true)
-    }
-
-    @Test("Launch runtime retries failed background detail refresh")
-    func launchRuntimeRetriesFailedBackgroundDetailRefresh() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: cachedPulse)
-        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        _ = runtime.completeBackgroundDetailRefresh(.failed("scripted detail fill failed"))
-
-        let retry = try #require(runtime.retryFirstFetch())
-        let duplicateRetry = runtime.retryFirstFetch()
-
-        #expect(retry.effect == .startBackgroundDetailRefresh)
-        #expect(runtime.backgroundDetailRefreshInFlight)
-        #expect(duplicateRetry == nil)
-        #expect(retry.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: retry.descriptor).contains("Filling details"))
-        #expect(!rowTitles(in: retry.descriptor).contains("Details fill failed"))
-    }
-
-    @Test("Launch runtime preserves cached pulse and retry copy after background detail failure")
-    func launchRuntimePreservesCachedPulseAndRetryCopyAfterBackgroundDetailFailure() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: cachedPulse)
-        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        let failed = runtime.completeBackgroundDetailRefresh(.failed("scripted details fill failed"))
-
-        #expect(runtime.currentPulse?.source == .cachedSnapshot)
-        #expect(failed.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: failed.descriptor).contains("Details fill failed"))
-        #expect(rowTitles(in: failed.descriptor).contains("Fill details again"))
-        #expect(!rowTitles(in: failed.descriptor).contains("Log in with Claude"))
-    }
-
-    @Test("Returning launch refresh reflects probe readiness in cached data health")
-    func returningLaunchRefreshReflectsProbeReadinessInCachedDataHealth() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: cachedPulse)
-        let ready = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        let health = try #require(healthRow(in: ready.descriptor))
-
-        #expect(ready.effect == .startBackgroundDetailRefresh)
-        #expect(health.children.first { $0.id == "dataHealth.source" }?.detail == "Claude ready; PDT ready; read tools unknown; policy unknown")
-        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.claude == .ready)
-        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.pdtMCP == .ready)
-    }
-
-    @Test("Cached pulse installed after a probe reflects last known readiness")
-    func cachedPulseInstalledAfterAProbeReflectsLastKnownReadiness() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: nil)
-        _ = runtime.completeReadinessProbe(.missingPDTMCP, for: runtime.readinessAttempt)
-        _ = try #require(runtime.completeCachedPulseLoad(cachedPulse))
-
-        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.claude == .ready)
-        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.pdtMCP == .missing)
-        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.readTools == .unknown)
-    }
-
-    @Test("Mark-read republish carries last known runtime readiness")
-    func markReadRepublishCarriesLastKnownRuntimeReadiness() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime(loadReadState: { PulseReadState(readFingerprints: ["pulse:v1:test"]) })
-
-        _ = runtime.launch(cachedPulse: cachedPulse)
-        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        let republished = try #require(runtime.pulseReadStateDidChange())
-        let health = try #require(healthRow(in: republished.descriptor))
-
-        #expect(runtime.lastKnownReadiness == .ready)
-        #expect(health.children.first { $0.id == "dataHealth.source" }?.detail == "Claude ready; PDT ready; read tools unknown; policy unknown")
-        #expect(health.children.first { $0.id == "dataHealth.readState" }?.detail == "1 read")
-        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.claude == .ready)
-        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.pdtMCP == .ready)
-        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.readTools == .unknown)
-    }
-
-    @Test("Mark-read republish without verified readiness keeps source facts unverified")
-    func markReadRepublishWithoutVerifiedReadinessKeepsSourceFactsUnverified() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: cachedPulse)
-        let republished = try #require(runtime.pulseReadStateDidChange())
-        let health = try #require(healthRow(in: republished.descriptor))
-
-        #expect(runtime.lastKnownReadiness == nil)
-        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.claude == .unknown)
-        #expect(runtime.currentPulse?.model.facetSnapshots.dataHealth.source.pdtMCP == .unknown)
-        #expect(health.detail == "Checking")
-        #expect(health.children.first { $0.id == "dataHealth.source" }?.detail == "Claude checking; PDT unknown; read tools unknown; policy unknown")
-    }
-
-    @Test("Mark-read republish reflects missing PDT MCP readiness")
-    func markReadRepublishReflectsMissingPDTMCPReadiness() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: cachedPulse)
-        _ = runtime.completeReadinessProbe(.missingPDTMCP, for: runtime.readinessAttempt)
-        let republished = try #require(runtime.pulseReadStateDidChange())
-        let health = try #require(runtime.currentPulse?.model.facetSnapshots.dataHealth)
-
-        #expect(republished.state == .missingPDTMCP)
-        #expect(health.source.detail == "Claude ready; PDT missing; read tools unknown; policy unknown")
-        #expect(health.status == .degraded)
-    }
-
-    @Test("Republished fetched pulse keeps live-verified source facts")
-    func republishedFetchedPulseKeepsLiveVerifiedSourceFacts() throws {
-        let fetchedPulse = try quietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: nil)
-        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        _ = runtime.completeFirstFetch(.succeeded(fetchedPulse))
-        let republished = try #require(runtime.pulseReadStateDidChange())
-
-        #expect(fetchedPulse.model.facetSnapshots.dataHealth.source.detail == "Claude ready; PDT ready; 7/7 read tools; read-only")
-        #expect(fetchedPulse.model.facetSnapshots.dataHealth.status == .healthy)
-        #expect(healthRow(in: republished.descriptor) == nil)
-        #expect(republished.descriptor.sections.first { $0.id == "freshness" }?.title == "Data")
-        #expect(republished.descriptor.sections
-            .first { $0.id == "freshness" }?
-            .rows
-            .first { $0.id == "freshness.summary" }?
-            .title == "Prices")
-    }
-
-    @Test("Launch runtime renders first fetch failure without cache as retryable setup")
-    func launchRuntimeRendersFirstFetchFailureWithoutCacheAsRetryableSetup() {
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: nil)
-        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        let failed = runtime.completeFirstFetch(.failed("scripted first fetch failed"))
-
-        #expect(runtime.currentPulse == nil)
-        #expect(failed.descriptor.statusTitle == "Could not fetch portfolio")
-        #expect(rowTitles(in: failed.descriptor) == ["Could not fetch portfolio", "Try again", "Log in with Claude"])
-    }
-
-    @Test("Launch runtime owns first fetch retry gate and progress descriptor")
-    func launchRuntimeOwnsFirstFetchRetryGateAndProgressDescriptor() throws {
+    @Test("A new user signs in, then the first fetch publishes the pulse")
+    func newUserSignsInThenFirstFetchPublishes() throws {
         let pulse = try quietFixturePulse()
         let runtime = PDTLaunchRuntime()
 
-        _ = runtime.launch(cachedPulse: nil)
-        _ = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
+        let notConnected = launched(runtime, cachedPulse: nil, status: .notConnected)
+        #expect(notConnected.state == .notConnected)
+        #expect(notConnected.effect == .none)
+
+        let signingIn = try #require(runtime.signIn())
+        #expect(signingIn.effect == .signIn)
+        #expect(signingIn.state == .connecting)
+        #expect(rowTitles(in: signingIn.descriptor).contains("Cancel sign-in"))
+
+        let connected = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+        #expect(connected.effect == .startFirstFetch)
+        #expect(connected.descriptor.statusTitle == "Fetching portfolio")
+
+        let complete = runtime.completeFirstFetch(.succeeded(pulse))
+        #expect(complete.effect == .none)
+        #expect(complete.state == .connected(.current))
+        #expect(complete.descriptor.statusTitle == pulse.descriptor.statusTitle)
+        #expect(freshnessRefreshDetailsAction(in: complete.descriptor)?.role == .fetchRetry)
+        #expect(actionRow("actions.disconnect", in: complete.descriptor)?.role == .connectionDisconnect)
+        #expect(runtime.currentPulse?.source == .fetchedSnapshot)
+    }
+
+    @Test("A pasted token connects like a sign-in")
+    func pastedTokenConnects() throws {
+        let runtime = PDTLaunchRuntime()
+        _ = launched(runtime, cachedPulse: nil, status: .notConnected)
+
+        let connecting = try #require(runtime.connect(token: PDTAPIToken("pdt_pasted")))
+        #expect(connecting.effect == .connectToken(PDTAPIToken("pdt_pasted")))
+        #expect(runtime.signIn() == nil)
+
+        let connected = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+        #expect(connected.effect == .startFirstFetch)
+    }
+
+    @Test("A returning launch with a cached pulse refreshes details in the background instead of a first fetch")
+    func returningLaunchRunsBackgroundRefresh() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+
+        _ = runtime.launch()
+        let checking = try #require(runtime.completeCachedPulseLoad(cachedPulse))
+        #expect(checking.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
+        #expect(rowTitles(in: checking.descriptor).contains("Checking PDT connection"))
+        #expect(actionRow("actions.refreshNow", in: checking.descriptor)?.role == .fetchStatus)
         #expect(runtime.retryFirstFetch() == nil)
-        _ = runtime.completeFirstFetch(.failed("scripted first fetch failed"))
+
+        let connected = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+
+        #expect(connected.effect == .startBackgroundDetailRefresh)
+        #expect(!runtime.firstFetchInFlight)
+        #expect(runtime.backgroundDetailRefreshInFlight)
+        #expect(connected.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
+        #expect(rowTitles(in: connected.descriptor).contains("Filling details"))
+        #expect(rowTitles(in: connected.descriptor).contains("Step 1/6: Base holdings"))
+    }
+
+    @Test("Stale and foreign connection outcomes are dropped")
+    func staleConnectionOutcomesAreDropped() throws {
+        let runtime = PDTLaunchRuntime()
+        let other = PDTLaunchRuntime()
+        _ = runtime.launch()
+        _ = try #require(runtime.completeCachedPulseLoad(nil))
+        let launchCheck = runtime.connectionAttempt
+        _ = runtime.completeConnection(PDTConnectionOutcome(.notConnected), for: launchCheck)
+        _ = try #require(runtime.signIn())
+
+        let stale = runtime.completeConnection(PDTConnectionOutcome(.connected), for: launchCheck)
+        let foreign = runtime.completeConnection(PDTConnectionOutcome(.connected), for: other.connectionAttempt)
+
+        #expect(stale.effect == .none)
+        #expect(stale.state == .connecting)
+        #expect(foreign.effect == .none)
+        #expect(foreign.state == .connecting)
+        #expect(!runtime.firstFetchInFlight)
+
+        let current = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+        let duplicate = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+        #expect(current.effect == .startFirstFetch)
+        #expect(duplicate.effect == .none)
+    }
+
+    @Test("Connection actions are refused while a fetch runs, and the menu does not offer them")
+    func connectionActionsRefusedWhileFetching() throws {
+        let runtime = PDTLaunchRuntime()
+        let fetching = launched(runtime, cachedPulse: nil, status: .connected)
+        #expect(fetching.effect == .startFirstFetch)
+
+        #expect(runtime.signIn() == nil)
+        #expect(runtime.connect(token: PDTAPIToken("pdt_x")) == nil)
+        #expect(runtime.checkAgain() == nil)
+        #expect(runtime.disconnect() == nil)
+        #expect(!rowRoles(in: fetching.descriptor).contains(.connectionDisconnect))
+
+        let cachedRuntime = PDTLaunchRuntime()
+        let refreshing = launched(cachedRuntime, cachedPulse: try cachedQuietFixturePulse(), status: .connected)
+        #expect(refreshing.effect == .startBackgroundDetailRefresh)
+        #expect(cachedRuntime.disconnect() == nil)
+        #expect(!rowRoles(in: refreshing.descriptor).contains(.connectionDisconnect))
+    }
+
+    @Test("A failed first fetch can be retried once at a time")
+    func firstFetchRetryStartsOneFetch() throws {
+        let pulse = try quietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+        _ = launched(runtime, cachedPulse: nil, status: .connected)
+        #expect(runtime.retryFirstFetch() == nil)
+
+        let failed = runtime.completeFirstFetch(.failed(.unavailable))
+        #expect(failed.state == .connected(.failed))
+        #expect(runtime.currentPulse == nil)
 
         let retry = try #require(runtime.retryFirstFetch())
         let duplicateRetry = runtime.retryFirstFetch()
@@ -770,417 +469,249 @@ struct PDTOnboardingRunnerTests {
         #expect(complete.descriptor.statusTitle == pulse.descriptor.statusTitle)
     }
 
-    @Test("Launch runtime ignores duplicate ready completions while first fetch is in flight")
-    func launchRuntimeIgnoresDuplicateReadyCompletionsWhileFirstFetchIsInFlight() {
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: nil)
-        let firstReady = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        let duplicateReady = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-
-        #expect(firstReady.effect == .startFirstFetch)
-        #expect(duplicateReady.effect == .none)
-        #expect(duplicateReady.descriptor.statusTitle == "Fetching portfolio")
-        #expect(runtime.firstFetchInFlight)
-    }
-
-    @Test("Launch runtime ignores stale readiness completions from earlier attempts")
-    func launchRuntimeIgnoresStaleReadinessCompletionsFromEarlierAttempts() throws {
-        let pulse = try quietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: nil)
-        let firstAttempt = runtime.readinessAttempt
-        _ = runtime.completeLoginHandoff(.succeeded)
-        let secondAttempt = runtime.readinessAttempt
-        let staleFailure = runtime.completeReadinessProbe(.failed, for: firstAttempt)
-        let ready = runtime.completeReadinessProbe(.ready, for: secondAttempt)
-        let complete = runtime.completeFirstFetch(.succeeded(pulse))
-        let laterStaleFailure = runtime.completeReadinessProbe(.missingClaudeLogin, for: firstAttempt)
-
-        #expect(staleFailure.effect == .none)
-        #expect(staleFailure.descriptor.statusTitle == "Checking Claude")
-        #expect(ready.effect == .startFirstFetch)
-        #expect(complete.descriptor.statusTitle == pulse.descriptor.statusTitle)
-        #expect(laterStaleFailure.descriptor.statusTitle == pulse.descriptor.statusTitle)
-        #expect(freshnessRefreshDetailsAction(in: laterStaleFailure.descriptor)?.role == .fetchRetry)
-        #expect(runtime.currentPulse?.source == .fetchedSnapshot)
-    }
-
-    @Test("Ready result parked behind the cached pulse load survives a stale ready from the superseded attempt")
-    func parkedReadySurvivesStaleReadyFromSupersededAttempt() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launchWhileLoadingCachedPulse()
-        let launchAttempt = runtime.readinessAttempt
-        _ = runtime.beginLoginHandoff()
-        _ = runtime.completeLoginHandoff(.succeeded)
-        let loginAttempt = runtime.readinessAttempt
-        let currentReady = runtime.completeReadinessProbe(.ready, for: loginAttempt)
-        let staleReady = runtime.completeReadinessProbe(.ready, for: launchAttempt)
-        let cached = try #require(runtime.completeCachedPulseLoad(cachedPulse))
-
-        #expect(currentReady.effect == .none)
-        #expect(currentReady.descriptor.statusTitle == "Checking Claude")
-        #expect(staleReady.effect == .none)
-        #expect(cached.effect == .startBackgroundDetailRefresh)
-        #expect(rowTitles(in: cached.descriptor).contains("Filling details"))
-        #expect(!rowTitles(in: cached.descriptor).contains("Checking Claude setup"))
-    }
-
-    @Test("Ready result parked behind an empty cached pulse load starts the first fetch")
-    func parkedReadyStartsFirstFetchWhenNoCachedPulse() {
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launchWhileLoadingCachedPulse()
-        let parked = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        let cacheMiss = runtime.completeCachedPulseLoad(nil)
-
-        #expect(parked.effect == .none)
-        #expect(cacheMiss?.effect == .startFirstFetch)
-        #expect(cacheMiss?.descriptor.statusTitle == "Fetching portfolio")
-    }
-
-    @Test("Ready from before Check again starts nothing when the cached pulse loads")
-    func readyFromBeforeCheckAgainStartsNothingWhenCachedPulseLoads() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launchWhileLoadingCachedPulse()
-        let launchAttempt = runtime.readinessAttempt
-        _ = runtime.completeReadinessProbe(.missingPDTMCP, for: launchAttempt)
-        _ = try #require(runtime.retryReadiness())
-        let staleReady = runtime.completeReadinessProbe(.ready, for: launchAttempt)
-        let missingLogin = runtime.completeReadinessProbe(.missingClaudeLogin, for: runtime.readinessAttempt)
-        let cached = try #require(runtime.completeCachedPulseLoad(cachedPulse))
-
-        #expect(staleReady.effect == .none)
-        #expect(rowTitles(in: missingLogin.descriptor).contains("Check again"))
-        #expect(cached.effect == .none)
-        #expect(!runtime.firstFetchInFlight)
-        #expect(!runtime.backgroundDetailRefreshInFlight)
-    }
-
-    @Test("Readiness result for another runtime's attempt is ignored")
-    func readinessResultForAnotherRuntimesAttemptIsIgnored() {
-        let runtime = PDTLaunchRuntime()
-        let otherRuntime = PDTLaunchRuntime()
-
-        _ = runtime.launchWhileLoadingCachedPulse()
-        _ = otherRuntime.launchWhileLoadingCachedPulse()
-        let foreignReady = runtime.completeReadinessProbe(.ready, for: otherRuntime.readinessAttempt)
-        let missingLogin = runtime.completeReadinessProbe(.missingClaudeLogin, for: runtime.readinessAttempt)
-        let cacheMiss = runtime.completeCachedPulseLoad(nil)
-
-        #expect(foreignReady.effect == .none)
-        #expect(rowTitles(in: missingLogin.descriptor).contains("Check again"))
-        #expect(cacheMiss == nil)
-        #expect(!runtime.firstFetchInFlight)
-    }
-
-    @Test("Readiness reads the background refresh setting only once a pulse exists")
-    func readinessReadsBackgroundRefreshSettingOnlyOncePulseExists() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-
-        let coldLaunch = PDTLaunchRuntime()
-        var coldReads = 0
-        _ = coldLaunch.launch(cachedPulse: nil)
-        let firstFetch = coldLaunch.completeReadinessProbe(
-            .ready,
-            for: coldLaunch.readinessAttempt,
-            allowsBackgroundDetailRefresh: { coldReads += 1; return true }()
-        )
-
-        #expect(firstFetch.effect == .startFirstFetch)
-        #expect(coldReads == 0)
-
-        let returningLaunch = PDTLaunchRuntime()
-        var returningReads = 0
-        _ = returningLaunch.launchWhileLoadingCachedPulse()
-        _ = returningLaunch.completeReadinessProbe(
-            .ready,
-            for: returningLaunch.readinessAttempt,
-            allowsBackgroundDetailRefresh: { returningReads += 1; return true }()
-        )
-        let replay = try #require(returningLaunch.completeCachedPulseLoad(
-            cachedPulse,
-            allowsBackgroundDetailRefresh: { returningReads += 1; return true }()
-        ))
-
-        #expect(replay.effect == .startBackgroundDetailRefresh)
-        #expect(returningReads == 1)
-    }
-
-    @Test("Launch runtime stale readiness completion preserves cached fetch failure copy")
-    func launchRuntimeStaleReadinessCompletionPreservesCachedFetchFailureCopy() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: cachedPulse)
-        let firstAttempt = runtime.readinessAttempt
-        _ = runtime.completeLoginHandoff(.succeeded)
-        let secondAttempt = runtime.readinessAttempt
-        _ = runtime.completeReadinessProbe(.ready, for: secondAttempt)
-        let failure = runtime.completeFirstFetch(.failed("scripted details fill failed"))
-        let staleFailure = runtime.completeReadinessProbe(.failed, for: firstAttempt)
-
-        #expect(failure.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
-        #expect(rowTitles(in: staleFailure.descriptor).contains("Details fill failed"))
-        #expect(rowTitles(in: staleFailure.descriptor).contains("Fill details again"))
-        #expect(freshnessRefreshDetailsAction(in: staleFailure.descriptor) == nil)
-    }
-
-    @Test("Launch runtime stale readiness completion preserves active setup copy")
-    func launchRuntimeStaleReadinessCompletionPreservesActiveSetupCopy() throws {
-        let cachedPulse = try cachedQuietFixturePulse()
-        let runtime = PDTLaunchRuntime()
-
-        _ = runtime.launch(cachedPulse: cachedPulse)
-        let firstAttempt = runtime.readinessAttempt
-        _ = runtime.completeLoginHandoff(.succeeded)
-        let secondAttempt = runtime.readinessAttempt
-        let missingSetup = runtime.completeReadinessProbe(.missingPDTMCP, for: secondAttempt)
-        let staleFailure = runtime.completeReadinessProbe(.failed, for: firstAttempt)
-
-        #expect(missingSetup.descriptor.statusTitle == "Add the PDT MCP server to Claude")
-        #expect(staleFailure.descriptor.statusTitle == "Add the PDT MCP server to Claude")
-        #expect(rowTitles(in: staleFailure.descriptor).contains("Check again"))
-        #expect(freshnessRefreshDetailsAction(in: staleFailure.descriptor) == nil)
-    }
-
-    @Test("Fresh setup login handoff success rechecks readiness and starts first fetch")
-    func freshSetupLoginHandoffSuccessRechecksReadinessAndStartsFirstFetch() throws {
-        let fetchedDescriptor = try quietFixtureDescriptor()
-        var readinessResults: [ClaudeReadinessProbeResult] = [.missingClaudeLogin, .ready]
-        var handoffCalls = 0
-        var fetchCalls = 0
-        var renderedStates: [ClaudeLaunchState] = []
-        var renderedTitles: [String] = []
-
-        let runner = PDTOnboardingRunner(
-            dependencies: PDTOnboardingRunnerDependencies(
-                loadCachedPulse: { nil },
-                readinessProbe: {
-                    readinessResults.removeFirst()
-                },
-                loginHandoff: {
-                    handoffCalls += 1
-                    return .succeeded
-                },
-                firstFetch: {
-                    fetchCalls += 1
-                    return .succeeded(fetchedDescriptor)
-                }
-            ),
-            render: {
-                renderedStates.append($0.state)
-                renderedTitles.append($0.descriptor.statusTitle)
-            }
-        )
-
-        runner.launch()
-        #expect(renderedStates == [.probingClaude, .missingClaudeLogin])
-        #expect(handoffCalls == 0)
-        #expect(fetchCalls == 0)
-
-        runner.loginWithClaude()
-
-        #expect(renderedStates == [
-            .probingClaude,
-            .missingClaudeLogin,
-            .openingClaude,
-            .probingClaude,
-            .fetchingPortfolio,
-            .fetchingPortfolio,
-            .fetchingPortfolio,
-        ])
-        #expect(renderedTitles.last == fetchedDescriptor.statusTitle)
-        #expect(handoffCalls == 1)
-        #expect(fetchCalls == 1)
-        #expect(readinessResults.isEmpty)
-    }
-
-    @Test("Login handoff failure shows missing Claude copy and does not fetch")
-    func loginHandoffFailureShowsMissingClaudeCopyAndDoesNotFetch() {
-        var handoffCalls = 0
-        var fetchCalls = 0
-        var renderedTitles: [String] = []
-
-        let runner = PDTOnboardingRunner(
-            dependencies: PDTOnboardingRunnerDependencies(
-                loadCachedPulse: { nil },
-                readinessProbe: { .missingClaudeLogin },
-                loginHandoff: {
-                    handoffCalls += 1
-                    return .failed(.missingBinary)
-                },
-                firstFetch: {
-                    fetchCalls += 1
-                    return .failed("unexpected fetch")
-                }
-            ),
-            render: { renderedTitles.append($0.descriptor.statusTitle) }
-        )
-
-        runner.launch()
-        runner.loginWithClaude()
-
-        #expect(renderedTitles.last == "Claude CLI not found")
-        #expect(handoffCalls == 1)
-        #expect(fetchCalls == 0)
-    }
-
-    @Test("Readiness failures map to setup states without live fetch")
-    func readinessFailuresMapToSetupStatesWithoutLiveFetch() {
-        let cases: [(ClaudeReadinessProbeResult, String)] = [
-            (.missingClaudeLogin, "Not connected"),
-            (.missingPDTMCP, "Add the PDT MCP server to Claude"),
-            (.failed, "Could not check Claude"),
+    @Test("A connection failure during the first fetch moves to that connection screen")
+    func firstFetchConnectionFailureShowsConnectionScreen() {
+        let cases: [(PDTConnectionStatus, PDTLaunchState)] = [
+            (.needsReconnect(.personalToken, .tokenRevoked), .needsReconnect(.personalToken, .tokenRevoked)),
+            (.subscriptionPaused, .subscriptionPaused),
+            (.keychainUnavailable(.missingEntitlement), .keychainUnavailable(.missingEntitlement)),
         ]
+        for (status, state) in cases {
+            let runtime = PDTLaunchRuntime()
+            _ = launched(runtime, cachedPulse: nil, status: .connected)
 
-        for (probeResult, expectedTitle) in cases {
-            var fetchCalls = 0
-            var renderedTitles: [String] = []
+            let failed = runtime.completeFirstFetch(.failed(.connection(status)))
 
-            let runner = PDTOnboardingRunner(
-                dependencies: PDTOnboardingRunnerDependencies(
-                    loadCachedPulse: { nil },
-                    readinessProbe: { probeResult },
-                    loginHandoff: { .failed(.failed) },
-                    firstFetch: {
-                        fetchCalls += 1
-                        return .failed("unexpected fetch")
-                    }
-                ),
-                render: { renderedTitles.append($0.descriptor.statusTitle) }
-            )
-
-            runner.launch()
-
-            #expect(renderedTitles == ["Checking Claude", expectedTitle])
-            #expect(fetchCalls == 0)
+            #expect(failed.state == state)
+            #expect(failed.effect == .none)
+            #expect(runtime.currentPulse == nil)
+            #expect(!runtime.firstFetchInFlight)
         }
     }
 
-    @Test("Fetch failure shows retryable fetch copy")
-    func fetchFailureShowsRetryableFetchCopy() {
-        var fetchCalls = 0
-        var renderedTitles: [String] = []
+    @Test("A fetch result with no fetch running changes nothing")
+    func strayFetchResultsAreIgnored() throws {
+        let runtime = PDTLaunchRuntime()
+        let notConnected = launched(runtime, cachedPulse: nil, status: .notConnected)
 
-        let runner = PDTOnboardingRunner(
-            dependencies: PDTOnboardingRunnerDependencies(
-                loadCachedPulse: { nil },
-                readinessProbe: { .ready },
-                loginHandoff: { .succeeded },
-                firstFetch: {
-                    fetchCalls += 1
-                    return .failed("scripted first fetch failed")
-                }
-            ),
-            render: { renderedTitles.append($0.descriptor.statusTitle) }
-        )
+        let firstFetch = runtime.completeFirstFetch(.succeeded(try quietFixturePulse()))
+        let refresh = runtime.completeBackgroundDetailRefresh(.failed(.connection(.subscriptionPaused)))
 
-        runner.launch()
-
-        #expect(renderedTitles == [
-            "Checking Claude",
-            "Fetching portfolio",
-            "Fetching portfolio",
-            "Could not fetch portfolio",
-        ])
-        #expect(fetchCalls == 1)
+        #expect(firstFetch.state == .notConnected)
+        #expect(refresh.state == .notConnected)
+        #expect(runtime.currentPulse == nil)
+        #expect(refresh.descriptor == notConnected.descriptor)
     }
 
-    @Test("Fetch retry invokes first fetch again")
-    func fetchRetryInvokesFirstFetchAgain() throws {
-        let fetchedDescriptor = try quietFixtureDescriptor()
-        var fetchResults: [PDTOnboardingFetchResult] = [
-            .failed("scripted first fetch failed"),
-            .succeeded(fetchedDescriptor),
+    @Test("Reconnect and paused keep the cached pulse visible; a later not connected hides it")
+    func connectionFailuresAndCachedPulse() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+
+        let cases: [(PDTConnectionStatus, PDTLaunchState)] = [
+            (.needsReconnect(.browserSession, .signInExpired), .needsReconnect(.browserSession, .signInExpired)),
+            (.subscriptionPaused, .subscriptionPaused),
         ]
-        var renderedTitles: [String] = []
+        for (status, state) in cases {
+            let runtime = PDTLaunchRuntime()
+            _ = launched(runtime, cachedPulse: cachedPulse, status: .connected)
 
-        let runner = PDTOnboardingRunner(
-            dependencies: PDTOnboardingRunnerDependencies(
-                loadCachedPulse: { nil },
-                readinessProbe: { .ready },
-                loginHandoff: { .succeeded },
-                firstFetch: {
-                    fetchResults.removeFirst()
-                }
-            ),
-            render: { renderedTitles.append($0.descriptor.statusTitle) }
+            let failed = runtime.completeBackgroundDetailRefresh(.failed(.connection(status)))
+
+            #expect(failed.state == state)
+            #expect(failed.descriptor.sections.first?.id == "pdtConnection")
+            #expect(failed.descriptor.sections.map(\.id).contains("pulse"))
+            #expect(runtime.currentPulse?.source == .cachedSnapshot)
+        }
+
+        let runtime = PDTLaunchRuntime()
+        let notConnected = launched(runtime, cachedPulse: cachedPulse, status: .notConnected)
+        #expect(notConnected.descriptor.sections.map(\.id) == ["pdtConnection"])
+    }
+
+    @Test("Check again from a paused subscription reruns one check, then reaches the fetch")
+    func checkAgainRerunsOneCheck() throws {
+        let runtime = PDTLaunchRuntime()
+        _ = launched(runtime, cachedPulse: nil, status: .subscriptionPaused)
+
+        let check = try #require(runtime.checkAgain())
+        #expect(check.effect == .checkConnection)
+        #expect(check.state == .checkingConnection)
+        #expect(runtime.checkAgain() == nil)
+        #expect(runtime.signIn() == nil)
+
+        let connected = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+        #expect(connected.effect == .startFirstFetch)
+    }
+
+    @Test("Cancel is offered only while signing in, and the sign-in outcome still ends the operation")
+    func cancelSignIn() throws {
+        let runtime = PDTLaunchRuntime()
+        _ = launched(runtime, cachedPulse: nil, status: .notConnected)
+        #expect(runtime.cancelSignIn() == nil)
+
+        _ = try #require(runtime.signIn())
+        let cancel = try #require(runtime.cancelSignIn())
+        #expect(cancel.effect == .cancelSignIn)
+        #expect(cancel.state == .connecting)
+
+        let ended = runtime.completeConnection(PDTConnectionOutcome(.notConnected), for: runtime.connectionAttempt)
+        #expect(ended.state == .notConnected)
+        #expect(rowTitles(in: ended.descriptor).contains("Sign in with PDT"))
+        #expect(!rowTitles(in: ended.descriptor).contains("Sign-in failed"))
+    }
+
+    @Test("A failed sign-in shows its notice until the next connection operation")
+    func signInFailureNoticeClearsOnNextOperation() throws {
+        let runtime = PDTLaunchRuntime()
+        _ = launched(runtime, cachedPulse: nil, status: .notConnected)
+        _ = try #require(runtime.signIn())
+
+        let failed = runtime.completeConnection(
+            PDTConnectionOutcome(.notConnected, notice: .signInFailed(.portBusy)),
+            for: runtime.connectionAttempt
+        )
+        #expect(rowTitles(in: failed.descriptor).contains("Sign-in failed"))
+
+        let retry = try #require(runtime.signIn())
+        #expect(!rowTitles(in: retry.descriptor).contains("Sign-in failed"))
+    }
+
+    @Test("Disconnect hides the pulse and links to the PDT revoke page")
+    func disconnectHidesPulseAndLinksRevokePage() throws {
+        let pulse = try quietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+        _ = launched(runtime, cachedPulse: nil, status: .connected)
+        _ = runtime.completeFirstFetch(.succeeded(pulse))
+
+        let disconnecting = try #require(runtime.disconnect())
+        #expect(disconnecting.effect == .disconnect)
+        #expect(disconnecting.state == .disconnecting)
+        #expect(runtime.disconnect() == nil)
+
+        let done = runtime.completeConnection(
+            PDTConnectionOutcome(.notConnected, notice: .disconnected(revokeAt: PDTOAuthEndpoints.connectedApps)),
+            for: runtime.connectionAttempt
         )
 
-        runner.launch()
-        runner.retryFirstFetch()
-
-        #expect(fetchResults.isEmpty)
-        #expect(renderedTitles.last == fetchedDescriptor.statusTitle)
+        #expect(done.state == .notConnected)
+        #expect(done.descriptor.sections.map(\.id) == ["pdtConnection"])
+        #expect(done.descriptor.sections.flatMap(\.rows).first { $0.id == "pdtConnection.revoke" }?.actionPayload
+            == PDTOAuthEndpoints.connectedApps.absoluteString)
     }
 
-    @Test("Coordinator preserves cached pulse supplied at initialization")
-    func coordinatorPreservesCachedPulseSuppliedAtInitialization() throws {
-        let cachedPulse = try quietFixtureDescriptor()
-        let coordinator = PDTOnboardingCoordinator(cachedPulse: cachedPulse)
+    @Test("Mark-read republish during the connection check keeps the check")
+    func markReadRepublishDuringCheckKeepsTheCheck() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+        _ = runtime.launch()
+        _ = try #require(runtime.completeCachedPulseLoad(cachedPulse))
 
-        let update = coordinator.launch()
+        let republished = try #require(runtime.pulseReadStateDidChange())
 
-        #expect(update.descriptor.statusTitle == cachedPulse.statusTitle)
-        #expect(rowTitles(in: update.descriptor).contains("Checking Claude setup"))
+        #expect(republished.state == .checkingConnection)
+        #expect(republished.effect == .none)
+        #expect(rowTitles(in: republished.descriptor).contains("Checking PDT connection"))
+        #expect(runtime.retryFirstFetch() == nil)
     }
 
-    @Test("Coordinator uses latest fetched pulse for later refresh states")
-    func coordinatorUsesLatestFetchedPulseForLaterRefreshStates() throws {
-        let stalePulse = try quietFixtureDescriptor()
-        let freshPulse = MenuDescriptor(
-            statusTitle: "Fresh scripted pulse",
-            sections: [
-                MenuSection(
-                    id: "pulse",
-                    title: "Pulse",
-                    rows: [MenuRow(id: "pulse.status", title: "Fresh scripted pulse")]
-                ),
-            ]
+    @Test("Background refresh reports progress over the cached pulse")
+    func backgroundRefreshReportsProgress() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+        _ = launched(runtime, cachedPulse: cachedPulse, status: .connected)
+
+        let progress = try #require(runtime.backgroundDetailRefreshProgress(
+            BackgroundDetailRefreshProgress(phase: .priceHistory, completedUnitCount: 12, totalUnitCount: 19)
+        ))
+
+        #expect(progress.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
+        #expect(rowTitles(in: progress.descriptor).contains("Step 5/6: Price history"))
+        #expect(rowTitles(in: progress.descriptor).contains("12/19 price histories checked"))
+        #expect(!rowTitles(in: progress.descriptor).contains("Details fill failed"))
+    }
+
+    @Test("A completed background refresh publishes the refreshed pulse")
+    func completedBackgroundRefreshPublishes() throws {
+        let refreshedPulse = try quietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+        _ = launched(runtime, cachedPulse: try cachedQuietFixturePulse(), status: .connected)
+
+        let completed = runtime.completeBackgroundDetailRefresh(.succeeded(refreshedPulse, outcome: .completed))
+
+        #expect(!runtime.backgroundDetailRefreshInFlight)
+        #expect(runtime.currentPulse?.source == .fetchedSnapshot)
+        #expect(completed.descriptor.statusTitle == refreshedPulse.descriptor.statusTitle)
+        #expect(freshnessRefreshDetailsAction(in: completed.descriptor)?.role == .fetchRetry)
+        #expect(!rowTitles(in: completed.descriptor).contains("Details partially filled"))
+    }
+
+    @Test("A degraded background refresh publishes the pulse and offers a retry")
+    func degradedBackgroundRefresh() throws {
+        let refreshedPulse = try quietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+        _ = launched(runtime, cachedPulse: try cachedQuietFixturePulse(), status: .connected)
+
+        let degraded = runtime.completeBackgroundDetailRefresh(.succeeded(refreshedPulse, outcome: .degraded))
+
+        #expect(runtime.currentPulse?.source == .fetchedSnapshot)
+        #expect(rowTitles(in: degraded.descriptor).contains("Details partially filled"))
+        #expect(rowTitles(in: degraded.descriptor).contains("Fill details again"))
+    }
+
+    @Test("A failed background refresh keeps the cached pulse, shows diagnostics, and retries once at a time")
+    func failedBackgroundRefresh() throws {
+        let cachedPulse = try cachedQuietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+        let diagnostic = PDTDetailRefreshFailureDiagnostic(
+            toolName: "/v1/prices/batch",
+            phase: .priceHistory,
+            attemptCount: 1,
+            category: .transientFailure,
+            argumentShape: ["symbolQuoteIds"]
         )
-        let coordinator = PDTOnboardingCoordinator(cachedPulse: stalePulse)
+        _ = launched(runtime, cachedPulse: cachedPulse, status: .connected)
 
-        _ = coordinator.completeFirstFetch(.succeeded(freshPulse))
-        let refresh = coordinator.beginFirstFetch()
+        let failed = runtime.completeBackgroundDetailRefresh(.failed(.unavailable, diagnostic: diagnostic))
+        let diagnosticRow = try #require(healthRow(in: failed.descriptor)?.children.first { $0.id == "dataHealth.diagnostic" })
 
-        #expect(refresh.descriptor.statusTitle == "Fresh scripted pulse")
-        #expect(rowTitles(in: refresh.descriptor).contains("Refreshing portfolio"))
+        #expect(runtime.currentPulse?.source == .cachedSnapshot)
+        #expect(failed.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
+        #expect(rowTitles(in: failed.descriptor).contains("Details fill failed"))
+        #expect(diagnosticRow.detail == "/v1/prices/batch; priceHistory; transientFailure")
+        #expect(actionRow("actions.disconnect", in: failed.descriptor) != nil)
+
+        let retry = try #require(runtime.retryFirstFetch())
+        #expect(retry.effect == .startBackgroundDetailRefresh)
+        #expect(runtime.retryFirstFetch() == nil)
+        #expect(rowTitles(in: retry.descriptor).contains("Filling details"))
+        #expect(!rowTitles(in: retry.descriptor).contains("Details fill failed"))
     }
 
-    @Test("Returning launch preserves cached pulse when fetch fails")
-    func returningLaunchPreservesCachedPulseWhenFetchFails() throws {
-        let cachedPulse = try quietFixtureDescriptor()
-        var fetchCalls = 0
-        var renderedDescriptors: [MenuDescriptor] = []
+    @Test("Republished fetched pulse keeps live-verified source facts")
+    func republishedFetchedPulseKeepsLiveVerifiedSourceFacts() throws {
+        let fetchedPulse = try quietFixturePulse()
+        let runtime = PDTLaunchRuntime()
+        _ = launched(runtime, cachedPulse: nil, status: .connected)
+        _ = runtime.completeFirstFetch(.succeeded(fetchedPulse))
 
-        let runner = PDTOnboardingRunner(
-            dependencies: PDTOnboardingRunnerDependencies(
-                loadCachedPulse: { cachedPulse },
-                readinessProbe: { .ready },
-                loginHandoff: { .succeeded },
-                firstFetch: {
-                    fetchCalls += 1
-                    return .failed("scripted details fill failed")
-                }
-            ),
-            render: { renderedDescriptors.append($0.descriptor) }
-        )
+        let republished = try #require(runtime.pulseReadStateDidChange())
 
-        runner.launch()
-
-        let finalDescriptor = try #require(renderedDescriptors.last)
-        #expect(finalDescriptor.statusTitle == cachedPulse.statusTitle)
-        #expect(rowTitles(in: finalDescriptor).contains("Details fill failed"))
-        #expect(rowTitles(in: finalDescriptor).contains("Fill details again"))
-        #expect(!rowTitles(in: finalDescriptor).contains("Log in with Claude"))
-        #expect(fetchCalls == 1)
+        #expect(fetchedPulse.model.facetSnapshots.dataHealth.status == .healthy)
+        #expect(healthRow(in: republished.descriptor) == nil)
+        #expect(republished.descriptor.sections.first { $0.id == "freshness" }?.title == "Data")
     }
+}
+
+/// Runs launch through the cached pulse load and the connection check.
+@discardableResult
+private func launched(
+    _ runtime: PDTLaunchRuntime,
+    cachedPulse: PulseLifecycleResult?,
+    status: PDTConnectionStatus
+) -> PDTOnboardingUpdate {
+    _ = runtime.launch()
+    _ = runtime.completeCachedPulseLoad(cachedPulse)
+    return runtime.completeConnection(PDTConnectionOutcome(status), for: runtime.connectionAttempt)
 }
 
 @Suite("Launch surface")

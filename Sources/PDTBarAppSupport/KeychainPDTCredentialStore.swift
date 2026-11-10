@@ -65,7 +65,7 @@ public struct KeychainPDTCredentialStore: PDTCredentialStore {
         case errSecItemNotFound:
             return .disconnected
         default:
-            throw PDTCredentialStoreError.keychain(status: status)
+            throw Self.failure(status)
         }
     }
 
@@ -73,7 +73,7 @@ public struct KeychainPDTCredentialStore: PDTCredentialStore {
         guard state != .disconnected else {
             let status = secItem.delete(Self.itemQuery as CFDictionary)
             guard status == errSecSuccess || status == errSecItemNotFound else {
-                throw PDTCredentialStoreError.keychain(status: status)
+                throw Self.failure(status)
             }
             return
         }
@@ -88,11 +88,15 @@ public struct KeychainPDTCredentialStore: PDTCredentialStore {
             item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             let status = secItem.add(item as CFDictionary)
             guard status == errSecSuccess else {
-                throw PDTCredentialStoreError.keychain(status: status)
+                throw Self.failure(status)
             }
         default:
-            throw PDTCredentialStoreError.keychain(status: update)
+            throw Self.failure(update)
         }
+    }
+
+    private static func failure(_ status: OSStatus) -> PDTCredentialStoreError {
+        status == errSecMissingEntitlement ? .missingKeychainEntitlement : .keychain(status: status)
     }
 
     private static var itemQuery: [String: Any] {

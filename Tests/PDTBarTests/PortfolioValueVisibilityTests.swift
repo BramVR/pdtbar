@@ -236,11 +236,11 @@ struct PortfolioValueVisibilityTests {
 
     @Test("Trusted setup descriptors preserve nonfinancial details when values are hidden")
     func trustedSetupDescriptorsPreserveNonfinancialDetails() throws {
-        let descriptor = ClaudeLaunchFlow.descriptor(for: .probingClaude)
+        let descriptor = PDTLaunchMenu.descriptor(for: .checkingConnection)
         let hidden = descriptor.applying(
             settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
         )
-        let setupRow = try #require(row(withID: "claudeSetup.probing", in: hidden))
+        let setupRow = try #require(row(withID: "pdtConnection.status", in: hidden))
 
         #expect(setupRow.detail == "No prompts opened")
     }

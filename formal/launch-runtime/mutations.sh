@@ -16,18 +16,20 @@ while read -r name expect drop; do
   printf '%-48s expect %-24s got %s\n' "$name" "$expect" "$got"
 done <<'LIST'
 # Mutations set                                  invariant expected to catch it  dropped for this row
-# Since #268 a fetch-retry click and a republish during the setup check are only
-# reachable through the old mark-read path, so those rows add markReadPublishes.
+# The menu never offers an action while work runs, so the retry guard is only reachable
+# through a menu that does; that row pairs the guard break with a menu break. Sign-in,
+# Check again, and Disconnect also check the state, and no state that offers them has
+# work behind it, so their idle guard is pinned by LaunchFlowTests, not here.
+"fetchingOffersSignIn"                           OfferedActionsAreLive
+"fetchingOffersDisconnect"                       OfferedActionsAreLive
+"fetchingOffersRefresh"                          OfferedActionsAreLive
+"fetchingOffersRefresh","noRetryGuard"           OneWorkAtATime           OfferedActionsAreLive
 "ignoreCachedPulse"                              NoFullFetchOverCache
-"noCacheParking"                                 NoFullFetchOverCache
+"checkDuringCacheLoad"                           OneWorkAtATime
 "keepFirstFetchFlag"                             FirstFetchFlagMatchesWork
-"noProbeFailedLogin"                             NeverStranded
-"noAttemptCheck"                                 SetupReflectsLatestProbe
-"parkStaleProbe"                                 ProbeResultNotLost
-"noRetryGuard","noAppDedupe","markReadPublishes" OneFetchAtATime          BackgroundFlagMatchesWork
-"invertCacheLoadRefreshCheck"                    FetchingMenuTellsTruth
-"probingOffersRefresh"                           RefreshOfferIsLive
-"markReadPublishes"                              BackgroundFlagMatchesWork
-"markReadPublishes","republishSkipsCheck"        CheckBeforeWork          BackgroundFlagMatchesWork
+"failureStaysFetching"                           FetchingMenuTellsTruth
+"reconnectHidesPulse"                            ProblemKeepsPulseVisible
+"notConnectedShowsPulse"                         NotConnectedShowsSetup
+"connectionScreenOffersRefresh"                  OfferedActionsAreLive
 LIST
 rm -f .mutation.cfg .mutation.cfg.bak

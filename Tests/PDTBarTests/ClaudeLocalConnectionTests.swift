@@ -1051,3 +1051,20 @@ private final class DelayRecorder: @unchecked Sendable {
         lock.unlock()
     }
 }
+
+@Suite("Claude auth status parser")
+struct ClaudeAuthStatusParserTests {
+    @Test("Claude auth status parser reads logged-in JSON from stdout")
+    func claudeAuthStatusParserReadsLoggedInJSONFromStdout() {
+        let noisyStdout = """
+        notice
+        {"loggedIn":true,"authMethod":"oauth"}
+        """
+
+        #expect(ClaudeAuthStatusParser.isLoggedIn(stdout: #"{"loggedIn":true}"#))
+        #expect(ClaudeAuthStatusParser.isLoggedIn(stdout: noisyStdout))
+        #expect(!ClaudeAuthStatusParser.isLoggedIn(stdout: #"{"loggedIn":false}"#))
+        #expect(!ClaudeAuthStatusParser.isLoggedIn(stdout: "not json"))
+        #expect(ClaudeAuthStatusParser.loggedInStatus(stdout: "not json") == nil)
+    }
+}

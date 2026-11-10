@@ -1,59 +1,61 @@
 ---
-summary: "Claude-first product launch, setup states, first fetch, cached pulse, and status icon semantics."
+summary: "Product launch over the PDT connection: connection states, sign-in, pasted token, disconnect, first fetch, cached pulse, and status icon semantics."
 read_when:
-  - Changing no-argument launch or setup/login behavior
+  - Changing no-argument launch, PDT sign-in, pasted token, reconnect, or disconnect behavior
   - Changing first fetch, cached pulse, or retry behavior
   - Changing status icon semantics
 ---
 
-# Claude Login Workflow
+# PDT Connection Workflow
 
-This is the current Claude-first product flow. Older PRD/planning text is historical when it conflicts with this file, the Swift code, or closed child issues #44-#53 and #64.
-
-> **Superseded by [ADR-0002](adr/0002-pdt-public-rest-api.md).** PDTBar is moving to direct read-only PDT REST access with browser sign-in (main) or a pasted read-only token (fallback). This file stays accurate for the shipped app until #248 switches onboarding and #250 deletes the Claude path. Do not extend the Claude path with new features.
+The shipped launch flow since #248. It replaced the Claude CLI + PDT MCP flow this file used to describe (the file keeps its name so links stay valid; #250 removes the remaining Claude code). Decisions: [ADR-0002](adr/0002-pdt-public-rest-api.md). Bram signed off on the auth path and token storage on 2026-11-10 ([#243](https://github.com/BramVR/pdtbar/issues/243)).
 
 ## Product launch
 
-No-argument `pdtbar` launch is the user path. It uses isolated app support when `--app-support-dir` or `PDTBAR_APP_SUPPORT_DIR` is supplied for smoke tests; otherwise it uses normal app state. Fixture mode is explicit only:
+No-argument `pdtbar` launch is the user path. It uses isolated app support when `--app-support-dir` or `PDTBAR_APP_SUPPORT_DIR` is supplied; otherwise it uses normal app state. Fixture mode is explicit only:
 
 ```bash
 pdtbar --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/manual-snapshot
 ```
 
-On product launch the app enters `probingClaude` before visible login UI or cached snapshot decode. Scripted smoke files can drive this state in isolated test runs; otherwise the probe checks whether the existing signed-in Claude CLI user can reach the configured PDT MCP server through `claude mcp list`. It must not open surprise prompts or fall back to fixtures. Product Claude calls scrub inherited old scripted handoff env before using any configured Claude binary; scripted login binaries are supported only through the explicit smoke/debug launch option documented in [`smoke-checks.md`](smoke-checks.md).
+Launch shows `Checking PDT connection`, loads the cached pulse, and only then reads the stored connection. Reading the store can wait on another PDTBar process's token refresh (the store lock), so it runs off the main queue; the cached pulse is already on screen while it waits. Because the check starts after the cached load, a connected result always knows whether a pulse is shown: a returning user gets a background refresh, never a full first fetch.
 
-## Setup states
+Launch never opens a browser, a Keychain prompt, or any other prompt. It never spawns the Claude CLI, `mcporter`, or any other process, and never falls back to fixtures.
 
-- Ready Claude/PDT setup: skip logged-out UI and start first fetch.
-- Missing Claude login: show `Not connected`, `Log in with Claude`, and `Check again`.
-- Missing PDT MCP: show `Add the PDT MCP server to Claude` and `Check again`.
-- Missing Claude CLI or failed login: show the matching CodexBar-style login failure (`Claude CLI not found`, `Claude login timed out`, `Claude login failed`, or `Could not start claude auth login`) plus retryable `Log in with Claude`.
-- Probe/fetch failure: keep setup or the previous good pulse visible; show retry copy in the menu.
+Smokes pass `--scripted-pdt <file>` together with an isolated `--app-support-dir`: an in-memory credential (or the Keychain store over a fake SecItem API), a scripted sign-in, and scripted API replies (`ScriptedPDTConnection`). The flag is refused without an isolated app support directory. For dev live proof, `--pdt-credential-file <file>` runs the same path over the mode-0600 file store `pdtbar-dev pdt-*` uses (see [`smoke-checks.md`](smoke-checks.md)); it also needs an isolated app support directory.
 
-`Log in with Claude` is user-initiated. It runs `claude auth login` through the same PTY-style flow CodexBar uses for Claude Code auth, then waits for CLI login success. `PDTBAR_CLAUDE_BIN` may point at a configured Claude executable, but old scripted handoff env is removed from the product launch environment. Generic providers, Codex login, raw MCP JSON, and mcporter are not product login paths. PDT browser sign-in and token paste arrive with ADR-0002, not as extensions of this Claude flow.
-After a successful login, PDTBar re-runs Claude/PDT readiness before deciding whether to fetch, show signed-out setup, show missing PDT MCP setup, or show probe failure. A failed login shows the matching retryable login failure state.
+## Connection states
+
+`PDTLaunchState` (`Sources/PDTBarCore/LaunchRuntime.swift`) is what the menu says. Each state lists its rows:
+
+- `checkingConnection`: `Checking PDT connection`. Also shown while a pasted token is saved.
+- `notConnected`: `Not connected`, `Sign in with PDT`, `Use a PDT token…`. A cached pulse is not shown.
+- `connecting`: `Signing in with PDT` (approve in the browser) and `Cancel sign-in`.
+- `connected(fetching | failed | current)`: the portfolio sync. `failed` without a pulse shows `Could not fetch portfolio`, `Try again`, `Disconnect from PDT`. With a pulse, `Disconnect from PDT` joins the Actions section.
+- `needsReconnect(kind, cause)`: `Reconnect to PDT` with the cause (sign-in expired, token expired, access revoked in PDT, no longer accepted, cannot read the portfolio), then `Sign in with PDT`, `Use a PDT token…`, `Check again`, `Disconnect from PDT`.
+- `subscriptionPaused`: `PDT access paused` (`403 API_ACCESS_PAUSED`). The token stays stored. `Check again` re-reads the store and fetches again; the fetch decides whether access is back.
+- `keychainUnavailable(missingEntitlement | failed)`: `Keychain unavailable` when this build is not signed with the keychain access entitlement (`errSecMissingEntitlement`, -34018), with `Check again`. PDTBar never retries against the login keychain.
+- `disconnecting`: `Disconnecting from PDT`.
+
+Every state except `notConnected` keeps a cached pulse visible, with the connection rows above it and `Refresh now` shown but not clickable until the connection is back.
+
+Connection actions (`Sign in`, `Use a token`, `Check again`, `Disconnect`) and fetch retries never overlap: the runtime refuses each one while the cached load, another connection operation, a first fetch, or a background refresh runs, and the menu does not offer them then. A stale result (an older connection attempt) is ignored. See `formal/launch-runtime/`.
+
+## Sign-in, token, and disconnect
+
+- `Sign in with PDT` runs `PDTBrowserSignIn` (S256 PKCE, loopback `127.0.0.1:47245`) and stores the session through `PDTConnection.signedIn` before reporting connected. A failure keeps the previous state and adds a `Sign-in failed` row: the port is busy (use a token), the browser could not open, PDT declined, or it timed out. `Cancel sign-in` stops the listener; the menu returns to the stored state.
+- `Use a PDT token…` opens a secure text field. The pasted value is parsed by `PDTAPIToken.personal(pasted:)`, stored, and never shown or logged. It is not verified before storing; the first fetch answers.
+- `Disconnect from PDT` deletes the stored credential and adds `Remove PDTBar in PDT…`, which opens PDT's connected apps page (browser sign-in) or Integrations (pasted token). PDT has no revoke API for app tokens.
+
+`PDTAppConnection` (`Sources/PDTBarAppSupport/PDTAppConnection.swift`) owns all of this, plus the API client, over one `PDTConnection` per process. It turns store and API errors into connection states: a rejected refresh or token is already stored as `needsReconnect` by `PDTConnection`, `API_ACCESS_PAUSED` becomes `subscriptionPaused`, `INSUFFICIENT_SCOPE` becomes reconnect with missing read access, and network, `429`, `5xx`, and decode failures stay connected and retryable.
 
 ## First fetch and returning launch
 
-The first fetch calls only required v1 PDT read tools through the Claude/PDT MCP connector. Scripted smoke runs use an isolated scripted connector file; real launches use the logged-in Claude CLI account and PDT MCP server.
+The first fetch reads holdings only (`PDTAPIDataSource` with `.firstFetch`) through `PDTCoalescedFirstPortfolioFetch`. The snapshot is written to `latest-portfolio-snapshot.json`, the pressure engine runs, and only then is the pulse published. A failed holdings request writes no snapshot and publishes nothing. Right after a successful first fetch, the background detail refresh (`PDTAPIBackgroundDetailRefresh`) fills allocation, X-ray, income, and price history and commits once at the end.
 
-- `pdt-get-portfolio-holdings`
-- `pdt-get-portfolio-distributions`
-- `pdt-list-x-ray-holdings`
-- `pdt-list-calendar-events`
-- `pdt-list-dividends`
-- `pdt-list-symbol-prices`
-- `pdt-get-symbol-quote`
+Returning launches show the previous snapshot while the connection check runs, then refresh details in the background. Progress rows (`Filling details`, `Step n/6`) keep the pulse visible. Optional phase failures degrade the refresh (`Details partially filled`, `Fill details again`) and keep last-good facets; a failed base holdings request keeps the pulse and shows `Details fill failed`, or moves to the matching connection state when the connection was the cause. A token that dies during an optional phase shows as a degraded refresh; the next refresh hits holdings first and shows `Reconnect to PDT`.
 
-Complete data normalizes into `PortfolioSnapshot`, writes `latest-portfolio-snapshot.json`, runs the pressure engine, and then publishes the pulse. Missing required read tools or malformed/partial data prevents pulse publication.
-When a first fetch requests distributions, X-ray holdings, calendar events, dividends, quote metadata, or price series, failure of one of those optional facets preserves the holdings-backed snapshot, marks detail fill degraded, and stores a redacted diagnostic for Data Health. Unfetched X-ray data stays `nil`; distributions, calendar events, dividends, quote metadata, and price series use their empty values and rely on the degraded outcome plus diagnostic to distinguish failure from a genuine empty result. A Claude/PDT setup outage skips later optional calls instead of repeating the same unavailable request.
-Real Claude CLI first-fetch runs are bounded for launch responsiveness: they fetch portfolio holdings first and publish a minimal pulse quickly, then start a background refresh for distributions, X-ray holdings, calendar events, and dividends. Slow per-holding quote/price enrichment is skipped during onboarding. When income details are filled, quote lookups are limited to symbol IDs needed by calendar events instead of every open holding. Price-history detail fill is deferred, concurrency-limited, and timeout-bounded so the menu can report degraded detail fill instead of waiting silently. The manual live smoke still proves all seven required read tools are reachable.
-
-Returning launches load the previous real snapshot asynchronously after the probing state is installed, then keep that pulse visible while a fresh fetch runs. After a pulse has been published, background detail fill shows active phase progress such as `Filling details`, `Step 5/5: Price history`, the current Claude/PDT substep, and per-holding price-history counts while keeping the pulse visible. Active refresh rows say cached data is visible and include the last snapshot date when known; the status tooltip/accessibility copy says PDTBar is syncing and names the current substep. Completed detail phases are committed as they finish. Optional phase failures degrade the refresh instead of discarding successful details; the menu shows `Details partially filled` plus `Fill details again`, and the local state stores only redacted last-failure diagnostics with tool name, phase, attempt count, category, and argument keys. Because every retry is another full Claude CLI run, retries are reserved for transient failures and get a short backoff; deterministic decode and missing-auth failures fail fast, an observed Claude/PDT auth or setup outage skips the remaining detail phases, and the income quote scan is deadline-bounded like price-history detail fill. A readiness probe that merely times out reports a retryable probe failure instead of a logged-out state. A full background failure still preserves the previous pulse and shows `Details fill failed` plus `Fill details again`. First-fetch failures with no usable pulse still show `Could not fetch portfolio`, `Try again`, and the Claude login action.
-
-The published pulse includes a `Data` section. In the healthy/current case it stays quiet with one `Prices` row and no extra facts; when prices are stale, partial, or unknown, the overview carries the short trust signal and `Prices` expands only to useful stale/oldest/detail-fill facts. When source, cache, detail-fill, freshness, or diagnostics need attention, a `Data health` row expands to Claude/PDT source readiness, required read-tool availability, read-only policy, cache/source state, detail-fill progress or outcome, read-state count, and copyable redacted diagnostics when a safe diagnostic exists.
-
-Data health source facts are truthful about how the pulse was built. A cached pulse alone reports unverified source facts (`Claude unknown; PDT unknown; read tools unknown; policy unknown`); a successful readiness probe upgrades Claude/PDT readiness on republished cached pulses (for example after `Mark as read`), and only a live fetch through the connector claims verified read tools and read-only policy. Cached-pulse freshness is evaluated against the current day, not only the snapshot's own asOf, so a snapshot from a prior day shows stale holdings (with the existing one-business-day grace, so weekends do not spuriously go stale) instead of staying `Fresh` forever. There is no automatic background re-sync; a stale cached pulse stays visible until the user refreshes or relaunches.
+Data Health still describes source facts in Claude/PDT MCP terms until #249 rewrites them. Cached pulses report unverified source facts; only a live fetch claims verified facts.
 
 ## Status icon
 
@@ -64,12 +66,10 @@ The menu bar always shows the Concentration Stack icon. It is a stable portfolio
 - filled bars: ranked attention item count, capped at three
 - zero attention: no filled bars
 - no separate round notification dot
-- stale/fetch-failed/setup states: tooltip/menu copy and optional whole-icon dimming only
+- connection, stale, and fetch-failed states: tooltip/menu copy and whole-icon dimming only
 
-Full status copy remains in tooltip, accessibility label, and the first Pulse menu row.
+Full status copy remains in tooltip, accessibility label, and the first menu row.
 
 ## Redaction and proof
 
-Public docs/proof may include command names, selectors, row text, counts, durations, scenario booleans, fixture names, and redacted status. They must not include private portfolio data, credentials, private endpoints, raw live payloads, account identifiers, holding names/values from live data, or non-public model IDs.
-
-Use `claude -p` only for optional manual PDT reachability proof. Do not use `claude --bare`; bare mode does not prove the signed-in Claude CLI MCP setup. The smoke defaults to the public `opus` alias and lets local users override via `--model` or `PDTBAR_CLAUDE_MODEL`.
+Public docs and proof may include command names, row text, counts, durations, scenario booleans, fixture names, and redacted status. They must not include private portfolio data, tokens, account identifiers, raw live payloads, or holding names and values from live data. Tests and smokes never use real credentials, the real Keychain, or live PDT portfolio reads.

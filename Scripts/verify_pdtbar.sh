@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Prompt-free PDTBar instance for the verify-pdtbar skill.
-# launch/doctor/stop run fixture mode only: they never call Claude, PDT, Keychain, Accessibility, or Screen Recording.
+# launch runs fixture mode; launch-scripted runs the product path over a --scripted-pdt script (in-memory
+# credential, scripted sign-in, scripted API replies). Neither calls PDT, the Keychain, Accessibility, or Screen Recording.
 # can-capture/capture are opt-in visual proof: they only preflight Screen Recording and use Accessibility when already granted.
 set -euo pipefail
 
@@ -13,6 +14,7 @@ usage() {
   cat >&2 <<'EOF'
 usage:
   Scripts/verify_pdtbar.sh launch [fixture.json]   # prints run dir; default fixture quiet-no-pressure
+  Scripts/verify_pdtbar.sh launch-scripted <script.json> [seed-snapshot.json]   # product path over a ScriptedPDTConnection
   Scripts/verify_pdtbar.sh doctor <run-dir>
   Scripts/verify_pdtbar.sh stop <run-dir>
   Scripts/verify_pdtbar.sh can-capture                                  # exit 0 yes, 3 no (with reason)
@@ -40,8 +42,10 @@ suite_for() { printf 'com.pdtbar.verify.%s\n' "$(basename "$1")"; }
 pid_command() { ps -ww -o command= -p "$1" 2>/dev/null || true; }
 
 ours() {
-  local pid="$1" run="$2"
-  [[ "$(pid_command "${pid}")" == "${APP} --fixture "*" --snapshot-dir ${run}/snapshots" ]]
+  local pid="$1" run="$2" command
+  command="$(pid_command "${pid}")"
+  [[ "${command}" == "${APP} --fixture "*" --snapshot-dir ${run}/snapshots" \
+    || "${command}" == "${APP} --app-support-dir ${run}/app-support --scripted-pdt ${run}/scripted-pdt.json" ]]
 }
 
 launch() {
@@ -60,9 +64,7 @@ launch() {
   printf '%s\n' "${fixture}" > "${run}/fixture"
   stat -f '%i %m' "${APP}" > "${run}/binary"
 
-  env -u PDTBAR_CLAUDE_READINESS -u PDTBAR_CLAUDE_BIN \
-    PDTBAR_DISABLE_REAL_CLAUDE=1 \
-    PDTBAR_APP_SUPPORT_DIR="${run}/app-support" \
+  PDTBAR_APP_SUPPORT_DIR="${run}/app-support" \
     PDTBAR_USER_DEFAULTS_SUITE="${suite}" \
     "${APP}" --fixture "${fixture}" --snapshot-dir "${run}/snapshots" \
     > "${run}/app.log" 2>&1 &
@@ -70,6 +72,45 @@ launch() {
 
   for _ in {1..50}; do
     if [[ -f "${run}/snapshots/latest-portfolio-snapshot.json" ]] && kill -0 "$(cat "${run}/pid")" 2>/dev/null; then
+      printf 'ready: %s\n' "${run}"
+      return 0
+    fi
+    sleep 0.2
+  done
+  printf 'not ready after 10s; app.log:\n' >&2
+  cat "${run}/app.log" >&2 || true
+  stop "${run}" >&2 || true
+  exit 1
+}
+
+# The product path over a script. The copy's eventLog is <run>/events.log; ready means the
+# first connection check ran and its outcome had a moment to render.
+launch_scripted() {
+  local script="${1:-}" seed="${2:-}"
+  [[ -x "${APP}" ]] || fail "missing ${APP}; run: swift build --product pdtbar"
+  [[ -f "${script}" ]] || fail "missing script ${script}"
+  [[ -z "${seed}" || -f "${seed}" ]] || fail "missing seed snapshot ${seed}"
+
+  mkdir -p "${RUNS_DIR}"
+  local run suite
+  run="$(cd "${RUNS_DIR}" && pwd -P)/$(date +%Y%m%d-%H%M%S)-$$"
+  mkdir -p "${run}/snapshots" "${run}/app-support/pdtbar/state" "${run}/evidence"
+  suite="$(suite_for "${run}")"
+  printf '%s\n' "${suite}" > "${run}/defaults-suite"
+  stat -f '%i %m' "${APP}" > "${run}/binary"
+  python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); d["eventLog"]=sys.argv[3]; json.dump(d, open(sys.argv[2], "w"))' \
+    "${script}" "${run}/scripted-pdt.json" "${run}/events.log"
+  printf 'scripted: %s\n' "${script}" > "${run}/fixture"
+  [[ -z "${seed}" ]] || cp "${seed}" "${run}/app-support/pdtbar/state/latest-portfolio-snapshot.json"
+
+  PDTBAR_USER_DEFAULTS_SUITE="${suite}" \
+    "${APP}" --app-support-dir "${run}/app-support" --scripted-pdt "${run}/scripted-pdt.json" \
+    > "${run}/app.log" 2>&1 &
+  printf '%s\n' "$!" > "${run}/pid"
+
+  for _ in {1..50}; do
+    if grep -qx check "${run}/events.log" 2>/dev/null && kill -0 "$(cat "${run}/pid")" 2>/dev/null; then
+      sleep 1.5
       printf 'ready: %s\n' "${run}"
       return 0
     fi
@@ -95,8 +136,13 @@ doctor() {
   [[ -z "${newest}" ]] || fail "stale build: ${newest} is newer than ${APP}; rebuild and relaunch"
   [[ "$(stat -f '%i %m' "${APP}")" == "$(cat "${run}/binary")" ]] || fail "binary rebuilt after launch; running process has old code; stop and relaunch"
   printf 'build: fresh (binary unchanged since launch; no Sources/*.swift newer)\n'
-  [[ -s "${run}/snapshots/latest-portfolio-snapshot.json" ]] || fail "fixture snapshot not written"
-  printf 'snapshot: %s\n' "${run}/snapshots/latest-portfolio-snapshot.json"
+  if [[ -f "${run}/scripted-pdt.json" ]]; then
+    grep -qx check "${run}/events.log" 2>/dev/null || fail "scripted run never checked the connection"
+    printf 'events: %s\n' "$(tr '\n' ' ' < "${run}/events.log")"
+  else
+    [[ -s "${run}/snapshots/latest-portfolio-snapshot.json" ]] || fail "fixture snapshot not written"
+    printf 'snapshot: %s\n' "${run}/snapshots/latest-portfolio-snapshot.json"
+  fi
   printf 'fixture: %s\n' "$(cat "${run}/fixture")"
   printf 'other pdtbar processes (not ours, do not touch):\n'
   ps -axo pid=,comm= \
@@ -159,6 +205,7 @@ capture() {
 
 case "${1:-}" in
   launch) shift; launch "$@" ;;
+  launch-scripted) [[ $# -ge 2 && $# -le 3 ]] || usage; shift; launch_scripted "$@" ;;
   doctor) [[ $# -eq 2 ]] || usage; doctor "${2%/}" ;;
   stop) [[ $# -eq 2 ]] || usage; stop "${2%/}" ;;
   can-capture) [[ $# -eq 1 ]] || usage; can_capture ;;

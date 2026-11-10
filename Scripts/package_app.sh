@@ -103,11 +103,39 @@ elif ! security find-identity -p codesigning -v 2>/dev/null | grep -F "${SIGN_ID
   SIGN_IDENTITY="-"
 fi
 
+# The data protection keychain that holds the PDT credential (ADR-0002) needs a
+# keychain access group, a restricted entitlement that only a Developer ID
+# provisioning profile authorizes. Without it the app reports
+# errSecMissingEntitlement (-34018) instead of storing the credential.
+PROFILE="${PDTBAR_PROVISIONING_PROFILE:-}"
+ENTITLEMENTS=""
+if [[ -n "${PROFILE}" ]]; then
+  [[ "${SIGN_IDENTITY}" != "-" ]] || fail "PDTBAR_PROVISIONING_PROFILE needs a Developer ID PDTBAR_APP_IDENTITY."
+  [[ -f "${PROFILE}" ]] || fail "PDTBAR_PROVISIONING_PROFILE not found: ${PROFILE}"
+  TEAM_ID="${PDTBAR_TEAM_ID:-}"
+  if [[ -z "${TEAM_ID}" && "${SIGN_IDENTITY}" =~ \(([A-Z0-9]{10})\)$ ]]; then
+    TEAM_ID="${BASH_REMATCH[1]}"
+  fi
+  [[ -n "${TEAM_ID}" ]] || fail "Set PDTBAR_TEAM_ID; it could not be read from PDTBAR_APP_IDENTITY."
+  cp "${PROFILE}" "${APP_STAGE}/Contents/embedded.provisionprofile"
+  ENTITLEMENTS="${ROOT_DIR}/.build/package/${APP_NAME}.entitlements"
+  sed -e "s/__TEAM_ID__/${TEAM_ID}/g" -e "s/__BUNDLE_ID__/${BUNDLE_IDENTIFIER}/g" \
+    "${ROOT_DIR}/Scripts/PDTBar.entitlements.template" > "${ENTITLEMENTS}"
+  plutil -lint "${ENTITLEMENTS}" >/dev/null
+elif [[ "${PDTBAR_REQUIRE_KEYCHAIN_ENTITLEMENT:-0}" == "1" ]]; then
+  fail "PDTBAR_PROVISIONING_PROFILE is required: without it the app cannot store the PDT connection."
+else
+  log "WARN: No PDTBAR_PROVISIONING_PROFILE; this build cannot use the Keychain and shows 'Keychain unavailable'."
+fi
+
 if command -v codesign >/dev/null 2>&1; then
   log "==> Signing ${APP_NAME}.app"
   CODESIGN_ARGS=(--force --sign "${SIGN_IDENTITY}")
   if [[ "${SIGN_IDENTITY}" != "-" ]]; then
     CODESIGN_ARGS+=(--timestamp --options runtime)
+  fi
+  if [[ -n "${ENTITLEMENTS}" ]]; then
+    CODESIGN_ARGS+=(--entitlements "${ENTITLEMENTS}")
   fi
   codesign "${CODESIGN_ARGS[@]}" "${APP_STAGE}" >/dev/null
 fi

@@ -2,7 +2,7 @@
 summary: "Smoke checks, proof commands, redaction rules, and live/scripted validation boundaries."
 read_when:
   - Updating smoke tests or proof artifacts
-  - Changing launch, login, fetch, or status-icon behavior
+  - Changing launch, PDT connection, fetch, or status-icon behavior
   - Preparing PR proof for UI/runtime changes
 ---
 
@@ -11,12 +11,11 @@ read_when:
 ## Current setup assumptions
 
 - Product launch is no-argument `pdtbar`; fixture mode is explicit `--fixture`.
-- Claude is the only setup/login path. PDTBar uses the existing signed-in Claude CLI user and the configured PDT MCP server.
-- Scripted smokes use isolated app-support and snapshot directories. They may inject fixture env vars only as sentinels to prove the no-argument path does not enter fixture mode.
-- Scripted login handoff fakes use `pdtbar --scripted-claude-login-bin <path>` from smoke/debug tooling only. Product Claude calls scrub inherited old `PDTBAR_CLAUDE_HANDOFF_*` env before using a configured Claude binary.
-- Manual Claude reachability proof uses normal `claude -p`; `claude --bare` is refused because it does not prove the signed-in Claude CLI MCP setup.
-- Live `mcporter` smoke is optional research/dev proof, not the product runtime path.
-- Missing macOS Accessibility/Screen Recording permission, Claude CLI, sign-in, model access, or PDT MCP setup should skip with a setup-required detail unless the smoke is specifically testing that failure.
+- The PDT REST API connection is the only setup path: Sign in with PDT (browser) or a pasted PDT token, stored in the Keychain. Launch and the menu never run the Claude CLI or an MCP server.
+- Scripted app smokes launch `pdtbar --app-support-dir <isolated> --scripted-pdt <file>`. The file is a `ScriptedPDTConnection` JSON: stored connection (`notConnected`, `browserSession`, `personalToken`, `signInExpired`, `tokenRevoked`), an optional `keychainStatus` that drives the real Keychain store over a fake `SecItem` API, a scripted sign-in outcome, PDT API replies in request order, and an `eventLog` that records `check`, `sign-in`, `token`, `disconnect`, and `request <path>`. The app refuses `--scripted-pdt` without `--app-support-dir`.
+- Scripted smokes inject fixture env vars only as sentinels and put a fake `claude` and `mcporter` first on `PATH`; they fail if the fixture sentinel is written or either fake runs.
+- Manual Claude reachability proof (`manual-claude-pdt`) and live `mcporter` smoke (`live-pdt`) exercise the legacy MCP path only (#250 removes it); neither is the product runtime path.
+- Missing macOS Accessibility/Screen Recording permission should skip with a setup-required detail unless the smoke is specifically testing that failure.
 
 ## Redaction rules
 
@@ -49,7 +48,7 @@ swift run pdtbar-smoke scripted-pdt-connector
 swift run pdtbar-smoke scripted-api-client
 swift run pdtbar-smoke scripted-api-snapshot
 swift run pdtbar-smoke scripted-api-auth
-swift run pdtbar-smoke scripted-login-handoff
+swift run pdtbar-smoke scripted-sign-in
 swift run pdtbar-smoke scripted-setup-retry
 swift run pdtbar-smoke scripted-pulse-mark-read
 swift run pdtbar-smoke copy-holding-identifier-action
@@ -63,7 +62,7 @@ keeps command-style fixture/connector and tooling-contract proof; Swift tests
 own core model, parser, runner, normalization, and rendering regressions. Non-AX
 scripted smokes can be run directly with `swift run pdtbar-smoke <name>` when
 launch/setup/menu behavior is in scope. Live Claude/PDT, Keychain, 1Password,
-Accessibility (`real-claude-flow-ax`), and packaged-app checks stay opt-in.
+and packaged-app checks stay opt-in.
 
 Expected handoff gate for changes that affect launch, setup, first fetch, menu
 behavior, or UI proof:
@@ -127,6 +126,19 @@ swift run pdtbar-dev pdt-refresh --store <file>
 swift run pdtbar-dev pdt-disconnect --store <file>
 ```
 
+Live app over that store (opt-in, live PDT reads; never in the default gate):
+
+```bash
+swift build --product pdtbar
+.build/debug/pdtbar --app-support-dir .build/live/<run>/app-support --pdt-credential-file <file>
+```
+
+`--pdt-credential-file` runs the product path (connection check, first fetch,
+background refresh) over the dev file store instead of the Keychain, which an
+ad-hoc dev build cannot use. It requires an isolated `--app-support-dir`, and
+the snapshot it writes holds real portfolio data: keep it under `.build/`, never
+in proof. Report counts, statuses, and outcomes only.
+
 These use the registered "pdtbar" app, port 47245, and a mode-0600 file store at
 the given path (plus a sibling `<name>.lock`), never the Keychain. Output is states, expiry, HTTP statuses,
 `/v1/me` key names, and token SHA-256 fingerprints; never token values. Delete
@@ -148,24 +160,22 @@ is preserved, a redacted diagnostic is stored, and a retry clears the degraded
 state. The proof artifact reports selectors/counts/scenario status only; no raw
 portfolio payloads, values, account identifiers, or live data are written.
 
-Scripted Claude login handoff e2e:
+Scripted PDT sign-in e2e:
 
 ```bash
 swift build --product pdtbar
-swift run pdtbar-smoke scripted-login-handoff
+swift run pdtbar-smoke scripted-sign-in
 ```
 
-This uses isolated app-support directories, a scripted fake Claude CLI, and no
-live Claude credentials. It launches the logged-out menu, verifies the
-fake Claude CLI is not called before the user-initiated `Log in with Claude`
-menu action, then proves the explicit smoke/debug login binary invokes `claude
-auth login`, shows `Signing in with Claude` while login is in flight, re-runs
-readiness, renders `Fetching portfolio`, and starts the first fetch from
-scripted PDT data. It fails if a successful handoff returns to the signed-out
-setup menu. Failure renders `Claude login failed` with a retryable login action.
-The proof artifact contains selector/click booleans, readiness probe counts,
-snapshot status, and redacted state only; no credentials, account identifiers,
-or raw portfolio payloads are written.
+This uses isolated app-support directories and the scripted PDT connection; no
+browser, Keychain, or network. A not-connected launch must stay idle (one
+`check`, no `sign-in`, no request) until the user clicks `Sign in with PDT`.
+With Accessibility it clicks that row, sees `Signing in with PDT`, and waits for
+the scripted success to reach the first fetch and write the snapshot. A second
+launch scripts a declined sign-in and verifies `Sign-in failed` with no fetch.
+Without Accessibility it proves the idle launch and returns `skipped`. The proof
+artifact contains event counts, click attempts, status booleans, and AX
+selectors only.
 
 Scripted setup retry e2e:
 
@@ -174,13 +184,16 @@ swift build --product pdtbar
 swift run pdtbar-smoke scripted-setup-retry
 ```
 
-This uses isolated app-support directories, scripted readiness files, and no
-live Claude credentials. It verifies missing Claude login renders `Not
-connected`, `Log in with Claude`, and `Check again`; missing PDT MCP renders
-`Add the PDT MCP server to Claude` and `Check again`; and clicking
-`Check again` reruns readiness once before the scripted first fetch. The proof
-artifact contains selectors, probe counts, status booleans, and redacted
-first-fetch state only.
+This uses isolated app-support directories and the scripted PDT connection. It
+launches three connection problems: a revoked token (`Reconnect to PDT`), a
+subscription paused on the holdings request (`403 API_ACCESS_PAUSED`, then `200`
+after `Check again`), and a Keychain that answers `-34018` (`Keychain
+unavailable`). Each launch must run exactly one `check` and write no snapshot.
+With Accessibility it verifies each row set, clicks `Check again` twice in a
+row, and requires exactly two `check` lines: the paused launch reaches the
+fetch (holdings requests: the 403, the first fetch, and the background refresh
+that follows it), and the duplicate click starts no second fetch. The proof
+artifact contains event counts, click attempts, and AX selectors only.
 
 Scripted Pulse mark-read proof:
 
@@ -236,7 +249,7 @@ under the observed Desktop server name and renamed MCP server names, structured
 output, and non-mutating tool discovery; a broad `--disallowedTools` denylist
 for built-ins plus PDT mutate-tool prefixes on the configured Claude CLI MCP
 server (`ClaudePDTReadOnlyToolPolicy` in PDTBarCore — the same shared denylist
-the production read-only sync sends); verbose stream JSON telemetry; and
+the legacy `ClaudeLocalConnection` sends); verbose stream JSON telemetry; and
 schema-enforced structured output to
 exercise the currently logged-in Claude user and Claude CLI PDT MCP setup.
 It never passes `claude --bare`;
@@ -263,14 +276,16 @@ swift build --product pdtbar
 swift run pdtbar-smoke scripted-first-fetch
 ```
 
-This uses isolated app-support directories and no live Claude credentials. It
-seeds a scripted Claude-ready state plus scripted PDT MCP responses, launches the
-no-argument app path, and verifies the first complete fetch writes
-`latest-portfolio-snapshot.json` under isolated app state before the pulse
-descriptor is considered publishable. It also launches a required-tool-missing
-scenario and verifies no first snapshot or pulse is published. Proof artifacts
-contain paths, selectors, status text, counts, and booleans only; no raw live
-portfolio payloads, account identifiers, or secrets are written.
+This uses isolated app-support directories and the scripted PDT connection with
+a stored personal token. The success launch answers the holdings request from
+`docs/pdt/fixtures/api/full/01-holdings.json` and verifies the first fetch writes
+`latest-portfolio-snapshot.json` (as-of `2026-06-22`) under isolated app state
+and, with Accessibility, shows the pulse. The failure launch answers every
+holdings attempt with `503` and verifies no snapshot is written, the app reports
+the failed first fetch, and, with Accessibility, the menu shows `Could not fetch
+portfolio` and `Try again`. Both launches fail if the fake `claude`/`mcporter`
+runs or the fixture sentinel is written. Proof artifacts contain paths,
+selectors, status text, counts, and booleans only.
 
 Scripted returning-launch e2e:
 
@@ -279,10 +294,10 @@ swift build --product pdtbar
 swift run pdtbar-smoke scripted-returning-launch
 ```
 
-This uses isolated app-support directories and no live Claude or PDT
-credentials. It seeds a previous complete local snapshot, launches the
-no-argument app path with a delayed scripted PDT REST refresh (the
-`docs/pdt/fixtures/api/full` replies, served through `scripted-pdt-api.json` by
+This uses isolated app-support directories and the scripted PDT connection with
+a stored browser session. It seeds a previous complete local snapshot, launches
+the app with a delayed scripted PDT REST refresh (the
+`docs/pdt/fixtures/api/full` replies, served through the script's `api` to
 `PDTAPIBackgroundDetailRefresh`), and verifies the cached pulse stays visible while the
 refresh is in progress. It then verifies complete refreshed data replaces the
 snapshot and pulse only after the scripted fetch finishes. A second launch
@@ -333,25 +348,25 @@ swift run pdtbar-smoke packaged-app --app PDTBar.app --fixture docs/pdt/fixtures
 swift run pdtbar-smoke packaged-app --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/quiet-snapshot
 ```
 
-The logged-out launch smoke starts the app with no arguments, seeds unusable
-Claude state in an isolated app-support directory, injects fixture environment
-variables as a guard, and verifies the app does not enter fixture mode. With macOS
-Accessibility permission, it also opens the menu and verifies `Not connected`,
-`Log in with Claude`, and `Quit PDTBar`. Without Accessibility, it reports a
-clean `skipped` with the exact missing permission caveat after proving launch
-liveness and fixture isolation.
+The logged-out launch smoke starts the app with a scripted not-connected PDT
+connection, injects fixture environment variables as a guard, and verifies the
+app stays running, checks once, fetches nothing, and does not enter fixture
+mode. With macOS Accessibility permission, it also opens the menu and verifies
+`Not connected`, `Sign in with PDT`, `Use a PDT token…`, and `Quit PDTBar`.
+Without Accessibility, it reports a clean `skipped` with the exact missing
+permission caveat after proving launch liveness and isolation.
 
-The ready launch smoke uses the same no-argument app path with isolated scripted
-Claude/PDT readiness and scripted PDT MCP responses. It verifies the existing
-Claude/PDT-ready path skips the logged-out menu, completes the first fetch,
-writes isolated first-fetch state, renders the first pulse, avoids fixture state,
-and writes only selector/status proof under `.build/pdtbar-smoke-artifacts/`.
-No live Claude credentials or portfolio payloads are used.
+The ready launch smoke starts the app with a scripted browser session and a
+scripted holdings reply. It verifies the connected path skips setup, completes
+the first fetch, writes isolated first-fetch state, renders the first pulse,
+avoids fixture state and the fake CLIs, and writes only selector/status proof
+under `.build/pdtbar-smoke-artifacts/`.
 
 The app-bundle packaging smoke builds `PDTBar.app` through
 `Scripts/package_app.sh`, verifies `Info.plist` bundle identifier/executable/
 `LSUIElement` metadata, verifies the local code signature, launches the bundle
-through LaunchServices with isolated app support, checks the running process
+through LaunchServices with isolated app support and a scripted not-connected
+PDT connection (`--scripted-pdt`), checks the running process
 matches `Contents/MacOS/PDTBar`, and opens the setup menu-bar surface when
 Accessibility is granted. Missing Accessibility exits successfully with
 `skipped` after packaging, signing, and LaunchServices launch proof. Its JSON
@@ -360,16 +375,15 @@ selectors, and redacted status text.
 
 The packaged onboarding smoke is the first-run onboarding regression gate. It
 requires a packaged `PDTBar.app`, launches the bundle executable with fresh
-isolated app-support state and an explicit scripted login handoff option,
-injects fixture env only as a sentinel, opens the setup menu through
-Accessibility, clicks `Log in with Claude`, uses a scripted successful
-`claude auth login`, and verifies readiness is rechecked
-before the scripted first fetch starts. Missing Accessibility exits
-successfully with `skipped` after proving packaged launch liveness and fixture
-isolation. Proof artifacts contain app/support/sentinel paths, selectors, setup
-and fetch status text, and booleans only.
-Passing `--peekaboo` additionally captures sanitized real UI PNGs for setup,
-login-opening, and post-readiness fetching states.
+isolated app-support state and a scripted not-connected PDT connection whose
+sign-in succeeds, injects fixture env only as a sentinel, opens the setup menu
+through Accessibility, clicks `Sign in with PDT`, sees `Signing in with PDT`,
+and verifies the scripted first fetch writes the snapshot. Missing
+Accessibility exits successfully with `skipped` after proving packaged launch
+liveness, an idle connection, and isolation. Proof artifacts contain
+app/support/sentinel paths, selectors, status text, and booleans only.
+Passing `--peekaboo` additionally captures a sanitized full-screen PNG while
+signing in.
 
 For UI PRs that need screenshot proof, follow the PR #68 convention: capture
 real macOS PNG screenshots from packaged `PDTBar.app` using sanitized fixtures or
@@ -377,24 +391,7 @@ isolated scripted state, wrap PNG pixels in SVG only as a viewable container, ve
 raw URLs with `curl -I -L`, and put the links in a PR comment. Do not use SVG as
 the only proof when the reviewer needs to inspect real UI pixels.
 
-Real Claude-flow Accessibility matrix smoke:
-
-```bash
-swift build --product pdtbar
-swift run pdtbar-smoke real-claude-flow-ax
-```
-
-This launches the actual no-argument app path with isolated app-support
-directories and scripted Claude/PDT dependencies. It opens the menu-bar item
-through macOS Accessibility and verifies stable status/menu identifiers plus
-visible text for setup, fetching, all-quiet, pressure, Data/Prices, Data health, and retryable
-fetch-error surfaces. Fixture env is injected only as a guard; the smoke fails if fixture
-snapshot state is written. Missing macOS Accessibility permission exits
-successfully with `skipped` and names that exact TCC permission. Proof artifacts
-contain selectors, status text, scenario booleans, and redacted state only; no
-Claude credentials or raw portfolio payloads are used.
-
-This launches the fixture-mode app, routes it through an isolated snapshot
+The packaged-app smoke launches the fixture-mode app, routes it through an isolated snapshot
 directory, verifies `latest-portfolio-snapshot.json` was written, and verifies
 the app stays running. It does not need live PDT credentials.
 
