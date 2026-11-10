@@ -11,8 +11,8 @@
 
   Code anchors (Sources/PDTBarCore/LaunchRuntime.swift = Core, Sources/PDTBarApp/main.swift = App):
     PDTLaunchState offers* ......... Core:94-150 (which connection buttons a state shows)
-    PDTLaunchMenu.descriptor ....... Core:207-330, withDisconnectAction Core:771
-    PDTLaunchRuntime ............... Core:849-1105
+    PDTLaunchMenu.descriptor ....... Core:207-330, withDisconnectAction Core:770
+    PDTLaunchRuntime ............... Core:848-1110
     AppDelegate effect wiring ...... App:60-355
 *)
 EXTENDS Naturals, FiniteSets

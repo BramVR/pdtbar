@@ -37,8 +37,17 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
         try locked { try store.load() }
     }
 
-    public func signedIn(_ session: PDTBrowserSession) throws {
-        try locked { try replace(with: .signedIn(session)) }
+    /// Stores the session unless `cancellation` fired first. The check runs
+    /// inside the store lock, so a cancel that wins the race stores nothing.
+    @discardableResult
+    public func signedIn(_ session: PDTBrowserSession, unless cancellation: PDTCancellation? = nil) throws -> Bool {
+        try locked {
+            if cancellation?.isCancelled == true {
+                return false
+            }
+            try replace(with: .signedIn(session))
+            return true
+        }
     }
 
     public func connect(personalToken: PDTAPIToken) throws {

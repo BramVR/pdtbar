@@ -158,7 +158,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 ).fetch()
                 outcome = PortfolioFetchOutcome(pulse: pulse)
             } catch {
-                outcome = PortfolioFetchOutcome(failure: connection.failure(for: error), errorDescription: "\(error)")
+                outcome = PortfolioFetchOutcome(failure: connection.failure(for: error), errorDescription: PDTAppConnection.logLabel(for: error))
             }
             DispatchQueue.main.async { [weak self] in
                 self?.finishFirstPortfolioFetch(outcome)
@@ -252,7 +252,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             } catch {
                 outcome = PortfolioFetchOutcome(
                     failure: connection.failure(for: error),
-                    errorDescription: "\(error)",
+                    errorDescription: PDTAppConnection.logLabel(for: error),
                     detailRefreshDiagnostic: try? snapshotStore.loadLastDetailRefreshDiagnostic()
                 )
             }

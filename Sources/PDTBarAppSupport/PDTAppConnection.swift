@@ -68,7 +68,8 @@ public final class PDTAppConnection: @unchecked Sendable {
             return PDTConnectionOutcome(status(), notice: .signInFailed(.failed))
         }
         do {
-            try connection.signedIn(session)
+            // A cancel during the code exchange or the wait for the store lock still wins.
+            try connection.signedIn(session, unless: cancellation)
         } catch {
             return PDTConnectionOutcome(PDTConnectionStatus(storeError: error))
         }
@@ -95,6 +96,22 @@ public final class PDTAppConnection: @unchecked Sendable {
             return PDTConnectionOutcome(status(), notice: .disconnected(revokeAt: revokeAt))
         } catch {
             return PDTConnectionOutcome(PDTConnectionStatus(storeError: error))
+        }
+    }
+
+    /// A log line for a fetch error that carries no server text: PDT's
+    /// `details.reason` and decode messages can echo request data.
+    public static func logLabel(for error: Error) -> String {
+        let error = (error as? PDTAPIRequestFailure)?.underlyingError ?? error
+        switch error {
+        case PDTAPIError.tokenInvalid:
+            return "tokenInvalid"
+        case let error as PDTAPIError:
+            return "\(error)"
+        case let error as PDTCredentialStoreError:
+            return "\(error)"
+        default:
+            return String(describing: type(of: error))
         }
     }
 

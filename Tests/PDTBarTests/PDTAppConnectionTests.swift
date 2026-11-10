@@ -133,6 +133,37 @@ struct PDTAppConnectionTests {
         #expect(Date().timeIntervalSince(started) < 5)
     }
 
+    @Test("A cancel that lands after PDT approved the sign-in still stores nothing")
+    func cancelAfterApprovalStoresNothing() throws {
+        let store = InMemoryPDTCredentialStore()
+        let cancellation = PDTCancellation()
+        let connection = PDTAppConnection(
+            store: store,
+            tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([])),
+            apiTransport: ScriptedPDTHTTPTransport([]),
+            signIn: { _ in
+                cancellation.cancel()
+                return browserSession
+            }
+        )
+
+        #expect(connection.signIn(cancellation: cancellation) == PDTConnectionOutcome(.notConnected))
+        #expect(try store.load() == .disconnected)
+    }
+
+    @Test("Fetch errors log without PDT's free-text reason")
+    func logLabelDropsServerText() {
+        let echoed = "pdt_echoed_secret"
+        let labels = [
+            PDTAppConnection.logLabel(for: PDTAPIError.tokenInvalid(reason: echoed)),
+            PDTAppConnection.logLabel(for: DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: echoed))),
+        ]
+
+        #expect(labels.allSatisfy { !$0.contains(echoed) })
+        #expect(labels[0] == "tokenInvalid")
+        #expect(PDTAppConnection.logLabel(for: PDTAPIError.server(status: 503, retryAfter: nil)).contains("503"))
+    }
+
     @Test("A pasted token is stored and sent as the bearer token")
     func pastedTokenIsUsed() throws {
         let transport = ScriptedPDTHTTPTransport([try holdingsReply()])

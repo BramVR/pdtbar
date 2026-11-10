@@ -94,13 +94,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${PDTBAR_PROVISIONING_PROFILE_BASE64:-}" ]]; then
-            export PDTBAR_PROVISIONING_PROFILE="$RUNNER_TEMP/pdtbar.provisionprofile"
-            printf '%s' "$PDTBAR_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PDTBAR_PROVISIONING_PROFILE"
-          fi
           REQUIRE_NOTARIZATION=0
           if [[ "${{ github.event_name }}" == "release" || "${{ inputs.require_notarization }}" == "true" ]]; then
             REQUIRE_NOTARIZATION=1
+          fi
+          # The profile needs the Developer ID certificate, which is imported only for notarized builds.
+          if [[ "$REQUIRE_NOTARIZATION" == "1" && -n "${PDTBAR_PROVISIONING_PROFILE_BASE64:-}" ]]; then
+            export PDTBAR_PROVISIONING_PROFILE="$RUNNER_TEMP/pdtbar.provisionprofile"
+            printf '%s' "$PDTBAR_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PDTBAR_PROVISIONING_PROFILE"
           fi
           PDTBAR_REQUIRE_NOTARIZATION="$REQUIRE_NOTARIZATION" ./Scripts/package_release_app.sh "$RELEASE_TAG"
 

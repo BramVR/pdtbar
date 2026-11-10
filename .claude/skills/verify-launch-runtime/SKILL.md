@@ -17,12 +17,12 @@ Sync commit: the #248 PR head (`feat/248-pdt-api-onboarding`). After you confirm
 
 `Sources/PDTBarCore/LaunchRuntime.swift`:
 - `PDTLaunchState` 94 and its `offersSignIn` / `offersCheckAgain` / `offersDisconnect` 115-150.
-- `PDTLaunchMenu.descriptor(for:cachedPulse:notice:fetchingElapsedSeconds:)` 207, `withDisconnectAction` 771.
-- `PDTConnectionAttempt` 824. `PDTLaunchRuntime` 849: `launch` 879, `completeCachedPulseLoad` 884, `completeConnection` 895, `signIn` 904, `connect(token:)` 911, `cancelSignIn` 919, `checkAgain` 926, `disconnect` 933, `retryFirstFetch` 941, `firstFetchProgress` 952, `completeFirstFetch` 959, `beginBackgroundDetailRefresh` 974, `backgroundDetailRefreshProgress` 981, `completeBackgroundDetailRefresh` 990, `pulseReadStateDidChange` 1018, `apply` 1032, `beginConnectionOperation` 1044, `startBackgroundDetailRefresh` 1057, `descriptor` 1078.
+- `PDTLaunchMenu.descriptor(for:cachedPulse:notice:fetchingElapsedSeconds:)` 207, `withDisconnectAction` 770.
+- `PDTConnectionAttempt` 823. `PDTLaunchRuntime` 848: `launch` 878, `completeCachedPulseLoad` 883, `completeConnection` 894, `signIn` 903, `connect(token:)` 910, `cancelSignIn` 918, `checkAgain` 925, `disconnect` 932, `retryFirstFetch` 940, `firstFetchProgress` 951, `completeFirstFetch` 958, `beginBackgroundDetailRefresh` 976, `backgroundDetailRefreshProgress` 983, `completeBackgroundDetailRefresh` 992, `pulseReadStateDidChange` 1023, `apply` 1037, `beginConnectionOperation` 1049, `startBackgroundDetailRefresh` 1062, `descriptor` 1083.
 
 `Sources/PDTBarCore/MenuDescriptorRenderer.swift`: default pulse "Refresh now" row 277, `refreshActionRow` 468 (`waitingForSetup` is shown but not clickable).
 
-`Sources/PDTBarApp/main.swift` (`AppDelegate`): `launch` 60, `startCachedPulseLoad` 93, `runConnectionOperation` 112, `startSignIn` 129, `startFirstPortfolioFetch` 135, `finishFirstPortfolioFetch` 170, `startBackgroundPortfolioRefresh` 220, `finishBackgroundPortfolioRefresh` 266, connection selectors 281-328, `handleLaunchUpdate` 330, `connectionAction(for:)` role-to-selector wiring.
+`Sources/PDTBarApp/main.swift` (`AppDelegate`): `launch` 60, `startCachedPulseLoad` 93, `runConnectionOperation` 111, `startSignIn` 128, `startFirstPortfolioFetch` 134, `finishFirstPortfolioFetch` 169, `startBackgroundPortfolioRefresh` 219, `finishBackgroundPortfolioRefresh` 265, connection selectors 280-327, `handleLaunchUpdate` 329, `connectionAction(for:)` role-to-selector wiring.
 
 ## Run
 
