@@ -1,7 +1,9 @@
 import CryptoKit
 import Foundation
 import Testing
+import PDTBarAppSupport
 import PDTBarCore
+import Security
 
 @Suite("PDT browser sign-in")
 struct PDTBrowserSignInTests {
@@ -543,6 +545,31 @@ struct PDTCredentialStorageTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0 != "pdt.json" }.isEmpty)
     }
 
+    @Test("The Keychain store keeps one device-only item in the data protection keychain")
+    func keychainQueries() throws {
+        let keychain = FakeSecItems()
+        let directory = FileManager.default.temporaryDirectory.appending(path: "pdtbar-keychain-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = KeychainPDTCredentialStore(lockDirectory: directory, secItem: keychain.api)
+        let stored = PDTConnectionState.connected(.personalToken(PDTAPIToken("pdt_keychain")))
+
+        #expect(try store.load() == .disconnected)
+        try store.save(stored)
+        try store.save(stored)
+        #expect(try store.load() == stored)
+        try store.save(.disconnected)
+        #expect(try store.load() == .disconnected)
+
+        let queries = keychain.queries
+        #expect(queries.count == 7)
+        for query in queries {
+            #expect(query[kSecUseDataProtectionKeychain as String] as? Bool == true)
+            #expect(query[kSecAttrSynchronizable as String] as? Bool == false)
+            #expect(query[kSecAttrService as String] as? String == KeychainPDTCredentialStore.service)
+        }
+        #expect(keychain.added.map { $0[kSecAttrAccessible as String] as? String } == [kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String])
+    }
+
     @Test("Tokens, sessions, states, and fingerprints never print a secret")
     func secretFreeDescriptions() throws {
         let secrets = ["access-secret-value", "refresh-secret-value", "pdt_personal-secret"]
@@ -890,5 +917,53 @@ private final class HookTransport: PDTHTTPTransport, @unchecked Sendable {
         lock.unlock()
         pending?()
         return try scripted.send(request, cancellation: cancellation)
+    }
+}
+
+private final class FakeSecItems: @unchecked Sendable {
+    private let lock = NSLock()
+    private var item: Data?
+    private(set) var queries: [[String: Any]] = []
+    private(set) var added: [[String: Any]] = []
+
+    var api: KeychainPDTCredentialStore.SecItemAPI {
+        KeychainPDTCredentialStore.SecItemAPI(
+            copyMatching: { query, result in
+                self.record(query) {
+                    guard let item = self.item else { return errSecItemNotFound }
+                    result?.pointee = item as CFData
+                    return errSecSuccess
+                }
+            },
+            add: { query in
+                self.record(query) {
+                    let attributes = query as NSDictionary as! [String: Any]
+                    self.added.append(attributes)
+                    self.item = attributes[kSecValueData as String] as? Data
+                    return errSecSuccess
+                }
+            },
+            update: { query, changes in
+                self.record(query) {
+                    guard self.item != nil else { return errSecItemNotFound }
+                    self.item = (changes as NSDictionary)[kSecValueData as String] as? Data
+                    return errSecSuccess
+                }
+            },
+            delete: { query in
+                self.record(query) {
+                    guard self.item != nil else { return errSecItemNotFound }
+                    self.item = nil
+                    return errSecSuccess
+                }
+            }
+        )
+    }
+
+    private func record(_ query: CFDictionary, _ body: () -> OSStatus) -> OSStatus {
+        lock.lock()
+        defer { lock.unlock() }
+        queries.append(query as NSDictionary as! [String: Any])
+        return body()
     }
 }

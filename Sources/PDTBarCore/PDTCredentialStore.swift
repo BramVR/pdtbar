@@ -81,8 +81,14 @@ public struct FilePDTCredentialStore: PDTCredentialStore {
 
     public func save(_ state: PDTConnectionState) throws {
         guard state != .disconnected else {
-            if unlink(url.path) != 0, errno != ENOENT {
-                throw PDTCredentialStoreError.writeFailed(code: errno)
+            if unlink(url.path) != 0 {
+                guard errno == ENOENT else {
+                    throw PDTCredentialStoreError.writeFailed(code: errno)
+                }
+                return
+            }
+            if let failure = Self.syncDirectory(url.deletingLastPathComponent()) {
+                throw PDTCredentialStoreError.writeFailed(code: failure)
             }
             return
         }
@@ -108,6 +114,20 @@ public struct FilePDTCredentialStore: PDTCredentialStore {
             unlink(temporary.path)
             throw PDTCredentialStoreError.writeFailed(code: failure)
         }
+        // A crash before the directory entry is durable would bring back the
+        // previous, already revoked refresh token.
+        if let failure = Self.syncDirectory(directory) {
+            throw PDTCredentialStoreError.writeFailed(code: failure)
+        }
+    }
+
+    private static func syncDirectory(_ directory: URL) -> Int32? {
+        let descriptor = open(directory.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            return errno
+        }
+        defer { close(descriptor) }
+        return fsync(descriptor) == 0 ? nil : errno
     }
 
     private func writeAll(_ data: Data, to descriptor: Int32) -> Int32? {
