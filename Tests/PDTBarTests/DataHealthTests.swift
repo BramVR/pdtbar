@@ -253,13 +253,8 @@ struct DataHealthTests {
         degraded.latestDetailFillOutcome = .degraded
         let store = try SnapshotStore.temporaryTestStore(prefix: "data-health-claude-era-file")
         _ = try store.commitCurrentSnapshot(degraded)
-        try store.saveLastDetailRefreshDiagnostic(PDTDetailRefreshFailureDiagnostic(
-            toolName: "pdt-list-symbol-prices",
-            phase: .priceHistory,
-            attemptCount: 2,
-            category: .transientFailure,
-            argumentShape: ["symbol_quote_id"]
-        ))
+        try Data(#"{"argumentShape":["symbol_quote_id"],"attemptCount":2,"category":"transientFailure","phase":"priceHistory","toolName":"pdt-list-symbol-prices"}"#.utf8)
+            .write(to: store.directory.appending(path: "latest-detail-refresh-diagnostic.json"))
 
         let cached = try #require(try PressureRunner.cachedPulse(snapshotStore: store))
 

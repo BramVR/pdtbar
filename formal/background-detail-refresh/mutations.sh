@@ -26,50 +26,59 @@ PY
   got="$("$runner" "$work/$name/BackgroundDetailRefresh.tla" "$work/$name/BackgroundDetailRefresh.cfg" 2>&1 |
     grep -oE 'Invariant [A-Za-z]+ is violated|Temporal properties were violated|No error has been found' |
     head -1 || true)"
-  printf '%-28s expect %-28s got %s\n' "$name" "$expect" "${got:-error}"
+  printf '%-26s expect %-24s got %s\n' "$name" "$expect" "${got:-error}"
   if [[ "$got" != *"$expect"* ]]; then
     failures=$((failures + 1))
   fi
 }
 
-# The #272 shape: price history's returned diagnostics never reach the
-# outage gate, so performance starts during an outage (21-state trace).
-mutate priceOutageBypassesGate NoPhaseAfterOutage \
-  "    /\\ diagOutage' = (diagOutage \\/ accUnavail)" \
-  "    /\\ diagOutage' = diagOutage"
+# The Claude refresh's shape: an optional phase that refreshed its facet commits it.
+mutate perPhaseCommit OneCommitAtEnd \
+  "    /\\ UNCHANGED <<chunk, cancelled, started, chunkRes, prices>>
+    /\\ UNCHANGED <<outcome, writes, readReset, storedFailure, cancelEarly>>" \
+  "    /\\ UNCHANGED <<chunk, cancelled, started, chunkRes, prices>>
+    /\\ writes' = IF snap' /= snap THEN writes + 1 ELSE writes
+    /\\ UNCHANGED <<outcome, readReset, storedFailure, cancelEarly>>"
 
-# A thrown optional-phase failure stops feeding the gate.
-mutate thrownOutageBypassesGate NoPhaseAfterOutage \
-  "        /\\ diagOutage' = (diagOutage \\/ IndicatesUnavailableSetup(c))" \
-  "        /\\ diagOutage' = diagOutage"
+# optionalPhase loses its `guard !syncEnded`.
+mutate optionalIgnoresSyncEnded NoRequestAfterSyncEnded \
+  "    /\\ IF syncEnded
+         THEN /\\ phase' = NextOf(p)" \
+  "    /\\ IF FALSE
+         THEN /\\ phase' = NextOf(p)"
 
-# runOptionalPhase's guard removed.
-mutate noOutageGuard NoPhaseAfterOutage \
-  '    /\ LET t == IF diagOutage THEN "finalize"' \
-  '    /\ LET t == IF FALSE THEN "finalize"'
+# The price loop loses its per-batch `if syncEnded`.
+mutate priceIgnoresSyncEnded NoRequestAfterSyncEnded \
+  "    /\\ IF syncEnded
+         THEN /\\ chunkRes' = [chunkRes EXCEPT ![chunk] = \"failed\"]" \
+  "    /\\ IF FALSE
+         THEN /\\ chunkRes' = [chunkRes EXCEPT ![chunk] = \"failed\"]"
 
-# PressureRunner.refreshedPulse never commits the final snapshot.
-mutate finalizeSkipsCommit ReturnedHasSucceededPhases \
-  "    /\\ store' = snap
-    /\\ everFresh' = everFresh \\cup Fresh(store')
-    /\\ phase' = \"returned\"" \
-  "    /\\ store' = store
-    /\\ everFresh' = everFresh \\cup Fresh(store')
-    /\\ phase' = \"returned\""
+# endsSync drops .rateLimited, so a 429 that outlasted the retries is followed by more requests.
+mutate rateLimitKeepsSyncing NoRequestAfterSyncEnded \
+  'EndsSync(k) == k \in {"reconnect", "readAccessMissing", "accessPaused", "forbidden", "credentialStore", "rateLimited"}' \
+  'EndsSync(k) == k \in {"reconnect", "readAccessMissing", "accessPaused", "forbidden", "credentialStore"}'
 
-# Price-history diagnostics dropped before the outcome is computed.
-mutate dropPriceDiagnostics OutcomeHonest \
-  "    /\\ diagPhases' = IF failedQ /= {} THEN diagPhases \\cup {\"priceHistory\"} ELSE diagPhases" \
-  "    /\\ diagPhases' = diagPhases"
+# A failed optional phase clears its facet instead of keeping the prior.
+mutate failedPhaseDropsPrior FailedSliceKeepsPrior \
+  "                       /\\ Record(p, k)
+                       /\\ UNCHANGED snap" \
+  "                       /\\ Record(p, k)
+                       /\\ snap' = [snap EXCEPT ![p] = \"none\"]"
 
-# isRetryable starts retrying a deterministic decode failure.
-mutate decodeRetryable NoDeterministicRetry \
-  'IsRetryable(c) == c \in {"transientFailure", "timeout", "exit"}' \
-  'IsRetryable(c) == c \in {"transientFailure", "timeout", "exit", "decode"}'
+# The outcome stops reading `failures`.
+mutate outcomeIgnoresFailures OutcomeHonest \
+  "    /\\ outcome' = IF failures = <<>> THEN \"completed\" ELSE \"degraded\"" \
+  "    /\\ outcome' = \"completed\""
 
-# workerCount ignores priceHistoryConcurrencyLimit.
-mutate unboundedWorkers ConcurrencyBound \
-  'Workers == 1 .. (IF Limit < HoldingCount THEN Limit ELSE HoldingCount)' \
-  'Workers == 1 .. HoldingCount'
+# refresh() stops clearing the stored failure before it starts.
+mutate noFailureClearAtStart StoredFailureIsThisRuns \
+  "              /\\ storedFailure' = \"none\"" \
+  "              /\\ storedFailure' = storedFailure"
+
+# The throwIfCancelled before refreshedPulse is dropped.
+mutate noFinalCancelCheck AbortWritesNothing \
+  "    /\\ phase' = IF cancelled THEN \"threw\" ELSE \"commit\"" \
+  "    /\\ phase' = \"commit\""
 
 exit "$failures"

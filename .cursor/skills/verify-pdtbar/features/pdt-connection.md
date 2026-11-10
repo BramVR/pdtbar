@@ -2,7 +2,7 @@
 
 The user launches PDTBar without a working PDT connection, or with one PDT stopped accepting. The menu names the state and offers what fits it: `Sign in with PDT`, `Use a PDT token…`, `Check again`, and `Disconnect from PDT`.
 
-Proof that it works: not connected shows `Not connected`, `Sign in with PDT`, and `Use a PDT token…`, and hides any cached pulse. A revoked token shows `Reconnect to PDT` with `Check again` and `Disconnect from PDT`. `403 API_ACCESS_PAUSED` shows `PDT access paused`. A build without the Keychain entitlement (`-34018`) shows `Keychain unavailable`. One `Check again` click reruns the connection check exactly once; a second click while the check or fetch runs starts nothing. `Sign in with PDT` shows `Signing in with PDT`, then `Fetching portfolio`. A declined sign-in shows `Sign-in failed`. No path runs `claude` or `mcporter`.
+Proof that it works: not connected shows `Not connected`, `Sign in with PDT`, and `Use a PDT token…`, and hides any cached pulse. A revoked token shows `Reconnect to PDT` with `Check again` and `Disconnect from PDT`. `403 API_ACCESS_PAUSED` shows `PDT access paused`. A build without the Keychain entitlement (`-34018`) shows `Keychain unavailable`. One `Check again` click reruns the connection check exactly once; a second click while the check or fetch runs starts nothing. `Sign in with PDT` shows `Signing in with PDT`, then `Fetching portfolio`. A declined sign-in shows `Sign-in failed`.
 
 ## Sub-features
 

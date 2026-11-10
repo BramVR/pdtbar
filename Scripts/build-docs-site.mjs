@@ -347,7 +347,7 @@ function layout({ page, html, toc, sectionName }) {
   const isDutch = page.lang === "nl";
   const lede = isDutch
     ? "Wat er nu toe doet in je portefeuille, direct in de macOS-menubalk."
-    : "A quiet portfolio pulse in the macOS menu bar, powered by your existing Claude CLI + PDT MCP setup.";
+    : "A quiet portfolio pulse in the macOS menu bar, read from PDT over a read-only connection.";
   const searchLabel = isDutch ? "Zoek in de site" : "Search";
   const searchPlaceholder = isDutch ? "Filter onderwerpen" : "Filter navigation";
   const noResults = isDutch ? "Niets gevonden." : "No results.";

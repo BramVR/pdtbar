@@ -9,7 +9,7 @@ read_when:
 
 # ADR-0002: Adopt the PDT public REST API
 
-- **Status:** Accepted
+- **Status:** Accepted. #250 removed the Claude CLI + PDT MCP path (decision 9).
 - **Date:** 2026-11-09
 - **Deciders:** Bram
 - **Supersedes:** the Claude-only connection model in `docs/claude-login-workflow.md`, `docs/product-brief.md`, and `docs/v1-scope.md`. ADR-0001 (native Swift, engine/bar separation) still holds.

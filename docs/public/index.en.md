@@ -10,7 +10,7 @@ description: "PDTBar is a quiet macOS menu bar companion for Portfolio Dividend 
 
 # PDTBar
 
-PDTBar is a quiet macOS menu bar companion for your Portfolio Dividend Tracker portfolio. It watches through your existing Claude CLI + PDT MCP setup and surfaces only the few things worth attention right now.
+PDTBar is a quiet macOS menu bar companion for your Portfolio Dividend Tracker portfolio. It reads your portfolio straight from PDT, read-only, and surfaces only the few things worth attention right now.
 
 ## What You See
 
@@ -24,17 +24,17 @@ PDTBar is a quiet macOS menu bar companion for your Portfolio Dividend Tracker p
 
 PDTBar uses the same data as PDT, but with the opposite rhythm. PDT remains the full dashboard. PDTBar lives in the menu bar and gives you a short pulse: the two or three facts you would otherwise have to hunt for.
 
-The current product path is Claude-first:
+PDTBar connects to PDT directly:
 
 ```text
 open PDTBar
-check Claude CLI login
-check PDT MCP server
+check the stored PDT connection
+sign in with PDT, or paste a read-only PDT token
 fetch read-only PDT data
 show the portfolio pulse
 ```
 
-When setup is missing, PDTBar offers `Log in with Claude` and `Check again`. Daily use does not require terminal commands.
+When PDTBar is not connected, the menu offers `Sign in with PDT` and `Use a PDT token…`. Daily use does not require terminal commands.
 
 ## Install
 
@@ -50,11 +50,11 @@ See the [features guide](features.en.md) for a deeper walkthrough of Pulse, Allo
 
 ## Trust And Privacy
 
-PDTBar is local and read-only by default. It does not place trades, move money, upload your portfolio to its own backend, or give financial advice. The pressure engine ranks facts and changes; you decide what they mean.
+PDTBar is local and read-only by default. Your PDT connection is stored in this Mac's Keychain only, and `Disconnect from PDT` deletes it. PDTBar does not place trades, move money, upload your portfolio to its own backend, or give financial advice. The pressure engine ranks facts and changes; you decide what they mean.
 
 ## Status
 
-PDTBar is in active development. Fixture mode exists for development and smoke tests, but real portfolio updates use the local Claude CLI + PDT MCP route.
+PDTBar is in active development. Fixture mode exists for development and smoke tests, but real portfolio updates come from PDT's read-only API.
 
 ## Source
 

@@ -1,8 +1,8 @@
 import CryptoKit
 import Foundation
 
-/// PDT's app sign-in endpoints. Discovery only describes the MCP flow, so
-/// these are fixed (ADR-0002).
+/// PDT's app sign-in endpoints. PDT's OAuth discovery does not offer the
+/// `read` scope, so these are fixed (ADR-0002).
 public enum PDTOAuthEndpoints {
     public static let authorize = URL(string: "https://auth.portfoliodividendtracker.com/oauth/authorize")!
     public static let token = URL(string: "https://auth.portfoliodividendtracker.com/oauth/token")!

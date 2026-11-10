@@ -23,7 +23,7 @@ The product path connects to PDT directly ([ADR-0002](docs/adr/0002-pdt-public-r
 4. Once connected, it fetches read-only PDT data, saves it on this Mac, then shows the pulse.
 5. If PDT stops accepting the connection, the menu says `Reconnect to PDT` and keeps your last pulse visible. If your PDT subscription ended, it says `PDT access paused`.
 
-The connection is stored in this Mac's Keychain only. `Disconnect from PDT` deletes it; PDT keeps the approval until you remove PDTBar on PDT's connected apps page. No Claude CLI, MCP server, or other tool is needed.
+The connection is stored in this Mac's Keychain only. `Disconnect from PDT` deletes it; PDT keeps the approval until you remove PDTBar on PDT's connected apps page. No other tool is needed.
 
 Fixture mode exists for development only and must be launched explicitly.
 

@@ -9,10 +9,10 @@
 <rect x="61.00" y="75.20" width="5.00" height="16.20" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
 <rect x="68.00" y="80.59" width="5.00" height="10.81" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
 </g>
-    <text x="46" y="128" class="section">Claude</text>
-<text x="46" y="148" class="row">Not connected - Sign in with Claude CLI</text>
-<text x="46" y="168" class="row">Log in with Claude</text>
-<text x="46" y="188" class="row">Check again</text>
+    <text x="46" y="128" class="section">PDT</text>
+<text x="46" y="148" class="row">Not connected - PDTBar reads your PDT portfolio read-only</text>
+<text x="46" y="168" class="row">Sign in with PDT</text>
+<text x="46" y="188" class="row">Use a PDT token…</text>
   </g>
   <g>
     <rect x="568" y="24" width="520" height="330" rx="8" class="card"/>
@@ -24,7 +24,7 @@
 <rect x="612.00" y="80.59" width="5.00" height="10.81" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
 </g>
     <text x="590" y="128" class="section">Portfolio</text>
-<text x="590" y="148" class="row">Fetching portfolio - Read-only through Claude</text>
+<text x="590" y="148" class="row">Fetching portfolio - Read-only from PDT</text>
   </g>
   <g>
     <rect x="24" y="378" width="520" height="330" rx="8" class="card"/>
@@ -35,16 +35,16 @@
 <rect x="61.00" y="429.20" width="5.00" height="16.20" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.86"/>
 <rect x="68.00" y="434.59" width="5.00" height="10.81" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.86"/>
 </g>
-    <text x="46" y="482" class="section">Pulse</text>
-<text x="46" y="502" class="row">EUR 51,200.00 - All quiet</text>
-<text x="46" y="522" class="row">All quiet - No attention items right now.</text>
-<text x="68" y="542" class="child">Value - EUR 51,200.00</text>
-<text x="68" y="562" class="child">Open holdings - 9</text>
-<text x="68" y="582" class="child">Top 3 - 34.8%</text>
-<text x="68" y="602" class="child">Prices - 2026-06-22</text>
-<text x="46" y="622" class="section">Allocation</text>
-<text x="46" y="642" class="row">Portfolio</text>
-<text x="46" y="662" class="row">Detailed info - Full allocation list</text>
+    <text x="46" y="482" class="section">Summary</text>
+<text x="46" y="502" class="row">Portfolio summary</text>
+<text x="46" y="522" class="section">Pulse</text>
+<text x="46" y="542" class="row">All quiet</text>
+<text x="46" y="562" class="row">All quiet - No attention items right now.</text>
+<text x="68" y="582" class="child">Open holdings - 9</text>
+<text x="68" y="602" class="child">Top 3 - 34.8%</text>
+<text x="68" y="622" class="child">Prices - 2026-06-22</text>
+<text x="46" y="642" class="section">Allocation</text>
+<text x="46" y="662" class="row">Portfolio</text>
   </g>
   <g>
     <rect x="568" y="378" width="520" height="330" rx="8" class="card"/>
@@ -57,16 +57,16 @@
 <rect x="605.00" y="429.20" width="5.00" height="16.20" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
 <rect x="612.00" y="434.59" width="5.00" height="10.81" rx="2.50" fill="none" stroke="#ffffff" stroke-width="1.20" opacity="0.42"/>
 </g>
-    <text x="590" y="482" class="section">Pulse</text>
-<text x="590" y="502" class="row">EUR 64,000.00 - Nova Lithography concentration</text>
-<text x="590" y="522" class="row">Nova Lithography concentration - 24.2%</text>
-<text x="612" y="542" class="child">Trigger - Concentration line crossed</text>
-<text x="612" y="562" class="child">Severity - medium; score 0.66</text>
-<text x="612" y="582" class="child">Threshold - 20.0%</text>
-<text x="612" y="602" class="child">Current - 24.2%</text>
-<text x="612" y="622" class="child">Sources - Open holdings</text>
-<text x="612" y="642" class="child">Mark as read</text>
-<text x="590" y="662" class="row">Information Technology sector concentration - 30.9%</text>
+    <text x="590" y="482" class="section">Summary</text>
+<text x="590" y="502" class="row">Portfolio summary</text>
+<text x="590" y="522" class="section">Pulse</text>
+<text x="590" y="542" class="row">Nova Lithography concentration</text>
+<text x="590" y="562" class="row">Nova Lithography concentration - 24.2%</text>
+<text x="612" y="582" class="child">Trigger - Concentration line crossed</text>
+<text x="612" y="602" class="child">Severity - medium; score 0.66</text>
+<text x="612" y="622" class="child">Threshold - 20.0%</text>
+<text x="612" y="642" class="child">Current - 24.2%</text>
+<text x="612" y="662" class="child">Sources - Open holdings</text>
   </g>
   <g>
     <rect x="24" y="732" width="520" height="330" rx="8" class="card"/>
@@ -80,7 +80,8 @@
     <text x="46" y="836" class="section">Portfolio</text>
 <text x="46" y="856" class="row">Could not fetch portfolio - No partial pulse published</text>
 <text x="46" y="876" class="row">Try again</text>
-<text x="46" y="896" class="row">Log in with Claude</text>
+<text x="46" y="896" class="section">PDT</text>
+<text x="46" y="916" class="row">Disconnect from PDT</text>
   </g>
   <style>
     .card { fill: #ffffff; stroke: #d7d3c8; }

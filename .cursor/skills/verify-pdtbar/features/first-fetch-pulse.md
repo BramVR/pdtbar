@@ -2,7 +2,7 @@
 
 The user is connected to PDT (browser sign-in or pasted token) and launches PDTBar. The app checks the connection, shows `Fetching portfolio`, reads holdings from the PDT REST API, writes a local snapshot, renders the pulse menu, and then fills details in the background.
 
-Proof that it works: `<app-support>/pdtbar/state/latest-portfolio-snapshot.json` is written in isolated state with open holdings and as-of `2026-06-22`. The app stays running, no `claude` or `mcporter` runs, and the fixture sentinel stays empty. With AX granted, the opened menu contains the pulse identifiers (`pdtbar.section.pulse`, `pdtbar.row.pulse.status`). A scenario whose required holdings request fails writes no snapshot and shows `Could not fetch portfolio` with `Try again`.
+Proof that it works: `<app-support>/pdtbar/state/latest-portfolio-snapshot.json` is written in isolated state with open holdings and as-of `2026-06-22`. The app stays running and the fixture sentinel stays empty. With AX granted, the opened menu contains the pulse identifiers (`pdtbar.section.pulse`, `pdtbar.row.pulse.status`). A scenario whose required holdings request fails writes no snapshot and shows `Could not fetch portfolio` with `Try again`.
 
 ## Sub-features
 
@@ -25,7 +25,7 @@ swift run pdtbar-smoke scripted-first-fetch --artifacts "$RUN/evidence" --app-su
 Scripts/verify_pdtbar.sh stop "$RUN"
 ```
 
-Read `$RUN/evidence/pdtbar-scripted-first-fetch-proof.json`. Pass requires `successSnapshotWritten: true`, `successSnapshotAsOf: 2026-06-22`, `successOpenHoldingCount > 0`, `failureSnapshotWritten: false`, `failureReported: true`, and for both launches `cliSpawned: false` and `fixtureSentinelEmpty: true`. When `accessibilityChecked: true`, `successPulseMenu.visible` and `failureMenu.visible` must be true, with the identifiers in `pdtbar-scripted-first-fetch-{success,failure}-ax.json`.
+Read `$RUN/evidence/pdtbar-scripted-first-fetch-proof.json`. Pass requires `successSnapshotWritten: true`, `successSnapshotAsOf: 2026-06-22`, `successOpenHoldingCount > 0`, `failureSnapshotWritten: false`, `failureReported: true`, and for both launches `processStillRunning: true` and `fixtureSentinelEmpty: true`. When `accessibilityChecked: true`, `successPulseMenu.visible` and `failureMenu.visible` must be true, with the identifiers in `pdtbar-scripted-first-fetch-{success,failure}-ax.json`.
 
 Related prompt-free scenarios: `ready-launch` (a connected browser session straight to the pulse) and `scripted-returning-launch` (a seeded snapshot stays visible during the background refresh and survives a failed one).
 

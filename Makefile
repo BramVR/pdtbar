@@ -1,4 +1,4 @@
-.PHONY: docs-list docs-site docs-site-test docs-site-clean start restart stop build test check
+.PHONY: docs-list docs-site docs-site-test docs-site-clean start restart stop build test check smoke-api
 
 docs-list:
 	node Scripts/docs-list.mjs
@@ -28,3 +28,6 @@ test:
 
 check:
 	./Scripts/check.sh
+
+smoke-api:
+	./Scripts/api_smoke_matrix.sh

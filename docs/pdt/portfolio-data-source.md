@@ -1,7 +1,7 @@
 ---
 summary: "PortfolioDataSource seam: PDT tools, normalized facets, joins, freshness, and gaps."
 read_when:
-  - Changing PDT/MCP data fetching or normalization
+  - Changing PDT data fetching or normalization
   - Updating pressure facets sourced from PDT
   - Debugging joins, freshness, or fixture realism
 ---
@@ -15,6 +15,10 @@ read_when:
 > Exercised live against the PDT MCP on **2026-06-22**. All numbers below are
 > redacted/sanitized; see `fixtures/` for the runnable JSON and
 > `fixtures-schema-notes.md` for the raw per-tool schemas.
+>
+> The MCP tool names and evidence below are historical. The product now reads
+> the PDT REST API (ADR-0002) through `PDTAPIDataSource`; the Claude/MCP path
+> was deleted in #250.
 
 ## 1. What PDT actually exposes (v1 facets)
 
@@ -34,13 +38,13 @@ read tool. The product's job is curation, not coverage.
 
 ## 2. The normalized `PortfolioDataSource` interface (facets)
 
-The seam hides raw PDT/MCP shapes from the engine. One interface, three current
-adapters (live PDT via a `PDTLiveToolClient`, Claude/PDT MCP connector-backed
-fetch via `PDTMCPConnectorDataSource`, and a fixture adapter reading
-`fixtures/*.json`). `PDTAPIDataSource` (#246) adds a fourth over the PDT REST
-API: REST envelopes decode into the same normalization inputs, holdings supply
-the `symbolId`/ISIN joins, and it is not wired into the app yet. It returns
-**normalized facets**, not raw PDT payloads:
+The seam hides raw PDT shapes from the engine. One interface, two adapters:
+`PDTAPIDataSource` (#246) over the PDT REST API, the app's data source since
+#248, where REST envelopes decode into the same normalization inputs and
+holdings supply the `symbolId`/ISIN joins; and a fixture adapter
+(`PDTFixtureDataSource`) reading the MCP-shaped `fixtures/*.json`, for explicit
+`--fixture` runs, checks, and tests only. It returns **normalized facets**, not
+raw PDT payloads:
 
 ```
 PortfolioDataSource
@@ -167,10 +171,29 @@ Normalization the seam owns (all pure logic, no UI):
    holdings-only tool and project the ~15 fields the engine needs) rather than
    load the whole blob into the model each tick.
 
-None of these block v1 — every gap is closable with derivation or an extra
-join call. The implemented Claude-first connector checks the same required v1
-read-tool list before fetching and refuses non-v1 read tools at the connector
-seam. These gaps mean the **PortfolioDataSource is non-trivial normalization
+### Supported REST path: known gaps (#250)
+
+The PDT REST API is the only data path. What it does not cover yet:
+
+- **Performance and gains.** `PDTAPIResource.performance` and `.gains` exist,
+  but the refresh does not map them (#246 scope). CAGR and total increase show
+  `Unavailable`, and a prior period's performance is never carried forward.
+  Scenario fixtures still carry performance for engine tests.
+- **Token expiry in Data health.** ADR-0002 §8 asks for the expiry date and an
+  `expiring_soon` warning. Nothing reads `expiresAt` yet (left by #287).
+- **Not read.** Corporate actions, benchmarks, transactions, and cash
+  corrections. Historical holdings (`/portfolio/holdings?date=`) and
+  `/portfolios` are allowlisted but unused by the refresh.
+- **Unconfirmed shapes.** Calendar, dividend, and symbol-quote row fields and
+  x-ray `weight` are assumed from the MCP tools, not seen live
+  (`fixtures/api/provenance.json`). The fixtures follow docs v0.8.1 and were
+  not re-checked against openapi v0.9.0.
+- **No API version signal.** PDT sends no version header, so a shape change
+  shows up as a typed decode failure in Data health, not as a version mismatch.
+
+None of the MCP-era gaps above block v1 — every gap is closable with derivation or an extra
+join call. `PDTAPIClient` sends only `GET` requests to an allowlisted set of
+read endpoints (`PDTAPIResource`). These gaps mean the **PortfolioDataSource is non-trivial normalization
 logic**, which was the key input to ADR-0001 below.
 
 ## 4. Freshness (concrete, observed)

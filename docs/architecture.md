@@ -10,11 +10,12 @@ read_when:
 
 ## Modules
 
-- `Sources/PDTBarCore`: normalized portfolio model, pressure engine, fixture/live data sources, menu descriptor rendering.
-- `Sources/PDTBarAppSupport`: shared AppKit-adjacent support used by the app, smoke runner, and tests for app state, status visuals, menu actions, status-item menu hosting, the PDT connection seam (`PDTAppConnection`, Keychain store), and the legacy Claude/PDT MCP connector kept for manual smokes until #250.
+- `Sources/PDTBarCore`: normalized portfolio model, pressure engine, fixture and PDT API data sources, menu descriptor rendering.
+- `Sources/PDTBarAppSupport`: shared AppKit-adjacent support used by the app, smoke runner, and tests for app state, status visuals, menu actions, status-item menu hosting, and the PDT connection seam (`PDTAppConnection`, Keychain store).
 - `Sources/PDTBarApp`: AppKit status item, PDT connection check and sign-in, first fetch, cached pulse, menu actions.
 - `Sources/PDTBarDev`: command-line model and descriptor inspection.
-- `Sources/PDTBarSmoke`: scripted, packaged, Accessibility, manual Claude, and live PDT smoke checks.
+- `Sources/PDTBarSmoke`: scripted, packaged, and Accessibility smoke checks, and the sandboxed scripted API matrix.
+- `Sources/PDTBarSmokeProof`: the pure check that decides whether a scripted app launch proved its fetch or refresh (`ScriptedLaunchEvidence`), shared by the smoke runner and tests.
 - `Sources/PDTBarChecks`: deterministic invariant checks.
 
 ## Entry Points
@@ -45,17 +46,11 @@ subscription paused, Keychain unavailable, disconnecting). Work never overlaps.
 `PDTAppConnection` is the app's one PDT connection (Keychain store, browser
 sign-in, URLSession, or an offline `--scripted-pdt` script for smokes) and the
 one place store and API errors become connection states. See
-[`claude-login-workflow.md`](claude-login-workflow.md).
+[`pdt-connection-workflow.md`](pdt-connection-workflow.md).
 The AppKit delegate renders runtime descriptors, forwards menu actions, and
-performs platform lifecycle work such as timers, async process calls, and
-status-item installation.
-
-`ClaudeLocalConnection` is the legacy Claude/PDT connection, no longer reachable
-from launch or the menu (#248); manual and live smokes still use it until #250:
-readiness, login handoff process handling, MCP list parsing,
-ToolSearch resolution, PDT read-tool calls, retry classification, read-only
-allowlists, and Claude tool-result parsing flow through app support instead of
-the AppKit delegate.
+performs platform lifecycle work such as timers, background work, and
+status-item installation. Product code starts no process; `pdtbar-checks`
+fails on any process start or Claude/MCP mention in the three product targets.
 
 `PDTAPIClient` is the read-only PDT REST transport (#244, ADR-0002): an allowlisted `PDTAPIResource` enum (every case a `GET` to
 `https://api.portfoliodividendtracker.com/v1`), an injected token provider
@@ -98,9 +93,7 @@ app's first fetch (#248): it decodes REST envelopes into the existing normalizat
 requires holdings, and degrades the snapshot when an optional facet fails.
 
 `PDTAPIBackgroundDetailRefresh` (#247) is the background detail refresh over the
-same client. It shares `PDTBackgroundDetailRefreshResult` and the
-`PDTBackgroundDetailRefreshing` seam with the legacy Claude refresh, and is the
-app's refresh since #248. Phases run in order
+same client and the app's refresh since #248. Phases run in order
 with no tool discovery and no per-holding lookups: holdings carry `symbolId`
 for the income join, and prices come from `prices/batch` in chunks of 50. Every
 phase fills one in-memory snapshot. The store is written once, by
@@ -121,9 +114,8 @@ token, account id, URL, or response body cannot be stored, shown, or copied.
 `DataHealthRedactionTests` holds that line with a `Mirror` walk and planted
 secrets. The last failure is persisted as `latest-sync-failure.json`
 (`SnapshotStore.lastSyncFailure`); an unreadable or foreign file is no failure.
-The Claude refresh keeps its own `PDTDetailRefreshFailureDiagnostic` and
-`latest-detail-refresh-diagnostic.json` until #250 deletes it; neither feeds
-Data Health.
+A `latest-detail-refresh-diagnostic.json` left by a build before #250 is never
+read.
 
 `DataHealth` (`Sources/PDTBarCore/FreshnessHealth.swift`) reports PDT API
 access as separate facts, one row each in the Data health submenu:
@@ -162,7 +154,7 @@ path but is explicit developer tooling.
 - App support holds reusable AppKit-adjacent glue; it is not a second engine.
 - Launch runtime owns setup, retry, cached-pulse display, and background detail refresh state; Bar forwards menu actions.
 - `PDTAppConnection` owns the credential, sign-in, and error-to-state mapping; AppKit chooses when to start work and renders descriptors.
-- PDT/MCP adapters normalize raw shapes before engine logic sees them.
+- PDT API and fixture adapters normalize raw shapes before engine logic sees them.
 - Financial data stays local; public proof is sanitized.
 
-See also: [`claude-login-workflow.md`](claude-login-workflow.md), [`pdt/portfolio-data-source.md`](pdt/portfolio-data-source.md), [`reuse-notes.md`](reuse-notes.md).
+See also: [`pdt-connection-workflow.md`](pdt-connection-workflow.md), [`pdt/portfolio-data-source.md`](pdt/portfolio-data-source.md), [`reuse-notes.md`](reuse-notes.md).

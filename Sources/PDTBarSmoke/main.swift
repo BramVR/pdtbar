@@ -6,6 +6,7 @@ import Foundation
 import ImageIO
 import PDTBarAppSupport
 import PDTBarCore
+import PDTBarSmokeProof
 import Security
 
 private struct SmokeReport: Codable {
@@ -23,97 +24,55 @@ private enum SmokeStatus {
 
 private let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
 private let defaultFixture = packageRoot.appending(path: "docs/pdt/fixtures/quiet-no-pressure.json")
-private let pinnedMcporterVersion = "0.12.2"
 private let scriptedPDTAsOf = "2026-06-22"
+private let menuNotCheckedByDesign = "menu: not checked (TCC unreachable by design)"
+/// The app applies a finished fetch on its main queue after the snapshot and
+/// the last event are readable, so a sandbox kill there lands after both.
+private let scriptedLaunchLivenessHold: TimeInterval = 0.5
+
+private struct SmokeCommand: Sendable {
+    var name: String
+    var usage: String
+    var inAPIMatrix = false
+    var run: @Sendable ([String]) throws -> SmokeReport
+}
+
+private let smokeCommands: [SmokeCommand] = [
+    SmokeCommand(name: "scripted-api-client", usage: "[--artifacts <dir>]", inAPIMatrix: true, run: scriptedAPIClientSmoke(arguments:)),
+    SmokeCommand(name: "scripted-api-snapshot", usage: "[--artifacts <dir>]", inAPIMatrix: true, run: scriptedAPISnapshotSmoke(arguments:)),
+    SmokeCommand(name: "scripted-api-auth", usage: "[--artifacts <dir>]", inAPIMatrix: true, run: scriptedAPIAuthSmoke(arguments:)),
+    SmokeCommand(name: "copy-holding-identifier-action", usage: "", run: { _ in copyHoldingIdentifierActionSmoke() }),
+    SmokeCommand(name: "scripted-first-fetch", usage: "[--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]", inAPIMatrix: true, run: scriptedFirstFetchSmoke(arguments:)),
+    SmokeCommand(name: "scripted-returning-launch", usage: "[--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]", inAPIMatrix: true, run: scriptedReturningLaunchSmoke(arguments:)),
+    SmokeCommand(name: "scripted-sign-in", usage: "[--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]", run: scriptedSignInSmoke(arguments:)),
+    SmokeCommand(name: "scripted-setup-retry", usage: "[--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]", run: scriptedSetupRetrySmoke(arguments:)),
+    SmokeCommand(name: "scripted-pulse-mark-read", usage: "[--artifacts <dir>]", run: scriptedPulseMarkReadSmoke(arguments:)),
+    SmokeCommand(name: "logged-out-launch", usage: "[--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]", run: loggedOutLaunchSmoke(arguments:)),
+    SmokeCommand(name: "ready-launch", usage: "[--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]", run: readyLaunchSmoke(arguments:)),
+    SmokeCommand(name: "app-bundle-packaging", usage: "[--artifacts <dir>] [--timeout <seconds>]", run: appBundlePackagingSmoke(arguments:)),
+    SmokeCommand(name: "packaged-onboarding", usage: "[--app <path-to-PDTBar.app>] [--app-support-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]", run: packagedOnboardingSmoke(arguments:)),
+    SmokeCommand(name: "packaged-app", usage: "[--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]", run: packagedAppSmoke(arguments:)),
+    SmokeCommand(name: "peekaboo", usage: "[--peekaboo <path>] [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>]", run: peekabooSmoke(arguments:)),
+    SmokeCommand(name: "real-user-pulse", usage: "[--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]", run: { try realUserPulseSmoke(arguments: $0) }),
+    SmokeCommand(name: "portfolio-summary-proof", usage: "[--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]", run: portfolioSummaryProof(arguments:)),
+    SmokeCommand(name: "portfolio-values-settings-proof", usage: "[--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]", run: portfolioValuesSettingsProof(arguments:)),
+    SmokeCommand(name: "fixture-proof", usage: "[--fixture <path>] [--output <path>]", run: fixtureProof(arguments:)),
+    SmokeCommand(name: "menu-polish-proof", usage: "[--output <path>]", run: menuPolishProof(arguments:)),
+    SmokeCommand(name: "scripted-api-matrix", usage: "[--app <path>] [--artifacts <dir>] [--timeout <seconds>]", run: scriptedAPIMatrixSmoke(arguments:)),
+    SmokeCommand(name: "sandbox-probe", usage: "connect|resolve|mach <service>|exec <path>", run: sandboxProbeSmoke(arguments:)),
+]
 
 do {
     let arguments = Array(CommandLine.arguments.dropFirst())
-    guard let command = arguments.first else {
+    guard let name = arguments.first, let command = smokeCommands.first(where: { $0.name == name }) else {
         throw CommandError.usage
     }
-
-    let report: SmokeReport
-    switch command {
-    case "manual-claude-pdt":
-        report = try manualClaudePDTSmoke(arguments: Array(arguments.dropFirst()))
-    case "live-pdt":
-        report = try livePDTSmoke(arguments: Array(arguments.dropFirst()))
-    case "scripted-pdt-connector":
-        report = try scriptedPDTConnectorSmoke(arguments: Array(arguments.dropFirst()))
-    case "scripted-api-client":
-        report = try scriptedAPIClientSmoke(arguments: Array(arguments.dropFirst()))
-    case "scripted-api-snapshot":
-        report = try scriptedAPISnapshotSmoke(arguments: Array(arguments.dropFirst()))
-    case "scripted-api-auth":
-        report = try scriptedAPIAuthSmoke(arguments: Array(arguments.dropFirst()))
-    case "copy-holding-identifier-action":
-        report = copyHoldingIdentifierActionSmoke()
-    case "scripted-first-fetch":
-        report = try scriptedFirstFetchSmoke(arguments: Array(arguments.dropFirst()))
-    case "scripted-returning-launch":
-        report = try scriptedReturningLaunchSmoke(arguments: Array(arguments.dropFirst()))
-    case "scripted-sign-in":
-        report = try scriptedSignInSmoke(arguments: Array(arguments.dropFirst()))
-    case "scripted-setup-retry":
-        report = try scriptedSetupRetrySmoke(arguments: Array(arguments.dropFirst()))
-    case "scripted-pulse-mark-read":
-        report = try scriptedPulseMarkReadSmoke(arguments: Array(arguments.dropFirst()))
-    case "logged-out-launch":
-        report = try loggedOutLaunchSmoke(arguments: Array(arguments.dropFirst()))
-    case "ready-launch":
-        report = try readyLaunchSmoke(arguments: Array(arguments.dropFirst()))
-    case "app-bundle-packaging":
-        report = try appBundlePackagingSmoke(arguments: Array(arguments.dropFirst()))
-    case "packaged-onboarding":
-        report = try packagedOnboardingSmoke(arguments: Array(arguments.dropFirst()))
-    case "packaged-app":
-        report = try packagedAppSmoke(arguments: Array(arguments.dropFirst()))
-    case "peekaboo":
-        report = try peekabooSmoke(arguments: Array(arguments.dropFirst()))
-    case "real-user-pulse":
-        report = try realUserPulseSmoke(arguments: Array(arguments.dropFirst()))
-    case "portfolio-summary-proof":
-        report = try portfolioSummaryProof(arguments: Array(arguments.dropFirst()))
-    case "portfolio-values-settings-proof":
-        report = try portfolioValuesSettingsProof(arguments: Array(arguments.dropFirst()))
-    case "fixture-proof":
-        report = try fixtureProof(arguments: Array(arguments.dropFirst()))
-    case "menu-polish-proof":
-        report = try menuPolishProof(arguments: Array(arguments.dropFirst()))
-    default:
-        throw CommandError.usage
-    }
-
+    let report = try command.run(Array(arguments.dropFirst()))
     try writeReport(report)
     Foundation.exit(report.status == SmokeStatus.failed ? 1 : 0)
 } catch CommandError.usage {
-    FileHandle.standardError.write(Data("""
-    usage:
-      pdtbar-smoke manual-claude-pdt [--claude <path>] [--model <alias>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke live-pdt [--server <mcporter-server>] [--mcporter <path>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke scripted-pdt-connector [--artifacts <dir>]
-      pdtbar-smoke scripted-api-client [--artifacts <dir>]
-      pdtbar-smoke scripted-api-snapshot [--artifacts <dir>]
-      pdtbar-smoke scripted-api-auth [--artifacts <dir>]
-      pdtbar-smoke copy-holding-identifier-action
-      pdtbar-smoke scripted-first-fetch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke scripted-returning-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke scripted-sign-in [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke scripted-setup-retry [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke scripted-pulse-mark-read [--artifacts <dir>]
-      pdtbar-smoke logged-out-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke ready-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke app-bundle-packaging [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke packaged-onboarding [--app <path-to-PDTBar.app>] [--app-support-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
-      pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]
-      pdtbar-smoke peekaboo [--peekaboo <path>] [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>]
-      pdtbar-smoke real-user-pulse [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
-      pdtbar-smoke portfolio-summary-proof [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
-      pdtbar-smoke portfolio-values-settings-proof [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
-      pdtbar-smoke fixture-proof [--fixture <path>] [--output <path>]
-      pdtbar-smoke menu-polish-proof [--output <path>]
-
-    """.utf8))
+    let usage = smokeCommands.map { "  pdtbar-smoke \($0.name)\($0.usage.isEmpty ? "" : " \($0.usage)")" }
+    FileHandle.standardError.write(Data("usage:\n\(usage.joined(separator: "\n"))\n\n".utf8))
     Foundation.exit(64)
 } catch {
     try? writeReport(SmokeReport(
@@ -127,9 +86,6 @@ do {
 
 // MARK: - Scripted PDT connection launches
 
-/// One app launch over `--scripted-pdt` with isolated app support. The fixture
-/// environment and a fake `claude`/`mcporter` first on PATH are traps: a
-/// correct launch never writes the fixture sentinel or the CLI marker.
 private struct ScriptedPDTLaunch {
     let appSupportDirectory: URL
     let script: URL
@@ -137,15 +93,10 @@ private struct ScriptedPDTLaunch {
     let stderrLog: URL
     let snapshot: URL
     let fixtureSentinel: URL
-    let cliMarker: URL
     let process: Process
 
     var fixtureSentinelEmpty: Bool {
         ((try? FileManager.default.contentsOfDirectory(atPath: fixtureSentinel.path)) ?? []).isEmpty
-    }
-
-    var cliSpawned: Bool {
-        FileManager.default.fileExists(atPath: cliMarker.path)
     }
 
     var snapshotWritten: Bool {
@@ -156,11 +107,16 @@ private struct ScriptedPDTLaunch {
         ["--app-support-dir", artifactPath(appSupportDirectory), "--scripted-pdt", artifactPath(script)]
     }
 
+    var events: [String] {
+        ((try? String(contentsOf: eventLog, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+    }
+
+    var publishedSnapshot: PortfolioSnapshot? {
+        try? JSONDecoder().decode(PortfolioSnapshot.self, from: Data(contentsOf: snapshot))
+    }
+
     func eventCount(_ event: String) -> Int {
-        guard let content = try? String(contentsOf: eventLog, encoding: .utf8) else {
-            return 0
-        }
-        return content.split(separator: "\n").filter { $0 == event }.count
+        events.filter { $0 == event }.count
     }
 
     func waitForEventCount(_ event: String, atLeast count: Int, timeout: TimeInterval) -> Bool {
@@ -208,15 +164,6 @@ private func launchScriptedPDTApp(
     }
     let files = try writeScriptedPDT(script, appSupportDirectory: appSupportDirectory)
     let fixtureSentinel = try options.temporarySnapshotDirectory(prefix: "\(prefix)-fixture-sentinel")
-    let cliMarker = appSupportDirectory.appending(path: "cli-spawned.log")
-    let fakeBin = appSupportDirectory.appending(path: "fake-cli-bin")
-    try FileManager.default.createDirectory(at: fakeBin, withIntermediateDirectories: true)
-    for name in ["claude", "mcporter"] {
-        let fake = fakeBin.appending(path: name)
-        let body = "#!/bin/sh\nprintf '%s %s\\n' \"$(basename \"$0\")\" \"$*\" >> '\(cliMarker.path)'\nexit 1\n"
-        try Data(body.utf8).write(to: fake, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
-    }
     let stderrLog = appSupportDirectory.appending(path: "pdtbar-stderr.log")
     FileManager.default.createFile(atPath: stderrLog.path, contents: nil)
 
@@ -228,7 +175,6 @@ private func launchScriptedPDTApp(
     process.environment = environment.merging([
         "PDTBAR_FIXTURE": defaultFixture.path,
         "PDTBAR_SNAPSHOT_DIR": fixtureSentinel.path,
-        "PATH": "\(fakeBin.path):\(environment["PATH"] ?? "/usr/bin:/bin")",
     ]) { _, new in new }
     process.standardError = try FileHandle(forWritingTo: stderrLog)
     try process.run()
@@ -239,7 +185,6 @@ private func launchScriptedPDTApp(
         stderrLog: stderrLog,
         snapshot: stateDirectory.appending(path: "latest-portfolio-snapshot.json"),
         fixtureSentinel: fixtureSentinel,
-        cliMarker: cliMarker,
         process: process
     )
 }
@@ -265,13 +210,13 @@ private func scriptedHoldingsUnavailable() -> [ScriptedPDTAPIConfiguration.Respo
     )
 }
 
-/// The pulse the app's first fetch builds from the same scripted replies.
-private func expectedFirstFetchPulse(_ api: ScriptedPDTAPIConfiguration) throws -> PulseLifecycleResult {
+/// The pulse and snapshot the app's first fetch builds from the same scripted replies.
+private func expectedFirstFetch(_ api: ScriptedPDTAPIConfiguration) throws -> (pulse: PulseLifecycleResult, snapshot: PortfolioSnapshot?) {
     let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-scripted-first-fetch-expected")
     defer {
         try? FileManager.default.removeItem(at: store.directory)
     }
-    return try PDTCoalescedFirstPortfolioFetch(
+    let pulse = try PDTCoalescedFirstPortfolioFetch(
         dataSource: PDTAPIDataSource(
             client: PDTAPIClient(
                 transport: api.transport(),
@@ -282,6 +227,7 @@ private func expectedFirstFetchPulse(_ api: ScriptedPDTAPIConfiguration) throws 
         snapshotStore: store,
         asOf: api.asOf
     ).fetch()
+    return (pulse, try store.loadPriorSnapshot())
 }
 
 private struct MenuCheck: Codable {
@@ -368,7 +314,6 @@ private func smokeArtifacts(_ options: SmokeOptions) throws -> URL {
 private struct ScriptedLaunchIsolation: Codable {
     var appArguments: [String]
     var processStillRunning: Bool
-    var cliSpawned: Bool
     var fixtureSentinelEmpty: Bool
 }
 
@@ -376,13 +321,278 @@ private func isolation(_ launch: ScriptedPDTLaunch) -> ScriptedLaunchIsolation {
     ScriptedLaunchIsolation(
         appArguments: launch.arguments,
         processStillRunning: launch.process.isRunning,
-        cliSpawned: launch.cliSpawned,
         fixtureSentinelEmpty: launch.fixtureSentinelEmpty
     )
 }
 
 private extension ScriptedLaunchIsolation {
-    var clean: Bool { processStillRunning && !cliSpawned && fixtureSentinelEmpty }
+    var clean: Bool { processStillRunning && fixtureSentinelEmpty }
+}
+
+/// Waits for `launch` to leave `expected` on disk and log `expectedEvents`,
+/// holds, then reads what it left behind. Call before the smoke stops the app.
+private func scriptedLaunchEvidence(
+    _ launch: ScriptedPDTLaunch,
+    seed: PortfolioSnapshot? = nil,
+    expected: PortfolioSnapshot?,
+    expectedEvents: [String],
+    timeout: TimeInterval
+) -> ScriptedLaunchEvidence {
+    let deadline = Date().addingTimeInterval(timeout)
+    while launch.process.isRunning,
+          Date() < deadline,
+          launch.publishedSnapshot != expected || launch.events != expectedEvents {
+        Thread.sleep(forTimeInterval: 0.1)
+    }
+    Thread.sleep(forTimeInterval: scriptedLaunchLivenessHold)
+    return ScriptedLaunchEvidence(
+        seed: seed,
+        expected: expected,
+        published: launch.publishedSnapshot,
+        expectedEvents: expectedEvents,
+        events: launch.events,
+        processStillRunning: launch.process.isRunning,
+        fixtureSentinelEmpty: launch.fixtureSentinelEmpty
+    )
+}
+
+private struct ScriptedLaunchEvidenceProof: Codable {
+    var violations: [ScriptedLaunchViolation]
+    var events: [String]
+    var seededOpenHoldingCount: Int?
+    var publishedOpenHoldingCount: Int?
+
+    init(_ evidence: ScriptedLaunchEvidence) {
+        violations = evidence.violations
+        events = evidence.events
+        seededOpenHoldingCount = evidence.seed?.openHoldings.count
+        publishedOpenHoldingCount = evidence.published?.openHoldings.count
+    }
+}
+
+// MARK: scripted-api-matrix
+
+private struct SandboxRuleProof: Codable {
+    var rule: String
+    var expected: String
+    var observed: String
+    var enforced: Bool
+
+    init(_ rule: String, expected: String, observed: String) {
+        self.rule = rule
+        self.expected = expected
+        self.observed = observed
+        enforced = observed == expected
+    }
+}
+
+private struct APISmokeMatrixEnvironment: Codable {
+    var path: String
+    var resolvedCLIs: [String: String]
+    var rules: [SandboxRuleProof]
+    var hermetic: Bool
+}
+
+private struct APISmokeMatrixProof: Codable {
+    var environment: APISmokeMatrixEnvironment
+    var menuChecks: String
+    var rows: [SmokeReport]
+    var status: String
+}
+
+private func scriptedAPIMatrixSmoke(arguments: [String]) throws -> SmokeReport {
+    let name = "scripted-api-matrix"
+    let options = try SmokeOptions(arguments: arguments)
+    let artifacts = try smokeArtifacts(options)
+    let proof = artifacts.appending(path: "pdtbar-scripted-api-matrix-proof.json")
+    let environment = try apiSmokeMatrixEnvironment()
+    let enforced = environment.rules.filter(\.enforced).count
+    printLine("\(environment.hermetic ? "hermetic" : "failed")  environment  PATH=\(environment.path)  claude/codex/mcporter: "
+        + (environment.resolvedCLIs.isEmpty ? "unresolvable" : "\(environment.resolvedCLIs)")
+        + "  sandbox rules enforced: \(enforced)/\(environment.rules.count)")
+
+    let matrixCommands = smokeCommands.filter(\.inAPIMatrix)
+    var rows: [SmokeReport] = []
+    if environment.hermetic {
+        for command in matrixCommands {
+            var rowArguments = ["--artifacts", artifacts.appending(path: command.name).path, "--no-menu-checks"]
+            if let app = options.app {
+                rowArguments += ["--app", app.path]
+            }
+            if options.timeoutWasProvided {
+                rowArguments += ["--timeout", String(options.timeout)]
+            }
+            let row: SmokeReport
+            do {
+                row = try command.run(rowArguments)
+            } catch {
+                row = SmokeReport(name: command.name, status: SmokeStatus.failed, detail: "\(error)", artifacts: [])
+            }
+            printLine("\(row.status)  \(row.name)  \(row.detail)")
+            rows.append(row)
+        }
+    }
+    let passed = environment.hermetic
+        && rows.map(\.name) == matrixCommands.map(\.name)
+        && rows.allSatisfy { $0.status == SmokeStatus.passed }
+    try stableJSONData(APISmokeMatrixProof(
+        environment: environment,
+        menuChecks: menuNotCheckedByDesign,
+        rows: rows,
+        status: passed ? SmokeStatus.passed : SmokeStatus.failed
+    )).write(to: proof, options: .atomic)
+
+    return SmokeReport(
+        name: name,
+        status: passed ? SmokeStatus.passed : SmokeStatus.failed,
+        detail: environment.hermetic
+            ? "\(rows.filter { $0.status == SmokeStatus.passed }.count)/\(matrixCommands.count) API rows passed with claude, codex, and mcporter off PATH and \(enforced) sandbox rules enforced"
+            : "not hermetic: \(environment.rules.filter { !$0.enforced }.map(\.rule) + environment.resolvedCLIs.keys.sorted().map { "\($0) on PATH" }); no rows ran",
+        artifacts: [artifactPath(proof)] + rows.flatMap(\.artifacts)
+    )
+}
+
+private func printLine(_ line: String) {
+    FileHandle.standardOutput.write(Data("\(line)\n".utf8))
+}
+
+/// Fatal rules are probed in child processes, which inherit the sandbox, so a
+/// rule that holds kills the child and leaves this process running. A denied
+/// `posix_spawn` kills the spawner, so exec probes call `execv` in the child. The
+/// non-fatal TCC rule is probed here first: a process outside the sandbox
+/// runs no child probe and so never sends a packet.
+private func apiSmokeMatrixEnvironment() throws -> APISmokeMatrixEnvironment {
+    let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+    var resolvedCLIs: [String: String] = [:]
+    for name in ["claude", "codex", "mcporter"] {
+        let candidates = path.split(separator: ":").map { URL(fileURLWithPath: String($0)).appending(path: name).path }
+        // An execute-permission check on a denied name trips the exec rule, so test existence only.
+        resolvedCLIs[name] = candidates.first { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    let denied = "denied"
+    let killed = "killed by SIGKILL"
+    var rules = [
+        SandboxRuleProof("TCC: com.apple.tccd lookup is denied", expected: denied, observed: machLookup("com.apple.tccd") == KERN_SUCCESS ? "allowed" : denied),
+        SandboxRuleProof("Control: com.apple.cfprefsd.daemon lookup is allowed", expected: "allowed", observed: machLookup("com.apple.cfprefsd.daemon") == KERN_SUCCESS ? "allowed" : denied),
+    ]
+    let sandboxed = rules.allSatisfy(\.enforced)
+    let executable = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
+    let execProbes = FileManager.default.temporaryDirectory.appending(path: "pdtbar-exec-probe-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: execProbes, withIntermediateDirectories: true)
+    defer {
+        try? FileManager.default.removeItem(at: execProbes)
+    }
+    func execProbe(_ name: String) throws -> URL {
+        let script = execProbes.appending(path: name)
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: script)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
+    }
+    let probes: [(rule: String, expected: String, arguments: [String])] = [
+        ("Network: connect to 192.0.2.1:443 is fatal", killed, ["connect"]),
+        ("DNS: the mDNSResponder socket is fatal", killed, ["resolve"]),
+        ("Keychain: com.apple.SecurityServer lookup is fatal", killed, ["mach", "com.apple.SecurityServer"]),
+        ("Keychain: com.apple.securityd.xpc lookup is fatal", killed, ["mach", "com.apple.securityd.xpc"]),
+        ("Exec: a file named claude is fatal", killed, ["exec", try execProbe("claude").path]),
+        ("Exec: a file named codex is fatal", killed, ["exec", try execProbe("codex").path]),
+        ("Exec: a file named mcporter is fatal", killed, ["exec", try execProbe("mcporter").path]),
+        ("Control: a file named claudette runs", "exited 0", ["exec", try execProbe("claudette").path]),
+    ]
+    for probe in probes {
+        let observed = sandboxed ? childOutcome(executable, ["sandbox-probe"] + probe.arguments) : "not run: this process is not sandboxed"
+        rules.append(SandboxRuleProof(probe.rule, expected: probe.expected, observed: observed))
+    }
+    return APISmokeMatrixEnvironment(
+        path: path,
+        resolvedCLIs: resolvedCLIs,
+        rules: rules,
+        hermetic: resolvedCLIs.isEmpty && rules.allSatisfy(\.enforced)
+    )
+}
+
+private func childOutcome(_ executable: URL, _ arguments: [String]) -> String {
+    let process = Process()
+    process.executableURL = executable
+    process.arguments = arguments
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+    } catch {
+        return "did not start: \(error)"
+    }
+    let deadline = Date().addingTimeInterval(10)
+    while process.isRunning && Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.02)
+    }
+    if process.isRunning {
+        process.terminate()
+        process.waitUntilExit()
+        return "timed out"
+    }
+    if process.terminationReason == .uncaughtSignal {
+        return process.terminationStatus == SIGKILL ? "killed by SIGKILL" : "killed by signal \(process.terminationStatus)"
+    }
+    return "exited \(process.terminationStatus)"
+}
+
+private func sandboxProbeSmoke(arguments: [String]) throws -> SmokeReport {
+    let observed: String
+    switch arguments.first {
+    case "connect" where arguments.count == 1:
+        observed = "non-blocking connect to 192.0.2.1:443: errno \(nonBlockingConnectErrno())"
+    case "resolve" where arguments.count == 1:
+        var result: UnsafeMutablePointer<addrinfo>?
+        let code = getaddrinfo("localhost", nil, nil, &result)
+        freeaddrinfo(result)
+        observed = "getaddrinfo localhost: \(code)"
+    case "mach" where arguments.count == 2:
+        observed = "bootstrap_look_up \(arguments[1]): \(machLookup(arguments[1]))"
+    case "exec" where arguments.count == 2:
+        execv(arguments[1], [strdup(arguments[1]), nil])
+        observed = "execv \(arguments[1]): errno \(errno)"
+    default:
+        throw CommandError.usage
+    }
+    return SmokeReport(name: "sandbox-probe", status: SmokeStatus.passed, detail: observed, artifacts: [])
+}
+
+/// TEST-NET-1 (RFC 5737) never answers, so a non-blocking connect reports
+/// EINPROGRESS outside a sandbox and EPERM under a non-fatal deny.
+private func nonBlockingConnectErrno() -> Int32 {
+    let socketDescriptor = socket(AF_INET, SOCK_STREAM, 0)
+    defer {
+        close(socketDescriptor)
+    }
+    _ = fcntl(socketDescriptor, F_SETFL, fcntl(socketDescriptor, F_GETFL) | O_NONBLOCK)
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = in_port_t(443).bigEndian
+    inet_pton(AF_INET, "192.0.2.1", &address.sin_addr)
+    let result = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.connect(socketDescriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+    }
+    return result == 0 ? 0 : errno
+}
+
+@_silgen_name("bootstrap_look_up")
+private func bootstrapLookUp(
+    _ bootstrap: mach_port_t,
+    _ serviceName: UnsafePointer<CChar>,
+    _ service: UnsafeMutablePointer<mach_port_t>
+) -> kern_return_t
+
+private func machLookup(_ serviceName: String) -> kern_return_t {
+    var bootstrap: mach_port_t = 0
+    let found = task_get_special_port(mach_task_self_, TASK_BOOTSTRAP_PORT, &bootstrap)
+    guard found == KERN_SUCCESS else {
+        return found
+    }
+    var service: mach_port_t = 0
+    return bootstrapLookUp(bootstrap, serviceName, &service)
 }
 
 // MARK: scripted-first-fetch
@@ -394,8 +604,10 @@ private struct ScriptedFirstFetchProof: Codable {
     var successSnapshotAsOf: String?
     var successOpenHoldingCount: Int
     var successHoldingsRequests: Int
+    var successEvidence: ScriptedLaunchEvidenceProof
     var successPulseMenu: MenuCheck?
     var failure: ScriptedLaunchIsolation
+    var failureEvidence: ScriptedLaunchEvidenceProof
     var failureHoldingsRequests: Int
     var failureSnapshotWritten: Bool
     var failureReported: Bool
@@ -413,10 +625,11 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
     }
     let artifacts = try smokeArtifacts(options)
     let proof = artifacts.appending(path: "pdtbar-scripted-first-fetch-proof.json")
-    let accessibilityChecked = AXIsProcessTrusted()
+    let accessibilityChecked = options.menuChecks && AXIsProcessTrusted()
 
     let successAPI = ScriptedPDTAPIConfiguration(responses: [try scriptedHoldingsResponse()], asOf: scriptedPDTAsOf)
-    let expectedPulse = try expectedFirstFetchPulse(successAPI)
+    let expected = try expectedFirstFetch(successAPI)
+    let holdingsRequest = "request /v1/portfolio/holdings"
     let success = try launchScriptedPDTApp(
         app,
         script: ScriptedPDTConnection(connection: .personalToken, api: successAPI),
@@ -424,12 +637,18 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
         prefix: "\(name)-success"
     )
     defer { terminate(success.process) }
-    let successSnapshotWritten = waitForFile(success.snapshot, timeout: options.timeout + 3.0)
-    let publishedSnapshot = try? JSONDecoder().decode(PortfolioSnapshot.self, from: Data(contentsOf: success.snapshot))
+    let successEvidence = scriptedLaunchEvidence(
+        success,
+        expected: expected.snapshot,
+        // The background refresh that follows the first fetch asks for holdings again and finds the script empty.
+        expectedEvents: ["check", holdingsRequest, holdingsRequest],
+        timeout: options.timeout + 3.0
+    )
+    let publishedSnapshot = successEvidence.published
     let successPulseMenu = accessibilityChecked
         ? try checkMenu(
             "\(name)-success",
-            descriptor: expectedPulse.descriptor,
+            descriptor: expected.pulse.descriptor,
             pulse: true,
             process: success.process,
             timeout: options.timeout,
@@ -450,8 +669,13 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
     )
     defer { terminate(failure.process) }
     let attempts = PDTAPIRequestPolicy().maxAttempts
-    _ = failure.waitForEventCount("request /v1/portfolio/holdings", atLeast: attempts, timeout: options.timeout + 3.0)
     let failureReported = waitForFileContent(failure.stderrLog, contains: "first fetch failed", timeout: options.timeout + 3.0)
+    let failureEvidence = scriptedLaunchEvidence(
+        failure,
+        expected: nil,
+        expectedEvents: ["check"] + Array(repeating: holdingsRequest, count: attempts),
+        timeout: options.timeout + 3.0
+    )
     let failureMenu = accessibilityChecked
         ? try checkMenu(
             "\(name)-failure",
@@ -467,13 +691,15 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
     let proofPayload = ScriptedFirstFetchProof(
         success: successIsolation,
         successSnapshotPath: artifactPath(success.snapshot),
-        successSnapshotWritten: successSnapshotWritten,
+        successSnapshotWritten: publishedSnapshot != nil,
         successSnapshotAsOf: publishedSnapshot?.asOf,
         successOpenHoldingCount: publishedSnapshot?.openHoldings.count ?? 0,
-        successHoldingsRequests: success.eventCount("request /v1/portfolio/holdings"),
+        successHoldingsRequests: success.eventCount(holdingsRequest),
+        successEvidence: ScriptedLaunchEvidenceProof(successEvidence),
         successPulseMenu: successPulseMenu,
         failure: failureIsolation,
-        failureHoldingsRequests: failure.eventCount("request /v1/portfolio/holdings"),
+        failureEvidence: ScriptedLaunchEvidenceProof(failureEvidence),
+        failureHoldingsRequests: failure.eventCount(holdingsRequest),
         failureSnapshotWritten: failure.snapshotWritten,
         failureReported: failureReported,
         failureMenu: failureMenu,
@@ -484,13 +710,11 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
     let artifactsList = [artifactPath(proof)] + [successPulseMenu, failureMenu].compactMap { $0?.evidencePath }
 
     guard successIsolation.clean,
-          successSnapshotWritten,
+          successEvidence.violations.isEmpty,
           proofPayload.successSnapshotAsOf == scriptedPDTAsOf,
           proofPayload.successOpenHoldingCount > 0,
-          proofPayload.successHoldingsRequests >= 1,
           failureIsolation.clean,
-          proofPayload.failureHoldingsRequests == attempts,
-          !proofPayload.failureSnapshotWritten,
+          failureEvidence.violations.isEmpty,
           failureReported,
           successPulseMenu?.visible ?? true,
           failureMenu?.visible ?? true
@@ -498,22 +722,24 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
         return SmokeReport(
             name: name,
             status: SmokeStatus.failed,
-            detail: "scripted PDT first fetch did not prove publish-on-success, no snapshot on a failed holdings fetch, and no CLI or fixture fallback",
+            detail: "scripted PDT first fetch did not prove publish-on-success, no snapshot on a failed holdings fetch, and no fixture fallback"
+                + "; success: \(successEvidence.violations.map(\.rawValue)), failure: \(failureEvidence.violations.map(\.rawValue))",
             artifacts: artifactsList
         )
     }
     guard accessibilityChecked else {
         return SmokeReport(
             name: name,
-            status: SmokeStatus.skipped,
-            detail: "connected first fetch wrote the snapshot; failed holdings fetch wrote none and reported the failure; no CLI spawned, no fixture state; macOS Accessibility permission missing for menu inspection",
+            status: options.menuChecks ? SmokeStatus.skipped : SmokeStatus.passed,
+            detail: "connected first fetch wrote the snapshot; failed holdings fetch wrote none and reported the failure; no fixture state; "
+                + (options.menuChecks ? "macOS Accessibility permission missing for menu inspection" : menuNotCheckedByDesign),
             artifacts: artifactsList
         )
     }
     return SmokeReport(
         name: name,
         status: SmokeStatus.passed,
-        detail: "connected first fetch wrote the snapshot and showed the pulse; failed holdings fetch wrote none and showed Could not fetch portfolio; no CLI spawned, no fixture state",
+        detail: "connected first fetch wrote the snapshot and showed the pulse; failed holdings fetch wrote none and showed Could not fetch portfolio; no fixture state",
         artifacts: artifactsList
     )
 }
@@ -859,7 +1085,7 @@ private func loggedOutLaunchSmoke(arguments: [String]) throws -> SmokeReport {
         return SmokeReport(
             name: name,
             status: SmokeStatus.failed,
-            detail: "not-connected launch exited, spawned a CLI, wrote fixture or snapshot state, or fetched without a connection",
+            detail: "not-connected launch exited, wrote fixture or snapshot state, or fetched without a connection",
             artifacts: [artifactPath(launch.appSupportDirectory)]
         )
     }
@@ -900,7 +1126,7 @@ private func readyLaunchSmoke(arguments: [String]) throws -> SmokeReport {
     }
     let artifacts = try smokeArtifacts(options)
     let api = ScriptedPDTAPIConfiguration(responses: [try scriptedHoldingsResponse()], asOf: scriptedPDTAsOf)
-    let expectedPulse = try expectedFirstFetchPulse(api)
+    let expectedPulse = try expectedFirstFetch(api).pulse
     let launch = try launchScriptedPDTApp(app, script: ScriptedPDTConnection(connection: .browserSession, api: api), options: options, prefix: name)
     defer { terminate(launch.process) }
     let snapshotWritten = waitForFile(launch.snapshot, timeout: options.timeout + 3.0)
@@ -1002,7 +1228,7 @@ private func packagedOnboardingSmoke(arguments: [String]) throws -> SmokeReport 
     )
     guard proofPayload.launch.clean, proofPayload.idleBeforeClick else {
         try stableJSONData(proofPayload).write(to: proof, options: .atomic)
-        return SmokeReport(name: name, status: SmokeStatus.failed, detail: "packaged app exited, spawned a CLI, wrote fixture state, or signed in before a click", artifacts: [artifactPath(proof)])
+        return SmokeReport(name: name, status: SmokeStatus.failed, detail: "packaged app exited, wrote fixture state, or signed in before a click", artifacts: [artifactPath(proof)])
     }
     guard proofPayload.accessibilityChecked else {
         try stableJSONData(proofPayload).write(to: proof, options: .atomic)
@@ -1087,7 +1313,6 @@ private func appBundlePackagingSmoke(arguments: [String]) throws -> SmokeReport 
         observedMenuIdentifiers: [],
         menuBarSurfaceVisible: false,
         fixtureModeUsed: false,
-        rawClaudeCredentialsUsed: false,
         rawPortfolioPayloadsRedacted: true
     )
 
@@ -1244,71 +1469,6 @@ private func appBundlePackagingSmoke(arguments: [String]) throws -> SmokeReport 
     )
 }
 
-private func scriptedPDTConnectorSmoke(arguments: [String]) throws -> SmokeReport {
-    let options = try SmokeOptions(arguments: arguments)
-    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
-    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-    let proof = artifacts.appending(path: "pdtbar-scripted-pdt-connector-proof.json")
-    let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-scripted-pdt-connector")
-    defer {
-        try? FileManager.default.removeItem(at: snapshotStore.directory)
-    }
-
-    let responses = try scriptedPDTConnectorResponses()
-    let connector = ScriptedPDTMCPConnector(responses: responses)
-    let coalescedFetch = PDTCoalescedFirstPortfolioFetch(
-        dataSource: PDTMCPConnectorDataSource(connector: connector),
-        snapshotStore: snapshotStore,
-        asOf: "2026-03-29"
-    )
-    let firstRun = try coalescedFetch.fetch()
-    let secondRun = try coalescedFetch.fetch()
-    let callCounts = Dictionary(grouping: connector.calls, by: { $0 }).mapValues(\.count)
-    let calledOnlyAllowedTools = Set(connector.calls).isSubset(of: Set(PDTReadTools.allowedV1))
-    let requiredToolsCalledOnce = PDTReadTools.requiredV1.allSatisfy { callCounts[$0] == 1 }
-    let scenarioResults = try scriptedPDTConnectorScenarioResults(responses: responses)
-    let proofPayload = ScriptedPDTConnectorProof(
-        requiredReadTools: PDTReadTools.requiredV1,
-        availabilityChecks: connector.availabilityChecks,
-        callCounts: PDTReadTools.requiredV1.reduce(into: [String: Int]()) { counts, tool in
-            counts[tool] = callCounts[tool] ?? 0
-        },
-        calledOnlyAllowedReadTools: calledOnlyAllowedTools,
-        optionalSymbolLookupCalls: callCounts["pdt-get-symbol"] ?? 0,
-        coalescedSecondFetchReusedFirstResult: firstRun == secondRun,
-        snapshotWritten: firstRun.snapshotCommit.written,
-        openHoldingCount: firstRun.model.facetSnapshots.allocation.openHoldingCount,
-        renderedSectionIDs: firstRun.descriptor.sections.map(\.id),
-        scenarios: scenarioResults,
-        rawPortfolioPayloadsRedacted: true
-    )
-    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
-
-    guard connector.availabilityChecks == 1,
-          calledOnlyAllowedTools,
-          requiredToolsCalledOnce,
-          callCounts["pdt-get-symbol"] == 1,
-          firstRun == secondRun,
-          firstRun.snapshotCommit.written,
-          firstRun.model.facetSnapshots.allocation.openHoldingCount > 0,
-          scenarioResults.allSatisfy(\.passed)
-    else {
-        return SmokeReport(
-            name: "scripted-pdt-connector",
-            status: SmokeStatus.failed,
-            detail: "scripted PDT connector did not prove required read-tool availability, allowed coalesced call counts, optional symbol lookup, progressive detail refresh, or all scripted response states",
-            artifacts: [artifactPath(proof)]
-        )
-    }
-
-    return SmokeReport(
-        name: "scripted-pdt-connector",
-        status: SmokeStatus.passed,
-        detail: "scripted Claude PDT connector checked required v1 read tools, called each required tool exactly once plus optional symbol lookup for a coalesced fetch, rendered through PressureRunner, and proved progressive degraded detail refresh with redacted proof",
-        artifacts: [artifactPath(proof)]
-    )
-}
-
 private func scriptedAPIClientSmoke(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
     let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
@@ -1426,6 +1586,7 @@ private func scriptedAPIAuthSmoke(arguments: [String]) throws -> SmokeReport {
     )
     let connection = PDTConnection(store: InMemoryPDTCredentialStore(), tokenEndpoint: tokenEndpoint, now: { clock.now })
     let client = PDTAPIClient(transport: api, tokenProvider: connection)
+    let callbackHost = SmokeValue()
 
     let session = try PDTBrowserSignIn(tokenEndpoint: tokenEndpoint, timeout: 10) { authorize in
         let query = Dictionary(
@@ -1434,6 +1595,7 @@ private func scriptedAPIAuthSmoke(arguments: [String]) throws -> SmokeReport {
         )
         var callback = URLComponents(string: query["redirect_uri"] ?? "")!
         callback.queryItems = [URLQueryItem(name: "code", value: secrets[0]), URLQueryItem(name: "state", value: query["state"])]
+        callbackHost.set(callback.host)
         URLSession(configuration: .ephemeral).dataTask(with: callback.url!).resume()
     }.run()
     try connection.signedIn(session)
@@ -1466,6 +1628,7 @@ private func scriptedAPIAuthSmoke(arguments: [String]) throws -> SmokeReport {
     let tokenRequests = tokens.requests
     let apiRequests = api.requests
     let proofPayload = ScriptedAPIAuthProof(
+        loopbackCallbackHost: callbackHost.value,
         tokenRequestCount: tokenRequests.count,
         apiRequestCount: apiRequests.count,
         tokenRequestsOnlyPOSTToTokenEndpoint: tokenRequests.allSatisfy {
@@ -1486,7 +1649,8 @@ private func scriptedAPIAuthSmoke(arguments: [String]) throws -> SmokeReport {
     try proofData.write(to: proof, options: .atomic)
     let proofText = String(decoding: proofData, as: UTF8.self)
 
-    guard proofPayload.tokenRequestCount == 3,
+    guard proofPayload.loopbackCallbackHost == "127.0.0.1",
+          proofPayload.tokenRequestCount == 3,
           proofPayload.apiRequestCount == 7,
           proofPayload.tokenRequestsOnlyPOSTToTokenEndpoint,
           proofPayload.apiRequestsOnlyGET,
@@ -1508,12 +1672,13 @@ private func scriptedAPIAuthSmoke(arguments: [String]) throws -> SmokeReport {
     return SmokeReport(
         name: "scripted-api-auth",
         status: SmokeStatus.passed,
-        detail: "scripted PDT sign-in exchanged a loopback callback code, shared one refresh across 6 concurrent reads, moved to reconnect on invalid_grant, read with a pasted token, disconnected, and kept every secret out of proof",
+        detail: "scripted PDT sign-in exchanged a code from its loopback callback on 127.0.0.1, shared one refresh across 6 concurrent reads, moved to reconnect on invalid_grant, read with a pasted token, disconnected, and kept every secret out of proof",
         artifacts: [artifactPath(proof)]
     )
 }
 
 private struct ScriptedAPIAuthProof: Codable {
+    var loopbackCallbackHost: String?
     var tokenRequestCount: Int
     var apiRequestCount: Int
     var tokenRequestsOnlyPOSTToTokenEndpoint: Bool
@@ -1541,6 +1706,23 @@ private final class SmokeClock: @unchecked Sendable {
         lock.lock()
         current += seconds
         lock.unlock()
+    }
+}
+
+private final class SmokeValue: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: String?
+
+    func set(_ value: String?) {
+        lock.lock()
+        stored = value
+        lock.unlock()
+    }
+
+    var value: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored
     }
 }
 
@@ -1921,6 +2103,7 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
         snapshotStore: expectedFreshStore,
         asOf: refreshConfiguration.asOf
     ).refresh()
+    let expectedFreshSnapshot = try expectedFreshStore.loadPriorSnapshot()
 
     let successLaunch = try launchScriptedPDTApp(
         app,
@@ -1941,12 +2124,12 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
         return SmokeReport(
             name: "scripted-returning-launch",
             status: SmokeStatus.failed,
-            detail: "returning launch did not start with the seeded local snapshot preserved, or spawned a CLI or wrote fixture state",
+            detail: "returning launch did not start with the seeded local snapshot preserved, or wrote fixture state",
             artifacts: [artifactPath(successSnapshot)]
         )
     }
 
-    let accessibilityChecked = AXIsProcessTrusted()
+    let accessibilityChecked = options.menuChecks && AXIsProcessTrusted()
     var stalePulseVisible = false
     var backgroundProgressVisible = false
     var backgroundProgressScreenshotPath: String?
@@ -2022,17 +2205,13 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
         }
     }
 
-    guard waitForSnapshotAsOf(successSnapshot, asOf: "2026-03-29", timeout: refreshDelay + options.timeout + 3.0),
-          let refreshedSnapshotAsOf = snapshotAsOf(successSnapshot),
-          refreshedSnapshotAsOf == "2026-03-29"
-    else {
-        return SmokeReport(
-            name: "scripted-returning-launch",
-            status: SmokeStatus.failed,
-            detail: "returning launch did not replace the local snapshot after complete scripted refresh",
-            artifacts: [artifactPath(successSnapshot)] + axArtifacts
-        )
-    }
+    let refreshEvidence = scriptedLaunchEvidence(
+        successLaunch,
+        seed: staleSnapshot,
+        expected: expectedFreshSnapshot,
+        expectedEvents: ["check"] + scriptedAPIBackgroundRefreshEvents(),
+        timeout: refreshDelay + options.timeout + 3.0
+    )
 
     if accessibilityChecked {
         let freshSurface = MenuBarSurfaceRenderer.render(descriptor: expectedFreshRun.descriptor)
@@ -2084,9 +2263,14 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
         terminate(failureProcess)
     }
     _ = waitForFileContent(failureLaunch.stderrLog, contains: "background refresh failed", timeout: options.timeout + 3.0)
-    let failurePreservedSnapshot = isolation(failureLaunch).clean
+    let failureEvidence = scriptedLaunchEvidence(
+        failureLaunch,
+        expected: staleSnapshot,
+        expectedEvents: ["check"] + Array(repeating: "request /v1/portfolio/holdings", count: PDTAPIRequestPolicy().maxAttempts),
+        timeout: options.timeout + 3.0
+    )
+    let failurePreservedSnapshot = failureEvidence.violations.isEmpty
         && failureLaunch.stderrContains("background refresh failed")
-        && snapshotAsOf(failureSnapshot) == staleSnapshot.asOf
 
     if accessibilityChecked {
         let failureSurface = MenuBarSurfaceRenderer.render(
@@ -2129,6 +2313,8 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
         staleSnapshotAsOf: staleSnapshot.asOf,
         refreshedSnapshotAsOf: snapshotAsOf(successSnapshot),
         failureSnapshotAsOf: snapshotAsOf(failureSnapshot),
+        refreshEvidence: ScriptedLaunchEvidenceProof(refreshEvidence),
+        failureEvidence: ScriptedLaunchEvidenceProof(failureEvidence),
         accessibilityChecked: accessibilityChecked,
         stalePulseVisibleDuringRefresh: stalePulseVisible,
         backgroundDetailProgressVisible: backgroundProgressVisible,
@@ -2142,7 +2328,8 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
     )
     try stableJSONData(proofPayload).write(to: proof, options: .atomic)
 
-    guard failurePreservedSnapshot,
+    guard refreshEvidence.violations.isEmpty,
+          failurePreservedSnapshot,
           !accessibilityChecked || (
               stalePulseVisible
               && backgroundProgressVisible
@@ -2154,7 +2341,8 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
         return SmokeReport(
             name: "scripted-returning-launch",
             status: SmokeStatus.failed,
-            detail: "scripted returning launch did not prove background progress visibility, fresh replacement, or transient failure preservation",
+            detail: "scripted returning launch did not prove background progress visibility, fresh replacement, or transient failure preservation"
+                + "; refresh: \(refreshEvidence.violations.map(\.rawValue)), failure: \(failureEvidence.violations.map(\.rawValue))",
             artifacts: [artifactPath(proof)] + axArtifacts
         )
     }
@@ -2162,330 +2350,11 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
     return SmokeReport(
         name: "scripted-returning-launch",
         status: SmokeStatus.passed,
-        detail: "returning launch kept the seeded pulse visible with active detail progress, replaced it after complete scripted data, and preserved it with a details retry after transient failure",
+        detail: accessibilityChecked
+            ? "returning launch kept the seeded pulse visible with active detail progress, replaced it after complete scripted data, and preserved it with a details retry after transient failure"
+            : "returning launch replaced the seeded snapshot after complete scripted data and preserved it after transient failure; "
+                + (options.menuChecks ? "macOS Accessibility permission missing for menu inspection" : menuNotCheckedByDesign),
         artifacts: [artifactPath(proof)] + axArtifacts
-    )
-}
-
-private func manualClaudePDTSmoke(arguments: [String]) throws -> SmokeReport {
-    guard !arguments.contains("--bare") else {
-        return SmokeReport(
-            name: "manual-claude-pdt",
-            status: SmokeStatus.failed,
-            detail: "refusing manual Claude readiness proof with --bare; use normal claude -p so the logged-in Claude CLI user and MCP setup are exercised",
-            artifacts: []
-        )
-    }
-
-    let options = try SmokeOptions(arguments: arguments)
-    let environment = ProcessInfo.processInfo.environment
-    let claudePath = options.claude?.path ?? environment["PDTBAR_CLAUDE_BIN"] ?? "claude"
-    let claude = URL(fileURLWithPath: claudePath)
-    let model = options.model ?? environment["PDTBAR_CLAUDE_MODEL"] ?? "opus"
-    let timeout = options.timeoutWasProvided ? options.timeout : 60.0
-    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
-    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-
-    guard claudePath.contains("/") || executableExistsOnPath(claudePath) else {
-        return SmokeReport(
-            name: "manual-claude-pdt",
-            status: SmokeStatus.skipped,
-            detail: "Claude CLI unavailable on PATH; install/sign in with Claude and rerun, or pass --claude <path>",
-            artifacts: []
-        )
-    }
-    if claudePath.contains("/") {
-        guard FileManager.default.isExecutableFile(atPath: claude.path) else {
-            return SmokeReport(
-                name: "manual-claude-pdt",
-                status: SmokeStatus.skipped,
-                detail: "Claude CLI unavailable at passed --claude path; install/sign in with Claude and rerun",
-                artifacts: []
-            )
-        }
-    }
-
-    let started = Date()
-    let allowedTools: [String]
-    do {
-        allowedTools = try manualClaudePDTAllowedTools(
-            claudePath: claudePath,
-            model: model,
-            timeout: min(timeout, 60.0)
-        )
-    } catch {
-        return SmokeReport(
-            name: "manual-claude-pdt",
-            status: SmokeStatus.skipped,
-            detail: "local Claude/PDT setup required; ToolSearch did not resolve every required PDT read tool",
-            artifacts: []
-        )
-    }
-    let result: CommandResult
-    let sessionID = UUID().uuidString
-    let filesBeforeCall = claudeToolResultFiles()
-    do {
-        var claudeArguments = [
-            claudePath,
-            "--model", model,
-            "--disallowedTools", manualClaudePDTDisallowedTools().joined(separator: ","),
-            "--session-id", sessionID,
-            "-p", manualClaudePDTPrompt(resolvedTools: allowedTools.filter { $0.hasPrefix("mcp__") }),
-            "--output-format", "stream-json",
-            "--verbose",
-            "--no-session-persistence",
-            "--json-schema", manualClaudePDTJSONSchema(),
-        ]
-        claudeArguments.insert(contentsOf: ["--allowedTools", allowedTools.joined(separator: ",")], at: 3)
-        result = try run(
-            URL(fileURLWithPath: "/usr/bin/env"),
-            arguments: claudeArguments,
-            timeout: timeout
-        )
-    } catch let CommandError.commandFailed(_, stdout, stderr) {
-        let combined = [stdout, stderr].joined(separator: "\n")
-        let createdFiles = claudeToolResultFiles().subtracting(filesBeforeCall)
-        let referencedFiles = Set(savedClaudeToolResultFiles(in: Data(combined.utf8)))
-        deleteSavedClaudeToolResultFiles(pdtToolResultFiles(
-            in: createdFiles,
-            referencedFiles: referencedFiles,
-            sessionID: sessionID
-        ))
-        guard PDTLiveUnavailableClassifier.shouldSkip(combined) || isClaudeModelSetupError(combined) else {
-            return SmokeReport(
-                name: "manual-claude-pdt",
-                status: SmokeStatus.failed,
-                detail: "claude -p returned an error before redacted PDT reachability proof could be parsed",
-                artifacts: []
-            )
-        }
-        return SmokeReport(
-            name: "manual-claude-pdt",
-            status: SmokeStatus.skipped,
-            detail: "local Claude/PDT setup required; claude -p did not complete with the configured model alias or MCP setup",
-            artifacts: []
-        )
-    } catch CommandError.timedOut {
-        deleteSavedClaudeToolResultFiles(pdtToolResultFiles(
-            in: claudeToolResultFiles().subtracting(filesBeforeCall),
-            referencedFiles: [],
-            sessionID: sessionID
-        ))
-        return SmokeReport(
-            name: "manual-claude-pdt",
-            status: SmokeStatus.skipped,
-            detail: "claude -p timed out before PDT reachability proof completed; local Claude/PDT setup may need attention",
-            artifacts: []
-        )
-    }
-
-    let payload = redactedClaudePDTResponse(from: result.stdout)
-    let createdFiles = claudeToolResultFiles().subtracting(filesBeforeCall)
-    let referencedFiles = Set(savedClaudeToolResultFiles(in: result.stdout))
-    deleteSavedClaudeToolResultFiles(pdtToolResultFiles(
-        in: createdFiles,
-        referencedFiles: referencedFiles,
-        sessionID: sessionID
-    ))
-
-    let required = Set(PDTReadTools.requiredV1)
-    let reported = Set(payload.toolNames)
-    let missing = PDTReadTools.requiredV1.filter { !reported.contains($0) }
-    let writeToolCount = max(payload.writeToolsCalled, payload.nonReadPDTToolNames.count)
-    let success = (payload.status == "ok" || payload.status == "redacted-ok")
-        && missing.isEmpty
-        && writeToolCount == 0
-        && payload.toolResultErrorCount == 0
-    let duration = Date().timeIntervalSince(started)
-    let proof = ManualClaudePDTProof(
-        promptMode: "-p",
-        bareModeUsed: false,
-        requiredReadTools: PDTReadTools.requiredV1,
-        reportedReadTools: payload.toolNames.filter { required.contains($0) }.sorted(),
-        reportedToolCount: reported.intersection(required).count,
-        selectorCount: payload.selectors.count,
-        selectors: payload.selectors.sorted(),
-        durationSeconds: roundedSmokeValue(duration, places: 2),
-        statusText: redactedStatus(payload.statusText),
-        writeToolsCalled: writeToolCount,
-        toolResultErrorCount: payload.toolResultErrorCount,
-        rawClaudeOutputRedacted: true,
-        rawPortfolioPayloadsRedacted: true
-    )
-    let proofPath = artifacts.appending(path: "pdtbar-manual-claude-pdt-proof.json")
-    try stableJSONData(proof).write(to: proofPath, options: .atomic)
-
-    if payload.status == "setup-required" {
-        return SmokeReport(
-            name: "manual-claude-pdt",
-            status: SmokeStatus.skipped,
-            detail: "local Claude/PDT setup required; claude -p completed but reported setup-required without raw PDT data",
-            artifacts: [artifactPath(proofPath)]
-        )
-    }
-
-    guard success else {
-        return SmokeReport(
-            name: "manual-claude-pdt",
-            status: SmokeStatus.failed,
-            detail: "claude -p did not prove every required PDT read tool with redacted, read-only proof; missing=\(missing.joined(separator: ",")); writeToolsCalled=\(writeToolCount); toolResultErrorCount=\(payload.toolResultErrorCount)",
-            artifacts: [artifactPath(proofPath)]
-        )
-    }
-
-    return SmokeReport(
-        name: "manual-claude-pdt",
-        status: SmokeStatus.passed,
-        detail: "claude -p reached required PDT read tools through the logged-in Claude setup; proof contains only tool names, counts, selectors, duration, and redacted status",
-        artifacts: [artifactPath(proofPath)]
-    )
-}
-
-private func isClaudeModelSetupError(_ text: String) -> Bool {
-    let lowercased = text.lowercased()
-    guard lowercased.contains("model") else {
-        return false
-    }
-    return [
-        "unavailable",
-        "not available",
-        "unknown model",
-        "invalid model",
-        "does not exist",
-        "not found",
-        "no access",
-        "access denied",
-    ].contains { lowercased.contains($0) }
-}
-
-private func livePDTSmoke(arguments: [String]) throws -> SmokeReport {
-    let options = try SmokeOptions(arguments: arguments)
-    let environment = ProcessInfo.processInfo.environment
-    if let schemaPath = environment["PDTBAR_LIVE_PDT_SCHEMA_JSON"], !schemaPath.isEmpty {
-        let schemaData = try Data(contentsOf: URL(fileURLWithPath: schemaPath))
-        let object = try JSONSerialization.jsonObject(with: schemaData)
-        let schemaToolNames = toolNames(in: object)
-        let missingTools = PDTReadTools.requiredV1.filter { tool in
-            !schemaToolNames.contains(tool)
-        }
-        guard missingTools.isEmpty else {
-            return SmokeReport(
-                name: "live-pdt",
-                status: SmokeStatus.failed,
-                detail: "schema missing required PDT read tools: \(missingTools.joined(separator: ", "))",
-                artifacts: [schemaPath]
-            )
-        }
-    }
-
-    let server = try discoverLivePDTServer(options: options)
-    guard let server else {
-        return SmokeReport(
-            name: "live-pdt",
-            status: SmokeStatus.skipped,
-            detail: "no configured mcporter PDT server exposes the required read tools; set PDTBAR_LIVE_PDT_SERVER or configure/auth a PDT server, then rerun",
-            artifacts: []
-        )
-    }
-    let mcporter: McporterTool
-    do {
-        mcporter = try resolveMcporterTool(options: options, environment: environment)
-    } catch let error as McporterSetupError {
-        return SmokeReport(
-            name: "live-pdt",
-            status: error.status,
-            detail: error.detail,
-            artifacts: error.artifacts
-        )
-    }
-
-    let snapshotStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-live-pdt-smoke")
-    defer {
-        try? FileManager.default.removeItem(at: snapshotStore.directory)
-    }
-    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
-    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-    let proof = artifacts.appending(path: "pdtbar-live-pdt-pulse-proof.json")
-    let liveTimeout = options.timeoutWasProvided ? options.timeout : 60.0
-    let result: PressureRunResult
-    do {
-        result = try PressureRunner.run(
-            dataSource: PDTLiveDataSource(
-                toolClient: PDTLiveMcporterClient(
-                    mcporter: mcporter,
-                    server: server,
-                    timeout: liveTimeout
-                )
-            ),
-            snapshotStore: snapshotStore
-        )
-    } catch let CommandError.commandFailed(_, stdout, stderr) {
-        guard PDTLiveUnavailableClassifier.shouldSkip([stdout, stderr].joined(separator: "\n")) else {
-            return SmokeReport(
-                name: "live-pdt",
-                status: SmokeStatus.failed,
-                detail: "configured PDT server returned a read-tool error; live smoke did not prove the PortfolioDataSource path",
-                artifacts: []
-            )
-        }
-        return SmokeReport(
-            name: "live-pdt",
-            status: SmokeStatus.skipped,
-            detail: "configured PDT server did not complete read-only tool calls; credentials or local server access may be missing",
-            artifacts: []
-        )
-    } catch CommandError.timedOut {
-        return SmokeReport(
-            name: "live-pdt",
-            status: SmokeStatus.skipped,
-            detail: "configured PDT server timed out during read-only smoke; local access may be unavailable",
-            artifacts: []
-        )
-    } catch let error as PDTLiveDataSourceError {
-        guard !error.shouldSkipLiveSmoke else {
-            return SmokeReport(
-                name: "live-pdt",
-                status: SmokeStatus.skipped,
-                detail: "configured PDT server returned an auth/offline response; cached credentials or local access may be missing",
-                artifacts: []
-            )
-        }
-        return SmokeReport(
-            name: "live-pdt",
-            status: SmokeStatus.failed,
-            detail: "live PDT response was not decodable as the expected read-only tool shape",
-            artifacts: []
-        )
-    }
-
-    let surface = MenuBarSurfaceRenderer.render(descriptor: result.descriptor)
-    let proofPayload = LivePDTPulseProof(
-        mcporterSource: mcporter.sourceDescription,
-        snapshotWritten: result.snapshotCommit.written,
-        statusAccessibilityIdentifier: surface.status.accessibilityIdentifier,
-        sectionIDs: surface.sections.map(\.id),
-        rowCount: surface.sections.flatMap(\.rows).count,
-        rawPortfolioValuesRedacted: true
-    )
-    try stableJSONData(proofPayload).write(to: proof, options: .atomic)
-    let pulseRows = surface.sections.first { $0.id == "pulse" }?.rows ?? []
-    guard result.snapshotCommit.written,
-          !surface.status.accessibilityIdentifier.isEmpty,
-          !pulseRows.isEmpty,
-          result.model.facetSnapshots.allocation.openHoldingCount > 0
-    else {
-        return SmokeReport(
-            name: "live-pdt",
-            status: SmokeStatus.failed,
-            detail: "live PDT read succeeded, but did not produce open holdings and pulse rows",
-            artifacts: [artifactPath(proof)]
-        )
-    }
-    return SmokeReport(
-        name: "live-pdt",
-        status: SmokeStatus.passed,
-        detail: "read-only live PDT data reached PressureRunner and rendered a pulse descriptor with isolated snapshot state; private portfolio values redacted from proof",
-        artifacts: [artifactPath(proof)]
     )
 }
 
@@ -3251,7 +3120,6 @@ private func writePortfolioValuesSettingsEvidence(
     return output
 }
 
-
 private func fixtureProof(arguments: [String]) throws -> SmokeReport {
     let options = try SmokeOptions(arguments: arguments)
     let fixture = options.fixture ?? defaultFixture
@@ -3409,55 +3277,6 @@ private struct DisplayModeEvidence: Codable {
     var refreshRate: Double
 }
 
-private struct LivePDTPulseProof: Codable {
-    var mcporterSource: String
-    var snapshotWritten: Bool
-    var statusAccessibilityIdentifier: String
-    var sectionIDs: [String]
-    var rowCount: Int
-    var rawPortfolioValuesRedacted: Bool
-}
-
-private struct ManualClaudePDTProof: Codable {
-    var promptMode: String
-    var bareModeUsed: Bool
-    var requiredReadTools: [String]
-    var reportedReadTools: [String]
-    var reportedToolCount: Int
-    var selectorCount: Int
-    var selectors: [String]
-    var durationSeconds: Double
-    var statusText: String
-    var writeToolsCalled: Int
-    var toolResultErrorCount: Int
-    var rawClaudeOutputRedacted: Bool
-    var rawPortfolioPayloadsRedacted: Bool
-}
-
-private struct RedactedClaudePDTResponse {
-    var status: String
-    var statusText: String
-    var toolNames: [String]
-    var selectors: [String]
-    var writeToolsCalled: Int
-    var nonReadPDTToolNames: [String]
-    var toolResultErrorCount: Int
-}
-
-private struct ScriptedPDTConnectorProof: Codable {
-    var requiredReadTools: [String]
-    var availabilityChecks: Int
-    var callCounts: [String: Int]
-    var calledOnlyAllowedReadTools: Bool
-    var optionalSymbolLookupCalls: Int
-    var coalescedSecondFetchReusedFirstResult: Bool
-    var snapshotWritten: Bool
-    var openHoldingCount: Int
-    var renderedSectionIDs: [String]
-    var scenarios: [ScriptedPDTConnectorScenarioResult]
-    var rawPortfolioPayloadsRedacted: Bool
-}
-
 private struct ScriptedPulseMarkReadProof: Codable {
     var stateDirectory: String
     var actionTitle: String
@@ -3475,6 +3294,8 @@ private struct ScriptedReturningLaunchProof: Codable {
     var staleSnapshotAsOf: String
     var refreshedSnapshotAsOf: String?
     var failureSnapshotAsOf: String?
+    var refreshEvidence: ScriptedLaunchEvidenceProof
+    var failureEvidence: ScriptedLaunchEvidenceProof
     var accessibilityChecked: Bool
     var stalePulseVisibleDuringRefresh: Bool
     var backgroundDetailProgressVisible: Bool
@@ -3510,7 +3331,6 @@ private struct AppBundlePackagingProof: Codable {
     var observedMenuIdentifiers: [String]
     var menuBarSurfaceVisible: Bool
     var fixtureModeUsed: Bool
-    var rawClaudeCredentialsUsed: Bool
     var rawPortfolioPayloadsRedacted: Bool
 }
 
@@ -3543,12 +3363,6 @@ private final class LaunchServicesOpenResultBox: @unchecked Sendable {
         }
         return (application, error, isComplete)
     }
-}
-
-private struct ScriptedPDTConnectorScenarioResult: Codable {
-    var name: String
-    var passed: Bool
-    var detail: String
 }
 
 private struct PulseTargetEvidence: Codable {
@@ -4588,6 +4402,20 @@ private func scriptedAPIBackgroundRefreshResponses() throws -> [ScriptedPDTAPICo
         .map { ScriptedPDTAPIConfiguration.Response(body: String(decoding: try Data(contentsOf: $0), as: UTF8.self)) }
 }
 
+/// The app's event-log line for each of those replies, in order.
+private func scriptedAPIBackgroundRefreshEvents() -> [String] {
+    [
+        "request /v1/portfolio/holdings",
+        "request /v1/portfolio/distributions",
+        "request /v1/x-ray",
+        "request /v1/x-ray",
+        "request /v1/calendar-events",
+        "request /v1/calendar-events",
+        "request /v1/dividends",
+        "request /v1/prices/batch",
+    ]
+}
+
 private func terminate(_ process: Process) {
     if process.isRunning {
         process.terminate()
@@ -4602,18 +4430,15 @@ private func fixtureStatusTitle(for fixture: URL) throws -> String {
 
 private struct SmokeOptions {
     var app: URL?
-    var claude: URL?
-    var mcporter: URL?
     var fixture: URL?
     var peekaboo: URL?
     var artifacts: URL?
     var output: URL?
     var snapshotDirectory: URL?
     var appSupportDirectory: URL?
-    var server: String?
-    var model: String?
     var timeout: TimeInterval = 2.0
     var timeoutWasProvided = false
+    var menuChecks = true
 
     init(arguments: [String]) throws {
         var index = 0
@@ -4621,12 +4446,6 @@ private struct SmokeOptions {
             switch arguments[index] {
             case "--app" where index + 1 < arguments.count:
                 app = URL(fileURLWithPath: arguments[index + 1])
-                index += 2
-            case "--claude" where index + 1 < arguments.count:
-                claude = URL(fileURLWithPath: arguments[index + 1])
-                index += 2
-            case "--mcporter" where index + 1 < arguments.count:
-                mcporter = URL(fileURLWithPath: arguments[index + 1])
                 index += 2
             case "--fixture" where index + 1 < arguments.count:
                 fixture = URL(fileURLWithPath: arguments[index + 1])
@@ -4646,16 +4465,13 @@ private struct SmokeOptions {
             case "--app-support-dir" where index + 1 < arguments.count:
                 appSupportDirectory = URL(fileURLWithPath: arguments[index + 1])
                 index += 2
-            case "--server" where index + 1 < arguments.count:
-                server = arguments[index + 1]
-                index += 2
-            case "--model" where index + 1 < arguments.count:
-                model = arguments[index + 1]
-                index += 2
             case "--timeout" where index + 1 < arguments.count:
                 timeout = TimeInterval(arguments[index + 1]) ?? 2.0
                 timeoutWasProvided = true
                 index += 2
+            case "--no-menu-checks":
+                menuChecks = false
+                index += 1
             default:
                 throw CommandError.usage
             }
@@ -4779,391 +4595,6 @@ private struct CommandResult {
     var stderr: Data
 }
 
-private func scriptedPDTConnectorScenarioResults(
-    responses: [String: Data]
-) throws -> [ScriptedPDTConnectorScenarioResult] {
-    var results: [ScriptedPDTConnectorScenarioResult] = []
-
-    let missingToolConnector = ScriptedPDTMCPConnector(
-        availableTools: Set(PDTReadTools.requiredV1.filter { $0 != "pdt-list-dividends" }),
-        responses: responses
-    )
-    do {
-        _ = try PDTMCPConnectorDataSource(connector: missingToolConnector).snapshot(asOf: "2026-03-29")
-        results.append(.init(name: "missing-tool", passed: false, detail: "snapshot unexpectedly succeeded"))
-    } catch PDTMCPConnectorError.missingRequiredReadTools(let missing) {
-        results.append(.init(
-            name: "missing-tool",
-            passed: missing == ["pdt-list-dividends"] && missingToolConnector.calls.isEmpty,
-            detail: "missing=\(missing.joined(separator: ",")); calls=\(missingToolConnector.calls.count)"
-        ))
-    }
-
-    for (name, failure) in [
-        ("auth-setup-error", PDTMCPConnectorError.setupUnavailable("Claude needs PDT setup")),
-        ("transient-failure", PDTMCPConnectorError.transientFailure("Claude call timed out")),
-    ] {
-        do {
-            _ = try PDTMCPConnectorDataSource(
-                connector: ScriptedPDTMCPConnector(responses: responses, failure: failure)
-            ).snapshot(asOf: "2026-03-29")
-            results.append(.init(name: name, passed: false, detail: "snapshot unexpectedly succeeded"))
-        } catch let error as PDTMCPConnectorError {
-            results.append(.init(name: name, passed: error == failure, detail: error.description))
-        }
-    }
-
-    var malformedResponses = responses
-    malformedResponses["pdt-get-portfolio-holdings"] = Data("{".utf8)
-    do {
-        _ = try PDTMCPConnectorDataSource(
-            connector: ScriptedPDTMCPConnector(responses: malformedResponses)
-        ).snapshot(asOf: "2026-03-29")
-        results.append(.init(name: "malformed-payload", passed: false, detail: "snapshot unexpectedly succeeded"))
-    } catch PDTLiveDataSourceError.malformedToolResult(let tool) {
-        results.append(.init(
-            name: "malformed-payload",
-            passed: tool == "pdt-get-portfolio-holdings",
-            detail: tool
-        ))
-    }
-
-    var degradedResponses = responses
-    degradedResponses.removeValue(
-        forKey: "pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9101"
-    )
-    let degradedStore = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-smoke-progressive-detail")
-    defer {
-        try? FileManager.default.removeItem(at: degradedStore.directory)
-    }
-    do {
-        let degraded = try PDTBackgroundDetailRefresh(
-            connector: ScriptedPDTMCPConnector(responses: degradedResponses),
-            snapshotStore: degradedStore,
-            asOf: "2026-03-29",
-            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
-        ).refresh()
-        let partialSnapshot = try degradedStore.loadPriorSnapshot()
-        let diagnostic = try degradedStore.loadLastDetailRefreshDiagnostic()
-        let retried = try PDTBackgroundDetailRefresh(
-            connector: ScriptedPDTMCPConnector(responses: responses),
-            snapshotStore: degradedStore,
-            asOf: "2026-03-29",
-            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 2, retryBackoffSeconds: 0)
-        ).refresh()
-        let diagnosticAfterRetry = try degradedStore.loadLastDetailRefreshDiagnostic()
-        results.append(.init(
-            name: "progressive-detail-degraded-retry",
-            passed: degraded.outcome == .degraded
-                && partialSnapshot?.sectors.isEmpty == false
-                && partialSnapshot?.incomeEvents.isEmpty == false
-                && diagnostic?.toolName == "pdt-list-symbol-prices"
-                && diagnostic?.argumentShape == ["date_from", "date_to", "symbol_quote_id"]
-                && retried.outcome == .completed
-                && retried.model.facetSnapshots.bigMovers.priceSeriesCount == 2
-                && diagnosticAfterRetry == nil,
-            detail: "partial=\(degraded.outcome.rawValue); retry=\(retried.outcome.rawValue); diagnostic=\(diagnostic?.category.rawValue ?? "none")"
-        ))
-    } catch {
-        results.append(.init(
-            name: "progressive-detail-degraded-retry",
-            passed: false,
-            detail: "progressive detail scenario failed"
-        ))
-    }
-
-    return results
-}
-
-private func scriptedPDTConnectorResponses() throws -> [String: Data] {
-    [
-        "pdt-get-portfolio-holdings": try mcpContent("""
-        {
-          "holdings": [
-            {
-              "symbolName": "Scripted Adapter Co",
-              "symbolQuoteId": 9101,
-              "currentPriceDate": "2026-03-29T22:00:00+00:00",
-              "currentPriceLocal": { "value": "20.00", "currency": "EUR" },
-              "currentWorthLocal": { "value": "250.00", "currency": "EUR" },
-              "portfolioWeight": 0.25,
-              "closedAt": null
-            }
-          ]
-        }
-        """),
-        "pdt-get-portfolio-distributions": try mcpResult("""
-        {
-          "sectors": [
-            { "categoryName": "Technology", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
-          ],
-          "assetTypes": [
-            { "categoryName": "Stock", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
-          ]
-        }
-        """),
-        "pdt-list-x-ray-holdings?limit=500&offset=0": try mcpResult("""
-        {
-          "items": [
-            { "weight": 25.0 },
-            { "weight": 0.5 }
-          ],
-          "hasMore": false
-        }
-        """),
-        "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=1&per_page=100": try mcpContent("""
-        {
-          "data": [
-            { "date": "2026-03-30", "type": "ex-dividend", "isEstimated": false, "symbolId": 5101, "symbolName": "Scripted Adapter Co" }
-          ],
-          "meta": { "last_page": 1 }
-        }
-        """),
-        "pdt-list-dividends?date_from=2025-03-24&date_to=2026-04-28&page=1&per_page=100": try mcpResult("""
-        {
-          "data": [
-            { "date": "2026-03-28T08:13:00+00:00", "amount": { "value": "8.00", "currency": "EUR" }, "symbolQuoteId": 9101 }
-          ],
-          "meta": { "last_page": 1 }
-        }
-        """),
-        "pdt-get-symbol-quote?id=9101": try mcpContent("""
-        { "id": 9101, "code": "SPDT", "symbolId": 5101 }
-        """),
-        "pdt-get-symbol?id=5101": try mcpContent("""
-        { "id": 5101, "name": "Scripted Adapter Co", "isin": "NL0010273215" }
-        """),
-        "pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9101": try mcpContent("""
-        {
-          "data": [
-            { "date": "2026-03-27", "closeAdjusted": "19.00", "symbolQuoteId": 9101 },
-            { "date": "2026-03-29", "closeAdjusted": "20.00", "symbolQuoteId": 9101 }
-          ]
-        }
-        """),
-    ]
-}
-
-private func scriptedQuietPDTConnectorResponses() throws -> [String: Data] {
-    [
-        "pdt-get-portfolio-holdings": try mcpContent("""
-        {
-          "holdings": [
-            {
-              "symbolName": "Scripted Quiet Co",
-              "symbolQuoteId": 9102,
-              "currentPriceDate": "2026-03-29T22:00:00+00:00",
-              "currentPriceLocal": { "value": "20.00", "currency": "EUR" },
-              "currentWorthLocal": { "value": "250.00", "currency": "EUR" },
-              "portfolioWeight": 0.10,
-              "closedAt": null
-            }
-          ]
-        }
-        """),
-        "pdt-get-portfolio-distributions": try mcpResult("""
-        {
-          "sectors": [
-            { "categoryName": "Technology", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
-          ],
-          "assetTypes": [
-            { "categoryName": "Stock", "totalValue": { "value": "250.00", "currency": "EUR" }, "percentage": 100.0 }
-          ]
-        }
-        """),
-        "pdt-list-x-ray-holdings?limit=500&offset=0": try mcpResult("""
-        {
-          "items": [
-            { "weight": 10.0 },
-            { "weight": 0.5 }
-          ],
-          "hasMore": false
-        }
-        """),
-        "pdt-list-calendar-events?date_from=2026-03-29&date_to=2026-04-28&page=1&per_page=100": try mcpContent("""
-        { "data": [], "meta": { "last_page": 1 } }
-        """),
-        "pdt-list-dividends?date_from=2025-03-24&date_to=2026-04-28&page=1&per_page=100": try mcpResult("""
-        {
-          "data": [],
-          "meta": { "last_page": 1 }
-        }
-        """),
-        "pdt-get-symbol-quote?id=9102": try mcpContent("""
-        { "id": 9102, "symbolId": 5102 }
-        """),
-        "pdt-get-symbol?id=5102": try mcpContent("""
-        { "id": 5102, "name": "Scripted Quiet Co", "isin": "BE0000000001" }
-        """),
-        "pdt-list-symbol-prices?date_from=2026-03-22&date_to=2026-03-29&symbol_quote_id=9102": try mcpContent("""
-        {
-          "data": [
-            { "date": "2026-03-27", "closeAdjusted": "20.00", "symbolQuoteId": 9102 },
-            { "date": "2026-03-29", "closeAdjusted": "20.00", "symbolQuoteId": 9102 }
-          ]
-        }
-        """),
-    ]
-}
-
-private func mcpContent(_ json: String) throws -> Data {
-    try mcpContent(json, isError: false)
-}
-
-private func mcpContent(_ text: String, isError: Bool) throws -> Data {
-    try JSONSerialization.data(
-        withJSONObject: [
-            "isError": isError,
-            "content": [
-                [
-                    "type": "text",
-                    "text": text,
-                ],
-            ],
-        ],
-        options: [.sortedKeys]
-    )
-}
-
-private func mcpResult(_ json: String) throws -> Data {
-    let payload = try JSONSerialization.jsonObject(with: Data(json.utf8))
-    return try JSONSerialization.data(
-        withJSONObject: ["result": payload],
-        options: [.sortedKeys]
-    )
-}
-
-private struct PDTLiveMcporterClient: PDTLiveToolClient {
-    var mcporter: McporterTool
-    var server: String
-    var timeout: TimeInterval
-
-    func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {
-        let selector = "\(server).\(name)"
-        let toolArguments = arguments
-            .sorted { $0.key < $1.key }
-            .map { "\($0.key)=\($0.value)" }
-        return try run(
-            mcporter.executable,
-            arguments: [
-                "call",
-                "--no-oauth",
-                "--timeout", String(Int(timeout * 1000)),
-                selector,
-            ] + toolArguments,
-            timeout: timeout + 1.0
-        ).stdout
-    }
-}
-
-private struct McporterTool {
-    var executable: URL
-    var sourceDescription: String
-}
-
-private enum McporterSetupError: Error {
-    case defaultMissing(URL)
-    case defaultPackageMissing(URL)
-    case defaultPackageUnreadable(URL)
-    case defaultPackageMalformed(URL)
-    case defaultVersionMismatch(expected: String, actual: String, packageJSON: URL)
-    case explicitPathMissing(URL)
-
-    var status: String {
-        switch self {
-        case .defaultMissing,
-             .defaultPackageMissing,
-             .defaultPackageUnreadable,
-             .defaultPackageMalformed,
-             .defaultVersionMismatch,
-             .explicitPathMissing:
-            SmokeStatus.failed
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .defaultMissing(let expected):
-            "pinned mcporter is not installed at \(artifactPath(expected)); run npm ci, then rerun live-pdt or pass --mcporter <trusted-local-path>"
-        case .defaultPackageMissing(let packageJSON):
-            "pinned mcporter executable exists, but \(artifactPath(packageJSON)) is missing; run npm ci to restore mcporter@\(pinnedMcporterVersion)"
-        case .defaultPackageUnreadable(let packageJSON):
-            "pinned mcporter metadata at \(artifactPath(packageJSON)) is unreadable; run npm ci to restore mcporter@\(pinnedMcporterVersion)"
-        case .defaultPackageMalformed(let packageJSON):
-            "pinned mcporter metadata at \(artifactPath(packageJSON)) is malformed or missing a version; run npm ci to restore mcporter@\(pinnedMcporterVersion)"
-        case .defaultVersionMismatch(let expected, let actual, let packageJSON):
-            "pinned mcporter version mismatch in \(artifactPath(packageJSON)); expected \(expected), found \(actual); run npm ci"
-        case .explicitPathMissing(let executable):
-            "trusted mcporter path is not executable at \(artifactPath(executable)); pass --mcporter <trusted-local-path> or run npm ci for the pinned repo-local tool"
-        }
-    }
-
-    var artifacts: [String] {
-        switch self {
-        case .defaultMissing(let expected), .explicitPathMissing(let expected):
-            [artifactPath(expected)]
-        case .defaultPackageMissing(let packageJSON),
-             .defaultPackageUnreadable(let packageJSON),
-             .defaultPackageMalformed(let packageJSON),
-             .defaultVersionMismatch(_, _, let packageJSON):
-            [artifactPath(packageJSON)]
-        }
-    }
-}
-
-private func resolveMcporterTool(options: SmokeOptions, environment: [String: String]) throws -> McporterTool {
-    let environmentMcporterPath = environment["PDTBAR_MCPORTER_BIN"]?
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    let explicitEnvironmentMcporter = environmentMcporterPath
-        .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
-    if let explicit = options.mcporter ?? explicitEnvironmentMcporter {
-        guard FileManager.default.isExecutableFile(atPath: explicit.path) else {
-            throw McporterSetupError.explicitPathMissing(explicit)
-        }
-        return McporterTool(
-            executable: explicit,
-            sourceDescription: "trusted local path \(artifactPath(explicit))"
-        )
-    }
-
-    let executable = packageRoot.appending(path: "node_modules/.bin/mcporter")
-    guard FileManager.default.isExecutableFile(atPath: executable.path) else {
-        throw McporterSetupError.defaultMissing(executable)
-    }
-    let packageJSON = packageRoot.appending(path: "node_modules/mcporter/package.json")
-    guard FileManager.default.fileExists(atPath: packageJSON.path) else {
-        throw McporterSetupError.defaultPackageMissing(packageJSON)
-    }
-    guard let data = try? Data(contentsOf: packageJSON) else {
-        throw McporterSetupError.defaultPackageUnreadable(packageJSON)
-    }
-    guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let version = object["version"] as? String
-    else {
-        throw McporterSetupError.defaultPackageMalformed(packageJSON)
-    }
-    guard version == pinnedMcporterVersion else {
-        throw McporterSetupError.defaultVersionMismatch(
-            expected: pinnedMcporterVersion,
-            actual: version,
-            packageJSON: packageJSON
-        )
-    }
-    return McporterTool(
-        executable: executable,
-        sourceDescription: "package-lock mcporter@\(pinnedMcporterVersion) \(artifactPath(executable))"
-    )
-}
-
-private func discoverLivePDTServer(options: SmokeOptions) throws -> String? {
-    if let server = options.server ?? ProcessInfo.processInfo.environment["PDTBAR_LIVE_PDT_SERVER"],
-       !server.isEmpty
-    {
-        return server
-    }
-    return nil
-}
-
 private func run(_ executable: URL, arguments: [String], timeout: TimeInterval) throws -> CommandResult {
     let process = Process()
     let fileManager = FileManager.default
@@ -5239,230 +4670,6 @@ private func permissionDictionaries(in object: Any) -> [[String: Any]] {
     return []
 }
 
-private func toolNames(in object: Any) -> Set<String> {
-    var names = Set<String>()
-    var stack = [object]
-    while let item = stack.popLast() {
-        if let array = item as? [Any] {
-            stack.append(contentsOf: array)
-            continue
-        }
-        if let dictionary = item as? [String: Any] {
-            stack.append(contentsOf: dictionary.values)
-            if let name = dictionary["name"] as? String {
-                names.insert(name)
-                if let selectorToolName = name.split(separator: ".").last {
-                    names.insert(String(selectorToolName))
-                }
-            }
-            continue
-        }
-    }
-    return names
-}
-
-private func manualClaudePDTPrompt(resolvedTools: [String]) -> String {
-    let tools = zip(PDTReadTools.requiredV1, resolvedTools).map { readTool, resolvedTool in
-        "\(readTool): \(resolvedTool)"
-    }.joined(separator: "\n- ")
-    return """
-    PDTBar manual smoke. Use the Claude CLI PDT MCP setup for read-only proof.
-
-    Rules:
-    - Call each resolved PDT MCP tool listed below exactly once.
-    - Use normal Claude tool access only. Do not use bare mode.
-    - Call only these resolved read-only PDT tools:
-    - \(tools)
-    - Do not call any write/mutate tool.
-    - Do not include holdings, values, account identifiers, payload fields, endpoints, credentials, or raw tool output in your answer.
-    - For list tools, use the smallest safe read-only request you can. For quote/price tools, derive one selector from holdings if needed, but do not print it if it contains private data.
-
-    Return exactly one minified JSON object, no Markdown:
-    {"status":"redacted-ok","statusText":"redacted-ok","toolNames":["pdt-get-portfolio-holdings"],"selectors":["pdt-get-portfolio-holdings"],"writeToolsCalled":0}
-
-    Include all required tool names in toolNames/selectors only after you have reached them.
-    If Claude or PDT MCP setup is missing, return status "setup-required" with redacted statusText.
-    """
-}
-
-private func manualClaudePDTJSONSchema() -> String {
-    """
-    {"type":"object","additionalProperties":false,"properties":{"status":{"type":"string"},"statusText":{"type":"string"},"toolNames":{"type":"array","items":{"type":"string"}},"selectors":{"type":"array","items":{"type":"string"}},"writeToolsCalled":{"type":"integer"}},"required":["status","statusText","toolNames","selectors","writeToolsCalled"]}
-    """
-}
-
-private func manualClaudePDTAllowedTools(
-    claudePath: String,
-    model: String,
-    timeout: TimeInterval
-) throws -> [String] {
-    let result = try run(
-        URL(fileURLWithPath: "/usr/bin/env"),
-        arguments: [
-            claudePath,
-            "--model", model,
-            "--allowedTools", "ToolSearch",
-            "--disallowedTools", manualClaudePDTToolSearchDisallowedTools().joined(separator: ","),
-            "-p", "Use ToolSearch to find these PDT MCP read-only tools: \(PDTReadTools.requiredV1.joined(separator: ", ")). Return only {\"status\":\"redacted-ok\"}.",
-            "--output-format", "stream-json",
-            "--verbose",
-            "--no-session-persistence",
-        ],
-        timeout: timeout
-    )
-    let output = String(decoding: result.stdout, as: UTF8.self)
-    let resolved = Dictionary(uniqueKeysWithValues: PDTReadTools.requiredV1.compactMap { readTool -> (String, String)? in
-        guard let toolName = manualClaudePDTToolName(readTool: readTool, in: output) else {
-            return nil
-        }
-        return (readTool, toolName)
-    })
-    guard resolved.count == PDTReadTools.requiredV1.count else {
-        throw PDTMCPConnectorError.setupUnavailable("ToolSearch did not resolve all PDT read tools")
-    }
-    return PDTReadTools.requiredV1.compactMap { resolved[$0] } + ["StructuredOutput", "ToolSearch"]
-}
-
-private func manualClaudePDTToolName(readTool: String, in output: String) -> String? {
-    let pattern = #"mcp__[A-Za-z0-9_.-]+__\#(NSRegularExpression.escapedPattern(for: readTool))"#
-    guard let expression = try? NSRegularExpression(pattern: pattern) else {
-        return nil
-    }
-    let range = NSRange(output.startIndex..<output.endIndex, in: output)
-    return expression.matches(in: output, range: range).compactMap { match in
-        Range(match.range, in: output).map { String(output[$0]) }
-    }.first
-}
-
-private func manualClaudePDTDisallowedTools() -> [String] {
-    // Shared with the production read-only sync (`ClaudeLocalConnection`) so
-    // this smoke always exercises the real read-only deny policy.
-    ClaudePDTReadOnlyToolPolicy.disallowedTools
-}
-
-private func manualClaudePDTToolSearchDisallowedTools() -> [String] {
-    manualClaudePDTDisallowedTools().filter { !$0.hasPrefix("mcp__") }
-}
-
-private func redactedClaudePDTResponse(from data: Data) -> RedactedClaudePDTResponse {
-    let streamObjects = streamJSONObjects(from: data)
-    let rawToolUseNames = streamObjects.flatMap(toolUseNames)
-    let telemetryToolNames = safePDTReadToolNames(in: rawToolUseNames)
-    let telemetryNonReadPDTToolNames = nonRequiredPDTToolNames(in: rawToolUseNames)
-    let telemetryToolResultErrorCount = streamObjects.map(toolResultErrorCount).reduce(0, +)
-    let reachedAllRequired = Set(PDTReadTools.requiredV1).isSubset(of: Set(telemetryToolNames))
-    let status = reachedAllRequired ? "redacted-ok" : (telemetryToolNames.isEmpty ? "setup-required" : "partial")
-    return RedactedClaudePDTResponse(
-        status: status,
-        statusText: reachedAllRequired ? "redacted-ok" : redactedStatus(status),
-        toolNames: telemetryToolNames,
-        selectors: telemetryToolNames,
-        writeToolsCalled: telemetryNonReadPDTToolNames.count,
-        nonReadPDTToolNames: telemetryNonReadPDTToolNames,
-        toolResultErrorCount: telemetryToolResultErrorCount
-    )
-}
-
-private func savedClaudeToolResultFiles(in data: Data) -> [URL] {
-    guard let text = String(data: data, encoding: .utf8) else {
-        return []
-    }
-    let projectsRoot = claudeProjectsDirectory().path
-    var files: [URL] = []
-    var searchStart = text.startIndex
-    while let rootRange = text.range(of: projectsRoot, range: searchStart..<text.endIndex),
-          let extensionRange = text.range(of: ".txt", range: rootRange.lowerBound..<text.endIndex)
-    {
-        let path = String(text[rootRange.lowerBound..<extensionRange.upperBound])
-        files.append(URL(fileURLWithPath: path))
-        searchStart = extensionRange.upperBound
-    }
-    return files
-}
-
-private func deleteSavedClaudeToolResultFiles(_ files: [URL]) {
-    for file in Set(files) {
-        try? FileManager.default.removeItem(at: file)
-    }
-}
-
-private func pdtToolResultFiles(in createdFiles: Set<URL>, referencedFiles: Set<URL>, sessionID: String) -> [URL] {
-    let deadline = Date().addingTimeInterval(1.0)
-    var sessionFiles = Set<URL>()
-    repeat {
-        sessionFiles = claudeToolResultFiles(sessionID: sessionID)
-        if sessionFiles.contains(where: { file in
-            PDTReadTools.requiredV1.contains { file.lastPathComponent.contains($0) }
-        }) {
-            break
-        }
-        Thread.sleep(forTimeInterval: 0.1)
-    } while Date() < deadline
-    let referenced = createdFiles.intersection(referencedFiles)
-    let matchingReadTool = createdFiles.union(sessionFiles).filter { file in
-        PDTReadTools.requiredV1.contains { file.lastPathComponent.contains($0) }
-    }
-    return Array(referenced.union(matchingReadTool))
-}
-
-private func claudeToolResultFiles(sessionID: String? = nil) -> Set<URL> {
-    let root = claudeProjectsDirectory()
-    guard let projects = try? FileManager.default.contentsOfDirectory(
-        at: root,
-        includingPropertiesForKeys: [.isDirectoryKey],
-        options: [.skipsHiddenFiles]
-    ) else {
-        return []
-    }
-    var files = Set<URL>()
-    for project in projects {
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: project.path, isDirectory: &isDirectory),
-              isDirectory.boolValue
-        else { continue }
-        let sessionDirectories: [URL]
-        if let sessionID {
-            sessionDirectories = [project.appending(path: sessionID)]
-        } else {
-            sessionDirectories = (try? FileManager.default.contentsOfDirectory(
-                at: project,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            )) ?? []
-        }
-        for sessionDirectory in sessionDirectories {
-            let toolResults = sessionDirectory.appending(path: "tool-results")
-            guard let toolFiles = try? FileManager.default.contentsOfDirectory(
-                at: toolResults,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
-            ) else {
-                continue
-            }
-            files.formUnion(toolFiles.filter { $0.pathExtension == "txt" })
-        }
-    }
-    return files
-}
-
-private func claudeProjectsDirectory() -> URL {
-    FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude/projects")
-}
-
-private func streamJSONObjects(from data: Data) -> [[String: Any]] {
-    guard let text = String(data: data, encoding: .utf8) else {
-        return []
-    }
-    return text
-        .split(separator: "\n")
-        .compactMap { line in
-            guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else {
-                return nil
-            }
-            return object
-        }
-}
-
 private func toolUseNames(in object: Any) -> [String] {
     if let array = object as? [Any] {
         return array.flatMap(toolUseNames)
@@ -5493,57 +4700,6 @@ private func toolResultErrorCount(in object: Any) -> Int {
         ? 1
         : 0
     return current + dictionary.values.map(toolResultErrorCount).reduce(0, +)
-}
-
-private func safePDTReadToolNames(in values: [String]) -> [String] {
-    let safeNames = values.flatMap { value in
-        PDTReadTools.requiredV1.filter { value.contains($0) }
-    }
-    return Array(Set(safeNames)).sorted()
-}
-
-private func nonRequiredPDTToolNames(in values: [String]) -> [String] {
-    let required = Set(PDTReadTools.requiredV1)
-    let names = values.flatMap(pdtToolNames)
-        .filter { !required.contains($0) }
-    return Array(Set(names)).sorted()
-}
-
-private func pdtToolNames(in value: String) -> [String] {
-    value
-        .split { character in
-            !(character.isLetter || character.isNumber || character == "-")
-        }
-        .map(String.init)
-        .filter { $0.hasPrefix("pdt-") }
-}
-
-private func redactedStatus(_ status: String) -> String {
-    let lowered = status.lowercased()
-    if lowered.contains("setup") || lowered.contains("missing") || lowered.contains("login") {
-        return "redacted-setup-required"
-    }
-    if lowered.contains("ok") || lowered.contains("pass") || lowered.contains("success") {
-        return "redacted-ok"
-    }
-    return "redacted-status"
-}
-
-private func executableExistsOnPath(_ name: String) -> Bool {
-    guard !name.contains("/") else {
-        return FileManager.default.isExecutableFile(atPath: name)
-    }
-    let paths = (ProcessInfo.processInfo.environment["PATH"] ?? "")
-        .split(separator: ":")
-        .map(String.init)
-    return paths.contains { directory in
-        FileManager.default.isExecutableFile(atPath: URL(fileURLWithPath: directory).appending(path: name).path)
-    }
-}
-
-private func roundedSmokeValue(_ value: Double, places: Int) -> Double {
-    let multiplier = pow(10.0, Double(places))
-    return (value * multiplier).rounded() / multiplier
 }
 
 private func fixtureProofSVG(descriptor: MenuDescriptor) -> String {

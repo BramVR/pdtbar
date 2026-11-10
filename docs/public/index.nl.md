@@ -10,7 +10,7 @@ description: "PDTBar toont in de macOS-menubalk wat er nu toe doet in je Portfol
 
 # PDTBar
 
-PDTBar toont in de macOS-menubalk wat er nu toe doet in je Portfolio Dividend Tracker-portefeuille. De app gebruikt je bestaande Claude CLI en PDT MCP-koppeling, leest lokaal mee en verandert niets.
+PDTBar toont in de macOS-menubalk wat er nu toe doet in je Portfolio Dividend Tracker-portefeuille. De app leest je portefeuille rechtstreeks uit PDT, alleen-lezen, en verandert niets.
 
 Je ziet in een oogopslag waar je portefeuille zwaar leunt, welke inkomsten eraan komen, welke posities opvallend bewegen, hoe recent je data is en wanneer er niets om aandacht vraagt.
 
@@ -26,17 +26,17 @@ Je ziet in een oogopslag waar je portefeuille zwaar leunt, welke inkomsten eraan
 
 PDTBar gebruikt dezelfde gegevens als PDT, maar met een andere rol. PDT blijft je volledige dashboard. PDTBar blijft in de menubalk en vat samen wat je anders zelf zou moeten opzoeken.
 
-Op dit moment werkt PDTBar via Claude:
+PDTBar maakt rechtstreeks verbinding met PDT:
 
 ```text
 PDTBar openen
-Claude CLI-login controleren
-PDT MCP-server controleren
+opgeslagen PDT-verbinding controleren
+inloggen bij PDT, of een alleen-lezen PDT-token plakken
 PDT-data lezen zonder iets te wijzigen
 samenvatting tonen
 ```
 
-Als er iets ontbreekt, toont PDTBar `Log in with Claude` en `Check again`. In normaal gebruik hoef je de terminal niet te openen.
+Als PDTBar niet verbonden is, toont het menu `Sign in with PDT` en `Use a PDT token…`. In normaal gebruik hoef je de terminal niet te openen.
 
 ## Installeren
 
@@ -52,11 +52,11 @@ Bekijk de [functionaliteitengids](features.nl.md) voor meer detail over Pulse, A
 
 ## Privacy
 
-PDTBar draait lokaal en verandert niets aan je portefeuille. De app plaatst geen orders, verplaatst geen geld, stuurt je portefeuille niet naar een eigen backend en geeft geen financieel advies. De app zet feiten en veranderingen op volgorde; jij bepaalt wat belangrijk is.
+PDTBar draait lokaal en verandert niets aan je portefeuille. Je PDT-verbinding staat alleen in de Sleutelhanger van deze Mac, en `Disconnect from PDT` verwijdert haar. De app plaatst geen orders, verplaatst geen geld, stuurt je portefeuille niet naar een eigen backend en geeft geen financieel advies. De app zet feiten en veranderingen op volgorde; jij bepaalt wat belangrijk is.
 
 ## Status
 
-PDTBar is in actieve ontwikkeling. Testgegevens zijn er alleen voor ontwikkeling en smoke-tests. Echte portefeuille-updates lopen via de lokale Claude CLI en PDT MCP-koppeling.
+PDTBar is in actieve ontwikkeling. Testgegevens zijn er alleen voor ontwikkeling en smoke-tests. Echte portefeuille-updates komen uit de alleen-lezen API van PDT.
 
 ## Broncode
 

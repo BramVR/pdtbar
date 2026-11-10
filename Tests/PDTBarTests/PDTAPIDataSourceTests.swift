@@ -40,6 +40,17 @@ struct PDTAPIDataSourceTests {
         #expect(run.snapshot.latestDetailFillOutcome == nil)
     }
 
+    @Test("Every paged request asks for at most PDT's documented page size")
+    func pagedRequestsStayWithinDocumentedPageSize() throws {
+        let documentedMaximumPageSize = 100
+        let pageSizes = try replay("full").transport.requests.compactMap { request in
+            (query(request, "perPage") + query(request, "limit")).first.flatMap(Int.init)
+        }
+
+        #expect(pageSizes.count == 11)
+        #expect(pageSizes.allSatisfy { $0 <= documentedMaximumPageSize })
+    }
+
     @Test("Holdings keep open rows, local FX values, identifiers, and tolerate malformed optional fields")
     func holdingsMapping() throws {
         let snapshot = try replay("full").snapshot
@@ -245,6 +256,67 @@ struct PDTAPIDataSourceTests {
         _ = try dataSource(transport, options: options, recorder: recorder).snapshot(asOf: "2026-06-22")
 
         #expect(recorder.failures.map(\.kind) == [kind])
+    }
+
+    @Test("Multi-currency holdings total in the portfolio currency")
+    func multiCurrencyTotalsInPortfolioCurrency() throws {
+        let transport = ScriptedPDTHTTPTransport([ok(#"""
+        {"data":[
+          {"symbolName":"US Traded Co","symbolQuoteId":2001,"symbolId":3001,"currentPriceDate":"2026-06-22T21:59:00+00:00","currentPriceLocal":{"value":"347.66","currency":"EUR"},"currentExchangeRate":1.154,"currentWorth":{"value":"9347.40","currency":"USD"},"currentWorthLocal":{"value":"8100.00","currency":"EUR"},"portfolioWeight":0.34,"closedAt":null},
+          {"symbolName":"Danish Traded Co","symbolQuoteId":2002,"symbolId":3002,"currentPriceDate":"2026-06-22T21:59:00+00:00","currentPriceLocal":{"value":"25.00","currency":"DKK"},"currentExchangeRate":2.0,"currentWorth":{"value":"250.00","currency":"DKK"},"currentWorthLocal":{"value":"250.00","currency":"DKK"},"portfolioWeight":0.66,"closedAt":null}
+        ]}
+        """#)])
+
+        let snapshot = try dataSource(transport, options: .firstFetch).snapshot(asOf: "2026-06-22")
+
+        #expect(snapshot.openHoldings.map(\.quoteId) == [2001, 2002])
+        #expect(snapshot.totalValue == Money(value: "8225.00", currency: "EUR"))
+    }
+
+    @Test("A portfolio held in USD is totalled in USD")
+    func nonEURPortfolioCurrencyIsInferred() throws {
+        let transport = ScriptedPDTHTTPTransport([ok(#"""
+        {"data":[
+          {"symbolName":"US Portfolio Holding","symbolQuoteId":6001,"symbolId":7001,"currentPriceDate":"2026-06-22T21:59:00+00:00","currentPriceLocal":{"value":"100.00","currency":"USD"},"currentExchangeRate":0.8,"currentWorth":{"value":"400.00","currency":"EUR"},"currentWorthLocal":{"value":"500.00","currency":"USD"},"portfolioWeight":0.67,"closedAt":null},
+          {"symbolName":"Second US Portfolio Holding","symbolQuoteId":6002,"symbolId":7002,"currentPriceDate":"2026-06-22T21:59:00+00:00","currentPriceLocal":{"value":"25.00","currency":"USD"},"currentWorth":{"value":"250.00","currency":"USD"},"currentWorthLocal":{"value":"250.00","currency":"USD"},"portfolioWeight":0.33,"closedAt":null}
+        ]}
+        """#)])
+
+        let snapshot = try dataSource(transport, options: .firstFetch).snapshot(asOf: "2026-06-22")
+
+        #expect(snapshot.openHoldings.map(\.quoteId) == [6001, 6002])
+        #expect(snapshot.totalValue == Money(value: "750.00", currency: "USD"))
+    }
+
+    @Test("Filtered-out holdings get no quote-code or price request")
+    func filteredHoldingsGetNoQuoteOrPriceRequest() throws {
+        let transport = ScriptedPDTHTTPTransport([
+            ok(#"""
+            {"data":[
+              {"symbolName":"Open Public Co","symbolQuoteId":1001,"symbolId":5001,"currentPriceDate":"2026-06-22T21:59:00+00:00","currentWorth":{"value":"500.00","currency":"EUR"},"currentWorthLocal":{"value":"500.00","currency":"EUR"},"portfolioWeight":0.10,"closedAt":null},
+              {"symbolName":"Zero Worth","symbolQuoteId":1003,"symbolId":5003,"currentPriceDate":"2026-06-22T21:59:00+00:00","currentWorthLocal":{"value":"0.00","currency":"EUR"},"portfolioWeight":0.45,"closedAt":null},
+              {"symbolName":"Negative Worth","symbolQuoteId":1005,"symbolId":5005,"currentPriceDate":"2026-06-22T21:59:00+00:00","currentWorthLocal":{"value":"-10.00","currency":"EUR"},"portfolioWeight":0.50,"closedAt":null},
+              {"symbolName":"Closed Co","symbolQuoteId":1002,"symbolId":5002,"currentPriceDate":"2026-06-21T21:59:00+00:00","currentWorthLocal":{"value":"0.00","currency":"EUR"},"portfolioWeight":0.40,"closedAt":"2026-06-01T00:00:00+00:00"}
+            ]}
+            """#),
+            ok(#"{"data":[{"id":1001,"code":"PUBC","symbolId":5001}],"meta":{"currentPage":1,"lastPage":1}}"#),
+            ok(#"{"data":{"prices":[[{"date":"2026-06-22","closeAdjusted":"10.25","closeCurrency":"EUR","symbolQuoteId":1001}]]}}"#),
+        ])
+        let options = PDTAPIDataSourceOptions(
+            includeDistributions: false,
+            includeXRayHoldings: false,
+            includeIncomeEvents: false,
+            includeDividends: false
+        )
+
+        let snapshot = try dataSource(transport, options: options).snapshot(asOf: "2026-06-22")
+
+        #expect(snapshot.openHoldings.map(\.quoteId) == [1001])
+        #expect(snapshot.openHoldings.first?.copyableIdentifier == "PUBC")
+        #expect(snapshot.priceSeries.map(\.quoteId) == [1001])
+        #expect(transport.requests.map { $0.url!.path } == ["/v1/portfolio/holdings", "/v1/symbol-quotes", "/v1/prices/batch"])
+        #expect(query(transport.requests[1], "symbolId") == ["5001"])
+        #expect(query(transport.requests[2], "symbolQuoteIds[]") == ["1001"])
     }
 
     @Test(

@@ -13,7 +13,7 @@ Feature journeys live in [features/README.md](features/README.md).
 
 - Never launch `pdtbar` without `--fixture` or `--scripted-pdt <file>`. Otherwise the app reads its PDT credential from the Keychain, can open a browser for Sign in with PDT, and calls the live PDT API. `--scripted-pdt` requires `--app-support-dir`, so a script never touches real app state.
 - Never point a run at the user's real app support dir or `UserDefaults`. Always set `PDTBAR_APP_SUPPORT_DIR`, `--snapshot-dir`, and `PDTBAR_USER_DEFAULTS_SUITE` to isolated values (`Scripts/verify_pdtbar.sh` does this).
-- Live Claude/PDT (`manual-claude-pdt`, `live-pdt`), Peekaboo, and any screenshot-capturing smoke are opt-in only. Do not run them unless the user asks. PDT write tools are never called. For real menu pixels, use `Scripts/verify_pdtbar.sh capture` (see Visual capture). It is the sanctioned opt-in path.
+- Live PDT (`pdtbar-dev pdt-*`, `--pdt-credential-file`), Peekaboo, and any screenshot-capturing smoke are opt-in only. Do not run them unless the user asks. PDT write tools are never called. For real menu pixels, use `Scripts/verify_pdtbar.sh capture` (see Visual capture). It is the sanctioned opt-in path.
 - Never kill by process name. A user may run an installed `PDTBar.app`, and other checkouts may run their own build.
 - Never call `AXIsProcessTrustedWithOptions` with the prompt option, `CGRequestScreenCaptureAccess`, or `osascript`/System Events UI scripting. Those can show TCC dialogs.
 
@@ -60,12 +60,11 @@ PDTBar has no in-process automation port. The repo's driver is `swift run pdtbar
 Pass `--artifacts <run-dir>/evidence` (and `--app-support-dir <run-dir>/smoke-app-support` where accepted) so proof lands in the run dir.
 
 Prompt-free scenarios. None of these captures the screen. They open the menu through AX only if AX is already granted, and otherwise skip that part cleanly:
-- No app launch: `scripted-pdt-connector`, `scripted-pulse-mark-read`, `copy-holding-identifier-action`, `fixture-proof`, `menu-polish-proof`.
-- Real app launch: `scripted-first-fetch`, `scripted-setup-retry`, `scripted-sign-in`, `ready-launch`, `logged-out-launch`. Each puts a fake `claude` and `mcporter` first on `PATH` and fails if either runs.
+- No app launch: `scripted-api-client`, `scripted-api-snapshot`, `scripted-api-auth`, `scripted-pulse-mark-read`, `copy-holding-identifier-action`, `fixture-proof`, `menu-polish-proof`.
+- Real app launch: `scripted-first-fetch`, `scripted-setup-retry`, `scripted-sign-in`, `ready-launch`, `logged-out-launch`. Each fails if the app stops early or writes the fixture sentinel.
+- `make smoke-api` runs `scripted-api-client`, `scripted-api-snapshot`, `scripted-api-auth`, `scripted-first-fetch`, and `scripted-returning-launch` in one sandbox that kills any non-loopback connection, DNS lookup, Keychain lookup, or exec of `claude`, `codex`, or `mcporter`, with menu checks off. See `docs/smoke-checks.md`.
 
 These are opt-in. They capture the screen (`/usr/sbin/screencapture` or Peekaboo), which can show a Screen Recording prompt or a periodic re-confirmation: `real-user-pulse`, `portfolio-summary-proof`, `portfolio-values-settings-proof`, `peekaboo`, `packaged-onboarding --peekaboo`, and `scripted-returning-launch`, which falls back to a full-screen capture when AX is granted.
-
-These are opt-in. They use live Claude or PDT through the legacy MCP path: `manual-claude-pdt`, `live-pdt`.
 
 A `pdtbar-smoke` scenario launches its own app. It does not attach to a `verify_pdtbar.sh` instance. Use the launched instance to inspect by hand, to hand to a user, or to prove fixture-mode launch side effects.
 
@@ -79,7 +78,7 @@ swift run pdtbar-dev descriptor --fixture docs/pdt/fixtures/quiet-no-pressure.js
 
 - Run dir: `.build/verify-pdtbar/<run>/`. It is gitignored and survives `stop`. Smoke proof JSON goes to `--artifacts`. The default is `.build/pdtbar-smoke-artifacts/`.
 - Capture the action and the resulting state together. Examples: the smoke report JSON plus its proof file (`pdtbar-scripted-*-proof.json`, `*-ax.json` with the identifiers seen in the open menu), or the fixture snapshot plus `doctor` output for a manual launch.
-- Verify side effects, not just exit codes. Check that snapshots were written in isolated state, that fixture sentinel dirs stayed empty, that no fake CLI ran, and that the event log's `check` and `request` counts match.
+- Verify side effects, not just exit codes. Check that snapshots were written in isolated state, that fixture sentinel dirs stayed empty, that the app was still running, and that the event log's `check` and `request` counts match.
 - Read the proof. `accessibilityChecked: false` means the menu was never opened. That proves launch and state, not what the menu showed. Say so in the PR.
 - Mocks are allowed only where the repo already isolates a production boundary: the scripted PDT connection (`--scripted-pdt <file>`, a `ScriptedPDTConnection` JSON) for the credential store, browser sign-in, and PDT API transport. Never use internal setters or test-only code paths as proof.
 - Redaction (`docs/smoke-checks.md`): proof may carry selectors, row text, counts, booleans, and fixture names. It must never carry live holdings, values, account IDs, endpoints, or raw PDT payloads.

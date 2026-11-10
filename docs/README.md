@@ -24,7 +24,7 @@ Docs are agent-facing source of truth. Root `README.md` stays human/product-faci
 - [`v1-scope.md`](v1-scope.md) - v1 product slice, facets, cold-start, quiet day.
 - [`architecture.md`](architecture.md) - modules, entry points, data flow.
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) - local build/test/smoke workflow.
-- [`claude-login-workflow.md`](claude-login-workflow.md) - product launch, setup, first fetch.
+- [`pdt-connection-workflow.md`](pdt-connection-workflow.md) - product launch, PDT connection, first fetch.
 - [`smoke-checks.md`](smoke-checks.md) - deterministic and live proof gates.
 - [`reuse-notes.md`](reuse-notes.md) - CodexBar/RepoBar/mcporter/birdclaw reuse boundaries.
 
@@ -41,4 +41,5 @@ Docs are agent-facing source of truth. Root `README.md` stays human/product-faci
 - `Sources/PDTBarApp`: macOS menu-bar product path.
 - `Sources/PDTBarDev`: developer descriptors/model inspection.
 - `Sources/PDTBarSmoke`: scripted and live smoke checks.
+- `Sources/PDTBarSmokeProof`: scripted-launch evidence check shared by the smoke runner and tests.
 - `Sources/PDTBarChecks`: deterministic checks.

@@ -9,8 +9,11 @@ read_when:
 # PDT raw tool schemas (observed 2026-06-22)
 
 Field names/types as returned live by the PDT MCP. Values here are illustrative
-and sanitized. This is the reference the fixtures and the `PortfolioDataSource`
-adapter are built against.
+and sanitized. This is the reference the scenario fixtures (`fixtures/*.json`)
+and their `PDTFixtureDataSource` decoder are built against. It is historical:
+the product reads the PDT REST API (ADR-0002, #250), whose synthetic reply
+bodies live in `fixtures/api/` with their provenance in
+`fixtures/api/provenance.json`.
 
 ## pdt-get-portfolio-holdings → `{ holdings: [...] }`
 
