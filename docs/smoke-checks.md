@@ -254,8 +254,9 @@ in proof. Report counts, statuses, and outcomes only.
 
 These use the registered "pdtbar" app, port 47245, and a mode-0600 file store at
 the given path (plus a sibling `<name>.lock`), never the Keychain. Output is states, expiry, HTTP statuses,
-`/v1/me` key names, and token SHA-256 fingerprints; never token values. Delete
-the store file after proof and revoke the grant in PDT's connected apps page.
+`/v1/me` key names, and token SHA-256 fingerprints; never token values. Keep
+the dev store and its PDT grant connected after proof; revoke only in a test
+about revoking, then sign in again.
 
 Scripted PDT sign-in e2e:
 
