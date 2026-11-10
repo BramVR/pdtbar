@@ -111,8 +111,6 @@ svg {
   text-transform: uppercase;
 }
 
-/* Header */
-
 .top {
   display: flex;
   flex-wrap: wrap;
@@ -215,9 +213,8 @@ svg {
   display: block;
 }
 
-/* Home hero */
-
 .hero {
+  --strip-h: 30px;
   display: grid;
   grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
   padding-block: 40px 72px;
@@ -229,12 +226,11 @@ svg {
   padding-right: 56px;
 }
 
-/* The eyebrow row is as tall as the drawn menu bar, so its rule meets the bar's lower edge. */
 .eyebrow {
   margin: 0;
   border-bottom: 1px solid var(--rule);
   color: var(--muted);
-  line-height: 30px;
+  line-height: var(--strip-h);
 }
 
 .eyebrow b {
@@ -344,9 +340,8 @@ svg {
   text-underline-offset: 4px;
 }
 
-/* The stage is the top-right corner of a Mac screen. The build sets the capture's size on it. */
+/* The build sets --capture-w, --capture-h, --capture-max and --caption-y on the stage from menu-capture.mjs. */
 .stage {
-  --strip-h: 30px;
   --inset: 28px;
   --menu-top: calc(var(--strip-h) + 6px);
   --pad-bottom: 40px;
@@ -504,7 +499,7 @@ svg {
   background: var(--income-mark);
 }
 
-/* The caption starts below the last callout and stays in flow, so longer text grows the stage instead of colliding. */
+/* The caption stays in flow so that longer text grows the stage instead of running into a callout. */
 .fig {
   grid-area: 1 / 1;
   align-self: start;
@@ -523,7 +518,7 @@ svg {
   font-weight: 400;
 }
 
-/* Body: the flat markdown output */
+/* The markdown renderer emits flat h1-h4, p, ul, ol, pre and a elements, so .prose styles only those. */
 
 .prose {
   min-width: 0;
@@ -589,7 +584,6 @@ svg {
   font-size: 17px;
 }
 
-/* Heading anchors stay out of sight until the heading is hovered or the link is focused. */
 .prose .anchor {
   position: absolute;
   right: 100%;
@@ -687,8 +681,6 @@ svg {
   letter-spacing: 0.06em;
 }
 
-/* Home body: section titles in the left column, text on a reading measure in the right. */
-
 .home .prose {
   display: grid;
   grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
@@ -733,14 +725,6 @@ svg {
   width: min(100%, var(--measure));
   padding-right: 20px;
 }
-
-.home .prose > h2 + pre {
-  margin-top: 102px;
-  padding-top: 14px;
-  border-top: 0;
-}
-
-/* Doc pages: a reading measure beside a sticky, numbered contents rail. */
 
 .doc {
   display: grid;
@@ -872,8 +856,6 @@ svg {
   padding-top: 26px;
 }
 
-/* Footer */
-
 .foot {
   display: flex;
   flex-wrap: wrap;
@@ -916,8 +898,6 @@ svg {
   text-decoration: underline;
   text-underline-offset: 4px;
 }
-
-/* Responsive */
 
 /* Beside the title block, the menu shrinks until the whole stage fits a laptop screen. */
 @media (min-width: 1100px) {
@@ -979,8 +959,7 @@ svg {
     padding-right: 0;
   }
 
-  .home .prose > h2 + *,
-  .home .prose > h2 + pre {
+  .home .prose > h2 + * {
     margin-top: 0;
     padding-top: 0;
     border-top: 0;
@@ -988,10 +967,6 @@ svg {
 
   .home .prose > h2 + :is(ul, ol) {
     border-top: 1px solid var(--rule);
-  }
-
-  .home .prose > h2 + pre {
-    padding-top: 14px;
   }
 
   .home .prose > pre {

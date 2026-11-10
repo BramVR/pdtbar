@@ -17,6 +17,7 @@ const repoSourceBase = `${repoBase}/blob/main/docs`;
 const siteBase = "https://bramvr.github.io/pdtbar";
 const productName = "PDTBar";
 const pdtName = "Portfolio Dividend Tracker";
+const imagesCheckedByPagesWorkflow = ["pdtbar-hero.png"];
 const productTagline = "Quiet portfolio pulse.";
 const installHint = "Homebrew is not supported yet. Use a shared PDTBar.app.zip build for now; public app downloads will be listed on GitHub releases once ready.";
 
@@ -52,8 +53,7 @@ for (const page of pages) {
 
 fs.writeFileSync(path.join(outDir, "favicon.svg"), faviconSvg(), "utf8");
 fs.writeFileSync(path.join(outDir, "social-card.svg"), socialCardSvg(), "utf8");
-// pdtbar-hero.png is no longer shown on a page, but pages.yml still checks that it ships.
-for (const image of ["pdtbar-hero.png", menuCapture.file]) {
+for (const image of [menuCapture.file, ...imagesCheckedByPagesWorkflow]) {
   fs.copyFileSync(path.join(docsDir, "public", image), path.join(outDir, image));
 }
 fs.writeFileSync(path.join(outDir, ".nojekyll"), "", "utf8");
