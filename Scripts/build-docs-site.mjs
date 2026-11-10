@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { brandMarkSvg, css, faviconSvg, js, preThemeScript, pulseArtSvg, socialCardSvg, themeToggleHtml } from "./docs-site-assets.mjs";
+import { brandMarkSvg, css, faviconSvg, js, preThemeScript, pulseArtSvg, socialCardSvg, themeToggleHtml } from "./docs-site/graphics.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const defaultRoot = path.resolve(scriptDir, "..");
