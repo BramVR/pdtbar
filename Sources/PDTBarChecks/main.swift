@@ -15,6 +15,7 @@ let scriptedResponses = try scriptedConnectorResponses()
 try checkFixtureCorpus(fixtures)
 try checkScriptedConnectorFirstFetch(responses: scriptedResponses, asOf: asOf)
 try checkScriptedBackgroundDetailRefresh(responses: scriptedResponses, asOf: asOf)
+try checkPDTAPIDataHealth()
 try checkMcporterPin()
 
 print("pdtbar-checks: passed")
@@ -186,6 +187,119 @@ private func checkScriptedBackgroundDetailRefresh(responses: [String: Data], asO
             && repaired.model.facetSnapshots.freshness.latestCompleteDetailFillAsOf == asOf
             && repairedDiagnostic == nil,
         "completed detail retry should restore price data, record latest complete detail fill, and clear diagnostics"
+    )
+}
+
+/// Data Health over the PDT REST API: a saved copy, then a refresh PDT rate
+/// limits with a token, an account id, and a URL planted in its answer.
+private func checkPDTAPIDataHealth() throws {
+    let token = "pdt_SENTINEL_TOKEN_0123456789abcdef0123456789abcdef"
+    let planted = [token, "acct-SENTINEL-4242", "https://api.portfoliodividendtracker.com/v1/accounts/acct-SENTINEL-4242", "RAW_BODY_SENTINEL"]
+    let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-api-data-health-check")
+    defer {
+        try? FileManager.default.removeItem(at: store.directory)
+    }
+    func refresh(_ replies: [ScriptedPDTHTTPTransport.Reply], asOf: String) -> PDTAPIBackgroundDetailRefresh {
+        PDTAPIBackgroundDetailRefresh(
+            client: PDTAPIClient(
+                transport: ScriptedPDTHTTPTransport(replies),
+                tokenProvider: InMemoryPDTAPITokenProvider(token: PDTAPIToken(token)),
+                policy: PDTAPIRequestPolicy(maxAttempts: 1)
+            ),
+            snapshotStore: store,
+            asOf: asOf
+        )
+    }
+    let emptyPage = #"{"data":[],"meta":{"currentPage":1,"lastPage":1}}"#
+    let completeSync = [
+        #"{"data":[{"symbolName":"Check Holding","symbolQuoteId":1,"symbolId":1001,"currentPriceDate":"2026-03-27T23:59:59+00:00","portfolioWeight":"1","closedAt":null,"currentWorthLocal":{"value":"100.00","currency":"EUR"}}]}"#,
+        #"{"data":{"sectors":[],"assetTypes":[]}}"#,
+        #"{"data":{"items":[],"hasMore":false}}"#,
+        emptyPage,
+        emptyPage,
+        #"{"data":{"prices":[[{"date":"2026-03-27","closeAdjusted":"10.00","closeCurrency":"EUR","symbolQuoteId":1}]]}}"#,
+    ].map { ScriptedPDTHTTPTransport.Reply.response(status: 200, body: Data($0.utf8)) }
+    _ = try refresh(completeSync, asOf: "2026-03-28").refresh()
+
+    let savedCopy = try require(
+        try PressureRunner.cachedPulse(snapshotStore: store, today: "2026-03-28"),
+        "a complete PDT API sync should leave a saved copy"
+    )
+    let savedHealth = savedCopy.model.facetSnapshots.dataHealth
+    try check(
+        savedHealth.freshness.status == .fresh && savedHealth.source.pulse == .cachedSnapshot && savedHealth.access.state == .unverified,
+        "a saved copy should report its own current prices but no checked connection"
+    )
+    try check(
+        [DataHealthAccess.unverified, .checking, .connected].allSatisfy {
+            DataHealth.snapshot(savedHealth, in: DataHealthRuntime(access: $0)).status != .healthy
+        },
+        "a saved copy should never be healthy, even with current prices and a connected app"
+    )
+
+    let rateLimited = ScriptedPDTHTTPTransport.Reply.response(
+        status: 429,
+        body: Data(#"{"error":{"code":"RATE_LIMITED","message":"\#(planted[3]) \#(planted[1]) \#(token)","details":{"reason":"\#(planted[1])"},"traceId":"\#(planted[2])"}}"#.utf8),
+        headers: ["Retry-After": "120", "X-Request-Id": token, "Authorization": "Bearer \(token)"]
+    )
+    do {
+        _ = try refresh([rateLimited], asOf: "2026-03-29").refresh()
+        throw CheckFailure("a rate-limited base request should fail the PDT API refresh")
+    } catch PDTAPIError.rateLimited {}
+    let failure = try require(store.lastSyncFailure(), "a failed PDT API refresh should store its typed failure")
+    try check(
+        failure.kind == .rateLimited(retryAfterSeconds: 120) && failure.endpoint == .holdings && failure.traceID == nil,
+        "a rate-limited refresh should store the 429 category, its endpoint, and no untrusted trace id"
+    )
+
+    let laterCopy = try require(
+        try PressureRunner.cachedPulse(snapshotStore: store, today: "2026-04-10"),
+        "a failed PDT API refresh should keep the saved copy"
+    )
+    let runtime = DataHealthRuntime(access: .connected, sync: .failed(failure))
+    let health = DataHealth.snapshot(laterCopy.model.facetSnapshots.dataHealth, in: runtime)
+    try check(
+        health.cache.lastSyncAsOf == "2026-03-28"
+            && health.freshness.oldestPriceAsOf?.hasPrefix("2026-03-27") == true
+            && health.freshness.status == .stale
+            && health.status == .degraded,
+        "last sync should stay the committed snapshot's day, separate from price freshness, after a failed refresh"
+    )
+    let healthRow = try require(
+        laterCopy.descriptor(in: runtime).sections.first { $0.id == "freshness" }?.rows.first { $0.id == "dataHealth" },
+        "a failed PDT API refresh should show Data health"
+    )
+    let details = Dictionary(uniqueKeysWithValues: healthRow.children.map { ($0.id, $0.detail ?? "") })
+    try check(
+        details["dataHealth.source"]?.contains("saved copy") == true
+            && details["dataHealth.access"] == "Connected"
+            && details["dataHealth.cache"] == "Last sync 2026-03-28"
+            && details["dataHealth.freshness"]?.hasPrefix("1 stale") == true
+            && details["dataHealth.detailFill"] == "Failed"
+            && details["dataHealth.diagnostic"] == "Base holdings: PDT rate limit; try again in 2 min",
+        "Data health should name source, access, last sync, price freshness, detail fill, and what to do, each in its own row"
+    )
+    let copyText = try require(
+        healthRow.children.first { $0.id == "dataHealth.diagnostic" }?.children.first?.actionTarget?.copyText,
+        "a recorded sync failure should offer Copy diagnostics"
+    )
+    try check(
+        copyText.contains("request: GET /v1/portfolio/holdings")
+            && copyText.contains("failure: rate limited (HTTP 429)")
+            && copyText.contains("retry after: 120 s")
+            && !copyText.contains("tool:")
+            && !copyText.contains("argument_keys"),
+        "copied diagnostics should describe the PDT API request, not a Claude tool call"
+    )
+    let written = [
+        copyText,
+        visibleMenuText([healthRow]).joined(separator: "\n"),
+        String(decoding: try stableJSONData(health), as: UTF8.self),
+        try String(contentsOf: store.directory.appending(path: "latest-sync-failure.json"), encoding: .utf8),
+    ]
+    try check(
+        written.allSatisfy { text in planted.allSatisfy { !text.contains($0) } && !text.contains("SENTINEL") },
+        "copied diagnostics, Data health rows, Data health JSON, and the stored failure should hold nothing PDT's answer carried"
     )
 }
 
