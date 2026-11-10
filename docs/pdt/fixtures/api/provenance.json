@@ -1,0 +1,49 @@
+{
+  "synthetic": true,
+  "accountData": "none",
+  "authoredFor": "BramVR/pdtbar#265, merged 2026-11-09",
+  "spec": {
+    "name": "PDT REST API documentation (api.portfoliodividendtracker.com)",
+    "version": "0.8.1",
+    "researched": "2026-11-08"
+  },
+  "crossChecked": "Envelope shapes match the ADR-0002 live findings of 2026-11-09: holdings {data}, paged lists {data, meta, links} with camelCase meta, x-ray {data: {items, hasMore, totalCount}}, errors {error: {code, message, details, traceId}}.",
+  "notReverifiedAgainst": {
+    "spec": "openapi.json",
+    "version": "0.9.0",
+    "seen": "2026-11-10"
+  },
+  "assumedNotSeenLive": [
+    "Calendar-event, dividend, and symbol-quote row fields match the retired PDT MCP tools.",
+    "X-ray items carry weight (0-100) beside symbolName."
+  ],
+  "requestNote": "Each request names the endpoint and, where one endpoint answers more than once, the parameter that tells the replies apart. Date windows, page sizes, and price ids follow the replay's asOf and request policy.",
+  "scenarios": {
+    "concentration-pressure": [
+      { "file": "01-holdings.json", "request": "GET /v1/portfolio/holdings" },
+      { "file": "02-distributions.json", "request": "GET /v1/portfolio/distributions" }
+    ],
+    "full": [
+      { "file": "01-holdings.json", "request": "GET /v1/portfolio/holdings" },
+      { "file": "02-distributions.json", "request": "GET /v1/portfolio/distributions" },
+      { "file": "03-x-ray-page-1.json", "request": "GET /v1/x-ray?offset=0" },
+      { "file": "04-x-ray-page-2.json", "request": "GET /v1/x-ray?offset=2" },
+      { "file": "05-calendar-events-page-1.json", "request": "GET /v1/calendar-events?page=1" },
+      { "file": "06-calendar-events-page-2.json", "request": "GET /v1/calendar-events?page=2" },
+      { "file": "07-dividends.json", "request": "GET /v1/dividends?page=1" },
+      { "file": "08-symbol-quotes-5001.json", "request": "GET /v1/symbol-quotes?symbolId=5001" },
+      { "file": "09-symbol-quotes-5002.json", "request": "GET /v1/symbol-quotes?symbolId=5002" },
+      { "file": "10-symbol-quotes-5003.json", "request": "GET /v1/symbol-quotes?symbolId=5003" },
+      { "file": "11-symbol-quotes-5004.json", "request": "GET /v1/symbol-quotes?symbolId=5004" },
+      { "file": "12-symbol-quotes-5010.json", "request": "GET /v1/symbol-quotes?symbolId=5010" },
+      { "file": "13-symbol-quotes-5013.json", "request": "GET /v1/symbol-quotes?symbolId=5013" },
+      { "file": "14-prices-batch.json", "request": "GET /v1/prices/batch" }
+    ],
+    "quiet-no-pressure": [
+      { "file": "01-holdings.json", "request": "GET /v1/portfolio/holdings" },
+      { "file": "02-distributions.json", "request": "GET /v1/portfolio/distributions" },
+      { "file": "03-calendar-events.json", "request": "GET /v1/calendar-events?page=1" },
+      { "file": "04-prices-batch.json", "request": "GET /v1/prices/batch" }
+    ]
+  }
+}

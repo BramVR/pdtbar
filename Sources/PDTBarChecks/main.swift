@@ -13,6 +13,7 @@ let asOf = "2026-03-29"
 let scriptedResponses = try scriptedConnectorResponses()
 
 try checkFixtureCorpus(fixtures)
+try checkAPIFixtureProvenance()
 try checkScriptedConnectorFirstFetch(responses: scriptedResponses, asOf: asOf)
 try checkScriptedBackgroundDetailRefresh(responses: scriptedResponses, asOf: asOf)
 try checkCoalescedAPIFirstFetch()
@@ -62,6 +63,52 @@ private func checkFixtureCorpus(_ fixtures: [URL]) throws {
             "\(fixture.lastPathComponent) should keep Money.value canonical"
         )
         try assertInformationalCopy(model: decoded, descriptor: descriptor, fixtureName: fixture.lastPathComponent)
+    }
+}
+
+/// `docs/pdt/fixtures/api/provenance.json` must describe every replayed
+/// REST body, file for file, and say what the bodies were authored against.
+private func checkAPIFixtureProvenance() throws {
+    struct Provenance: Decodable {
+        struct Spec: Decodable {
+            var version: String
+        }
+
+        struct Reply: Decodable {
+            var file: String
+            var request: String
+        }
+
+        var synthetic: Bool
+        var spec: Spec
+        var scenarios: [String: [Reply]]
+    }
+    let root = packageRoot.appending(path: "docs/pdt/fixtures/api")
+    let provenance = try JSONDecoder().decode(Provenance.self, from: Data(contentsOf: root.appending(path: "provenance.json")))
+    try check(provenance.synthetic, "REST fixture provenance should mark the bodies synthetic")
+    try check(
+        !provenance.spec.version.trimmingCharacters(in: .whitespaces).isEmpty,
+        "REST fixture provenance should name the PDT API spec version"
+    )
+    let scenarios = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey])
+        .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+        .map(\.lastPathComponent)
+    try check(
+        Set(provenance.scenarios.keys) == Set(scenarios),
+        "REST fixture provenance should list exactly the scenario directories \(scenarios.sorted())"
+    )
+    for (scenario, replies) in provenance.scenarios {
+        let files = try FileManager.default.contentsOfDirectory(atPath: root.appending(path: scenario).path)
+            .filter { $0.hasSuffix(".json") }
+            .sorted()
+        try check(
+            replies.map(\.file) == files,
+            "REST fixture provenance for \(scenario) should list its replies in replay order: \(files)"
+        )
+        try check(
+            replies.allSatisfy { $0.request.hasPrefix("GET /v1/") },
+            "REST fixture provenance for \(scenario) should name a GET request for every reply"
+        )
     }
 }
 
