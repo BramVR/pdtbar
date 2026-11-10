@@ -4,7 +4,7 @@ import PDTBarAppSupport
 import PDTBarCore
 import Testing
 
-@Suite("Claude local login runner")
+@Suite("Claude local login runner", .serialized)
 struct ClaudeLocalLoginRunnerTests {
     @Test("Product login runner ignores inherited scripted binary environment")
     func productLoginRunnerIgnoresInheritedScriptedBinaryEnvironment() async throws {

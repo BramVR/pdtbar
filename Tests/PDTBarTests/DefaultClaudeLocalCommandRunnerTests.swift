@@ -93,17 +93,13 @@ struct DefaultClaudeLocalCommandRunnerTests {
         #expect(eventuallyProcessExits(escapedPID))
     }
 
-    @Test("Cancellation after root exit terminates a pipe-holding descendant")
-    func cancellationAfterRootExitTerminatesDescendant() throws {
+    @Test("A run that exits normally ends a reparented, pipe-holding helper")
+    func normalExitEndsReparentedHelper() throws {
         let runner = DefaultClaudeLocalCommandRunner()
-        let cancellation = PDTCancellation()
         let pidFile = FileManager.default.temporaryDirectory
-            .appending(path: "pdtbar-exited-root-grandchild-\(UUID().uuidString).pid")
+            .appending(path: "pdtbar-exited-root-helper-\(UUID().uuidString).pid")
         defer {
             try? FileManager.default.removeItem(at: pidFile)
-        }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
-            cancellation.cancel()
         }
 
         let started = Date()
@@ -111,20 +107,21 @@ struct DefaultClaudeLocalCommandRunnerTests {
             executable: "/bin/sh",
             arguments: [
                 "-c",
-                #"/bin/sh -c 'trap "" TERM; exec sleep 15' & echo $! > "$PID_FILE"; sleep 0.3"#,
+                #"( /bin/sh -c 'trap "" TERM; exec sleep 15' & echo $! > "$PID_FILE" ); echo done"#,
             ],
             timeout: 10,
-            environment: ["PATH": "/usr/bin:/bin", "PID_FILE": pidFile.path],
-            cancellation: cancellation
+            environment: ["PATH": "/usr/bin:/bin", "PID_FILE": pidFile.path]
         )
         let elapsed = Date().timeIntervalSince(started)
 
-        #expect(result.exitCode == -1)
+        #expect(result.exitCode == 0)
+        #expect(result.stdout.contains("done"))
         #expect(elapsed < 4.0)
-        let descendantPID = try #require(pid_t(
+        let helperPID = try #require(pid_t(
             String(contentsOf: pidFile).trimmingCharacters(in: .whitespacesAndNewlines)
         ))
-        #expect(eventuallyProcessExits(descendantPID))
+        defer { kill(helperPID, SIGKILL) }
+        #expect(eventuallyProcessExits(helperPID))
     }
 
     @Test("Normal runs still drain output larger than the pipe buffer in full")
