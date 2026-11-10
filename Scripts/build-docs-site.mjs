@@ -481,7 +481,7 @@ ${html}
 }
 
 function heroHtml(page, t) {
-  const { file, width, height, displayWidth, callouts } = menuCapture;
+  const { file, width, height, displayWidth, captionY, callouts } = menuCapture;
   const spec = [
     [t.specAccess, t.specAccessValue],
     [t.specRequires, t.specRequiresValue],
@@ -503,7 +503,7 @@ function heroHtml(page, t) {
           ${spec.map(([term, value]) => `<div><dt class="mono">${term}</dt><dd>${value}</dd></div>`).join("\n          ")}
         </dl>
       </div>
-      <figure class="stage" style="--capture-w:${width};--capture-h:${height};--capture-max:${displayWidth}px">
+      <figure class="stage" style="--capture-w:${width};--capture-h:${height};--capture-max:${displayWidth}px;--caption-y:${captionY}">
         ${menuBarStripHtml()}
         <div class="hang">
           <span class="bar-item" aria-hidden="true">${statusIconSvg()}</span>

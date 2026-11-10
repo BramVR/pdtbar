@@ -353,6 +353,8 @@ svg {
   --mw: var(--capture-max);
   --mh: calc(var(--mw) * var(--capture-h) / var(--capture-w));
   position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--mw);
   margin: 0;
   padding: var(--menu-top) var(--inset) var(--pad-bottom);
   overflow: hidden;
@@ -376,10 +378,13 @@ svg {
 .bar-left {
   position: absolute;
   left: 0;
+  right: calc(var(--inset) + var(--mw) + 12px);
   top: 0;
   display: flex;
   gap: 20px;
   padding-left: 20px;
+  overflow: hidden;
+  white-space: nowrap;
   opacity: 0.6;
   -webkit-mask-image: linear-gradient(90deg, transparent, #000 85%);
   mask-image: linear-gradient(90deg, transparent, #000 85%);
@@ -403,8 +408,7 @@ svg {
 
 .hang {
   position: relative;
-  width: var(--mw);
-  margin-left: auto;
+  grid-area: 1 / 2;
 }
 
 .bar-item {
@@ -449,6 +453,7 @@ svg {
 }
 
 .callouts {
+  grid-area: 1 / 1;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -469,6 +474,7 @@ svg {
 .callouts span {
   min-width: 0;
   overflow-wrap: anywhere;
+  hyphens: auto;
 }
 
 .callouts li::before {
@@ -498,13 +504,13 @@ svg {
   background: var(--income-mark);
 }
 
+/* The caption starts below the last callout and stays in flow, so longer text grows the stage instead of colliding. */
 .fig {
-  position: absolute;
-  left: var(--inset);
-  right: calc(var(--inset) + var(--mw) + 20px);
-  bottom: 34px;
-  max-width: 200px;
-  margin: 0;
+  grid-area: 1 / 1;
+  align-self: start;
+  max-width: 220px;
+  margin: calc(var(--mh) * var(--caption-y) / 100) 0 0;
+  padding-right: 20px;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.45;
@@ -1026,6 +1032,10 @@ svg {
     margin-top: 28px;
   }
 
+  .stage {
+    display: block;
+  }
+
   .hang {
     width: min(var(--capture-max), 100%);
     margin-inline: auto;
@@ -1037,9 +1047,9 @@ svg {
   }
 
   .fig {
-    position: static;
     max-width: none;
     margin-top: 18px;
+    padding-right: 0;
   }
 
   .fig b {
