@@ -570,6 +570,26 @@ struct PDTCredentialStorageTests {
         #expect(keychain.added.map { $0[kSecAttrAccessible as String] as? String } == [kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String])
     }
 
+    @Test("An unentitled build fails with the missing-entitlement error and never retries outside the data protection keychain")
+    func keychainMissingEntitlement() throws {
+        let keychain = FakeSecItems(status: errSecMissingEntitlement)
+        let directory = FileManager.default.temporaryDirectory.appending(path: "pdtbar-keychain-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = KeychainPDTCredentialStore(lockDirectory: directory, secItem: keychain.api)
+
+        #expect(throws: PDTCredentialStoreError.missingKeychainEntitlement) { try store.load() }
+        #expect(throws: PDTCredentialStoreError.missingKeychainEntitlement) {
+            try store.save(.connected(.personalToken(PDTAPIToken("pdt_keychain"))))
+        }
+        #expect(throws: PDTCredentialStoreError.missingKeychainEntitlement) { try store.save(.disconnected) }
+        let connection = PDTConnection(store: store, tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([])))
+        #expect(throws: PDTCredentialStoreError.missingKeychainEntitlement) { try connection.state() }
+
+        #expect(keychain.queries.count == 4)
+        #expect(keychain.queries.allSatisfy { $0[kSecUseDataProtectionKeychain as String] as? Bool == true })
+        #expect(keychain.added.isEmpty)
+    }
+
     @Test("Tokens, sessions, states, and fingerprints never print a secret")
     func secretFreeDescriptions() throws {
         let secrets = ["access-secret-value", "refresh-secret-value", "pdt_personal-secret"]
@@ -922,6 +942,7 @@ private final class HookTransport: PDTHTTPTransport, @unchecked Sendable {
 
 private final class FakeSecItems: @unchecked Sendable {
     private let lock = NSLock()
+    private let forcedStatus: OSStatus?
     private var item: Data?
     private(set) var queries: [[String: Any]] = []
     private(set) var added: [[String: Any]] = []
@@ -960,10 +981,15 @@ private final class FakeSecItems: @unchecked Sendable {
         )
     }
 
+    /// `status` answers every call instead of the in-memory item.
+    init(status: OSStatus? = nil) {
+        forcedStatus = status
+    }
+
     private func record(_ query: CFDictionary, _ body: () -> OSStatus) -> OSStatus {
         lock.lock()
         defer { lock.unlock() }
         queries.append(query as NSDictionary as! [String: Any])
-        return body()
+        return forcedStatus ?? body()
     }
 }

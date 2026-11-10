@@ -81,6 +81,7 @@ if [[ "$REQUIRE_NOTARIZATION" == "1" ]]; then
   require_env APP_STORE_CONNECT_API_KEY_P8
   require_env APP_STORE_CONNECT_KEY_ID
   require_env APP_STORE_CONNECT_ISSUER_ID
+  require_env PDTBAR_PROVISIONING_PROFILE
   security find-identity -p codesigning -v 2>/dev/null | grep -F "${PDTBAR_APP_IDENTITY}" >/dev/null \
     || fail "PDTBAR_APP_IDENTITY is not installed in this keychain."
   NOTARIZATION_READY=1
@@ -90,6 +91,7 @@ cd "${ROOT_DIR}"
 mkdir -p "${OUT_DIR}"
 
 log "==> Building release app archive ${ARCHIVE_NAME}"
+PDTBAR_REQUIRE_KEYCHAIN_ENTITLEMENT="${NOTARIZATION_READY}" \
 PDTBAR_APP_VERSION="${BUNDLE_VERSION}" \
 PDTBAR_APP_BUILD="${BUNDLE_VERSION}" \
 ARCHES="${ARCHES_VALUE}" \

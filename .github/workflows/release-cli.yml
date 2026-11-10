@@ -90,9 +90,14 @@ jobs:
           APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          PDTBAR_PROVISIONING_PROFILE_BASE64: ${{ secrets.PDTBAR_PROVISIONING_PROFILE_BASE64 }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ -n "${PDTBAR_PROVISIONING_PROFILE_BASE64:-}" ]]; then
+            export PDTBAR_PROVISIONING_PROFILE="$RUNNER_TEMP/pdtbar.provisionprofile"
+            printf '%s' "$PDTBAR_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PDTBAR_PROVISIONING_PROFILE"
+          fi
           REQUIRE_NOTARIZATION=0
           if [[ "${{ github.event_name }}" == "release" || "${{ inputs.require_notarization }}" == "true" ]]; then
             REQUIRE_NOTARIZATION=1
