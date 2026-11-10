@@ -11,10 +11,9 @@ read_when:
 ## Current setup assumptions
 
 - Product launch is no-argument `pdtbar`; fixture mode is explicit `--fixture`.
-- The PDT REST API connection is the only setup path: Sign in with PDT (browser) or a pasted PDT token, stored in the Keychain. Launch and the menu never run the Claude CLI or an MCP server.
+- The PDT REST API connection is the only setup path: Sign in with PDT (browser) or a pasted PDT token, stored in the Keychain. Product code starts no process; `pdtbar-checks` fails on a process start, or a mention of a local CLI or MCP tool, in `Sources/PDTBarCore`, `Sources/PDTBarAppSupport`, or `Sources/PDTBarApp`.
 - Scripted app smokes launch `pdtbar --app-support-dir <isolated> --scripted-pdt <file>`. The file is a `ScriptedPDTConnection` JSON: stored connection (`notConnected`, `browserSession`, `personalToken`, `signInExpired`, `tokenRevoked`), an optional `keychainStatus` that drives the real Keychain store over a fake `SecItem` API, a scripted sign-in outcome, PDT API replies in request order, and an `eventLog` that records `check`, `sign-in`, `token`, `disconnect`, and `request <path>`. The app refuses `--scripted-pdt` without `--app-support-dir`.
-- Scripted smokes inject fixture env vars only as sentinels and put a fake `claude` and `mcporter` first on `PATH`; they fail if the fixture sentinel is written or either fake runs.
-- Manual Claude reachability proof (`manual-claude-pdt`) and live `mcporter` smoke (`live-pdt`) exercise the legacy MCP path only (#250 removes it); neither is the product runtime path.
+- Scripted smokes inject fixture env vars only as sentinels; they fail if the fixture sentinel is written.
 - Missing macOS Accessibility/Screen Recording permission should skip with a setup-required detail unless the smoke is specifically testing that failure.
 
 ## Redaction rules
@@ -44,7 +43,7 @@ make check
 swift build
 swift test
 swift run pdtbar-checks
-swift run pdtbar-smoke scripted-pdt-connector
+make smoke-api
 swift run pdtbar-smoke scripted-api-client
 swift run pdtbar-smoke scripted-api-snapshot
 swift run pdtbar-smoke scripted-api-auth
@@ -57,15 +56,114 @@ swift run pdtbar-smoke scripted-returning-launch
 ```
 
 `make check` is bounded to local deterministic checks: script syntax, Swift
-build, `pdtbar-checks`, and the sharded Swift test runner. The checks executable
-keeps command-style fixture/connector and tooling-contract proof, plus PDT API
-Data health proof over an in-memory script (a saved copy is never healthy, last
-sync stays apart from price freshness after a failed refresh, and copied
-diagnostics hold nothing a `429` answer carried); Swift tests
-own core model, parser, runner, normalization, and rendering regressions. Non-AX
+build, `pdtbar-checks`, and the sharded Swift test runner. It does not run
+`make smoke-api`. The checks executable keeps command-style proof: the scenario
+fixture corpus, REST fixture provenance (below), the coalesced API first fetch,
+a degraded-then-repaired API background refresh, PDT API Data health over an
+in-memory script (a saved copy is never healthy, last sync stays apart from
+price freshness after a failed refresh, and copied diagnostics hold nothing a
+`429` answer carried), and the product source scan above. Swift tests own core
+model, parser, runner, normalization, and rendering regressions. Non-AX
 scripted smokes can be run directly with `swift run pdtbar-smoke <name>` when
-launch/setup/menu behavior is in scope. Live Claude/PDT, Keychain, 1Password,
-and packaged-app checks stay opt-in.
+launch/setup/menu behavior is in scope. Live PDT, Keychain, 1Password, and
+packaged-app checks stay opt-in.
+
+REST fixture provenance: `docs/pdt/fixtures/api/provenance.json` says the
+bodies are synthetic, holds no account data, names the PDT API docs version
+they were written against (v0.8.1) and the spec version they were not
+re-checked against (openapi v0.9.0), and lists the fields still assumed rather
+than seen live. Per scenario directory it lists every reply file in replay
+order with the `GET /v1/...` request it answers. `pdtbar-checks` fails when the
+scenario keys differ from the directories, a file list differs from the
+directory's `*.json` files, a request is not a `GET /v1/` request, the version
+is empty, or `synthetic` is false. It lives at the `api/` root because the
+replay loaders read every `*.json` in a scenario directory.
+
+Scripted API smoke matrix:
+
+```bash
+make smoke-api   # ./Scripts/api_smoke_matrix.sh [<artifacts-dir>]
+```
+
+`Scripts/api_smoke_matrix.sh` builds `pdtbar` and `pdtbar-smoke`, then runs
+`pdtbar-smoke scripted-api-matrix --app .build/debug/pdtbar --timeout 5` under
+`env -i` (`HOME` and `TMPDIR` in a throwaway directory, `PATH=/usr/bin:/bin`)
+and `sandbox-exec` with the profile written in the script. CI runs it after
+the deterministic checks.
+
+The matrix runs five rows in its own process, each with `--no-menu-checks`:
+`scripted-api-client`, `scripted-api-snapshot`, `scripted-api-auth`,
+`scripted-first-fetch`, and `scripted-returning-launch`. They use the scripted
+HTTP transport, in-memory or fake-`SecItem` credential stores, and the
+synthetic REST fixtures; the last two launch the real app with
+`--scripted-pdt`, and the app inherits the sandbox. Each row also runs on its
+own, as described below. The registry in `Sources/PDTBarSmoke/main.swift`
+marks which commands are matrix rows.
+
+Row zero checks the environment first. No `PATH` entry may hold a file named
+`claude`, `codex`, or `mcporter` (an existence check: an execute check would
+trip the exec rule), and every sandbox rule below must hold. Otherwise the
+matrix fails and runs no row. A failed or `skipped` row fails the matrix.
+`<artifacts>/pdtbar-scripted-api-matrix-proof.json` (default
+`.build/pdtbar-smoke-artifacts/api-matrix/`) records the `PATH`, any resolved
+CLI, each rule's expected and observed outcome, every row report, and
+`menuChecks: "menu: not checked (TCC unreachable by design)"`. Each row writes
+its own proof under `<artifacts>/<row>/`.
+
+Each rule is probed from inside the sandbox. Fatal rules run in a child
+`pdtbar-smoke sandbox-probe <connect|resolve|mach <service>|exec <path>>`, so a
+rule that holds kills the child and leaves the matrix running. The TCC rule and
+the control lookup run in-process first; outside the sandbox they come back
+allowed and no child probe runs, so the network probe never sends a packet.
+
+- **Network.** `(deny network-outbound (with send-signal SIGKILL) (remote ip))`.
+  Probe: a non-blocking connect to `192.0.2.1:443` (TEST-NET-1) is killed by
+  SIGKILL. Control: with the deny but no SIGKILL, the connect fails with
+  errno 1 and no packet leaves.
+- **Loopback.** `(allow network-outbound (remote ip "localhost:*"))`, after the
+  deny because the last matching rule wins. Only `scripted-api-auth` uses it:
+  its token exchange calls its own listener, and the row asserts the callback
+  host is `127.0.0.1`. Control: without the allow, the matrix is killed by
+  SIGKILL in `scripted-api-auth`, while the other four rows pass on their own
+  under that profile. The claim is no non-loopback network and no account
+  access, not zero sockets.
+- **DNS.** `(deny network-outbound (with send-signal SIGKILL) (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))`.
+  Probe: `getaddrinfo("localhost")` is killed by SIGKILL. Control: outside the
+  sandbox it returns 0, and with the deny but no SIGKILL it still returns 0
+  (the resolver answers `localhost` without mDNSResponder), so the SIGKILL is
+  what makes this rule observable.
+- **Exec.** `(deny process-exec (with send-signal SIGKILL) (regex #"/(claude|codex|mcporter)$"))`.
+  Probe: `execv` of a `#!/bin/sh` script named `claude`, `codex`, or `mcporter`
+  is killed by SIGKILL; the same script named `claudette` exits 0. Control:
+  outside the sandbox each runs and exits 0; with the deny but no SIGKILL,
+  `execv` fails with errno 1. The probe calls `execv` in the child because a
+  denied `posix_spawn` kills the spawner.
+- **Keychain.** `(deny mach-lookup (with send-signal SIGKILL) (global-name-regex #"^com\.apple\.(SecurityServer|securityd\.)"))`.
+  Probe: looking up `com.apple.SecurityServer` or `com.apple.securityd.xpc` is
+  killed by SIGKILL. Control: outside the sandbox both lookups return 0 (a
+  lookup reads no item and shows no prompt); with the deny but no SIGKILL they
+  return 1100. The launch rows pass under this rule, so the app reaches no
+  Keychain daemon.
+- **TCC.** `(deny mach-lookup (global-name-regex #"^com\.apple\.tccd"))`, with no
+  SIGKILL. Probe: the in-process `com.apple.tccd` lookup returns 1100, while a
+  `com.apple.cfprefsd.daemon` lookup still returns 0. With SIGKILL, the
+  launched app is killed before its first fetch. No TCC prompt is reachable,
+  and the rows pass `--no-menu-checks`, so the menu is not checked; that is
+  recorded, not counted as a skip.
+- **PATH.** Not a sandbox rule: `env -i` sets `PATH=/usr/bin:/bin`. Control: a
+  fake `claude` first on `PATH` fails row zero (`claude` resolved, rules 10/10)
+  and no row runs.
+
+Whole-matrix controls: without `sandbox-exec`, row zero reports 1 of 10 rules
+enforced (only the control lookup) and no row runs. With every SIGKILL removed
+from the profile, it reports 3 of 10 (TCC and the two controls) and no row runs.
+
+Dropped: the fake `claude` and `mcporter` that app-launch smokes used to put
+first on `PATH` (and their `cli-spawned.log`). They caught only a `PATH` lookup
+of two names; the exec rule catches any path for all three, row zero checks
+`PATH`, and `pdtbar-checks` scans product sources. The manual Claude
+(`manual-claude-pdt`), live mcporter (`live-pdt`), and MCP connector
+(`scripted-pdt-connector`) smokes were deleted with the Claude/MCP path (#250).
 
 Expected handoff gate for changes that affect launch, setup, first fetch, menu
 behavior, or UI proof:
@@ -159,22 +257,6 @@ the given path (plus a sibling `<name>.lock`), never the Keychain. Output is sta
 `/v1/me` key names, and token SHA-256 fingerprints; never token values. Delete
 the store file after proof and revoke the grant in PDT's connected apps page.
 
-Scripted Claude PDT connector e2e:
-
-```bash
-swift run pdtbar-smoke scripted-pdt-connector
-```
-
-This uses no live Claude credentials. It drives the connector-backed
-`PortfolioDataSource` path with live-shaped scripted MCP responses, checks all
-required v1 PDT read tools are available, verifies only those tools are called,
-and proves each required read tool is called exactly once for the coalesced
-fetch. It also exercises progressive background detail refresh with one missing
-optional price-history response, proving completed allocation/X-ray/income data
-is preserved, a redacted diagnostic is stored, and a retry clears the degraded
-state. The proof artifact reports selectors/counts/scenario status only; no raw
-portfolio payloads, values, account identifiers, or live data are written.
-
 Scripted PDT sign-in e2e:
 
 ```bash
@@ -252,38 +334,6 @@ restore the prior display setting. The AX evidence records the active logical an
 pixel display dimensions. Layout tests also cover narrower widths and larger
 system-font metrics while preserving the two-column grid.
 
-Manual Claude `-p` PDT reachability smoke:
-
-```bash
-swift run pdtbar-smoke manual-claude-pdt --model opus
-```
-
-This optional local smoke uses the installed `claude` CLI with normal `-p`
-mode plus an explicit `--allowedTools` list for the seven required PDT read tools
-under the observed Desktop server name and renamed MCP server names, structured
-output, and non-mutating tool discovery; a broad `--disallowedTools` denylist
-for built-ins plus PDT mutate-tool prefixes on the configured Claude CLI MCP
-server (`ClaudePDTReadOnlyToolPolicy` in PDTBarCore — the same shared denylist
-the legacy `ClaudeLocalConnection` sends); verbose stream JSON telemetry; and
-schema-enforced structured output to
-exercise the currently logged-in Claude user and Claude CLI PDT MCP setup.
-It never passes `claude --bare`;
-if `--bare` is supplied to the smoke, it refuses the run because bare mode does
-not prove the signed-in Claude CLI setup. Use `--model <alias>` or
-`PDTBAR_CLAUDE_MODEL=<alias>` when the local Claude default model is
-unavailable; the current manual path defaults to the public `opus` alias. Pass
-`--claude <path>` or `PDTBAR_CLAUDE_BIN=<path>` for this manual reachability smoke
-only; product launch removes old scripted handoff env before honoring a
-configured Claude binary.
-
-Missing Claude CLI, sign-in, model access, or PDT MCP setup exits successfully
-with `skipped` and setup-required detail. Passing proof writes
-`pdtbar-manual-claude-pdt-proof.json` with only `-p` mode, `bareModeUsed=false`,
-required/reported tool names, selector/count totals, duration, and redacted
-status plus tool-result error counts. It must not contain raw Claude output,
-account identifiers, endpoints, portfolio holdings, values, credentials, or raw
-PDT payloads.
-
 Scripted first-fetch e2e:
 
 ```bash
@@ -298,8 +348,8 @@ a stored personal token. The success launch answers the holdings request from
 and, with Accessibility, shows the pulse. The failure launch answers every
 holdings attempt with `503` and verifies no snapshot is written, the app reports
 the failed first fetch, and, with Accessibility, the menu shows `Could not fetch
-portfolio` and `Try again`. Both launches fail if the fake `claude`/`mcporter`
-runs or the fixture sentinel is written. Proof artifacts contain paths,
+portfolio` and `Try again`. Both launches fail if the fixture sentinel is
+written. Proof artifacts contain paths,
 selectors, status text, counts, and booleans only.
 
 Scripted returning-launch e2e:
@@ -319,36 +369,6 @@ snapshot and pulse only after the scripted fetch finishes. A second launch
 whose holdings requests all answer `503` proves the previous snapshot stays in place and the
 menu shows `Details fill failed` plus `Fill details again`. Proof artifacts contain
 paths, selectors, status text, as-of dates, and booleans only.
-
-Read-only live PDT pulse smoke:
-
-```bash
-npm ci
-./node_modules/.bin/mcporter list <pdt-server> --schema --json > /tmp/pdt-schema.json
-PDTBAR_LIVE_PDT_SERVER=<pdt-server> PDTBAR_LIVE_PDT_SCHEMA_JSON=/tmp/pdt-schema.json swift run pdtbar-smoke live-pdt
-```
-
-Default behavior is a clean skip. The live smoke requires a configured/authenticated
-mcporter PDT server via `--server <pdt-server>` or `PDTBAR_LIVE_PDT_SERVER`, plus
-the pinned repo-local `./node_modules/.bin/mcporter` installed from
-`package-lock.json`. Run `npm ci` after checkout or lockfile changes. To use a
-manually audited local binary instead, pass `--mcporter <path>` or
-`PDTBAR_MCPORTER_BIN=<path>`; unversioned `npx mcporter` is not accepted for the
-live smoke. Missing or mismatched pinned mcporter setup fails once a server is
-explicitly configured, with an actionable `npm ci` setup message. When
-`PDTBAR_LIVE_PDT_SCHEMA_JSON` is set, the gate first confirms the expected read
-tools are present in the schema. It then calls only read tools through the live
-`PortfolioDataSource`, runs the same `PressureRunner` path used by fixture e2e,
-renders the pulse descriptor, and keeps the raw live snapshot in an unreported
-temporary directory that is removed after the render check.
-
-Missing server credentials or local PDT access must stay `skipped`, not failed,
-so local runs can distinguish environment gaps from regressions. Passing live
-proof is sanitized: the reported artifact contains selector IDs/counts only,
-never raw portfolio payloads, holding names, or values.
-
-Live read calls default to a 60s timeout. Pass `--timeout <seconds>` to use a
-shorter local bound.
 
 Local/release packaged-app smoke:
 
@@ -374,7 +394,7 @@ permission caveat after proving launch liveness and isolation.
 The ready launch smoke starts the app with a scripted browser session and a
 scripted holdings reply. It verifies the connected path skips setup, completes
 the first fetch, writes isolated first-fetch state, renders the first pulse,
-avoids fixture state and the fake CLIs, and writes only selector/status proof
+avoids fixture state, and writes only selector/status proof
 under `.build/pdtbar-smoke-artifacts/`.
 
 The app-bundle packaging smoke builds `PDTBar.app` through

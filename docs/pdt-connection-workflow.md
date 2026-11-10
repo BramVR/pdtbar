@@ -8,7 +8,7 @@ read_when:
 
 # PDT Connection Workflow
 
-The shipped launch flow since #248. It replaced the Claude CLI + PDT MCP flow this file used to describe (the file keeps its name so links stay valid; #250 removes the remaining Claude code). Decisions: [ADR-0002](adr/0002-pdt-public-rest-api.md). Bram signed off on the auth path and token storage on 2026-11-10 ([#243](https://github.com/BramVR/pdtbar/issues/243)).
+The shipped launch flow since #248, which replaced the Claude CLI + PDT MCP flow; #250 removed the remaining Claude code. Decisions: [ADR-0002](adr/0002-pdt-public-rest-api.md). Bram signed off on the auth path and token storage on 2026-11-10 ([#243](https://github.com/BramVR/pdtbar/issues/243)).
 
 ## Product launch
 
@@ -20,7 +20,7 @@ pdtbar --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/
 
 Launch shows `Checking PDT connection`, loads the cached pulse, and only then reads the stored connection. Reading the store can wait on another PDTBar process's token refresh (the store lock), so it runs off the main queue; the cached pulse is already on screen while it waits. Because the check starts after the cached load, a connected result always knows whether a pulse is shown: a returning user gets a background refresh, never a full first fetch.
 
-Launch never opens a browser, a Keychain prompt, or any other prompt. It never spawns the Claude CLI, `mcporter`, or any other process, and never falls back to fixtures.
+Launch never opens a browser, a Keychain prompt, or any other prompt. It never starts a process and never falls back to fixtures.
 
 Smokes pass `--scripted-pdt <file>` together with an isolated `--app-support-dir`: an in-memory credential (or the Keychain store over a fake SecItem API), a scripted sign-in, and scripted API replies (`ScriptedPDTConnection`). The flag is refused without an isolated app support directory. For dev live proof, `--pdt-credential-file <file>` runs the same path over the mode-0600 file store `pdtbar-dev pdt-*` uses (see [`smoke-checks.md`](smoke-checks.md)); it also needs an isolated app support directory.
 

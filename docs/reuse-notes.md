@@ -14,7 +14,7 @@ read_when:
 
 - **CodexBar / RepoBar** (Swift menu-bar apps) — reuse the **menu-bar skeleton ideas**: status item, menu + submenus, refresh/coalescing, cached pulse while refreshing, and crisp empty/loading/error states. Do not copy provider switching. Browser sign-in and Keychain token storage are now in scope for PDT access only (ADR-0002); adapt CodexBar's patterns to one PDT credential, not a provider registry.
   - https://github.com/steipete/CodexBar · https://github.com/steipete/RepoBar
-- **mcporter** (TS MCP runtime/CLI) — use it to **explore the PDT MCP during research** (list tools, inspect schemas, call ad-hoc) and for the optional live smoke. ADR-0001 chose native Swift, so mcporter is not a shipped runtime bridge.
+- **mcporter** (TS MCP runtime/CLI) — use it to **explore the PDT MCP during research** (list tools, inspect schemas, call ad-hoc). The optional live smoke that used it was removed in #250. ADR-0001 chose native Swift, so mcporter is not a shipped runtime bridge.
   - https://github.com/steipete/mcporter
 - **birdclaw** (local-first SQLite workspace) — **ideas only, as needed:** stable `--json` to stdout / logs to stderr for any CLI; a small local snapshot store for history (keep it tiny); a Git text backup if/when we want a data-ownership story. Don't build a full mirror.
   - https://birdclaw.sh/
@@ -48,7 +48,7 @@ Do not copy provider registry, browser cookie import, device flow, multi-account
 
 - **Tabbed source/provider surfaces:** likely useful once PDTBar supports multiple MCP access paths or richer source diagnostics. Keep v1 menu descriptors simple, but avoid naming/layout choices that make tabs impossible later.
 - **Codex login for MCP access:** plausible future source path alongside Claude CLI. When this becomes active work, revisit CodexBar's Codex login/source-selection patterns and write an ADR before copying auth/storage code.
-- **Provider/source registry:** likely useful only when Claude/PDT is no longer the sole product source. Introduce the smallest source abstraction when the second real source lands.
+- **Provider/source registry:** likely useful only when the PDT REST API is no longer the sole product source. Introduce the smallest source abstraction when the second real source lands.
 - **Existing Claude/Codex login reuse:** valid when narrow, read-only, prompt-safe, and explicit about storage ownership. Reuse host-app cookies/tokens only through a small source adapter; do not add broad browser-cookie import or generic credential storage until a product path requires it.
 - **Credential storage:** required now for one PDT credential (ADR-0002): one Keychain item, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, in-memory store in tests and smokes. Still no generic credential store.
 

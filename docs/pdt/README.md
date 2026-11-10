@@ -8,24 +8,28 @@ read_when:
 
 # docs/pdt — PDT data reality & fixtures
 
-Evidence captured by exercising the PDT MCP live (2026-06-22) for issue #8.
-This resolves the "PDT data reality" open question in `../../CONTEXT.md` and
-feeds ADR-0001.
+The product reads PDT through its public REST API (ADR-0002): `PDTAPIDataSource`
+decodes REST envelopes into the same normalization inputs and builds
+`PortfolioSnapshot`. Connection and launch flow:
+[`../pdt-connection-workflow.md`](../pdt-connection-workflow.md).
 
-Current product fetch path is Claude-first: no-argument launch probes Claude
-Desktop/PDT MCP readiness, then the connector checks the required v1 read tools
-before normalizing into `PortfolioSnapshot`. The PDT shapes below are still the
-normalization source of truth; setup/login flow lives in
-[`../claude-login-workflow.md`](../claude-login-workflow.md).
+The MCP material here is historical evidence: it was captured by exercising
+the PDT MCP live (2026-06-22) for issue #8, resolved the "PDT data reality" open
+question in `../../CONTEXT.md`, and fed ADR-0001. PDTBar no longer talks to the
+PDT MCP (#250).
 
 - [`portfolio-data-source.md`](portfolio-data-source.md) — the `PortfolioDataSource`
   seam described in terms of facets, the normalized interface, freshness rules,
   documented gaps/missing fields, and the ADR-0001 evidence.
-- [`fixtures-schema-notes.md`](fixtures-schema-notes.md) — raw PDT tool schemas
-  (field names/types) observed live, the reference for the adapter.
-- [`fixtures/`](fixtures/) — sanitized scenario fixtures, each mirroring the real
-  PDT response envelopes (field names/types verbatim) with fake securities and
-  redacted account data:
+- [`fixtures-schema-notes.md`](fixtures-schema-notes.md) — raw PDT MCP tool
+  schemas (field names/types) observed live on 2026-06-22; historical, and still
+  the reference for the scenario fixtures.
+- [`fixtures/`](fixtures/) — sanitized scenario fixtures captured through the
+  retired PDT MCP on 2026-06-22 and frozen. They are dev/test input only, read
+  by `PDTFixtureDataSource` when `pdtbar --fixture <file>` is passed explicitly,
+  and by checks, dev commands, smokes, and tests. Each mirrors the MCP response
+  envelopes (field names/types verbatim) with fake securities and redacted
+  account data:
   - `concentration-pressure.json` — allocation pressure (top weight 24.2% > 20%).
   - `income-event.json` — ex-dividend in window + payment landed + derivable raise.
   - `big-mover.json` — +12.4% move via price history and prior-vs-current snapshot.
@@ -43,6 +47,13 @@ normalization source of truth; setup/login flow lives in
     name in REST envelopes, for pressure parity tests.
   - Assumed, not yet seen live: calendar, dividend, and symbol-quote row fields
     match the MCP tools; x-ray items carry `weight` (0-100) beside `symbolName`.
+  - [`provenance.json`](fixtures/api/provenance.json) — the bodies are
+    synthetic, hold no account data, were written for #265 against PDT REST
+    docs v0.8.1 and checked against ADR-0002's live envelope findings, and were
+    not re-checked against openapi v0.9.0. It lists every reply per scenario
+    with its `GET /v1/...` request; `pdtbar-checks` fails when it drifts from the
+    directories. It sits at the `api/` root because replay reads every `*.json`
+    in a scenario directory.
 
 ## Sanitization rules applied
 

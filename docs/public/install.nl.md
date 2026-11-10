@@ -20,9 +20,9 @@ Je hebt nodig:
 
 - Een Mac met macOS 14 of nieuwer.
 - Je Portfolio Dividend Tracker-portefeuille.
-- Je bestaande Claude CLI + PDT MCP-koppeling.
+- Een PDT-account om PDTBar mee te verbinden.
 
-Als de Claude/PDT-koppeling nog niet klaar is, kan PDTBar wel openen, maar vraagt de app eerst om die verbinding af te maken voordat je portefeuillegegevens ziet. Vraag de persoon die je PDTBar gaf om te helpen met de PDT-koppeling.
+PDTBar opent zonder verbinding en vraagt je eerst verbinding te maken met PDT voordat je portefeuillegegevens ziet.
 
 ## De App Installeren
 
@@ -37,14 +37,18 @@ Als macOS zegt dat de app van het internet is gedownload, klik met rechts op `PD
 Na het openen staat er een klein stapel-icoon in de macOS-menubalk.
 
 - Zie je je portefeuilleoverzicht, dan ben je klaar.
-- Zie je `Log in with Claude`, klik daarop, volg de browserstappen en klik daarna op `Check again`.
-- Zie je `Add the PDT MCP server to Claude`, dan is PDTBar geïnstalleerd, maar is de PDT-koppeling nog niet klaar.
+- Zie je `Sign in with PDT`, klik daarop en keur PDTBar goed op de pagina van PDT in je browser.
+- Wil je liever een token gebruiken, kies dan `Use a PDT token…` en plak een alleen-lezen token van de pagina Integrations > API in PDT.
+- Zie je `Reconnect to PDT`, dan accepteert PDT de verbinding niet meer. Log opnieuw in of plak een nieuw token; je laatste overzicht blijft zichtbaar.
+- Zie je `PDT access paused`, dan is je PDT-abonnement afgelopen. Verleng het en klik daarna op `Check again`.
+- Zie je `Keychain unavailable`, dan is deze kopie van PDTBar niet ondertekend voor de Sleutelhanger. Installeer in plaats daarvan de ondertekende release.
 
 ## Dagelijks Gebruik
 
 - Klik op het menubalkicoon om te zien wat aandacht vraagt.
 - Gebruik `Refresh now` om nieuwe PDT-gegevens op te halen.
 - Gebruik `Open PDT` als je het volledige Portfolio Dividend Tracker-dashboard wilt openen.
+- Gebruik `Disconnect from PDT` om de opgeslagen verbinding te verwijderen.
 
 PDTBar is standaard alleen-lezen. De app plaatst geen orders, verplaatst geen geld, uploadt je portefeuille niet naar een eigen backend en geeft geen financieel advies.
 

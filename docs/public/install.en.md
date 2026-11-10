@@ -20,9 +20,9 @@ You need:
 
 - A Mac running macOS 14 or newer.
 - Your Portfolio Dividend Tracker portfolio.
-- Your existing Claude CLI + PDT MCP setup.
+- A PDT account to connect PDTBar to.
 
-If the Claude/PDT setup is not ready yet, PDTBar can still open, but it will ask you to finish that connection before it can show portfolio data. Ask the person who gave you PDTBar to help set up the PDT connection.
+PDTBar opens without a connection and asks you to connect to PDT before it shows portfolio data.
 
 ## Install The App
 
@@ -37,14 +37,18 @@ If macOS says the app was downloaded from the internet, right-click `PDTBar.app`
 After PDTBar opens, look for the small stack icon in the macOS menu bar.
 
 - If you see your portfolio pulse, you are done.
-- If you see `Log in with Claude`, click it, follow the browser steps, then click `Check again`.
-- If you see `Add the PDT MCP server to Claude`, PDTBar is installed, but the PDT connection is not ready yet.
+- If you see `Sign in with PDT`, click it and approve PDTBar on PDT's page in your browser.
+- To use a token instead, choose `Use a PDT token…` and paste a read-only token from PDT's Integrations > API page.
+- If you see `Reconnect to PDT`, PDT stopped accepting the connection. Sign in again or paste a new token; your last pulse stays visible.
+- If you see `PDT access paused`, your PDT subscription has ended. Renew it, then click `Check again`.
+- If you see `Keychain unavailable`, this copy of PDTBar was not signed for the Keychain. Install the signed release instead.
 
 ## Daily Use
 
 - Click the menu-bar icon to see what needs attention.
 - Use `Refresh now` to fetch fresh PDT data.
 - Use `Open PDT` when you want the full Portfolio Dividend Tracker dashboard.
+- Use `Disconnect from PDT` to remove the stored connection.
 
 PDTBar is read-only by default. It does not place trades, move money, upload your portfolio to its own backend, or give financial advice.
 

@@ -35,10 +35,11 @@ swift test
 `make check` is the default deterministic handoff gate. It delegates to
 `Scripts/check.sh`, which checks script syntax, builds the Swift package, runs
 `pdtbar-checks`, and runs the sharded Swift test runner. `pdtbar-checks` is now
-kept to command-style fixture/connector and tooling-contract proof; core model,
+kept to command-style fixture, PDT API, and tooling-contract proof; core model,
 parser, runner, normalization, and rendering regressions live in
-`Tests/PDTBarTests` and run under `swift test`. It does not run live Claude/PDT,
-Keychain, 1Password, Accessibility, or packaged-app flows.
+`Tests/PDTBarTests` and run under `swift test`. It does not run live PDT,
+Keychain, 1Password, Accessibility, or packaged-app flows, or the sandboxed
+scripted API matrix (`make smoke-api`, see `docs/smoke-checks.md`).
 
 `Scripts/test.sh` runs Swift Testing suites through the PDTBar sharder. Useful knobs:
 
@@ -89,8 +90,8 @@ packages `PDTBar.app`, and launches the packaged app. `./Scripts/compile_and_run
 is the explicit one-shot equivalent. `make stop` stops the packaged app and may
 also clean up old raw SwiftPM debug/release processes from historical runs.
 Normal product setup is the PDT REST API connection: Sign in with PDT (browser)
-or a pasted PDT token, kept in the Keychain. Launch and the menu never run the
-Claude CLI or an MCP server. Deterministic app smokes launch
+or a pasted PDT token, kept in the Keychain. Product code starts no process.
+Deterministic app smokes launch
 `pdtbar --app-support-dir <isolated> --scripted-pdt <file>` through
 `pdtbar-smoke`; the app refuses `--scripted-pdt` without an isolated app support
 directory.
@@ -113,7 +114,7 @@ must use the packaged app path above.
 swift build
 swift test
 swift run pdtbar-checks
-swift run pdtbar-smoke scripted-pdt-connector
+make smoke-api
 swift run pdtbar-smoke scripted-api-client
 swift run pdtbar-smoke scripted-api-snapshot
 swift run pdtbar-smoke scripted-api-auth
@@ -152,10 +153,6 @@ codesign --verify --deep --strict --verbose=2 /tmp/pdtbar-release-proof/PDTBar.a
 Optional local/live checks:
 
 ```bash
-npm ci
-./node_modules/.bin/mcporter list <pdt-server> --schema --json > /tmp/pdt-schema.json
-swift run pdtbar-smoke manual-claude-pdt --model opus   # legacy MCP path (#250)
-swift run pdtbar-smoke live-pdt                         # legacy MCP path (#250)
 swift run pdtbar-smoke logged-out-launch
 swift run pdtbar-smoke ready-launch
 swift run pdtbar-smoke packaged-app --app PDTBar.app --fixture docs/pdt/fixtures/quiet-no-pressure.json --snapshot-dir .build/pdtbar-smoke-artifacts/packaged-snapshot
@@ -164,6 +161,10 @@ swift run pdtbar-smoke real-user-pulse --fixture docs/pdt/fixtures/quiet-no-pres
 ```
 
 See [`smoke-checks.md`](smoke-checks.md) before changing smoke behavior.
+
+mcporter was a past research tool for exploring the PDT MCP (ADR-0001). The
+repo no longer pins or runs it; for research, run it unpinned with
+`npx mcporter`.
 
 ## Handoff Gate
 
@@ -180,7 +181,7 @@ swift run pdtbar-smoke packaged-onboarding --app PDTBar.app
 ```
 
 Add optional live proof only when explicitly requested or when the change needs
-live Claude/PDT, Accessibility, or real UI screenshot evidence.
+live PDT, Accessibility, or real UI screenshot evidence.
 
 For release/distribution changes, also read [`RELEASING.md`](RELEASING.md) and run the release archive gate above.
 
@@ -199,7 +200,7 @@ PDTBar/
 │   ├── product-brief.md
 │   ├── v1-scope.md
 │   ├── reuse-notes.md
-│   ├── claude-login-workflow.md
+│   ├── pdt-connection-workflow.md
 │   ├── smoke-checks.md
 │   ├── adr/
 │   └── pdt/

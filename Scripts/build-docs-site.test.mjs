@@ -137,8 +137,9 @@ test("docs-site builds bilingual public artifact from allowlisted pages", () => 
     assert.match(index, /wat er nu toe doet in je Portfolio Dividend Tracker-portefeuille/);
     assert.match(index, /href="#wat-je-ziet">Bekijk wat je ziet/);
     assert.match(index, /Portfolio Dividend Tracker/);
-    assert.match(index, /Claude CLI/);
-    assert.match(index, /PDT MCP/);
+    assert.match(index, /rechtstreeks uit PDT, alleen-lezen/);
+    assert.match(index, /Sign in with PDT/);
+    assert.doesNotMatch(index, /Claude CLI|PDT MCP/);
     assert.match(index, /draait lokaal en verandert niets aan je portefeuille/);
     assert.match(index, /Concentratie/);
     assert.match(index, /Inkomsten/);
