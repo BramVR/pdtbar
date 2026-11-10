@@ -326,7 +326,7 @@ private func checkProductSpawnsNothing() throws {
     var hits: [String] = []
     for target in ["Sources/PDTBarCore", "Sources/PDTBarAppSupport", "Sources/PDTBarApp"] {
         let directory = packageRoot.appending(path: target)
-        for file in try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted() where file.hasSuffix(".swift") {
+        for file in try FileManager.default.subpathsOfDirectory(atPath: directory.path).sorted() where file.hasSuffix(".swift") {
             let lines = try String(contentsOf: directory.appending(path: file), encoding: .utf8).components(separatedBy: "\n")
             for (index, line) in lines.enumerated()
             where line.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil {
