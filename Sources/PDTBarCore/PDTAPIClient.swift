@@ -24,22 +24,24 @@ public enum PDTAPIResource: Equatable, Sendable {
         case offset
     }
 
-    var path: String {
+    var endpoint: PDTAPIEndpoint {
         switch self {
-        case .holdings: "portfolio/holdings"
-        case .distributions: "portfolio/distributions"
-        case .xRay: "x-ray"
-        case .calendarEvents: "calendar-events"
-        case .dividends: "dividends"
-        case .portfolios: "portfolios"
-        case .pricesBatch: "prices/batch"
-        case .symbolQuotes: "symbol-quotes"
-        case .performance: "portfolio/performance"
-        case .gains: "portfolio/gains"
-        case .me: "me"
-        case .personalAccessTokens: "personal-access-tokens"
+        case .holdings: .holdings
+        case .distributions: .distributions
+        case .xRay: .xRay
+        case .calendarEvents: .calendarEvents
+        case .dividends: .dividends
+        case .portfolios: .portfolios
+        case .pricesBatch: .pricesBatch
+        case .symbolQuotes: .symbolQuotes
+        case .performance: .performance
+        case .gains: .gains
+        case .me: .me
+        case .personalAccessTokens: .personalAccessTokens
         }
     }
+
+    var path: String { endpoint.rawValue }
 
     var pagination: Pagination {
         switch self {
@@ -81,6 +83,24 @@ public enum PDTAPIResource: Equatable, Sendable {
     private func optionalItems(_ values: KeyValuePairs<String, String?>) -> [URLQueryItem] {
         values.compactMap { name, value in value.map { URLQueryItem(name: name, value: $0) } }
     }
+}
+
+/// A PDT REST endpoint with no request data: the raw value is the path under
+/// `/v1/`. `PDTAPIResource.path` is derived from it, so the endpoint a
+/// diagnostic names and the path requested cannot drift.
+public enum PDTAPIEndpoint: String, Codable, Equatable, Sendable, CaseIterable {
+    case holdings = "portfolio/holdings"
+    case distributions = "portfolio/distributions"
+    case xRay = "x-ray"
+    case calendarEvents = "calendar-events"
+    case dividends
+    case portfolios
+    case pricesBatch = "prices/batch"
+    case symbolQuotes = "symbol-quotes"
+    case performance = "portfolio/performance"
+    case gains = "portfolio/gains"
+    case me
+    case personalAccessTokens = "personal-access-tokens"
 }
 
 /// A bearer token. It never prints: `description`, `debugDescription`, and
@@ -226,6 +246,12 @@ public enum PDTAPIError: Error, Equatable, Sendable {
         return formatter.date(from: value).map { max(0, $0.timeIntervalSince(now)) }
     }
 
+    /// The trace id of an error response: `X-Request-Id`, else `error.traceId`.
+    static func traceID(body: Data, headers: [String: String]) -> PDTTraceID? {
+        PDTTraceID(headers["x-request-id"])
+            ?? PDTTraceID((try? JSONDecoder().decode(ErrorEnvelope.self, from: body))?.error.traceId)
+    }
+
     private struct ErrorEnvelope: Decodable {
         struct Body: Decodable {
             struct Details: Decodable {
@@ -234,6 +260,7 @@ public enum PDTAPIError: Error, Equatable, Sendable {
 
             var code: String
             var details: Details?
+            var traceId: String?
         }
 
         var error: Body
@@ -338,6 +365,8 @@ public struct PDTAPIResult<Value> {
 public struct PDTAPIRequestFailure: Error, CustomStringConvertible {
     public let underlyingError: any Error
     public let attemptCount: Int
+    /// The trace id of the response that failed the call, when PDT sent one.
+    public let traceID: PDTTraceID?
 
     public var description: String {
         "\(underlyingError) after \(attemptCount) request(s)"
@@ -372,8 +401,8 @@ public struct PDTAPIClient: Sendable {
     /// One response body. For paged resources this is the first page only.
     public func get(_ resource: PDTAPIResource, cancellation: PDTCancellation? = nil) throws -> Data {
         try withoutAttemptCount {
-            try countingRequests { sent in
-                try send(resource, extraQuery: [], cancellation: cancellation, sent: &sent)
+            try countingRequests { log in
+                try send(resource, extraQuery: [], cancellation: cancellation, log: &log)
             }
         }
     }
@@ -397,8 +426,8 @@ public struct PDTAPIClient: Sendable {
         as _: Body.Type,
         cancellation: PDTCancellation? = nil
     ) throws -> PDTAPIResult<Body> {
-        try countingRequests { sent in
-            try decode(Body.self, from: send(resource, extraQuery: [], cancellation: cancellation, sent: &sent))
+        try countingRequests { log in
+            try decode(Body.self, from: send(resource, extraQuery: [], cancellation: cancellation, log: &log))
         }
     }
 
@@ -408,25 +437,31 @@ public struct PDTAPIClient: Sendable {
         as _: Row.Type = Row.self,
         cancellation: PDTCancellation? = nil
     ) throws -> PDTAPIResult<[Row]> {
-        try countingRequests { sent in
+        try countingRequests { log in
             switch resource.pagination {
             case .none:
-                try decode(ListPage<Row>.self, from: send(resource, extraQuery: [], cancellation: cancellation, sent: &sent)).data
+                try decode(ListPage<Row>.self, from: send(resource, extraQuery: [], cancellation: cancellation, log: &log)).data
             case .pages:
-                try collectPages(resource, cancellation: cancellation, sent: &sent)
+                try collectPages(resource, cancellation: cancellation, log: &log)
             case .offset:
-                try collectOffsets(resource, cancellation: cancellation, sent: &sent)
+                try collectOffsets(resource, cancellation: cancellation, log: &log)
             }
         }
     }
 
-    private func countingRequests<Value>(_ call: (inout Int) throws -> Value) throws -> PDTAPIResult<Value> {
+    /// What one call has sent so far. `traceID` belongs to the latest request only.
+    private struct RequestLog {
         var sent = 0
+        var traceID: PDTTraceID?
+    }
+
+    private func countingRequests<Value>(_ call: (inout RequestLog) throws -> Value) throws -> PDTAPIResult<Value> {
+        var log = RequestLog()
         do {
-            let value = try call(&sent)
-            return PDTAPIResult(value: value, attemptCount: sent)
+            let value = try call(&log)
+            return PDTAPIResult(value: value, attemptCount: log.sent)
         } catch {
-            throw PDTAPIRequestFailure(underlyingError: error, attemptCount: sent)
+            throw PDTAPIRequestFailure(underlyingError: error, attemptCount: log.sent, traceID: log.traceID)
         }
     }
 
@@ -441,7 +476,7 @@ public struct PDTAPIClient: Sendable {
     private func collectPages<Row: Decodable>(
         _ resource: PDTAPIResource,
         cancellation: PDTCancellation?,
-        sent: inout Int
+        log: inout RequestLog
     ) throws -> [Row] {
         var rows: [Row] = []
         for page in 1...max(1, policy.maxPages) {
@@ -452,7 +487,7 @@ public struct PDTAPIClient: Sendable {
                     URLQueryItem(name: "perPage", value: String(policy.pageSize)),
                 ],
                 cancellation: cancellation,
-                sent: &sent
+                log: &log
             )
             let decoded = try decode(ListPage<Row>.self, from: body)
             guard let meta = decoded.meta else {
@@ -475,7 +510,7 @@ public struct PDTAPIClient: Sendable {
     private func collectOffsets<Row: Decodable>(
         _ resource: PDTAPIResource,
         cancellation: PDTCancellation?,
-        sent: inout Int
+        log: inout RequestLog
     ) throws -> [Row] {
         var rows: [Row] = []
         for _ in 1...max(1, policy.maxPages) {
@@ -486,7 +521,7 @@ public struct PDTAPIClient: Sendable {
                     URLQueryItem(name: "offset", value: String(rows.count)),
                 ],
                 cancellation: cancellation,
-                sent: &sent
+                log: &log
             )
             let decoded = try decode(OffsetPage<Row>.self, from: body).data
             rows += decoded.items
@@ -504,7 +539,7 @@ public struct PDTAPIClient: Sendable {
         _ resource: PDTAPIResource,
         extraQuery: [URLQueryItem],
         cancellation: PDTCancellation?,
-        sent: inout Int
+        log: inout RequestLog
     ) throws -> Data {
         guard resource.isValid else {
             throw PDTAPIError.invalidRequest
@@ -522,7 +557,7 @@ public struct PDTAPIClient: Sendable {
             }
             let token = try tokenProvider.currentToken()
             do {
-                return try sendOnce(url: url, token: token, cancellation: cancellation, sent: &sent)
+                return try sendOnce(url: url, token: token, cancellation: cancellation, log: &log)
             } catch let PDTAPIError.tokenInvalid(reason) where !retriedRejectedToken {
                 guard try tokenProvider.shouldRetry(afterRejecting: token, reason: reason) else {
                     throw PDTAPIError.tokenInvalid(reason: reason)
@@ -539,7 +574,7 @@ public struct PDTAPIClient: Sendable {
         }
     }
 
-    private func sendOnce(url: URL, token: PDTAPIToken, cancellation: PDTCancellation?, sent: inout Int) throws -> Data {
+    private func sendOnce(url: URL, token: PDTAPIToken, cancellation: PDTCancellation?, log: inout RequestLog) throws -> Data {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: policy.requestTimeout)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -555,12 +590,15 @@ public struct PDTAPIClient: Sendable {
         if cancellation?.isCancelled == true {
             throw PDTAPIError.cancelled
         }
-        sent += 1
+        log.sent += 1
+        log.traceID = nil
         let (data, response) = try transport.sendClassifyingFailures(request, cancellation: cancellation)
         if (200..<300).contains(response.statusCode) {
             return data
         }
-        throw PDTAPIError.classify(status: response.statusCode, body: data, headers: response.lowercasedHeaders, now: now())
+        let headers = response.lowercasedHeaders
+        log.traceID = PDTAPIError.traceID(body: data, headers: headers)
+        throw PDTAPIError.classify(status: response.statusCode, body: data, headers: headers, now: now())
     }
 
     private func retryDelay(for error: PDTAPIError, attempt: Int) -> TimeInterval {
