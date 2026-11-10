@@ -25,95 +25,55 @@ private let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirect
 private let defaultFixture = packageRoot.appending(path: "docs/pdt/fixtures/quiet-no-pressure.json")
 private let pinnedMcporterVersion = "0.12.2"
 private let scriptedPDTAsOf = "2026-06-22"
+private let menuNotCheckedByDesign = "menu: not checked (TCC unreachable by design)"
+
+/// Every subcommand. Dispatch, usage, and `scripted-api-matrix` read this list.
+private struct SmokeCommand: Sendable {
+    var name: String
+    var usage: String
+    var inAPIMatrix = false
+    var run: @Sendable ([String]) throws -> SmokeReport
+}
+
+private let smokeCommands: [SmokeCommand] = [
+    SmokeCommand(name: "manual-claude-pdt", usage: "[--claude <path>] [--model <alias>] [--artifacts <dir>] [--timeout <seconds>]", run: manualClaudePDTSmoke(arguments:)),
+    SmokeCommand(name: "live-pdt", usage: "[--server <mcporter-server>] [--mcporter <path>] [--artifacts <dir>] [--timeout <seconds>]", run: livePDTSmoke(arguments:)),
+    SmokeCommand(name: "scripted-pdt-connector", usage: "[--artifacts <dir>]", run: scriptedPDTConnectorSmoke(arguments:)),
+    SmokeCommand(name: "scripted-api-client", usage: "[--artifacts <dir>]", inAPIMatrix: true, run: scriptedAPIClientSmoke(arguments:)),
+    SmokeCommand(name: "scripted-api-snapshot", usage: "[--artifacts <dir>]", inAPIMatrix: true, run: scriptedAPISnapshotSmoke(arguments:)),
+    SmokeCommand(name: "scripted-api-auth", usage: "[--artifacts <dir>]", inAPIMatrix: true, run: scriptedAPIAuthSmoke(arguments:)),
+    SmokeCommand(name: "copy-holding-identifier-action", usage: "", run: { _ in copyHoldingIdentifierActionSmoke() }),
+    SmokeCommand(name: "scripted-first-fetch", usage: "[--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]", inAPIMatrix: true, run: scriptedFirstFetchSmoke(arguments:)),
+    SmokeCommand(name: "scripted-returning-launch", usage: "[--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]", inAPIMatrix: true, run: scriptedReturningLaunchSmoke(arguments:)),
+    SmokeCommand(name: "scripted-sign-in", usage: "[--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]", run: scriptedSignInSmoke(arguments:)),
+    SmokeCommand(name: "scripted-setup-retry", usage: "[--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]", run: scriptedSetupRetrySmoke(arguments:)),
+    SmokeCommand(name: "scripted-pulse-mark-read", usage: "[--artifacts <dir>]", run: scriptedPulseMarkReadSmoke(arguments:)),
+    SmokeCommand(name: "logged-out-launch", usage: "[--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]", run: loggedOutLaunchSmoke(arguments:)),
+    SmokeCommand(name: "ready-launch", usage: "[--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]", run: readyLaunchSmoke(arguments:)),
+    SmokeCommand(name: "app-bundle-packaging", usage: "[--artifacts <dir>] [--timeout <seconds>]", run: appBundlePackagingSmoke(arguments:)),
+    SmokeCommand(name: "packaged-onboarding", usage: "[--app <path-to-PDTBar.app>] [--app-support-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]", run: packagedOnboardingSmoke(arguments:)),
+    SmokeCommand(name: "packaged-app", usage: "[--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]", run: packagedAppSmoke(arguments:)),
+    SmokeCommand(name: "peekaboo", usage: "[--peekaboo <path>] [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>]", run: peekabooSmoke(arguments:)),
+    SmokeCommand(name: "real-user-pulse", usage: "[--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]", run: { try realUserPulseSmoke(arguments: $0) }),
+    SmokeCommand(name: "portfolio-summary-proof", usage: "[--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]", run: portfolioSummaryProof(arguments:)),
+    SmokeCommand(name: "portfolio-values-settings-proof", usage: "[--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]", run: portfolioValuesSettingsProof(arguments:)),
+    SmokeCommand(name: "fixture-proof", usage: "[--fixture <path>] [--output <path>]", run: fixtureProof(arguments:)),
+    SmokeCommand(name: "menu-polish-proof", usage: "[--output <path>]", run: menuPolishProof(arguments:)),
+    SmokeCommand(name: "scripted-api-matrix", usage: "[--app <path>] [--artifacts <dir>] [--timeout <seconds>]", run: scriptedAPIMatrixSmoke(arguments:)),
+    SmokeCommand(name: "sandbox-probe", usage: "connect|resolve|mach <service>|exec <path>", run: sandboxProbeSmoke(arguments:)),
+]
 
 do {
     let arguments = Array(CommandLine.arguments.dropFirst())
-    guard let command = arguments.first else {
+    guard let name = arguments.first, let command = smokeCommands.first(where: { $0.name == name }) else {
         throw CommandError.usage
     }
-
-    let report: SmokeReport
-    switch command {
-    case "manual-claude-pdt":
-        report = try manualClaudePDTSmoke(arguments: Array(arguments.dropFirst()))
-    case "live-pdt":
-        report = try livePDTSmoke(arguments: Array(arguments.dropFirst()))
-    case "scripted-pdt-connector":
-        report = try scriptedPDTConnectorSmoke(arguments: Array(arguments.dropFirst()))
-    case "scripted-api-client":
-        report = try scriptedAPIClientSmoke(arguments: Array(arguments.dropFirst()))
-    case "scripted-api-snapshot":
-        report = try scriptedAPISnapshotSmoke(arguments: Array(arguments.dropFirst()))
-    case "scripted-api-auth":
-        report = try scriptedAPIAuthSmoke(arguments: Array(arguments.dropFirst()))
-    case "copy-holding-identifier-action":
-        report = copyHoldingIdentifierActionSmoke()
-    case "scripted-first-fetch":
-        report = try scriptedFirstFetchSmoke(arguments: Array(arguments.dropFirst()))
-    case "scripted-returning-launch":
-        report = try scriptedReturningLaunchSmoke(arguments: Array(arguments.dropFirst()))
-    case "scripted-sign-in":
-        report = try scriptedSignInSmoke(arguments: Array(arguments.dropFirst()))
-    case "scripted-setup-retry":
-        report = try scriptedSetupRetrySmoke(arguments: Array(arguments.dropFirst()))
-    case "scripted-pulse-mark-read":
-        report = try scriptedPulseMarkReadSmoke(arguments: Array(arguments.dropFirst()))
-    case "logged-out-launch":
-        report = try loggedOutLaunchSmoke(arguments: Array(arguments.dropFirst()))
-    case "ready-launch":
-        report = try readyLaunchSmoke(arguments: Array(arguments.dropFirst()))
-    case "app-bundle-packaging":
-        report = try appBundlePackagingSmoke(arguments: Array(arguments.dropFirst()))
-    case "packaged-onboarding":
-        report = try packagedOnboardingSmoke(arguments: Array(arguments.dropFirst()))
-    case "packaged-app":
-        report = try packagedAppSmoke(arguments: Array(arguments.dropFirst()))
-    case "peekaboo":
-        report = try peekabooSmoke(arguments: Array(arguments.dropFirst()))
-    case "real-user-pulse":
-        report = try realUserPulseSmoke(arguments: Array(arguments.dropFirst()))
-    case "portfolio-summary-proof":
-        report = try portfolioSummaryProof(arguments: Array(arguments.dropFirst()))
-    case "portfolio-values-settings-proof":
-        report = try portfolioValuesSettingsProof(arguments: Array(arguments.dropFirst()))
-    case "fixture-proof":
-        report = try fixtureProof(arguments: Array(arguments.dropFirst()))
-    case "menu-polish-proof":
-        report = try menuPolishProof(arguments: Array(arguments.dropFirst()))
-    default:
-        throw CommandError.usage
-    }
-
+    let report = try command.run(Array(arguments.dropFirst()))
     try writeReport(report)
     Foundation.exit(report.status == SmokeStatus.failed ? 1 : 0)
 } catch CommandError.usage {
-    FileHandle.standardError.write(Data("""
-    usage:
-      pdtbar-smoke manual-claude-pdt [--claude <path>] [--model <alias>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke live-pdt [--server <mcporter-server>] [--mcporter <path>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke scripted-pdt-connector [--artifacts <dir>]
-      pdtbar-smoke scripted-api-client [--artifacts <dir>]
-      pdtbar-smoke scripted-api-snapshot [--artifacts <dir>]
-      pdtbar-smoke scripted-api-auth [--artifacts <dir>]
-      pdtbar-smoke copy-holding-identifier-action
-      pdtbar-smoke scripted-first-fetch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke scripted-returning-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke scripted-sign-in [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke scripted-setup-retry [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke scripted-pulse-mark-read [--artifacts <dir>]
-      pdtbar-smoke logged-out-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke ready-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke app-bundle-packaging [--artifacts <dir>] [--timeout <seconds>]
-      pdtbar-smoke packaged-onboarding [--app <path-to-PDTBar.app>] [--app-support-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
-      pdtbar-smoke packaged-app [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--timeout <seconds>]
-      pdtbar-smoke peekaboo [--peekaboo <path>] [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>]
-      pdtbar-smoke real-user-pulse [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
-      pdtbar-smoke portfolio-summary-proof [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
-      pdtbar-smoke portfolio-values-settings-proof [--app <path>] [--fixture <path>] [--snapshot-dir <path>] [--artifacts <dir>] [--peekaboo <path>] [--timeout <seconds>]
-      pdtbar-smoke fixture-proof [--fixture <path>] [--output <path>]
-      pdtbar-smoke menu-polish-proof [--output <path>]
-
-    """.utf8))
+    let usage = smokeCommands.map { "  pdtbar-smoke \($0.name)\($0.usage.isEmpty ? "" : " \($0.usage)")" }
+    FileHandle.standardError.write(Data("usage:\n\(usage.joined(separator: "\n"))\n\n".utf8))
     Foundation.exit(64)
 } catch {
     try? writeReport(SmokeReport(
@@ -385,6 +345,236 @@ private extension ScriptedLaunchIsolation {
     var clean: Bool { processStillRunning && !cliSpawned && fixtureSentinelEmpty }
 }
 
+// MARK: scripted-api-matrix
+
+private struct SandboxRuleProof: Codable {
+    var rule: String
+    var expected: String
+    var observed: String
+    var enforced: Bool
+
+    init(_ rule: String, expected: String, observed: String) {
+        self.rule = rule
+        self.expected = expected
+        self.observed = observed
+        enforced = observed == expected
+    }
+}
+
+private struct APISmokeMatrixEnvironment: Codable {
+    var path: String
+    var resolvedCLIs: [String: String]
+    var rules: [SandboxRuleProof]
+    var hermetic: Bool
+}
+
+private struct APISmokeMatrixProof: Codable {
+    var environment: APISmokeMatrixEnvironment
+    var menuChecks: String
+    var rows: [SmokeReport]
+    var status: String
+}
+
+/// Runs the prompt-free API rows in this process after proving, from inside
+/// it, that `Scripts/api_smoke_matrix.sh`'s sandbox is in force. A skipped
+/// row fails the matrix.
+private func scriptedAPIMatrixSmoke(arguments: [String]) throws -> SmokeReport {
+    let name = "scripted-api-matrix"
+    let options = try SmokeOptions(arguments: arguments)
+    let artifacts = try smokeArtifacts(options)
+    let proof = artifacts.appending(path: "pdtbar-scripted-api-matrix-proof.json")
+    let environment = try apiSmokeMatrixEnvironment()
+    let enforced = environment.rules.filter(\.enforced).count
+    printLine("\(environment.hermetic ? "hermetic" : "failed")  environment  PATH=\(environment.path)  claude/codex/mcporter: "
+        + (environment.resolvedCLIs.isEmpty ? "unresolvable" : "\(environment.resolvedCLIs)")
+        + "  sandbox rules enforced: \(enforced)/\(environment.rules.count)")
+
+    let matrixCommands = smokeCommands.filter(\.inAPIMatrix)
+    var rows: [SmokeReport] = []
+    if environment.hermetic {
+        for command in matrixCommands {
+            var rowArguments = ["--artifacts", artifacts.appending(path: command.name).path, "--no-menu-checks"]
+            if let app = options.app {
+                rowArguments += ["--app", app.path]
+            }
+            if options.timeoutWasProvided {
+                rowArguments += ["--timeout", String(options.timeout)]
+            }
+            let row: SmokeReport
+            do {
+                row = try command.run(rowArguments)
+            } catch {
+                row = SmokeReport(name: command.name, status: SmokeStatus.failed, detail: "\(error)", artifacts: [])
+            }
+            printLine("\(row.status)  \(row.name)  \(row.detail)")
+            rows.append(row)
+        }
+    }
+    let passed = environment.hermetic
+        && rows.map(\.name) == matrixCommands.map(\.name)
+        && rows.allSatisfy { $0.status == SmokeStatus.passed }
+    try stableJSONData(APISmokeMatrixProof(
+        environment: environment,
+        menuChecks: menuNotCheckedByDesign,
+        rows: rows,
+        status: passed ? SmokeStatus.passed : SmokeStatus.failed
+    )).write(to: proof, options: .atomic)
+
+    return SmokeReport(
+        name: name,
+        status: passed ? SmokeStatus.passed : SmokeStatus.failed,
+        detail: environment.hermetic
+            ? "\(rows.filter { $0.status == SmokeStatus.passed }.count)/\(matrixCommands.count) API rows passed with claude, codex, and mcporter off PATH and \(enforced) sandbox rules enforced"
+            : "not hermetic: \(environment.rules.filter { !$0.enforced }.map(\.rule) + environment.resolvedCLIs.keys.sorted().map { "\($0) on PATH" }); no rows ran",
+        artifacts: [artifactPath(proof)] + rows.flatMap(\.artifacts)
+    )
+}
+
+private func printLine(_ line: String) {
+    FileHandle.standardOutput.write(Data("\(line)\n".utf8))
+}
+
+/// Fatal rules are probed in child processes, which inherit the sandbox, so a
+/// rule that holds kills the child and leaves this process running. A denied
+/// `posix_spawn` kills the spawner, so exec probes call `execv` in the child. The
+/// non-fatal TCC rule is probed here first: a process outside the sandbox
+/// runs no child probe and so never sends a packet.
+private func apiSmokeMatrixEnvironment() throws -> APISmokeMatrixEnvironment {
+    let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+    var resolvedCLIs: [String: String] = [:]
+    for name in ["claude", "codex", "mcporter"] {
+        let candidates = path.split(separator: ":").map { URL(fileURLWithPath: String($0)).appending(path: name).path }
+        // An execute-permission check on a denied name trips the exec rule, so test existence only.
+        resolvedCLIs[name] = candidates.first { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    let denied = "denied"
+    let killed = "killed by SIGKILL"
+    var rules = [
+        SandboxRuleProof("TCC: com.apple.tccd lookup is denied", expected: denied, observed: machLookup("com.apple.tccd") == KERN_SUCCESS ? "allowed" : denied),
+        SandboxRuleProof("Control: com.apple.cfprefsd.daemon lookup is allowed", expected: "allowed", observed: machLookup("com.apple.cfprefsd.daemon") == KERN_SUCCESS ? "allowed" : denied),
+    ]
+    let sandboxed = rules.allSatisfy(\.enforced)
+    let executable = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
+    let execProbes = FileManager.default.temporaryDirectory.appending(path: "pdtbar-exec-probe-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: execProbes, withIntermediateDirectories: true)
+    defer {
+        try? FileManager.default.removeItem(at: execProbes)
+    }
+    func execProbe(_ name: String) throws -> URL {
+        let script = execProbes.appending(path: name)
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: script)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
+    }
+    let probes: [(rule: String, expected: String, arguments: [String])] = [
+        ("Network: connect to 192.0.2.1:443 is fatal", killed, ["connect"]),
+        ("DNS: the mDNSResponder socket is fatal", killed, ["resolve"]),
+        ("Keychain: com.apple.SecurityServer lookup is fatal", killed, ["mach", "com.apple.SecurityServer"]),
+        ("Keychain: com.apple.securityd.xpc lookup is fatal", killed, ["mach", "com.apple.securityd.xpc"]),
+        ("Exec: a file named claude is fatal", killed, ["exec", try execProbe("claude").path]),
+        ("Exec: a file named codex is fatal", killed, ["exec", try execProbe("codex").path]),
+        ("Exec: a file named mcporter is fatal", killed, ["exec", try execProbe("mcporter").path]),
+        ("Control: a file named claudette runs", "exited 0", ["exec", try execProbe("claudette").path]),
+    ]
+    for probe in probes {
+        let observed = sandboxed ? childOutcome(executable, ["sandbox-probe"] + probe.arguments) : "not run: this process is not sandboxed"
+        rules.append(SandboxRuleProof(probe.rule, expected: probe.expected, observed: observed))
+    }
+    return APISmokeMatrixEnvironment(
+        path: path,
+        resolvedCLIs: resolvedCLIs,
+        rules: rules,
+        hermetic: resolvedCLIs.isEmpty && rules.allSatisfy(\.enforced)
+    )
+}
+
+private func childOutcome(_ executable: URL, _ arguments: [String]) -> String {
+    let process = Process()
+    process.executableURL = executable
+    process.arguments = arguments
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+    } catch {
+        return "did not start: \(error)"
+    }
+    let deadline = Date().addingTimeInterval(10)
+    while process.isRunning && Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.02)
+    }
+    if process.isRunning {
+        process.terminate()
+        process.waitUntilExit()
+        return "timed out"
+    }
+    if process.terminationReason == .uncaughtSignal {
+        return process.terminationStatus == SIGKILL ? "killed by SIGKILL" : "killed by signal \(process.terminationStatus)"
+    }
+    return "exited \(process.terminationStatus)"
+}
+
+/// What one sandbox probe saw when the sandbox let it run. Under
+/// `Scripts/api_smoke_matrix.sh` each probe is killed before it can report.
+private func sandboxProbeSmoke(arguments: [String]) throws -> SmokeReport {
+    let observed: String
+    switch arguments.first {
+    case "connect" where arguments.count == 1:
+        observed = "non-blocking connect to 192.0.2.1:443: errno \(nonBlockingConnectErrno())"
+    case "resolve" where arguments.count == 1:
+        var result: UnsafeMutablePointer<addrinfo>?
+        let code = getaddrinfo("localhost", nil, nil, &result)
+        freeaddrinfo(result)
+        observed = "getaddrinfo localhost: \(code)"
+    case "mach" where arguments.count == 2:
+        observed = "bootstrap_look_up \(arguments[1]): \(machLookup(arguments[1]))"
+    case "exec" where arguments.count == 2:
+        execv(arguments[1], [strdup(arguments[1]), nil])
+        observed = "execv \(arguments[1]): errno \(errno)"
+    default:
+        throw CommandError.usage
+    }
+    return SmokeReport(name: "sandbox-probe", status: SmokeStatus.passed, detail: observed, artifacts: [])
+}
+
+/// TEST-NET-1 (RFC 5737) never answers, so a non-blocking connect reports
+/// EINPROGRESS outside a sandbox and EPERM under a non-fatal deny.
+private func nonBlockingConnectErrno() -> Int32 {
+    let socketDescriptor = socket(AF_INET, SOCK_STREAM, 0)
+    defer {
+        close(socketDescriptor)
+    }
+    _ = fcntl(socketDescriptor, F_SETFL, fcntl(socketDescriptor, F_GETFL) | O_NONBLOCK)
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = in_port_t(443).bigEndian
+    inet_pton(AF_INET, "192.0.2.1", &address.sin_addr)
+    let result = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.connect(socketDescriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+    }
+    return result == 0 ? 0 : errno
+}
+
+@_silgen_name("bootstrap_look_up")
+private func bootstrapLookUp(
+    _ bootstrap: mach_port_t,
+    _ serviceName: UnsafePointer<CChar>,
+    _ service: UnsafeMutablePointer<mach_port_t>
+) -> kern_return_t
+
+private func machLookup(_ serviceName: String) -> kern_return_t {
+    var bootstrap: mach_port_t = 0
+    let found = task_get_special_port(mach_task_self_, TASK_BOOTSTRAP_PORT, &bootstrap)
+    guard found == KERN_SUCCESS else {
+        return found
+    }
+    var service: mach_port_t = 0
+    return bootstrapLookUp(bootstrap, serviceName, &service)
+}
+
 // MARK: scripted-first-fetch
 
 private struct ScriptedFirstFetchProof: Codable {
@@ -413,7 +603,7 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
     }
     let artifacts = try smokeArtifacts(options)
     let proof = artifacts.appending(path: "pdtbar-scripted-first-fetch-proof.json")
-    let accessibilityChecked = AXIsProcessTrusted()
+    let accessibilityChecked = options.menuChecks && AXIsProcessTrusted()
 
     let successAPI = ScriptedPDTAPIConfiguration(responses: [try scriptedHoldingsResponse()], asOf: scriptedPDTAsOf)
     let expectedPulse = try expectedFirstFetchPulse(successAPI)
@@ -505,8 +695,9 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
     guard accessibilityChecked else {
         return SmokeReport(
             name: name,
-            status: SmokeStatus.skipped,
-            detail: "connected first fetch wrote the snapshot; failed holdings fetch wrote none and reported the failure; no CLI spawned, no fixture state; macOS Accessibility permission missing for menu inspection",
+            status: options.menuChecks ? SmokeStatus.skipped : SmokeStatus.passed,
+            detail: "connected first fetch wrote the snapshot; failed holdings fetch wrote none and reported the failure; no CLI spawned, no fixture state; "
+                + (options.menuChecks ? "macOS Accessibility permission missing for menu inspection" : menuNotCheckedByDesign),
             artifacts: artifactsList
         )
     }
@@ -1426,6 +1617,7 @@ private func scriptedAPIAuthSmoke(arguments: [String]) throws -> SmokeReport {
     )
     let connection = PDTConnection(store: InMemoryPDTCredentialStore(), tokenEndpoint: tokenEndpoint, now: { clock.now })
     let client = PDTAPIClient(transport: api, tokenProvider: connection)
+    let callbackHost = SmokeValue()
 
     let session = try PDTBrowserSignIn(tokenEndpoint: tokenEndpoint, timeout: 10) { authorize in
         let query = Dictionary(
@@ -1434,6 +1626,7 @@ private func scriptedAPIAuthSmoke(arguments: [String]) throws -> SmokeReport {
         )
         var callback = URLComponents(string: query["redirect_uri"] ?? "")!
         callback.queryItems = [URLQueryItem(name: "code", value: secrets[0]), URLQueryItem(name: "state", value: query["state"])]
+        callbackHost.set(callback.host)
         URLSession(configuration: .ephemeral).dataTask(with: callback.url!).resume()
     }.run()
     try connection.signedIn(session)
@@ -1466,6 +1659,7 @@ private func scriptedAPIAuthSmoke(arguments: [String]) throws -> SmokeReport {
     let tokenRequests = tokens.requests
     let apiRequests = api.requests
     let proofPayload = ScriptedAPIAuthProof(
+        loopbackCallbackHost: callbackHost.value,
         tokenRequestCount: tokenRequests.count,
         apiRequestCount: apiRequests.count,
         tokenRequestsOnlyPOSTToTokenEndpoint: tokenRequests.allSatisfy {
@@ -1486,7 +1680,8 @@ private func scriptedAPIAuthSmoke(arguments: [String]) throws -> SmokeReport {
     try proofData.write(to: proof, options: .atomic)
     let proofText = String(decoding: proofData, as: UTF8.self)
 
-    guard proofPayload.tokenRequestCount == 3,
+    guard proofPayload.loopbackCallbackHost == "127.0.0.1",
+          proofPayload.tokenRequestCount == 3,
           proofPayload.apiRequestCount == 7,
           proofPayload.tokenRequestsOnlyPOSTToTokenEndpoint,
           proofPayload.apiRequestsOnlyGET,
@@ -1508,12 +1703,13 @@ private func scriptedAPIAuthSmoke(arguments: [String]) throws -> SmokeReport {
     return SmokeReport(
         name: "scripted-api-auth",
         status: SmokeStatus.passed,
-        detail: "scripted PDT sign-in exchanged a loopback callback code, shared one refresh across 6 concurrent reads, moved to reconnect on invalid_grant, read with a pasted token, disconnected, and kept every secret out of proof",
+        detail: "scripted PDT sign-in exchanged a code from its loopback callback on 127.0.0.1, shared one refresh across 6 concurrent reads, moved to reconnect on invalid_grant, read with a pasted token, disconnected, and kept every secret out of proof",
         artifacts: [artifactPath(proof)]
     )
 }
 
 private struct ScriptedAPIAuthProof: Codable {
+    var loopbackCallbackHost: String?
     var tokenRequestCount: Int
     var apiRequestCount: Int
     var tokenRequestsOnlyPOSTToTokenEndpoint: Bool
@@ -1541,6 +1737,23 @@ private final class SmokeClock: @unchecked Sendable {
         lock.lock()
         current += seconds
         lock.unlock()
+    }
+}
+
+private final class SmokeValue: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: String?
+
+    func set(_ value: String?) {
+        lock.lock()
+        stored = value
+        lock.unlock()
+    }
+
+    var value: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored
     }
 }
 
@@ -1946,7 +2159,7 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
         )
     }
 
-    let accessibilityChecked = AXIsProcessTrusted()
+    let accessibilityChecked = options.menuChecks && AXIsProcessTrusted()
     var stalePulseVisible = false
     var backgroundProgressVisible = false
     var backgroundProgressScreenshotPath: String?
@@ -2162,7 +2375,10 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
     return SmokeReport(
         name: "scripted-returning-launch",
         status: SmokeStatus.passed,
-        detail: "returning launch kept the seeded pulse visible with active detail progress, replaced it after complete scripted data, and preserved it with a details retry after transient failure",
+        detail: accessibilityChecked
+            ? "returning launch kept the seeded pulse visible with active detail progress, replaced it after complete scripted data, and preserved it with a details retry after transient failure"
+            : "returning launch replaced the seeded snapshot after complete scripted data and preserved it after transient failure; "
+                + (options.menuChecks ? "macOS Accessibility permission missing for menu inspection" : menuNotCheckedByDesign),
         artifacts: [artifactPath(proof)] + axArtifacts
     )
 }
@@ -4614,6 +4830,7 @@ private struct SmokeOptions {
     var model: String?
     var timeout: TimeInterval = 2.0
     var timeoutWasProvided = false
+    var menuChecks = true
 
     init(arguments: [String]) throws {
         var index = 0
@@ -4656,6 +4873,9 @@ private struct SmokeOptions {
                 timeout = TimeInterval(arguments[index + 1]) ?? 2.0
                 timeoutWasProvided = true
                 index += 2
+            case "--no-menu-checks":
+                menuChecks = false
+                index += 1
             default:
                 throw CommandError.usage
             }
