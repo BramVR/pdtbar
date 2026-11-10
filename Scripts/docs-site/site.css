@@ -6,7 +6,7 @@
   --tint: rgba(22, 33, 30, 0.055);
   --ink: #16211e;
   --ink-2: #3b4641;
-  --muted: #5d6762;
+  --muted: #56605b;
   --rule: rgba(22, 33, 30, 0.15);
   --rule-2: rgba(22, 33, 30, 0.34);
   --accent: #0b6a61;
@@ -607,8 +607,10 @@ svg {
 .prose .anchor:focus-visible {
   width: auto;
   height: auto;
-  padding-right: 6px;
+  margin-right: 8px;
+  padding-inline: 3px;
   clip-path: none;
+  outline-offset: 0;
 }
 
 .prose code {
@@ -998,14 +1000,17 @@ svg {
 
   .doc {
     display: block;
-    padding-block: 32px 80px;
+    padding-block: 0 80px;
+  }
+
+  .doc .prose {
+    padding-top: 40px;
   }
 
   .toc {
     position: static;
-    margin-bottom: 40px;
     padding-top: 0;
-    border-block: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
   }
 
   .rail {
@@ -1091,6 +1096,7 @@ svg {
   }
 
   .lede {
+    max-width: none;
     font-size: 21px;
   }
 
