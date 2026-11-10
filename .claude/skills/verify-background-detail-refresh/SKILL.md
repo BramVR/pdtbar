@@ -23,17 +23,17 @@ description: "Check a background detail refresh or price-history worker change a
 
 ## Covered code and sync commit
 
-Sync commit: `1b6ffd4`. The model was last confirmed against the code at this commit.
+Sync commit: `3f0860d`. The model was last confirmed against the code at this commit.
 
 - `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:8-41`. `PDTDetailRefreshFailureCategory`, `isRetryable`, `indicatesUnavailableSetup`.
 - `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:90-130`. `PDTBackgroundDetailRefreshOptions` (concurrency limit, retry count, timeouts).
-- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:166-428`. `refresh`: cancellation checkpoints, tool discovery, base phase, `recordOptionalPhaseFailure`, skip gates, per-phase commits, pagination diagnostics, performance and its timeout diagnostic, outcome, final commit.
-- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:455-496`. `availableReadTools`, `preserveOptionalDetails`.
-- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:498-545`. `performanceSummary`, `callPerformanceDecoded`.
-- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:564-650`. `xRayHoldings`, `incomeEvents` (only whether they return a diagnostic).
-- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:840-968`. `priceSeries`: worker loop, deadline, cancellation, `group.wait`, abandonment.
-- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:970-1089`. `callDecoded`, `callDecodedWithRetry`, `throwIfCancelled`.
-- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:1122-1230`. `PDTPriceHistoryAccumulator`, `PDTPriceHistoryWorkTracker`.
+- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:173-441`. `refresh` and `runOptionalPhase`: cancellation checkpoints, tool discovery, base phase, the one outage gate and failure channel, per-phase commits, pagination diagnostics, performance and its timeout diagnostic, outcome, final commit.
+- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:468-509`. `availableReadTools`, `preserveOptionalDetails`.
+- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:511-558`. `performanceSummary`, `callPerformanceDecoded`.
+- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:577-663`. `xRayHoldings`, `incomeEvents` (only whether they return a diagnostic).
+- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:853-981`. `priceSeries`: worker loop, deadline, cancellation, `group.wait`, abandonment.
+- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:983-1102`. `callDecoded`, `callDecodedWithRetry`, `throwIfCancelled`.
+- `Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift:1135-1243`. `PDTPriceHistoryAccumulator`, `PDTPriceHistoryWorkTracker`.
 - `Sources/PDTBarCore/PDTLiveDataSource.swift:605-678`. `PDTListPaginationResult.truncationDiagnostic`, `paginatePDTList` (only the `.timeout` truncation diagnostic).
 - `Sources/PDTBarCore/PDTCancellation.swift`. The cancel flag and its parent link.
 - `Sources/PDTBarCore/LaunchRuntime.swift:213`. `BackgroundDetailRefreshPhase` (phase order only).
@@ -41,7 +41,7 @@ Sync commit: `1b6ffd4`. The model was last confirmed against the code at this co
 Every action in the spec names the Swift lines it models. To see whether a change touches this model, run:
 
 ```bash
-git diff 1b6ffd4 -- Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift Sources/PDTBarCore/PDTCancellation.swift Sources/PDTBarCore/PDTLiveDataSource.swift | grep -n '^@@'
+git diff 3f0860d -- Sources/PDTBarCore/PDTBackgroundDetailRefresh.swift Sources/PDTBarCore/PDTCancellation.swift Sources/PDTBarCore/PDTLiveDataSource.swift | grep -n '^@@'
 ```
 
 If a hunk falls in a range above, recheck the model. Line numbers drift with unrelated edits, so match by function name when they do.
@@ -52,48 +52,15 @@ Needs a JDK 11+. The runner pins TLA+ 1.7.4 and runs one TLC worker unless `PDTB
 
 ```bash
 Scripts/formal/tlc.sh formal/background-detail-refresh/BackgroundDetailRefresh.tla
-Scripts/formal/tlc.sh formal/background-detail-refresh/BackgroundDetailRefresh.tla formal/background-detail-refresh/BackgroundDetailRefreshFindingsFixed.cfg
 ```
 
-Expected at the sync commit:
-
-- `BackgroundDetailRefresh.cfg` models the shipped code. It fails in about 10 seconds with `Invariant NoPhaseAfterOutage is violated`, a 21-state trace. That is the open finding below.
-- `BackgroundDetailRefreshFindingsFixed.cfg` sets the finding knob to its fixed value. It passes with 3,290,492 distinct states in about 3 minutes on one worker. Use it to check every other property while the finding stays open. With `PDTBAR_TLC_WORKERS=4` it takes about 1 minute.
-
-A new failure in either run, or a different invariant in the first run, means the change broke something or the model needs updating.
-
-## Open finding at the sync commit
-
-`NoPhaseAfterOutage`. Price-history diagnostics with an outage category never set `skipRemainingPhasesForUnavailableSetup`, so the performance phase still runs during an outage. TLC's shortest trace on the shipped config, in the code's names:
-
-1. Tool discovery lists the performance tools. `Discover`, `PDTBackgroundDetailRefresh.swift:171-195`, gate `:365`.
-2. The base holdings call returns and is committed. `BaseSucceeds`, `:201-225`.
-3. Allocation, X-ray, and income each return and commit. `Advance` and `OptionalSucceeds`, `:245-323`.
-4. `priceSeries` starts two workers. `Advance`, `:334-344`, `:840-866`.
-5. Worker 1 passes the while-condition. `WCheck`, `:870-872`.
-6. Worker 1 takes holding 1 and starts `pdt-list-symbol-prices`. `WPull`, `:873`, `:1006-1026`.
-7. The price-history deadline passes. `Tick`.
-8. `group.wait` times out. `WaitTimedOut`, `:928`.
-9. Worker 1's run returns `setupUnavailable`. The retry guard throws. `WCallReturns`, `:1044-1049`.
-10. Worker 1 records the diagnostic. The accumulator sets `firstUnavailableSetupCategory`. `WComplete`, `:914-916`, `:1161-1168`.
-11. The main thread reads the outage category and abandons holdings 2 and 3. `Decide`, `:928-939`.
-12. Holdings 2 and 3 get `setupUnavailable` diagnostics. `RecordAbandoned` twice, `:943-964`.
-13. `priceSeries` returns. `refresh` appends the diagnostics and leaves the skip flag false. `Collect`, `:346-362`.
-14. The performance gate passes and the performance phase starts, calling `pdt-get-portfolio-performance` during the outage. `Advance`, `:364-372`, `:498-506`.
-
-The deadline is incidental. With no timeout, worker 2 sees the outage and exits, and the same thing happens one step later. The cost is one wasted CLI run of up to the performance call's timeout, and the docs promise an observed outage skips the remaining phases. Knob `PriceHistoryOutageSetsSkip`.
-
-When the fix lands, set the knob to `TRUE` in `BackgroundDetailRefresh.cfg` and confirm this passes:
-
-```bash
-Scripts/formal/tlc.sh formal/background-detail-refresh/BackgroundDetailRefresh.tla
-```
-
-Then delete `BackgroundDetailRefreshFindingsFixed.cfg`, and the knob too if you like.
+Expected at the sync commit: `No error has been found`, 3,290,492 distinct states, about 3 minutes on one worker or about 1 minute with `PDTBAR_TLC_WORKERS=4`. Any failure means the change broke something or the model needs updating.
 
 ## Retired findings
 
-- `NoRetryAfterDeadline`. `priceSeries` called `callDecodedWithRetry` without `retryDeadline`, so a transient price-history failure past the deadline started another full CLI run. Fixed by `f11cf27` (#236), which passes `retryDeadline: deadline`. `a4ffe5a` (#239) made `retryDeadline` required for every call. The knob is gone and the property stays as a guard. Dropping `~pastDeadline` from the retry guard in `WCallReturns` and from `WBackoffEnds`, which mirrors deleting `now() < retryDeadline` at `:1047` and the guard at `:1013`, fails it with the findings-fixed config.
+- `NoPhaseAfterOutage` (#272). Only a phase that threw reached `recordOptionalPhaseFailure`, the one writer of `skipRemainingPhasesForUnavailableSetup`. Price history never throws. It returns its per-holding diagnostics, so an outage seen there let the performance phase start one more doomed CLI run. TLC's shortest trace had 21 states: base and the first three optional phases succeed, a price-history worker gets `setupUnavailable`, the main thread abandons the rest, `Collect` leaves the flag false, and `Advance` enters performance. Fixed by `3f0860d`. Every optional phase now runs through `runOptionalPhase`, which is the only writer of `diagnostics` and skips the phase when `diagnostics` already holds an outage category. The boolean is gone. In the model, `skip` became `diagOutage` ("`diagnostics` holds an outage"), and both `OptionalFails` and `Collect` set it. The knob and `BackgroundDetailRefreshFindingsFixed.cfg` are gone. Making `Collect` leave `diagOutage` unchanged reproduces the 21-state trace.
+
+- `NoRetryAfterDeadline`. `priceSeries` called `callDecodedWithRetry` without `retryDeadline`, so a transient price-history failure past the deadline started another full CLI run. Fixed by `f11cf27` (#236), which passes `retryDeadline: deadline`. `a4ffe5a` (#239) made `retryDeadline` required for every call. The knob is gone and the property stays as a guard. Dropping `~pastDeadline` from the retry guard in `WCallReturns` and from `WBackoffEnds`, which mirrors deleting `now() < retryDeadline` at `:1047` and the guard at `:1013`, fails it.
 
 ## Reading a result
 
@@ -136,11 +103,12 @@ Bounds live in the `.cfg` files: `HoldingCount = 3`, `Limit = 2`, `RetryCount = 
 
 ## How the properties were shown to fail
 
-At the sync commit, a scratch change to the real code dropped `!abandonedQuoteIDs.contains(quoteID)` from `PDTPriceHistoryWorkTracker.complete` (`:1209`). `swift build` still passed. With the matching model edit (`record == h \notin finished` in `WComplete`), the findings-fixed config failed with `ResultFrozen`. Each other property also fails when its line in the model is broken this way:
+At `1b6ffd4`, a scratch change to the real code dropped `!abandonedQuoteIDs.contains(quoteID)` from `PDTPriceHistoryWorkTracker.complete` (`:1209`). `swift build` still passed. With the matching model edit (`record == h \notin finished` in `WComplete`), the config failed with `ResultFrozen`. Each other property also fails when its line in the model is broken this way:
 
 - `CommittedNeverLost`. `Finalize` commits the prior snapshot instead of `snap`.
 - `ReturnedHasSucceededPhases`. `Finalize` skips the commit (`store' = store`).
 - `OutcomeHonest`. `Collect` drops the price-history diagnostics, or `Performance` drops its timeout diagnostic.
+- `NoPhaseAfterOutage`. `Collect` leaves `diagOutage` unchanged (the #272 bug, 21 states), `OptionalFails` leaves it unchanged, or `Advance` ignores it. Rechecked at `3f0860d` with the #272, `ReturnedHasSucceededPhases`, `OutcomeHonest` (`Collect`), `NoDeterministicRetry`, and `ConcurrencyBound` mutations above. Each failed with its own invariant.
 - `NoDeterministicRetry`. `IsRetryable` includes `"decode"`.
 - `ConcurrencyBound`. `Workers == 1 .. HoldingCount`, so the `min` with the limit is dropped.
 - `PullAtMostOnce`. `WPull` does not pop `pending`.
