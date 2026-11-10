@@ -1152,6 +1152,34 @@ struct BackgroundDetailRefreshTests {
         #expect(committed.priceSeries.map(\.quoteId) == [9101, 9101, 9102, 9102])
     }
 
+    @Test("Unavailable setup seen during price history skips the performance phase")
+    func priceHistoryUnavailableSetupSkipsPerformancePhase() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-detail-refresh-price-outage-performance-test")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        _ = try store.commitCurrentSnapshot(testSnapshot(asOf: "2026-03-28"))
+        let connector = SelectiveFailingPDTConnector(
+            responses: try detailRefreshResponses(),
+            failures: [
+                "pdt-list-symbol-prices": .setupUnavailable("Claude PDT MCP server is not connected"),
+            ],
+            advertisedTools: Set(PDTReadTools.allowedV1)
+        )
+
+        let result = try PDTBackgroundDetailRefresh(
+            connector: connector,
+            snapshotStore: store,
+            asOf: "2026-03-29",
+            options: PDTBackgroundDetailRefreshOptions(priceHistoryConcurrencyLimit: 1, retryBackoffSeconds: 0)
+        ).refresh()
+
+        #expect(result.outcome == .degraded)
+        #expect(connector.callCount(of: "pdt-list-symbol-prices") == 1)
+        #expect(connector.callCount(of: "pdt-get-portfolio-performance") == 0)
+        #expect(result.diagnostics.allSatisfy { $0.category == .setupUnavailable })
+    }
+
 }
 
 extension BackgroundDetailRefreshTests {
@@ -1390,6 +1418,7 @@ private final class SelectiveFailingPDTConnector: PDTMCPConnector, @unchecked Se
     private let failures: [String: PDTMCPConnectorError]
     private let delaySecondsByTool: [String: TimeInterval]
     private let onCall: @Sendable (String) -> Void
+    private let advertisedTools: Set<String>
     private let lock = NSLock()
     private var calls: [String] = []
     private var requests: [String] = []
@@ -1398,10 +1427,12 @@ private final class SelectiveFailingPDTConnector: PDTMCPConnector, @unchecked Se
         responses: [String: Data],
         failures: [String: PDTMCPConnectorError] = [:],
         delaySecondsByTool: [String: TimeInterval] = [:],
+        advertisedTools: Set<String> = Set(PDTReadTools.requiredV1),
         onCall: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.responses = responses
         self.failures = failures
+        self.advertisedTools = advertisedTools
         self.delaySecondsByTool = delaySecondsByTool
         self.onCall = onCall
     }
@@ -1423,7 +1454,7 @@ private final class SelectiveFailingPDTConnector: PDTMCPConnector, @unchecked Se
     }
 
     func availableReadTools() throws -> Set<String> {
-        Set(PDTReadTools.requiredV1)
+        advertisedTools
     }
 
     func callReadTool(_ name: String, arguments: [String: String]) throws -> Data {

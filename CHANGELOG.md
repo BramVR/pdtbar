@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed a Claude/PDT setup outage seen while fetching price history still starting the performance phase, which spent one more doomed Claude CLI run (up to its timeout) before the refresh degraded; an outage seen in any background detail phase now skips every later phase (#272).
 - Fixed a returning concentration alert staying hidden after PDTBar quit during a background refresh; the old read mark is now cleared before the snapshot that records the holding crossing back above the threshold is saved (#270).
 - Fixed "Log in with Claude" leaving helper processes from `claude auth login` running after the attempt ended, whether it succeeded, failed, timed out or was cancelled; every Claude CLI run now ends its whole process group, so `claude auth status`, `claude -p` and `claude mcp list` helpers no longer outlive their run either (#271).
 - Fixed marking a pulse row read during a background refresh: the refresh progress rows kept stopping and "Refresh now" came back while the refresh still ran, and the row turned unread again when the refresh finished. Marking a row read now changes only the pulse rows, and every published pulse reads the current read state (#268, #269).
