@@ -165,11 +165,14 @@ public struct MenuSection: Codable, Equatable {
 
 public enum MenuRowRole: String, Codable, Equatable {
     case row
-    case setupProbe
     case setupStatus
-    case setupLogin
-    case setupRetry
     case setupFailure
+    case connectionSignIn
+    case connectionToken
+    case connectionCancel
+    case connectionCheck
+    case connectionDisconnect
+    case connectionRevoke
     case fetchStatus
     case fetchRetry
     case pulseSummary

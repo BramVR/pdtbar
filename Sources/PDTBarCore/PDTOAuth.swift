@@ -8,6 +8,8 @@ public enum PDTOAuthEndpoints {
     public static let token = URL(string: "https://auth.portfoliodividendtracker.com/oauth/token")!
     /// PDT offers no API revoke for app tokens; users revoke here.
     public static let connectedApps = URL(string: "https://app.portfoliodividendtracker.com/account/integrations/authorizations")!
+    /// Integrations, where a pasted personal access token was created and is revoked.
+    public static let integrations = URL(string: "https://app.portfoliodividendtracker.com/account/integrations")!
 
     static func isTokenRequest(_ request: URLRequest) -> Bool {
         request.httpMethod == "POST" && request.url == token

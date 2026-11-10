@@ -7,51 +7,33 @@ import PDTBarCore
 import SwiftUI
 
 private struct PortfolioFetchOutcome: @unchecked Sendable {
-    var pulse: PulseLifecycleResult? = nil
+    var pulse: PulseLifecycleResult?
+    var failure: PDTFetchFailure = .unavailable
     var errorDescription: String?
     var detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome?
     var detailRefreshDiagnostic: PDTDetailRefreshFailureDiagnostic?
-    var shouldStartBackgroundRefresh = false
 }
 
 private struct CachedPulseLoadOutcome: @unchecked Sendable {
     var pulse: PulseLifecycleResult?
 }
 
-private struct FirstFetchConnectorConfiguration: @unchecked Sendable {
-    var connector: any PDTMCPConnector
-    var asOf: String?
-    var liveOptions = PDTLiveDataSourceOptions()
-    var shouldStartBackgroundRefresh = false
-}
-
-private func firstFetchDataSource(
-    configuration: FirstFetchConnectorConfiguration,
-    snapshotStore: SnapshotStore
-) -> PDTMCPConnectorDataSource {
-    PDTMCPConnectorDataSource(
-        connector: configuration.connector,
-        liveOptions: configuration.liveOptions,
-        onOptionalFacetFailure: { try? snapshotStore.saveLastDetailRefreshDiagnostic($0) }
-    )
-}
-
 @MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let options: PDTBarLaunchOptions
     private let environment: [String: String]
-    private let loginHandoff: ClaudeLoginHandoff
     private lazy var launchRuntime = PDTLaunchRuntime { [unowned self] in
         try? PulseReadStore(directory: self.currentSnapshotDirectory()).load()
     }
+    /// One connection per store for the whole process (ADR-0002 "one connection per store").
+    private var pdtConnection: PDTAppConnection?
     private var statusItem: NSStatusItem?
-    private var portfolioRefreshInFlight = false
     private var activeRefreshCancellation: PDTCancellation?
     private var activeRefreshCompletion: DispatchGroup?
+    private var signInCancellation: PDTCancellation?
     private var portfolioFetchStartedAt: Date?
     private var portfolioFetchProgressTimer: Timer?
     private var activeSnapshotDirectory: URL?
-    private let claudeLoginAttemptGate = ClaudeLoginAttemptGate()
     private let menuActionDispatcher = MenuActionDispatcher()
     private let statusMenuHost = StatusMenuHost()
     private let settingsStore: PDTBarSettingsStore
@@ -62,12 +44,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     init(options: PDTBarLaunchOptions) {
         self.options = options
-        let environment = ClaudeLocalEnvironment.removingScriptedHandoffHook(ProcessInfo.processInfo.environment)
+        let environment = ProcessInfo.processInfo.environment
         self.environment = environment
-        self.loginHandoff = ClaudeCLILoginHandoff(
-            environment: environment,
-            binaryOverride: options.claudeLoginBinaryOverride
-        )
         self.settingsStore = PDTBarSettingsStore(userDefaults: PDTBarSettingsStore.userDefaults(environment: environment))
         super.init()
         self.settingsCancellable = settingsStore.$showPortfolioValues
@@ -81,12 +59,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func launch() throws {
         switch options.mode {
-        case .claudeFirst:
+        case .pdtAPI:
+            pdtConnection = try makeConnection()
             activeSnapshotDirectory = firstFetchStateDirectory()
-            let launchUpdate = launchRuntime.launchWhileLoadingCachedPulse()
-            installMenuBarItem(launchUpdate.descriptor)
-            startCachedPulseLoad()
-            startClaudeReadinessProbe(for: launchRuntime.readinessAttempt)
+            handleLaunchUpdate(launchRuntime.launch())
         case let .fixture(fixture):
             let dataSource = PDTFixtureDataSource(fixture: fixture)
             let snapshotDirectory = try fixtureSnapshotDirectory()
@@ -102,6 +78,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func makeConnection() throws -> PDTAppConnection {
+        if let script = options.scriptedConnection {
+            return try ScriptedPDTConnection.load(script)
+                .appConnection(lockDirectory: appSupportDirectory().appending(path: "pdtbar"))
+        }
+        return PDTAppConnection.production(appSupportDirectory: appSupportDirectory()) { url in
+            guard NSWorkspace.shared.open(url) else {
+                throw PDTSignInError.browserUnavailable
+            }
+        }
+    }
+
     private func startCachedPulseLoad() {
         let directory = currentSnapshotDirectory()
         DispatchQueue.global(qos: .userInitiated).async {
@@ -112,73 +100,69 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
             )
             DispatchQueue.main.async { [weak self] in
-                guard let self else {
+                guard let self, let update = self.launchRuntime.completeCachedPulseLoad(outcome.pulse) else {
                     return
                 }
-                if let update = self.launchRuntime.completeCachedPulseLoad(
-                    outcome.pulse,
-                    allowsBackgroundDetailRefresh: self.backgroundDetailRefreshConfigured()
-                ) {
-                    self.handleLaunchUpdate(update)
-                }
+                self.handleLaunchUpdate(update)
             }
         }
     }
 
-    private func startClaudeReadinessProbe(for attempt: PDTReadinessAttempt) {
-        let probe = ScriptedClaudeReadinessProbe(
-            appSupportDirectory: appSupportDirectory(),
-            environment: environment
-        )
+    private func runConnectionOperation(_ operation: @escaping @Sendable (PDTAppConnection) -> PDTConnectionOutcome) {
+        guard let connection = pdtConnection else {
+            return
+        }
+        let attempt = launchRuntime.connectionAttempt
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = probe.check()
+            let outcome = operation(connection)
             DispatchQueue.main.async { [weak self] in
                 guard let self else {
                     return
                 }
-                self.handleLaunchUpdate(self.launchRuntime.completeReadinessProbe(
-                    result,
-                    for: attempt,
-                    allowsBackgroundDetailRefresh: self.backgroundDetailRefreshConfigured()
-                ))
+                self.signInCancellation = nil
+                self.handleLaunchUpdate(self.launchRuntime.completeConnection(outcome, for: attempt))
             }
         }
     }
 
+    private func startSignIn() {
+        let cancellation = PDTCancellation()
+        signInCancellation = cancellation
+        runConnectionOperation { $0.signIn(cancellation: cancellation) }
+    }
+
     private func startFirstPortfolioFetch() {
-        do {
-            let configuration = try firstFetchConnectorConfiguration()
-            portfolioFetchStartedAt = Date()
-            installPortfolioFetchProgressMenu(cancelOpenMenu: true)
-            startPortfolioFetchProgressTimer()
-            let stateDirectory = firstFetchStateDirectory()
-            activeSnapshotDirectory = stateDirectory
-            let snapshotStore = SnapshotStore(directory: stateDirectory)
-            let pulseReadStore = PulseReadStore(directory: stateDirectory)
-            DispatchQueue.global(qos: .userInitiated).async {
-                let outcome: PortfolioFetchOutcome
-                do {
-                    let fetch = PDTCoalescedFirstPortfolioFetch(
-                        dataSource: firstFetchDataSource(configuration: configuration, snapshotStore: snapshotStore),
-                        snapshotStore: snapshotStore,
-                        asOf: configuration.asOf,
-                        pulseReadStore: pulseReadStore
-                    )
-                    let result = try fetch.fetch()
-                    outcome = PortfolioFetchOutcome(
-                        pulse: result,
-                        errorDescription: nil,
-                        shouldStartBackgroundRefresh: configuration.shouldStartBackgroundRefresh
-                    )
-                } catch {
-                    outcome = PortfolioFetchOutcome(errorDescription: "\(error)")
-                }
-                DispatchQueue.main.async { [weak self] in
-                    self?.finishFirstPortfolioFetch(outcome)
-                }
+        guard let connection = pdtConnection else {
+            return
+        }
+        portfolioFetchStartedAt = Date()
+        installPortfolioFetchProgressMenu(cancelOpenMenu: true)
+        startPortfolioFetchProgressTimer()
+        let stateDirectory = firstFetchStateDirectory()
+        activeSnapshotDirectory = stateDirectory
+        let snapshotStore = SnapshotStore(directory: stateDirectory)
+        let pulseReadStore = PulseReadStore(directory: stateDirectory)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let outcome: PortfolioFetchOutcome
+            do {
+                // The coalesced fetch persists the snapshot before it returns a pulse.
+                let pulse = try PDTCoalescedFirstPortfolioFetch(
+                    dataSource: PDTAPIDataSource(
+                        client: connection.apiClient(),
+                        options: .firstFetch,
+                        onOptionalFacetFailure: { try? snapshotStore.saveLastDetailRefreshDiagnostic($0) }
+                    ),
+                    snapshotStore: snapshotStore,
+                    asOf: connection.asOf,
+                    pulseReadStore: pulseReadStore
+                ).fetch()
+                outcome = PortfolioFetchOutcome(pulse: pulse)
+            } catch {
+                outcome = PortfolioFetchOutcome(failure: connection.failure(for: error), errorDescription: "\(error)")
             }
-        } catch {
-            finishFirstPortfolioFetch(PortfolioFetchOutcome(errorDescription: "\(error)"))
+            DispatchQueue.main.async { [weak self] in
+                self?.finishFirstPortfolioFetch(outcome)
+            }
         }
     }
 
@@ -186,16 +170,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         stopPortfolioFetchProgressTimer()
         if let pulse = outcome.pulse {
             handleLaunchUpdate(launchRuntime.completeFirstFetch(.succeeded(pulse)))
-            if outcome.shouldStartBackgroundRefresh {
-                if let update = launchRuntime.beginBackgroundDetailRefresh() {
-                    handleLaunchUpdate(update)
-                }
+            if let update = launchRuntime.beginBackgroundDetailRefresh() {
+                handleLaunchUpdate(update)
             }
             return
         }
-        let errorDescription = outcome.errorDescription ?? "unknown error"
-        FileHandle.standardError.write(Data("pdtbar: first fetch failed: \(errorDescription)\n".utf8))
-        handleLaunchUpdate(launchRuntime.completeFirstFetch(.failed(errorDescription)))
+        FileHandle.standardError.write(Data("pdtbar: first fetch failed: \(outcome.errorDescription ?? "unknown error")\n".utf8))
+        handleLaunchUpdate(launchRuntime.completeFirstFetch(.failed(outcome.failure)))
     }
 
     private func startPortfolioFetchProgressTimer() {
@@ -235,31 +216,19 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         installMenuBarItem(update.descriptor, cancelOpenMenu: cancelOpenMenu)
     }
 
-    @objc private func retryPortfolioFetch(_ sender: NSMenuItem) {
-        guard let update = launchRuntime.retryFirstFetch() else {
-            return
-        }
-        handleLaunchUpdate(update)
-    }
-
     private func startBackgroundPortfolioRefresh() {
-        guard !portfolioRefreshInFlight else {
+        guard let connection = pdtConnection else {
             return
         }
-        portfolioRefreshInFlight = true
         let stateDirectory = firstFetchStateDirectory()
         activeSnapshotDirectory = stateDirectory
         let snapshotStore = SnapshotStore(directory: stateDirectory)
-        let pulseReadStore = PulseReadStore(directory: stateDirectory)
-        let refresh: any PDTBackgroundDetailRefreshing
-        do {
-            refresh = try backgroundDetailRefresh(snapshotStore: snapshotStore, pulseReadStore: pulseReadStore)
-        } catch {
-            finishBackgroundPortfolioRefresh(
-                PortfolioFetchOutcome(errorDescription: "\(error)")
-            )
-            return
-        }
+        let refresh = PDTAPIBackgroundDetailRefresh(
+            client: connection.apiClient(),
+            snapshotStore: snapshotStore,
+            pulseReadStore: PulseReadStore(directory: stateDirectory),
+            asOf: connection.asOf
+        )
         let cancellation = PDTCancellation()
         let completion = DispatchGroup()
         completion.enter()
@@ -273,22 +242,16 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 let result = try refresh.refresh(cancellation: cancellation) { progress in
                     DispatchQueue.main.async { [weak self] in
-                        guard let self,
-                              self.portfolioRefreshInFlight,
-                              let update = self.launchRuntime.backgroundDetailRefreshProgress(progress)
-                        else {
+                        guard let self, let update = self.launchRuntime.backgroundDetailRefreshProgress(progress) else {
                             return
                         }
                         self.installMenuBarItem(update.descriptor, cancelOpenMenu: false)
                     }
                 }
-                outcome = PortfolioFetchOutcome(
-                    pulse: result.pulse,
-                    errorDescription: nil,
-                    detailRefreshOutcome: result.outcome
-                )
+                outcome = PortfolioFetchOutcome(pulse: result.pulse, detailRefreshOutcome: result.outcome)
             } catch {
                 outcome = PortfolioFetchOutcome(
+                    failure: connection.failure(for: error),
                     errorDescription: "\(error)",
                     detailRefreshDiagnostic: try? snapshotStore.loadLastDetailRefreshDiagnostic()
                 )
@@ -300,7 +263,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func finishBackgroundPortfolioRefresh(_ outcome: PortfolioFetchOutcome) {
-        portfolioRefreshInFlight = false
         activeRefreshCancellation = nil
         activeRefreshCompletion = nil
         if let pulse = outcome.pulse {
@@ -309,129 +271,86 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             ))
             return
         }
-        let errorDescription = outcome.errorDescription ?? "unknown error"
-        FileHandle.standardError.write(Data("pdtbar: background refresh failed: \(errorDescription)\n".utf8))
+        FileHandle.standardError.write(Data("pdtbar: background refresh failed: \(outcome.errorDescription ?? "unknown error")\n".utf8))
         handleLaunchUpdate(launchRuntime.completeBackgroundDetailRefresh(
-            .failed(errorDescription, diagnostic: outcome.detailRefreshDiagnostic)
+            .failed(outcome.failure, diagnostic: outcome.detailRefreshDiagnostic)
         ))
     }
 
-    @objc private func retryClaudeReadiness(_ sender: NSMenuItem) {
-        guard let update = launchRuntime.retryReadiness() else {
+    @objc private func retryPortfolioFetch(_ sender: NSMenuItem) {
+        handleLaunchUpdate(launchRuntime.retryFirstFetch())
+    }
+
+    @objc private func signInWithPDT(_ sender: NSMenuItem) {
+        handleLaunchUpdate(launchRuntime.signIn())
+    }
+
+    @objc private func cancelSignIn(_ sender: NSMenuItem) {
+        handleLaunchUpdate(launchRuntime.cancelSignIn())
+    }
+
+    @objc private func checkConnectionAgain(_ sender: NSMenuItem) {
+        handleLaunchUpdate(launchRuntime.checkAgain())
+    }
+
+    @objc private func disconnectFromPDT(_ sender: NSMenuItem) {
+        handleLaunchUpdate(launchRuntime.disconnect())
+    }
+
+    @objc private func openRevokePage(_ sender: NSMenuItem) {
+        guard let link = sender.representedObject as? String, let url = URL(string: link) else {
             return
         }
-        handleLaunchUpdate(update)
+        NSWorkspace.shared.open(url)
     }
 
-    @objc private func loginWithClaude(_ sender: NSMenuItem) {
-        let attempt = claudeLoginAttemptGate.begin()
-        handleLaunchUpdate(launchRuntime.beginLoginHandoff())
-        loginHandoff.startLogin { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self, self.claudeLoginAttemptGate.finish(attempt) else {
-                    return
-                }
-                switch result {
-                case .success:
-                    self.handleLaunchUpdate(self.launchRuntime.completeLoginHandoff(.succeeded))
-                case .failure(let error):
-                    FileHandle.standardError.write(Data("pdtbar: Claude handoff failed: \(error)\n".utf8))
-                    if let handoffError = error as? ClaudeLoginHandoffError {
-                        self.handleLaunchUpdate(
-                            self.launchRuntime.completeLoginHandoff(.failed(handoffError.reason))
-                        )
-                    } else {
-                        self.handleLaunchUpdate(self.launchRuntime.completeLoginHandoff(.failed(.failed)))
-                    }
-                }
-            }
+    /// The pasted-token fallback. The field is secure, and the value goes
+    /// straight into the store; it is never logged or shown.
+    @objc private func enterPDTToken(_ sender: NSMenuItem) {
+        statusMenuHost.dismissWithoutAnimation()
+        let alert = NSAlert()
+        alert.messageText = "Use a PDT token"
+        alert.informativeText = "In PDT, open Integrations > API and create a token with the read scope. Paste it here."
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Connect")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn,
+              let token = try? PDTAPIToken.personal(pasted: field.stringValue)
+        else {
+            return
         }
+        field.stringValue = ""
+        handleLaunchUpdate(launchRuntime.connect(token: token))
     }
 
-    private func handleLaunchUpdate(_ update: PDTOnboardingUpdate) {
+    private func handleLaunchUpdate(_ update: PDTOnboardingUpdate?) {
+        guard let update else {
+            return
+        }
         installMenuBarItem(update.descriptor)
         switch update.effect {
         case .none:
             return
-        case .probeReadiness:
-            startClaudeReadinessProbe(for: launchRuntime.readinessAttempt)
-        case .startLoginHandoff:
-            return
+        case .loadCachedPulse:
+            startCachedPulseLoad()
+        case .checkConnection:
+            runConnectionOperation { $0.check() }
+        case .signIn:
+            startSignIn()
+        case .connectToken(let token):
+            runConnectionOperation { $0.connect(token: token) }
+        case .cancelSignIn:
+            signInCancellation?.cancel()
+        case .disconnect:
+            runConnectionOperation { $0.disconnect() }
         case .startFirstFetch:
             startFirstPortfolioFetch()
         case .startBackgroundDetailRefresh:
             startBackgroundPortfolioRefresh()
         }
-    }
-
-    private func scriptedPDTConnectorConfiguration() throws -> ScriptedPDTMCPConnectorConfiguration {
-        let url = appSupportDirectory().appending(path: "pdtbar/scripted-pdt-mcp.json")
-        let data = try Data(contentsOf: url)
-        return try JSONDecoder().decode(ScriptedPDTMCPConnectorConfiguration.self, from: data)
-    }
-
-    private func firstFetchConnectorConfiguration() throws -> FirstFetchConnectorConfiguration {
-        let scriptedURL = appSupportDirectory().appending(path: "pdtbar/scripted-pdt-mcp.json")
-        if FileManager.default.fileExists(atPath: scriptedURL.path) {
-            let configuration = try scriptedPDTConnectorConfiguration()
-            return FirstFetchConnectorConfiguration(
-                connector: try configuration.connector(),
-                asOf: configuration.asOf,
-                liveOptions: PDTLiveDataSourceOptions(),
-                shouldStartBackgroundRefresh: scriptedBackgroundRefreshEnabled()
-            )
-        }
-        return FirstFetchConnectorConfiguration(
-            connector: ClaudeLocalConnection(environment: environment),
-            asOf: nil,
-            liveOptions: .firstFetch,
-            shouldStartBackgroundRefresh: true
-        )
-    }
-
-    /// The shipped refresh stays on Claude until a PDT token source exists
-    /// (#245, #248). Scripted runs can drive the REST refresh offline.
-    private func backgroundDetailRefresh(
-        snapshotStore: SnapshotStore,
-        pulseReadStore: PulseReadStore
-    ) throws -> any PDTBackgroundDetailRefreshing {
-        if scriptedBackgroundRefreshEnabled() {
-            let scriptedAPIURL = appSupportDirectory().appending(path: "pdtbar/scripted-pdt-api.json")
-            if FileManager.default.fileExists(atPath: scriptedAPIURL.path) {
-                let configuration = try JSONDecoder().decode(
-                    ScriptedPDTAPIConfiguration.self,
-                    from: Data(contentsOf: scriptedAPIURL)
-                )
-                return PDTAPIBackgroundDetailRefresh(
-                    client: PDTAPIClient(
-                        transport: configuration.transport(),
-                        tokenProvider: InMemoryPDTAPITokenProvider(token: PDTAPIToken("scripted"))
-                    ),
-                    snapshotStore: snapshotStore,
-                    pulseReadStore: pulseReadStore,
-                    asOf: configuration.asOf
-                )
-            }
-            let scriptedURL = appSupportDirectory().appending(path: "pdtbar/scripted-pdt-mcp.json")
-            if FileManager.default.fileExists(atPath: scriptedURL.path) {
-                let configuration = try scriptedPDTConnectorConfiguration()
-                return PDTBackgroundDetailRefresh(
-                    connector: try configuration.connector(),
-                    snapshotStore: snapshotStore,
-                    pulseReadStore: pulseReadStore,
-                    asOf: configuration.asOf
-                )
-            }
-        }
-        return PDTBackgroundDetailRefresh(
-            connector: ClaudeLocalConnection(environment: environment),
-            snapshotStore: snapshotStore,
-            pulseReadStore: pulseReadStore
-        )
-    }
-
-    private func scriptedBackgroundRefreshEnabled() -> Bool {
-        environment["PDTBAR_SCRIPTED_BACKGROUND_REFRESH"] == "1"
     }
 
     private func firstFetchStateDirectory() -> URL {
@@ -552,13 +471,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 item.target = self
                 item.action = #selector(retryPortfolioFetch(_:))
             }
-            if row.role == .setupRetry {
+            if let action = connectionAction(for: row.role) {
                 item.target = self
-                item.action = #selector(retryClaudeReadiness(_:))
-            }
-            if row.role == .setupLogin {
-                item.target = self
-                item.action = #selector(loginWithClaude(_:))
+                item.action = action
+                item.representedObject = row.actionPayload
             }
             if row.actionTarget?.kind == .copyHoldingIdentifier || row.actionTarget?.kind == .copyDataHealthDiagnostic {
                 item.target = menuActionDispatcher
@@ -1082,9 +998,16 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 private extension AppDelegate {
-    /// Reads connector configuration. `PDTLaunchRuntime` calls this lazily, only once a pulse exists.
-    func backgroundDetailRefreshConfigured() -> Bool {
-        (try? firstFetchConnectorConfiguration().shouldStartBackgroundRefresh) ?? false
+    func connectionAction(for role: MenuRowRole) -> Selector? {
+        switch role {
+        case .connectionSignIn: #selector(signInWithPDT(_:))
+        case .connectionToken: #selector(enterPDTToken(_:))
+        case .connectionCancel: #selector(cancelSignIn(_:))
+        case .connectionCheck: #selector(checkConnectionAgain(_:))
+        case .connectionDisconnect: #selector(disconnectFromPDT(_:))
+        case .connectionRevoke: #selector(openRevokePage(_:))
+        default: nil
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -1097,6 +1020,7 @@ private extension AppDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        signInCancellation?.cancel()
         activeRefreshCancellation?.cancel()
         _ = activeRefreshCompletion?.wait(timeout: .now() + 4.0)
     }
@@ -1109,152 +1033,6 @@ private struct PDTBarSettingsView: View {
         Toggle("Show portfolio values", isOn: $settingsStore.showPortfolioValues)
             .padding(20)
             .frame(width: 300, alignment: .leading)
-    }
-}
-
-private protocol ClaudeLoginHandoff {
-    func startLogin(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void)
-}
-
-private enum ClaudeLoginHandoffError: Error, CustomStringConvertible {
-    case failed(ClaudeLoginFailureReason, String)
-
-    var reason: ClaudeLoginFailureReason {
-        switch self {
-        case .failed(let reason, _):
-            return reason
-        }
-    }
-
-    var description: String {
-        switch self {
-        case .failed(_, let message):
-            return message
-        }
-    }
-}
-
-private final class ClaudeCLILoginHandoff: ClaudeLoginHandoff, @unchecked Sendable {
-    private let environment: [String: String]
-    private let loginBinary: String
-    private let lock = NSLock()
-    private var activeCancellation: PDTCancellation?
-
-    init(environment: [String: String], binaryOverride: String? = nil) {
-        self.environment = environment
-        let trimmedBinaryOverride = binaryOverride?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let trimmedBinaryOverride, !trimmedBinaryOverride.isEmpty {
-            self.loginBinary = trimmedBinaryOverride
-        } else {
-            self.loginBinary = ClaudeLocalLoginRunner.productBinary(environment: environment)
-        }
-    }
-
-    func startLogin(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
-        let cancellation = PDTCancellation()
-        lock.lock()
-        activeCancellation?.cancel()
-        activeCancellation = cancellation
-        lock.unlock()
-        Task.detached(priority: .userInitiated) { [environment, cancellation, loginBinary, weak self] in
-            let result = await ClaudeLocalLoginRunner(
-                environment: environment,
-                binary: loginBinary
-            ).run(
-                timeout: 120,
-                cancellation: cancellation,
-                onPhaseChange: { _ in }
-            )
-            self?.clearActiveCancellation(cancellation)
-            switch result {
-            case .success:
-                completion(.success(()))
-            case .failed(let reason, let message):
-                completion(.failure(ClaudeLoginHandoffError.failed(reason, message)))
-            case .cancelled:
-                break
-            }
-        }
-    }
-
-    private func clearActiveCancellation(_ cancellation: PDTCancellation) {
-        lock.lock()
-        if activeCancellation === cancellation {
-            activeCancellation = nil
-        }
-        lock.unlock()
-    }
-}
-
-private struct ScriptedClaudeReadinessProbe {
-    var appSupportDirectory: URL
-    var environment: [String: String]
-
-    func check() -> ClaudeReadinessProbeResult {
-        recordProbe()
-        if let scripted = environment["PDTBAR_CLAUDE_READINESS"] {
-            return parse(scripted) ?? .failed
-        }
-        let url = appSupportDirectory.appending(path: "pdtbar/claude-readiness.json")
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            if environment["PDTBAR_DISABLE_REAL_CLAUDE"] == "1" {
-                return .notReady
-            }
-            return ClaudeLocalConnection(environment: environment).checkReadiness()
-        }
-        guard let data = try? Data(contentsOf: url),
-              let script = try? JSONDecoder().decode(Script.self, from: data)
-        else {
-            return .failed
-        }
-        if let delay = script.delaySeconds, delay > 0 {
-            Thread.sleep(forTimeInterval: delay)
-        }
-        return parse(script.result) ?? .failed
-    }
-
-    private func recordProbe() {
-        guard let log = environment["PDTBAR_CLAUDE_READINESS_LOG"], !log.isEmpty else {
-            return
-        }
-        let url = URL(fileURLWithPath: log)
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        if !FileManager.default.fileExists(atPath: url.path) {
-            FileManager.default.createFile(atPath: url.path, contents: nil)
-        }
-        guard let handle = try? FileHandle(forWritingTo: url) else {
-            return
-        }
-        defer {
-            try? handle.close()
-        }
-        _ = try? handle.seekToEnd()
-        _ = try? handle.write(contentsOf: Data("probe\n".utf8))
-    }
-
-    private func parse(_ value: String) -> ClaudeReadinessProbeResult? {
-        switch value {
-        case "ready":
-            return .ready
-        case "notReady":
-            return .notReady
-        case "missingClaudeLogin", "loggedOut":
-            return .missingClaudeLogin
-        case "missingPDTMCP", "missingPdtMcp", "missingPDTMCPServer", "missingPDTServer", "missingSetup":
-            return .missingPDTMCP
-        case "failed", "failure":
-            return .failed
-        default:
-            return nil
-        }
-    }
-
-    private struct Script: Decodable {
-        var result: String
-        var delaySeconds: Double?
     }
 }
 
@@ -1583,7 +1361,7 @@ do {
     }
 } catch {
     FileHandle.standardError.write(
-        Data("usage: pdtbar [--app-support-dir <path>] | --fixture <path> [--snapshot-dir <path>]\n".utf8)
+        Data("usage: pdtbar [--app-support-dir <path> [--scripted-pdt <file>]] | --fixture <path> [--snapshot-dir <path>]\n".utf8)
     )
     Foundation.exit(64)
 }

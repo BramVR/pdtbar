@@ -263,8 +263,8 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
     }
 }
 
-/// Offline replay script for the app's scripted background refresh
-/// (`PDTBAR_SCRIPTED_BACKGROUND_REFRESH=1` plus `scripted-pdt-api.json`).
+/// Offline API replies for the app's `--scripted-pdt` connection
+/// (`ScriptedPDTConnection.api`).
 /// Responses are served in request order.
 public struct ScriptedPDTAPIConfiguration: Codable, Equatable, Sendable {
     public struct Response: Codable, Equatable, Sendable {

@@ -486,7 +486,7 @@ public enum MenuDescriptorRenderer {
                 id: "actions.refreshNow",
                 role: .fetchStatus,
                 title: "Refresh now",
-                detail: "After Claude setup check"
+                detail: "Once PDT is connected"
             )
         }
     }

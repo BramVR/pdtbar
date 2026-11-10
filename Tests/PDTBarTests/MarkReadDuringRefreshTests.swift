@@ -62,7 +62,8 @@ struct DisplayedPulseReadStateTests {
         try fixture.readStore.markRead(item.readFingerprint)
         let runtime = PDTLaunchRuntime(loadReadState: { try? fixture.readStore.load() })
 
-        let launch = runtime.launch(cachedPulse: fixture.pulse)
+        _ = runtime.launch()
+        let launch = try #require(runtime.completeCachedPulseLoad(fixture.pulse))
 
         #expect(!markReadPayloads(in: launch.descriptor).contains(item.id))
         #expect(runtime.currentPulse?.model.rankedAttentionItems.contains { $0.id == item.id } == false)
@@ -104,7 +105,7 @@ private struct ConcentrationFixture {
     }
 }
 
-/// A returning launch with a cached concentration pulse, ready readiness, and a background refresh in flight.
+/// A returning launch with a cached concentration pulse, a connected check, and a background refresh in flight.
 private struct ReturningLaunch {
     let readStore: PulseReadStore
     let cachedPulse: PulseLifecycleResult
@@ -116,9 +117,10 @@ private struct ReturningLaunch {
         self.readStore = readStore
         cachedPulse = fixture.pulse
         runtime = PDTLaunchRuntime(loadReadState: { try? readStore.load() })
-        _ = runtime.launch(cachedPulse: cachedPulse)
-        let ready = runtime.completeReadinessProbe(.ready, for: runtime.readinessAttempt)
-        try #require(ready.effect == .startBackgroundDetailRefresh)
+        _ = runtime.launch()
+        _ = try #require(runtime.completeCachedPulseLoad(cachedPulse))
+        let connected = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+        try #require(connected.effect == .startBackgroundDetailRefresh)
     }
 
     /// What the app does when the user clicks a row's Mark as read item.
