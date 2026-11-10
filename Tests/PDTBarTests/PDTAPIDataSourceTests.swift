@@ -40,6 +40,17 @@ struct PDTAPIDataSourceTests {
         #expect(run.snapshot.latestDetailFillOutcome == nil)
     }
 
+    @Test("Every paged request asks for at most PDT's documented page size")
+    func pagedRequestsStayWithinDocumentedPageSize() throws {
+        let documentedMaximumPageSize = 100
+        let pageSizes = try replay("full").transport.requests.compactMap { request in
+            (query(request, "perPage") + query(request, "limit")).first.flatMap(Int.init)
+        }
+
+        #expect(pageSizes.count == 11)
+        #expect(pageSizes.allSatisfy { $0 <= documentedMaximumPageSize })
+    }
+
     @Test("Holdings keep open rows, local FX values, identifiers, and tolerate malformed optional fields")
     func holdingsMapping() throws {
         let snapshot = try replay("full").snapshot
