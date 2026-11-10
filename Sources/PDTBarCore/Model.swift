@@ -716,7 +716,8 @@ public struct FacetSnapshots: Codable, Equatable {
         income = try container.decode(IncomeSnapshot.self, forKey: .income)
         bigMovers = try container.decode(BigMoversSnapshot.self, forKey: .bigMovers)
         freshness = try container.decode(FreshnessSnapshot.self, forKey: .freshness)
-        dataHealth = try container.decodeIfPresent(DataHealthSnapshot.self, forKey: .dataHealth)
+        // Data Health written by a build with another shape is rebuilt, never a decode failure.
+        dataHealth = (try? container.decodeIfPresent(DataHealthSnapshot.self, forKey: .dataHealth))
             ?? DataHealth.build(DataHealthInput.default(freshness: freshness))
     }
 }

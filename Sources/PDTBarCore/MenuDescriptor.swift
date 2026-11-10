@@ -211,7 +211,9 @@ public enum MenuRowRole: String, Codable, Equatable {
     case freshnessCaveats
     case dataHealthSummary
     case dataHealthSource
+    case dataHealthAccess
     case dataHealthCache
+    case dataHealthFreshness
     case dataHealthDetailFill
     case dataHealthReadState
     case dataHealthDiagnostic

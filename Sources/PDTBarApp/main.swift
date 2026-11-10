@@ -11,7 +11,7 @@ private struct PortfolioFetchOutcome: @unchecked Sendable {
     var failure: PDTFetchFailure = .unavailable
     var errorDescription: String?
     var detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome?
-    var detailRefreshDiagnostic: PDTDetailRefreshFailureDiagnostic?
+    var syncFailure: PDTSyncFailure?
 }
 
 private struct CachedPulseLoadOutcome: @unchecked Sendable {
@@ -253,7 +253,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 outcome = PortfolioFetchOutcome(
                     failure: connection.failure(for: error),
                     errorDescription: PDTAppConnection.logLabel(for: error),
-                    detailRefreshDiagnostic: try? snapshotStore.loadLastDetailRefreshDiagnostic()
+                    syncFailure: snapshotStore.lastSyncFailure()
                 )
             }
             DispatchQueue.main.async { [weak self] in
@@ -273,7 +273,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         FileHandle.standardError.write(Data("pdtbar: background refresh failed: \(outcome.errorDescription ?? "unknown error")\n".utf8))
         handleLaunchUpdate(launchRuntime.completeBackgroundDetailRefresh(
-            .failed(outcome.failure, diagnostic: outcome.detailRefreshDiagnostic)
+            .failed(outcome.failure, failure: outcome.syncFailure)
         ))
     }
 

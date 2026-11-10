@@ -393,7 +393,6 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             snapshotStore: snapshotStore,
             pulseReadStore: pulseReadStore,
             detailRefreshOutcome: outcome,
-            detailRefreshDiagnostic: diagnostics.last,
             priorSnapshotLoadStatus: originalPriorSnapshotLoad.status
         )
         if let lastDiagnostic = diagnostics.last {

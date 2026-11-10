@@ -757,36 +757,18 @@ public enum MenuDescriptorRenderer {
 
     private static func dataHealthRows(for health: DataHealthSnapshot) -> [MenuRow] {
         [
-            MenuRow(
-                id: "dataHealth.source",
-                role: .dataHealthSource,
-                title: "Source",
-                detail: health.source.detail
-            ),
-            MenuRow(
-                id: "dataHealth.cache",
-                role: .dataHealthCache,
-                title: "Cache",
-                detail: health.cache.summary
-            ),
-            MenuRow(
-                id: "dataHealth.detailFill",
-                role: .dataHealthDetailFill,
-                title: "Detail fill",
-                detail: health.detailFill.detail
-            ),
-            MenuRow(
-                id: "dataHealth.readState",
-                role: .dataHealthReadState,
-                title: "Read state",
-                detail: health.readState.detail
-            ),
-            dataHealthDiagnosticRow(for: health.diagnostic),
+            MenuRow(id: "dataHealth.source", role: .dataHealthSource, title: "Source", detail: health.source.detail),
+            MenuRow(id: "dataHealth.access", role: .dataHealthAccess, title: "Access", detail: health.access.detail),
+            MenuRow(id: "dataHealth.cache", role: .dataHealthCache, title: "Cache", detail: health.cache.summary),
+            MenuRow(id: "dataHealth.freshness", role: .dataHealthFreshness, title: "Prices", detail: health.freshness.detail),
+            MenuRow(id: "dataHealth.detailFill", role: .dataHealthDetailFill, title: "Detail fill", detail: health.detailFill.detail),
+            MenuRow(id: "dataHealth.readState", role: .dataHealthReadState, title: "Read state", detail: health.readState.detail),
+            dataHealthDiagnosticRow(for: health),
         ]
     }
 
-    static func dataHealthDiagnosticRow(for diagnostic: DataHealthDiagnosticSummary?) -> MenuRow {
-        guard let diagnostic else {
+    private static func dataHealthDiagnosticRow(for health: DataHealthSnapshot) -> MenuRow {
+        guard let failure = health.lastFailure, let copyText = DataHealth.diagnosticsText(for: health) else {
             return MenuRow(
                 id: "dataHealth.diagnostic",
                 role: .dataHealthDiagnostic,
@@ -798,7 +780,7 @@ public enum MenuDescriptorRenderer {
             id: "dataHealth.diagnostic",
             role: .dataHealthDiagnostic,
             title: "Diagnostics",
-            detail: diagnostic.detail,
+            detail: failure.menuDetail,
             children: [
                 MenuRow(
                     id: "dataHealth.diagnostic.copy",
@@ -806,7 +788,7 @@ public enum MenuDescriptorRenderer {
                     actionTarget: MenuRowActionTarget(
                         kind: .copyDataHealthDiagnostic,
                         id: "dataHealth.diagnostic.copy",
-                        copyText: diagnostic.copyText
+                        copyText: copyText
                     ),
                     title: "Copy diagnostics",
                     detail: "Redacted"
@@ -818,9 +800,13 @@ public enum MenuDescriptorRenderer {
     private static func dataHealthSummaryDetail(for health: DataHealthSnapshot) -> String {
         switch health.status {
         case .healthy:
-            return "Healthy"
+            "Healthy"
         case .degraded:
-            return "Needs attention"
+            "Needs attention"
+        case .checking:
+            "Checking"
+        case .refreshing:
+            "Refreshing"
         }
     }
 

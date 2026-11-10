@@ -288,6 +288,14 @@ public struct PulseLifecycleResult: Codable, Equatable {
         )
     }
 
+    /// This pulse's menu with Data Health as the running app sees it.
+    public func descriptor(in runtime: DataHealthRuntime) -> MenuDescriptor {
+        MenuDescriptorRenderer.descriptorByReplacingDataHealth(
+            in: descriptor,
+            with: DataHealth.snapshot(model.facetSnapshots.dataHealth, in: runtime)
+        )
+    }
+
     public func rendered(settings: PortfolioValueDisplaySettings) -> PulseLifecycleResult {
         PulseLifecycleResult(
             unfilteredModel: unfilteredModel,
@@ -364,20 +372,11 @@ public enum PressureRunner {
             pulseReadStore: pulseReadStore,
             source: .cachedSnapshot,
             prunesStaleReadState: false,
-            detailRefreshDiagnostic: cachedDetailRefreshDiagnostic(for: snapshot, snapshotStore: snapshotStore),
+            // A failure recorded before a later complete fill no longer describes this snapshot.
+            lastSyncFailure: snapshot.latestDetailFillOutcome == .degraded ? snapshotStore.lastSyncFailure() : nil,
             priorSnapshotLoadStatus: snapshotLoad.status,
             today: today ?? currentDayString()
         )
-    }
-
-    private static func cachedDetailRefreshDiagnostic(
-        for snapshot: PortfolioSnapshot,
-        snapshotStore: SnapshotStore
-    ) -> PDTDetailRefreshFailureDiagnostic? {
-        guard snapshot.latestDetailFillOutcome == .degraded else {
-            return nil
-        }
-        return try? snapshotStore.loadLastDetailRefreshDiagnostic()
     }
 
     public static func cachedPulseDescriptor(
@@ -455,7 +454,7 @@ public enum PressureRunner {
         snapshotStore: SnapshotStore,
         pulseReadStore: PulseReadStore? = nil,
         detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil,
-        detailRefreshDiagnostic: PDTDetailRefreshFailureDiagnostic? = nil,
+        lastSyncFailure: PDTSyncFailure? = nil,
         priorSnapshotLoadStatus: PriorSnapshotLoadStatus = .notRequested
     ) throws -> PulseLifecycleResult {
         var committedSnapshot = snapshot
@@ -476,7 +475,7 @@ public enum PressureRunner {
             loadedReadState: loadedReadState,
             prunesStaleReadState: true,
             detailRefreshOutcome: detailRefreshOutcome,
-            detailRefreshDiagnostic: detailRefreshDiagnostic,
+            lastSyncFailure: lastSyncFailure,
             priorSnapshotLoadStatus: priorSnapshotLoadStatus
         )
     }
@@ -514,7 +513,7 @@ public enum PressureRunner {
         loadedReadState: PulseReadState? = nil,
         prunesStaleReadState: Bool,
         detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil,
-        detailRefreshDiagnostic: PDTDetailRefreshFailureDiagnostic? = nil,
+        lastSyncFailure: PDTSyncFailure? = nil,
         priorSnapshotLoadStatus: PriorSnapshotLoadStatus = .notRequested,
         today: String? = nil
     ) throws -> PulseLifecycleResult {
@@ -527,15 +526,22 @@ public enum PressureRunner {
             detailRefreshOutcome: effectiveDetailRefreshOutcome,
             today: today
         )
-        rawModel.facetSnapshots.dataHealth = DataHealth.build(
-            DataHealthInput.default(
-                freshness: rawModel.facetSnapshots.freshness,
-                pulseSource: source,
-                readState: displayReadState,
-                detailRefreshOutcome: effectiveDetailRefreshOutcome,
-                diagnostic: detailRefreshDiagnostic,
-                priorSnapshotLoadStatus: priorSnapshotLoadStatus
+        func dataHealth(freshness: FreshnessSnapshot, readState: PulseReadState?) -> DataHealthSnapshot {
+            DataHealth.build(
+                DataHealthInput.default(
+                    freshness: freshness,
+                    pulseSource: source,
+                    snapshotAsOf: snapshot.asOf,
+                    readState: readState,
+                    detailRefreshOutcome: effectiveDetailRefreshOutcome,
+                    lastSyncFailure: lastSyncFailure,
+                    priorSnapshotLoadStatus: priorSnapshotLoadStatus
+                )
             )
+        }
+        rawModel.facetSnapshots.dataHealth = dataHealth(
+            freshness: rawModel.facetSnapshots.freshness,
+            readState: displayReadState
         )
         let readState = prunesStaleReadState
             ? try readStateAfterPruningStaleItems(
@@ -545,16 +551,7 @@ public enum PressureRunner {
             )
             : displayReadState
         var model = modelAfterApplyingReadState(rawModel, readState: readState)
-        model.facetSnapshots.dataHealth = DataHealth.build(
-            DataHealthInput.default(
-                freshness: model.facetSnapshots.freshness,
-                pulseSource: source,
-                readState: readState,
-                detailRefreshOutcome: effectiveDetailRefreshOutcome,
-                diagnostic: detailRefreshDiagnostic,
-                priorSnapshotLoadStatus: priorSnapshotLoadStatus
-            )
-        )
+        model.facetSnapshots.dataHealth = dataHealth(freshness: model.facetSnapshots.freshness, readState: readState)
         return PulseLifecycleResult(
             unfilteredModel: rawModel,
             model: model,

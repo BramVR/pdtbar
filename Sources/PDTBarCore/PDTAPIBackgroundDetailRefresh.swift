@@ -200,6 +200,7 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
             snapshotStore: snapshotStore,
             pulseReadStore: pulseReadStore,
             detailRefreshOutcome: outcome,
+            lastSyncFailure: failures.last,
             priorSnapshotLoadStatus: priorSnapshotLoad.status
         )
         snapshotStore.setLastSyncFailure(failures.last)
