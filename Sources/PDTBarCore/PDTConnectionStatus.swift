@@ -11,7 +11,7 @@ public enum PDTConnectionStatus: Equatable, Sendable {
     case keychainUnavailable(PDTKeychainProblem)
 }
 
-public enum PDTReconnectCause: Equatable, Sendable {
+public enum PDTReconnectCause: String, Codable, Equatable, Sendable {
     /// The token endpoint answered `invalid_grant`: the browser sign-in lapsed or was revoked.
     case signInExpired
     case tokenExpired

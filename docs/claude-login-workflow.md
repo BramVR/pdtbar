@@ -55,7 +55,9 @@ The first fetch reads holdings only (`PDTAPIDataSource` with `.firstFetch`) thro
 
 Returning launches show the previous snapshot while the connection check runs, then refresh details in the background. Progress rows (`Filling details`, `Step n/6`) keep the pulse visible. Optional phase failures degrade the refresh (`Details partially filled`, `Fill details again`) and keep last-good facets; a failed base holdings request keeps the pulse and shows `Details fill failed`, or moves to the matching connection state when the connection was the cause. A token that dies during an optional phase shows as a degraded refresh; the next refresh hits holdings first and shows `Reconnect to PDT`.
 
-Data Health still describes source facts in Claude/PDT MCP terms until #249 rewrites them. Cached pulses report unverified source facts; only a live fetch claims verified facts.
+Data health describes PDT API access (#249). It is hidden while healthy. Otherwise its rows are Source (fetched this session, or a saved copy and its date), Access (`Checking`, `Connected`, `Reconnect needed:` with the cause, `Paused:`, `Keychain unavailable`, or `Not checked this session` for a saved copy nothing has verified), Cache (last sync, and last complete sync when it differs), Prices, Detail fill, Read state, and Diagnostics. A saved copy is never healthy: the summary reads `Checking` during the connection check, `Refreshing` during a sync, and `Needs attention` otherwise.
+
+Diagnostics names the step that failed and what to do: reconnect, renew the subscription, try again in N min after a `429` with `Retry-After`, check the connection, try again later, or update PDTBar. The wait is fixed when the failure is recorded; there is no countdown, and `Fill details again` stays enabled. `Copy diagnostics` copies the step, `GET /v1/<endpoint>`, the failure category with its HTTP status, the request count, and PDT's trace id when it is a UUID or 32 hex digits. It holds no token, account id, query value, date, or response text. A failed base request that moves the menu to a connection state drops its failure record; the Access row carries the cause there.
 
 ## Status icon
 

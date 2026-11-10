@@ -232,10 +232,7 @@ public enum PDTLaunchMenu {
                 return fetchingDescriptor(elapsedSeconds: fetchingElapsedSeconds)
             }
             return cachedPulseDescriptor(
-                cachedPulseWithRuntimeHealth(
-                    cachedPulse,
-                    detailFill: .inProgress(BackgroundDetailRefreshProgress(phase: .baseHoldings))
-                ).withRefreshAction(.inProgress),
+                cachedPulse.withRefreshAction(.inProgress),
                 rowsFirst: true,
                 rows: [
                     MenuRow(
@@ -281,7 +278,7 @@ public enum PDTLaunchMenu {
         case .notConnected:
             ("Not connected", "PDTBar reads your PDT portfolio read-only")
         case let .needsReconnect(_, cause):
-            ("Reconnect to PDT", reconnectDetail(cause))
+            ("Reconnect to PDT", sentenceCased(reconnectReason(cause)))
         case .subscriptionPaused:
             ("PDT access paused", "Your PDT subscription has ended. Renew it, then check again")
         case .keychainUnavailable(.missingEntitlement):
@@ -293,14 +290,20 @@ public enum PDTLaunchMenu {
         }
     }
 
-    private static func reconnectDetail(_ cause: PDTReconnectCause) -> String {
+    /// Why PDT rejected the connection, worded to follow "Reconnect needed: "
+    /// in Data Health or, sentence-cased, to stand alone on the reconnect screen.
+    static func reconnectReason(_ cause: PDTReconnectCause) -> String {
         switch cause {
-        case .signInExpired: "Your PDT sign-in has expired"
-        case .tokenExpired: "Your PDT token has expired"
+        case .signInExpired: "your PDT sign-in has expired"
+        case .tokenExpired: "your PDT token has expired"
         case .tokenRevoked: "PDTBar's access was revoked in PDT"
         case .tokenInvalid: "PDT no longer accepts this connection"
-        case .readAccessMissing: "This connection can't read your portfolio"
+        case .readAccessMissing: "this connection can't read your portfolio"
         }
+    }
+
+    private static func sentenceCased(_ text: String) -> String {
+        text.prefix(1).uppercased() + text.dropFirst()
     }
 
     private static func connectionDescriptor(
@@ -429,13 +432,9 @@ public enum PDTLaunchMenu {
         return descriptor
     }
 
-    public static func descriptorForBackgroundRefreshFailure(
-        cachedPulse: MenuDescriptor,
-        diagnostic: PDTDetailRefreshFailureDiagnostic? = nil
-    ) -> MenuDescriptor {
+    public static func descriptorForBackgroundRefreshFailure(cachedPulse: MenuDescriptor) -> MenuDescriptor {
         cachedPulseDescriptor(
-            cachedPulseWithRuntimeHealth(cachedPulse, detailFill: .failed, diagnostic: diagnostic, clearsDiagnostic: true)
-                .withRefreshAction(.available),
+            cachedPulse.withRefreshAction(.available),
             statusVisual: cachedPulse.statusVisual.withDimming(true),
             rowsFirst: true,
             rows: [
@@ -462,8 +461,7 @@ public enum PDTLaunchMenu {
         let statusCopy = progress.detail.map { "Syncing portfolio - \($0)" }
             ?? "Syncing portfolio - \(progress.phase.title)"
         return cachedPulseDescriptor(
-            cachedPulseWithRuntimeHealth(cachedPulse, detailFill: .inProgress(progress))
-                .withRefreshAction(.inProgress),
+            cachedPulse.withRefreshAction(.inProgress),
             statusVisual: cachedPulse.statusVisual.withStatusCopy(statusCopy),
             rowsFirst: true,
             rows: backgroundDetailProgressRows(progress, cachedSnapshotAsOf: cachedSnapshotAsOf)
@@ -472,8 +470,7 @@ public enum PDTLaunchMenu {
 
     public static func descriptorForBackgroundDetailDegraded(cachedPulse: MenuDescriptor) -> MenuDescriptor {
         cachedPulseDescriptor(
-            cachedPulseWithRuntimeHealth(cachedPulse, detailFill: .degraded)
-                .withRefreshAction(.available),
+            cachedPulse.withRefreshAction(.available),
             statusVisual: cachedPulse.statusVisual.withDimming(true),
             rowsFirst: true,
             rows: [
@@ -504,8 +501,6 @@ public enum PDTLaunchMenu {
         return "\(fallback) - working for \(formatElapsedSeconds(elapsedSeconds))"
     }
 
-
-
     private static func cachedPulseDescriptor(
         _ cachedPulse: MenuDescriptor,
         statusVisual: StatusVisualState? = nil,
@@ -526,190 +521,6 @@ public enum PDTLaunchMenu {
         )
         descriptor.portfolioValueProtectionState = cachedPulse.portfolioValueProtectionState
         return descriptor
-    }
-
-    private static func cachedPulseWithRuntimeHealth(
-        _ cachedPulse: MenuDescriptor,
-        claudeReadiness: DataHealthSourceStatus = .ready,
-        pdtMCPReadiness: DataHealthSourceStatus = .ready,
-        detailFill: DataHealthDetailFillInput,
-        diagnostic: PDTDetailRefreshFailureDiagnostic? = nil,
-        clearsDiagnostic: Bool = false
-    ) -> MenuDescriptor {
-        var descriptor = cachedPulse
-        let portfolioValueProtectionState = descriptor.portfolioValueProtectionState
-        let sourceDetail = runtimeDataHealthSourceDetail(claudeReadiness: claudeReadiness, pdtMCPReadiness: pdtMCPReadiness)
-        let detailFillDetail = runtimeDataHealthDetailFillDetail(detailFill)
-        let summaryDetail = runtimeDataHealthSummaryDetail(
-            detailFill,
-            claudeReadiness: claudeReadiness,
-            pdtMCPReadiness: pdtMCPReadiness
-        )
-        let diagnosticRow = runtimeDataHealthDiagnosticRow(for: diagnostic)
-            ?? (clearsDiagnostic ? MenuDescriptorRenderer.dataHealthDiagnosticRow(for: nil) : nil)
-
-        var replacedDataHealth = false
-        descriptor.sections = descriptor.sections.map { section in
-            guard section.id == "freshness" else {
-                return section
-            }
-            var section = section
-            section.rows = section.rows.map { row in
-                guard row.id == "dataHealth" else {
-                    return row
-                }
-                var row = row
-                replacedDataHealth = true
-                if let summaryDetail {
-                    row.detail = summaryDetail
-                }
-                row.children = row.children.map { child in
-                    var child = child
-                    if child.id == "dataHealth.source", let sourceDetail {
-                        child.detail = sourceDetail
-                    } else if child.id == "dataHealth.detailFill" {
-                        child.detail = detailFillDetail
-                    } else if child.id == "dataHealth.diagnostic", let diagnosticRow {
-                        child = diagnosticRow
-                    }
-                    return child
-                }
-                return row
-            }
-            if !replacedDataHealth {
-                var row = runtimeDataHealthRow(
-                    claudeReadiness: claudeReadiness,
-                    pdtMCPReadiness: pdtMCPReadiness,
-                    detailFill: detailFill,
-                    diagnostic: diagnostic
-                )
-                if let summaryDetail {
-                    row.detail = summaryDetail
-                }
-                section.rows.append(row)
-            }
-            return section
-        }
-        descriptor.portfolioValueProtectionState = portfolioValueProtectionState
-        return descriptor
-    }
-
-    private static func runtimeDataHealthRow(
-        claudeReadiness: DataHealthSourceStatus,
-        pdtMCPReadiness: DataHealthSourceStatus,
-        detailFill: DataHealthDetailFillInput,
-        diagnostic: PDTDetailRefreshFailureDiagnostic?
-    ) -> MenuRow {
-        let sourceReady = claudeReadiness == .ready && pdtMCPReadiness == .ready
-        let health = DataHealth.build(
-            DataHealthInput(
-                claudeReadiness: claudeReadiness,
-                pdtMCPReadiness: pdtMCPReadiness,
-                availableReadTools: sourceReady ? Set(PDTReadTools.requiredV1) : nil,
-                readOnlyPolicy: sourceReady ? .enforced : .unknown,
-                pulseSource: .cachedSnapshot,
-                lastSuccessfulCompleteFetchAsOf: nil,
-                cachedPulseAvailable: true,
-                detailFill: detailFill,
-                freshness: FreshnessSnapshot(
-                    status: .fresh,
-                    worstPriceAsOf: nil,
-                    stale: false,
-                    staleHoldingCount: 0,
-                    oldestPriceAsOf: nil,
-                    oldestRows: [],
-                    latestCompleteDetailFillAsOf: nil,
-                    sourceCaveats: []
-                ),
-                readState: nil,
-                diagnostic: diagnostic
-            )
-        )
-        var row = MenuDescriptorRenderer.dataHealthRow(for: health)
-        row.children.removeAll { $0.id == "dataHealth.readState" }
-        return row
-    }
-
-    private static func runtimeDataHealthDiagnosticRow(
-        for diagnostic: PDTDetailRefreshFailureDiagnostic?
-    ) -> MenuRow? {
-        guard let diagnostic else {
-            return nil
-        }
-        let health = DataHealth.build(
-            DataHealthInput(
-                claudeReadiness: .ready,
-                pdtMCPReadiness: .ready,
-                availableReadTools: Set(PDTReadTools.requiredV1),
-                readOnlyPolicy: .enforced,
-                pulseSource: .cachedSnapshot,
-                lastSuccessfulCompleteFetchAsOf: nil,
-                cachedPulseAvailable: true,
-                detailFill: .failed,
-                freshness: FreshnessSnapshot(worstPriceAsOf: nil, stale: false),
-                readState: nil,
-                diagnostic: diagnostic
-            )
-        )
-        return MenuDescriptorRenderer.dataHealthDiagnosticRow(for: health.diagnostic)
-    }
-
-    private static func runtimeDataHealthSourceDetail(
-        claudeReadiness: DataHealthSourceStatus,
-        pdtMCPReadiness: DataHealthSourceStatus
-    ) -> String? {
-        guard claudeReadiness != .ready || pdtMCPReadiness != .ready else {
-            return nil
-        }
-        return DataHealth.sourceSnapshot(
-            DataHealthRuntimeSourceState(
-                claudeReadiness: claudeReadiness,
-                pdtMCPReadiness: pdtMCPReadiness,
-                availableReadTools: nil,
-                readOnlyPolicy: .unknown
-            )
-        ).detail
-    }
-
-    private static func runtimeDataHealthDetailFillDetail(_ detailFill: DataHealthDetailFillInput) -> String {
-        switch detailFill {
-        case .notStarted:
-            return "Not started"
-        case .completed(let asOf):
-            return asOf.map { "Completed \($0)" } ?? "Completed"
-        case .degraded:
-            return "Degraded"
-        case .failed:
-            return "Failed"
-        case .inProgress(let progress):
-            if let completed = progress.completedUnitCount,
-               let total = progress.totalUnitCount
-            {
-                return "\(progress.phase.title) \(max(0, completed))/\(max(0, total))"
-            }
-            return progress.phase.title
-        }
-    }
-
-    private static func runtimeDataHealthSummaryDetail(
-        _ detailFill: DataHealthDetailFillInput,
-        claudeReadiness: DataHealthSourceStatus,
-        pdtMCPReadiness: DataHealthSourceStatus
-    ) -> String? {
-        if claudeReadiness == .checking || pdtMCPReadiness == .checking {
-            return "Checking"
-        }
-        if claudeReadiness != .ready || pdtMCPReadiness != .ready {
-            return "Needs attention"
-        }
-        switch detailFill {
-        case .degraded, .failed:
-            return "Needs attention"
-        case .inProgress:
-            return "Refreshing"
-        case .completed, .notStarted:
-            return nil
-        }
     }
 
     private static func refreshDetailsRow(id: String = "freshness.refreshDetails") -> MenuRow {
@@ -829,7 +640,7 @@ public enum PDTLaunchFetchResult: Equatable {
 
 public enum PDTLaunchBackgroundDetailRefreshResult: Equatable {
     case succeeded(PulseLifecycleResult, outcome: PDTBackgroundDetailRefreshOutcome)
-    case failed(PDTFetchFailure, diagnostic: PDTDetailRefreshFailureDiagnostic? = nil)
+    case failed(PDTFetchFailure, failure: PDTSyncFailure? = nil)
 }
 
 /// One connection operation (check, sign-in, pasted token, disconnect). Only
@@ -868,7 +679,7 @@ public final class PDTLaunchRuntime {
         case launchState(fetchingElapsedSeconds: Int?)
         case detailProgress(BackgroundDetailRefreshProgress)
         case detailDegraded
-        case detailFailed(PDTDetailRefreshFailureDiagnostic?)
+        case detailFailed(PDTSyncFailure?)
         case refreshed
     }
 
@@ -1017,12 +828,12 @@ public final class PDTLaunchRuntime {
             return currentUpdate()
         case .failed(.connection(let status), _):
             return apply(status)
-        case .failed(.unavailable, let diagnostic):
+        case .failed(.unavailable, let failure):
             guard currentPulse != nil else {
                 return update(state: .connected(.failed))
             }
             state = .connected(.failed)
-            screen = .detailFailed(diagnostic)
+            screen = .detailFailed(failure)
             return currentUpdate()
         }
     }
@@ -1096,34 +907,51 @@ public final class PDTLaunchRuntime {
     }
 
     private func descriptor() -> MenuDescriptor {
-        guard let pulse = currentPulse, case .connected = state else {
-            if case let .launchState(elapsed) = screen {
-                return PDTLaunchMenu.descriptor(
-                    for: state,
-                    cachedPulse: currentPulse?.descriptor,
-                    notice: notice,
-                    fetchingElapsedSeconds: elapsed
-                )
-            }
-            return PDTLaunchMenu.descriptor(for: state, cachedPulse: currentPulse?.descriptor, notice: notice)
+        // The only pulse menu this function may use: every screen that keeps a
+        // pulse shows Data Health as this run knows it, never the pulse's own guess.
+        guard let pulse = currentPulse else {
+            return PDTLaunchMenu.descriptor(for: state, notice: notice, fetchingElapsedSeconds: screenElapsedSeconds)
+        }
+        let pulseMenu = pulse.descriptor(in: healthRuntime())
+        guard case .connected = state else {
+            return PDTLaunchMenu.descriptor(for: state, cachedPulse: pulseMenu, notice: notice)
         }
         let descriptor: MenuDescriptor
         switch screen {
         case .launchState(let elapsed):
-            descriptor = PDTLaunchMenu.descriptor(for: state, cachedPulse: pulse.descriptor, fetchingElapsedSeconds: elapsed)
+            descriptor = PDTLaunchMenu.descriptor(for: state, cachedPulse: pulseMenu, fetchingElapsedSeconds: elapsed)
         case .detailProgress(let progress):
             descriptor = PDTLaunchMenu.descriptorForBackgroundDetailProgress(
-                cachedPulse: pulse.descriptor,
+                cachedPulse: pulseMenu,
                 progress: progress,
                 cachedSnapshotAsOf: pulse.model.asOf
             )
         case .detailDegraded:
-            descriptor = PDTLaunchMenu.descriptorForBackgroundDetailDegraded(cachedPulse: pulse.descriptor)
-        case .detailFailed(let diagnostic):
-            descriptor = PDTLaunchMenu.descriptorForBackgroundRefreshFailure(cachedPulse: pulse.descriptor, diagnostic: diagnostic)
+            descriptor = PDTLaunchMenu.descriptorForBackgroundDetailDegraded(cachedPulse: pulseMenu)
+        case .detailFailed:
+            descriptor = PDTLaunchMenu.descriptorForBackgroundRefreshFailure(cachedPulse: pulseMenu)
         case .refreshed:
-            descriptor = PDTLaunchMenu.descriptorWithRefreshDetailsAction(cachedPulse: pulse.descriptor)
+            descriptor = PDTLaunchMenu.descriptorWithRefreshDetailsAction(cachedPulse: pulseMenu)
         }
         return state.offersDisconnect ? descriptor.withDisconnectAction() : descriptor
+    }
+
+    private var screenElapsedSeconds: Int? {
+        if case let .launchState(elapsed) = screen {
+            return elapsed
+        }
+        return nil
+    }
+
+    private func healthRuntime() -> DataHealthRuntime {
+        let sync: DataHealthSync = switch screen {
+        case .detailProgress(let progress):
+            .running(progress)
+        case .detailFailed(let failure):
+            .failed(failure)
+        case .launchState, .detailDegraded, .refreshed:
+            state == .connected(.fetching) ? .running(BackgroundDetailRefreshProgress(phase: .baseHoldings)) : .idle
+        }
+        return DataHealthRuntime(access: DataHealthAccess(state), sync: sync)
     }
 }

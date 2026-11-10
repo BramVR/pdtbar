@@ -239,25 +239,10 @@ public enum FreshnessLedger {
 public enum DataHealthStatus: String, Codable, Equatable {
     case healthy
     case degraded
-}
-
-public enum DataHealthSourceStatus: String, Codable, Equatable, Sendable {
-    case ready
+    /// The connection is being checked. Set only by `DataHealth.snapshot(_:in:)`.
     case checking
-    case missing
-    case failed
-    case unknown
-}
-
-public enum DataHealthReadToolsStatus: String, Codable, Equatable {
-    case available
-    case missingRequired
-    case unknown
-}
-
-public enum DataHealthReadOnlyPolicyStatus: String, Codable, Equatable, Sendable {
-    case enforced
-    case unknown
+    /// A sync is running. Set only by `DataHealth.snapshot(_:in:)`.
+    case refreshing
 }
 
 public enum DataHealthDetailFillOutcome: String, Codable, Equatable {
@@ -301,121 +286,104 @@ private extension PriorSnapshotLoadStatus {
     }
 }
 
-/// What the runtime actually knows about the Claude/PDT source right now.
-/// Cached snapshots alone prove nothing about connectivity, read tools, or
-/// policy; only a live fetch through the connector verifies all of them.
-public struct DataHealthRuntimeSourceState: Equatable, Sendable {
-    public var claudeReadiness: DataHealthSourceStatus
-    public var pdtMCPReadiness: DataHealthSourceStatus
-    public var availableReadTools: Set<String>?
-    public var readOnlyPolicy: DataHealthReadOnlyPolicyStatus
+/// What PDTBar knows about its PDT connection. No secret, no identifier.
+public enum DataHealthAccess: Codable, Equatable, Sendable {
+    /// Nothing checked this session: all a pulse built from a saved copy can claim.
+    case unverified
+    /// Checking, signing in, or disconnecting.
+    case checking
+    case connected
+    case notConnected
+    /// The `401` causes and `403 INSUFFICIENT_SCOPE`.
+    case reconnect(PDTReconnectCause)
+    /// `403 API_ACCESS_PAUSED`.
+    case subscriptionPaused
+    case keychainUnavailable
 
-    public init(
-        claudeReadiness: DataHealthSourceStatus,
-        pdtMCPReadiness: DataHealthSourceStatus,
-        availableReadTools: Set<String>?,
-        readOnlyPolicy: DataHealthReadOnlyPolicyStatus
-    ) {
-        self.claudeReadiness = claudeReadiness
-        self.pdtMCPReadiness = pdtMCPReadiness
-        self.availableReadTools = availableReadTools
-        self.readOnlyPolicy = readOnlyPolicy
-    }
-
-    /// Facts proven by a live fetch through the Claude/PDT read-only connector.
-    public static let liveFetchVerified = DataHealthRuntimeSourceState(
-        claudeReadiness: .ready,
-        pdtMCPReadiness: .ready,
-        availableReadTools: Set(PDTReadTools.requiredV1),
-        readOnlyPolicy: .enforced
-    )
-
-    /// Nothing verified in this session; the honest state for cache-only pulses.
-    public static let unverified = DataHealthRuntimeSourceState(
-        claudeReadiness: .unknown,
-        pdtMCPReadiness: .unknown,
-        availableReadTools: nil,
-        readOnlyPolicy: .unknown
-    )
-
-    /// The source facts a pulse can truthfully assume from how it was built:
-    /// fetched/refreshed pulses just came through the live connector, while a
-    /// cached snapshot or an unknown source proves nothing about the current
-    /// connection, so optimistic facts are never the silent fallback.
-    public static func assumed(for pulseSource: PulseLifecycleSource?) -> DataHealthRuntimeSourceState {
+    /// A pulse fetched in this run just read PDT with the credential; a saved
+    /// copy proves nothing about the connection.
+    static func assumed(for pulseSource: PulseLifecycleSource?) -> DataHealthAccess {
         switch pulseSource {
         case .fetchedSnapshot, .refreshedSnapshot:
-            return .liveFetchVerified
+            .connected
         case .cachedSnapshot, nil:
-            return .unverified
+            .unverified
+        }
+    }
+
+    public init(_ state: PDTLaunchState) {
+        switch state {
+        case .checkingConnection, .connecting, .disconnecting:
+            self = .checking
+        case .notConnected:
+            self = .notConnected
+        case let .needsReconnect(_, cause):
+            self = .reconnect(cause)
+        case .subscriptionPaused:
+            self = .subscriptionPaused
+        case .keychainUnavailable:
+            self = .keychainUnavailable
+        case .connected:
+            self = .connected
         }
     }
 }
 
+/// What only the running app knows about Data Health. Everything else comes
+/// from the pulse.
+public struct DataHealthRuntime: Equatable, Sendable {
+    public var access: DataHealthAccess
+    public var sync: DataHealthSync
+
+    public init(access: DataHealthAccess, sync: DataHealthSync = .idle) {
+        self.access = access
+        self.sync = sync
+    }
+}
+
+public enum DataHealthSync: Equatable, Sendable {
+    /// The pulse's own detail fill and failure stand.
+    case idle
+    /// The pulse's last failure stays visible until the sync ends.
+    case running(BackgroundDetailRefreshProgress)
+    /// Replaces the pulse's failure; nil clears it.
+    case failed(PDTSyncFailure?)
+}
+
+/// What a pulse knows about its own health when it is built. `default` is the
+/// only way to make one, so every pulse derives access from how it was built.
 public struct DataHealthInput: Equatable {
-    public var claudeReadiness: DataHealthSourceStatus
-    public var pdtMCPReadiness: DataHealthSourceStatus
-    public var availableReadTools: Set<String>?
-    public var readOnlyPolicy: DataHealthReadOnlyPolicyStatus
+    public var access: DataHealthAccess
     public var pulseSource: PulseLifecycleSource?
-    public var lastSuccessfulCompleteFetchAsOf: String?
-    public var cachedPulseAvailable: Bool
+    /// `asOf` of the committed snapshot: the last sync whose base holdings succeeded.
+    public var lastSyncAsOf: String?
+    /// The last sync that also filled every detail.
+    public var lastCompleteSyncAsOf: String?
     public var priorSnapshotStatus: PriorSnapshotHealthStatus?
     public var detailFill: DataHealthDetailFillInput
     public var freshness: FreshnessSnapshot
     public var readState: PulseReadState?
-    public var diagnostic: PDTDetailRefreshFailureDiagnostic?
-
-    public init(
-        claudeReadiness: DataHealthSourceStatus,
-        pdtMCPReadiness: DataHealthSourceStatus,
-        availableReadTools: Set<String>?,
-        readOnlyPolicy: DataHealthReadOnlyPolicyStatus,
-        pulseSource: PulseLifecycleSource?,
-        lastSuccessfulCompleteFetchAsOf: String?,
-        cachedPulseAvailable: Bool,
-        priorSnapshotStatus: PriorSnapshotHealthStatus? = nil,
-        detailFill: DataHealthDetailFillInput,
-        freshness: FreshnessSnapshot,
-        readState: PulseReadState?,
-        diagnostic: PDTDetailRefreshFailureDiagnostic? = nil
-    ) {
-        self.claudeReadiness = claudeReadiness
-        self.pdtMCPReadiness = pdtMCPReadiness
-        self.availableReadTools = availableReadTools
-        self.readOnlyPolicy = readOnlyPolicy
-        self.pulseSource = pulseSource
-        self.lastSuccessfulCompleteFetchAsOf = lastSuccessfulCompleteFetchAsOf
-        self.cachedPulseAvailable = cachedPulseAvailable
-        self.priorSnapshotStatus = priorSnapshotStatus
-        self.detailFill = detailFill
-        self.freshness = freshness
-        self.readState = readState
-        self.diagnostic = diagnostic
-    }
+    public var lastFailure: PDTSyncFailure?
 
     public static func `default`(
         freshness: FreshnessSnapshot,
         pulseSource: PulseLifecycleSource? = nil,
+        snapshotAsOf: String? = nil,
         readState: PulseReadState? = nil,
         detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome? = nil,
-        diagnostic: PDTDetailRefreshFailureDiagnostic? = nil,
+        lastSyncFailure: PDTSyncFailure? = nil,
         priorSnapshotLoadStatus: PriorSnapshotLoadStatus = .notRequested
     ) -> DataHealthInput {
-        let runtimeSourceState = DataHealthRuntimeSourceState.assumed(for: pulseSource)
-        return DataHealthInput(
-            claudeReadiness: runtimeSourceState.claudeReadiness,
-            pdtMCPReadiness: runtimeSourceState.pdtMCPReadiness,
-            availableReadTools: runtimeSourceState.availableReadTools,
-            readOnlyPolicy: runtimeSourceState.readOnlyPolicy,
+        DataHealthInput(
+            access: .assumed(for: pulseSource),
             pulseSource: pulseSource,
-            lastSuccessfulCompleteFetchAsOf: freshness.latestCompleteDetailFillAsOf,
-            cachedPulseAvailable: pulseSource != nil,
+            lastSyncAsOf: snapshotAsOf,
+            lastCompleteSyncAsOf: freshness.latestCompleteDetailFillAsOf,
             priorSnapshotStatus: priorSnapshotLoadStatus.healthStatus,
             detailFill: detailFillInput(outcome: detailRefreshOutcome, freshness: freshness),
             freshness: freshness,
             readState: readState,
-            diagnostic: diagnostic
+            lastFailure: lastSyncFailure
         )
     }
 
@@ -438,20 +406,19 @@ public struct DataHealthInput: Equatable {
 }
 
 public struct DataHealthSourceSnapshot: Codable, Equatable {
-    public var claude: DataHealthSourceStatus
-    public var pdtMCP: DataHealthSourceStatus
-    public var readTools: DataHealthReadToolsStatus
-    public var requiredReadToolCount: Int
-    public var availableReadToolCount: Int?
-    public var missingReadTools: [String]
-    public var readOnlyPolicy: DataHealthReadOnlyPolicyStatus
+    /// Nil when the pulse did not come through a fetch or the saved copy.
+    public var pulse: PulseLifecycleSource?
+    public var detail: String
+}
+
+public struct DataHealthAccessSnapshot: Codable, Equatable {
+    public var state: DataHealthAccess
     public var detail: String
 }
 
 public struct DataHealthCacheSnapshot: Codable, Equatable {
-    public var pulseSource: PulseLifecycleSource?
-    public var cachedPulseAvailable: Bool
-    public var lastSuccessfulCompleteFetchAsOf: String?
+    public var lastSyncAsOf: String?
+    public var lastCompleteSyncAsOf: String?
     public var priorSnapshotStatus: PriorSnapshotHealthStatus?
     public var summary: String
 }
@@ -477,279 +444,231 @@ public struct DataHealthReadStateSnapshot: Codable, Equatable {
     public var detail: String
 }
 
-public struct DataHealthDiagnosticSummary: Codable, Equatable {
-    public var available: Bool
-    public var detail: String
-    public var copyText: String
-}
-
 public struct DataHealthSnapshot: Codable, Equatable {
     public var status: DataHealthStatus
     public var source: DataHealthSourceSnapshot
+    public var access: DataHealthAccessSnapshot
     public var cache: DataHealthCacheSnapshot
-    public var detailFill: DataHealthDetailFillSnapshot
     public var freshness: DataHealthFreshnessSummary
+    public var detailFill: DataHealthDetailFillSnapshot
     public var readState: DataHealthReadStateSnapshot
-    public var diagnostic: DataHealthDiagnosticSummary?
+    public var lastFailure: PDTSyncFailure?
 }
 
 public enum DataHealth {
     public static func build(_ input: DataHealthInput) -> DataHealthSnapshot {
-        let source = sourceSnapshot(
-            DataHealthRuntimeSourceState(
-                claudeReadiness: input.claudeReadiness,
-                pdtMCPReadiness: input.pdtMCPReadiness,
-                availableReadTools: input.availableReadTools,
-                readOnlyPolicy: input.readOnlyPolicy
-            )
-        )
-        let cache = DataHealthCacheSnapshot(
-            pulseSource: input.pulseSource,
-            cachedPulseAvailable: input.cachedPulseAvailable,
-            lastSuccessfulCompleteFetchAsOf: input.lastSuccessfulCompleteFetchAsOf,
-            priorSnapshotStatus: input.priorSnapshotStatus,
-            summary: cacheSummary(
-                cachedPulseAvailable: input.cachedPulseAvailable,
-                lastSuccessfulCompleteFetchAsOf: input.lastSuccessfulCompleteFetchAsOf
-            )
-        )
-        let detailFill = detailFillSnapshot(input.detailFill)
-        let freshness = DataHealthFreshnessSummary(
-            status: input.freshness.status,
-            staleHoldingCount: input.freshness.staleHoldingCount,
-            oldestPriceAsOf: input.freshness.oldestPriceAsOf,
-            detail: freshnessDetail(input.freshness)
-        )
-        let readState = DataHealthReadStateSnapshot(
-            readFingerprintCount: input.readState?.readFingerprints.count ?? 0,
-            detail: "\(input.readState?.readFingerprints.count ?? 0) read"
-        )
-        let diagnostic = input.diagnostic.map(diagnosticSummary)
-        return DataHealthSnapshot(
-            status: healthStatus(
-                source: source,
-                detailFill: detailFill,
-                freshness: freshness,
-                diagnostic: diagnostic
+        var health = DataHealthSnapshot(
+            status: .degraded,
+            source: DataHealthSourceSnapshot(
+                pulse: input.pulseSource,
+                detail: sourceDetail(input.pulseSource, lastSyncAsOf: input.lastSyncAsOf)
             ),
-            source: source,
-            cache: cache,
-            detailFill: detailFill,
-            freshness: freshness,
-            readState: readState,
-            diagnostic: diagnostic
+            access: accessSnapshot(input.access),
+            cache: DataHealthCacheSnapshot(
+                lastSyncAsOf: input.lastSyncAsOf,
+                lastCompleteSyncAsOf: input.lastCompleteSyncAsOf,
+                priorSnapshotStatus: input.priorSnapshotStatus,
+                summary: cacheSummary(lastSyncAsOf: input.lastSyncAsOf, lastCompleteSyncAsOf: input.lastCompleteSyncAsOf)
+            ),
+            freshness: DataHealthFreshnessSummary(
+                status: input.freshness.status,
+                staleHoldingCount: input.freshness.staleHoldingCount,
+                oldestPriceAsOf: input.freshness.oldestPriceAsOf,
+                detail: freshnessDetail(input.freshness)
+            ),
+            detailFill: detailFillSnapshot(input.detailFill),
+            readState: DataHealthReadStateSnapshot(
+                readFingerprintCount: input.readState?.readFingerprints.count ?? 0,
+                detail: "\(input.readState?.readFingerprints.count ?? 0) read"
+            ),
+            lastFailure: input.lastFailure
         )
+        health.status = status(of: health)
+        return health
     }
 
-    /// Rebuilds the source facts of an already-built health snapshot from what
-    /// the runtime currently knows, then recomputes the overall status. Used
-    /// when a cached pulse is republished after the launch flow has learned
-    /// real Claude/PDT readiness.
-    public static func applyingRuntimeSourceState(
-        _ state: DataHealthRuntimeSourceState,
-        to snapshot: DataHealthSnapshot
-    ) -> DataHealthSnapshot {
-        var snapshot = snapshot
-        snapshot.source = sourceSnapshot(state)
-        snapshot.status = healthStatus(
-            source: snapshot.source,
-            detailFill: snapshot.detailFill,
-            freshness: snapshot.freshness,
-            diagnostic: snapshot.diagnostic
-        )
-        return snapshot
-    }
-
-    static func sourceSnapshot(_ state: DataHealthRuntimeSourceState) -> DataHealthSourceSnapshot {
-        let requiredTools = PDTReadTools.requiredV1
-        let missingTools = state.availableReadTools.map { PDTReadTools.missingRequiredV1Tools(in: $0) } ?? []
-        let readToolsStatus: DataHealthReadToolsStatus
-        if state.availableReadTools == nil {
-            readToolsStatus = .unknown
-        } else if missingTools.isEmpty {
-            readToolsStatus = .available
-        } else {
-            readToolsStatus = .missingRequired
+    /// The pulse's health as the running app sees it. Replaces `access`, and
+    /// `detailFill` and `lastFailure` per `sync`. Source, cache, freshness and
+    /// read state stay the pulse's own: a sync that did not commit a snapshot
+    /// cannot move a date.
+    public static func snapshot(_ pulse: DataHealthSnapshot, in runtime: DataHealthRuntime) -> DataHealthSnapshot {
+        var health = pulse
+        health.access = accessSnapshot(runtime.access)
+        switch runtime.sync {
+        case .idle:
+            break
+        case let .running(progress):
+            health.detailFill = detailFillSnapshot(.inProgress(progress))
+        case let .failed(failure):
+            health.detailFill = detailFillSnapshot(.failed)
+            health.lastFailure = failure
         }
-        return DataHealthSourceSnapshot(
-            claude: state.claudeReadiness,
-            pdtMCP: state.pdtMCPReadiness,
-            readTools: readToolsStatus,
-            requiredReadToolCount: requiredTools.count,
-            availableReadToolCount: state.availableReadTools?.intersection(requiredTools).count,
-            missingReadTools: missingTools,
-            readOnlyPolicy: state.readOnlyPolicy,
-            detail: sourceDetail(
-                claude: state.claudeReadiness,
-                pdtMCP: state.pdtMCPReadiness,
-                readTools: readToolsStatus,
-                availableCount: state.availableReadTools?.intersection(requiredTools).count,
-                requiredCount: requiredTools.count,
-                missingTools: missingTools,
-                readOnlyPolicy: state.readOnlyPolicy
-            )
-        )
+        health.status = status(of: health)
+        return health
     }
 
-    private static func healthStatus(
-        source: DataHealthSourceSnapshot,
-        detailFill: DataHealthDetailFillSnapshot,
-        freshness: DataHealthFreshnessSummary,
-        diagnostic: DataHealthDiagnosticSummary?
-    ) -> DataHealthStatus {
-        if source.claude != .ready
-            || source.pdtMCP != .ready
-            || source.readTools != .available
-            || source.readOnlyPolicy != .enforced
-            || detailFill.outcome == .degraded
-            || detailFill.outcome == .failed
-            || freshness.status != .fresh
-            || diagnostic != nil
-        {
-            return .degraded
+    /// "Copy diagnostics" text, or nil when no failure is recorded. Built only
+    /// from closed enums, Ints and a validated trace id: it has no dates and
+    /// reads none of the snapshot's `detail` strings, which can carry PDT text.
+    static func diagnosticsText(for health: DataHealthSnapshot) -> String? {
+        guard let failure = health.lastFailure else {
+            return nil
         }
-        return .healthy
+        return ([
+            "PDTBar data health",
+            "source: PDT API, read-only",
+            "shown: \(shownLabel(health.source.pulse))",
+            "access: \(accessLabel(health.access.state))",
+            "detail fill: \(detailFillLabel(health.detailFill.outcome))",
+        ] + failure.reportLines).joined(separator: "\n")
     }
 
-    private static func sourceDetail(
-        claude: DataHealthSourceStatus,
-        pdtMCP: DataHealthSourceStatus,
-        readTools: DataHealthReadToolsStatus,
-        availableCount: Int?,
-        requiredCount: Int,
-        missingTools: [String],
-        readOnlyPolicy: DataHealthReadOnlyPolicyStatus
-    ) -> String {
-        let toolCopy: String
-        switch readTools {
-        case .available:
-            toolCopy = "\(availableCount ?? requiredCount)/\(requiredCount) read tools"
-        case .missingRequired:
-            toolCopy = "\(availableCount ?? 0)/\(requiredCount) read tools; missing \(missingTools.joined(separator: ", "))"
-        case .unknown:
-            toolCopy = "read tools unknown"
-        }
-        return [
-            "Claude \(statusCopy(claude))",
-            "PDT \(statusCopy(pdtMCP))",
-            toolCopy,
-            readOnlyPolicy == .enforced ? "read-only" : "policy unknown",
-        ].joined(separator: "; ")
-    }
-
-    private static func statusCopy(_ status: DataHealthSourceStatus) -> String {
-        switch status {
-        case .ready:
-            return "ready"
+    /// A saved copy is never healthy, whatever its prices say: nothing in this
+    /// run has read PDT yet.
+    private static func status(of health: DataHealthSnapshot) -> DataHealthStatus {
+        switch health.access.state {
         case .checking:
-            return "checking"
-        case .missing:
-            return "missing"
-        case .failed:
-            return "failed"
-        case .unknown:
-            return "unknown"
+            return .checking
+        case .notConnected, .reconnect, .subscriptionPaused, .keychainUnavailable:
+            return .degraded
+        case .unverified, .connected:
+            break
+        }
+        if health.detailFill.outcome == .inProgress {
+            return .refreshing
+        }
+        let healthy = health.access.state == .connected
+            && health.source.pulse != nil
+            && health.source.pulse != .cachedSnapshot
+            && health.detailFill.outcome != .degraded
+            && health.detailFill.outcome != .failed
+            && health.freshness.status == .fresh
+            && health.lastFailure == nil
+        return healthy ? .healthy : .degraded
+    }
+
+    private static func sourceDetail(_ pulse: PulseLifecycleSource?, lastSyncAsOf: String?) -> String {
+        switch pulse {
+        case .fetchedSnapshot, .refreshedSnapshot:
+            "PDT, read-only; fetched this session"
+        case .cachedSnapshot:
+            "PDT, read-only; saved copy" + (lastSyncAsOf.map { " from \($0)" } ?? "")
+        case nil:
+            "PDT, read-only; not fetched this session"
         }
     }
 
-    private static func cacheSummary(
-        cachedPulseAvailable: Bool,
-        lastSuccessfulCompleteFetchAsOf: String?
-    ) -> String {
-        guard cachedPulseAvailable else {
-            return "No cached pulse"
+    private static func accessSnapshot(_ state: DataHealthAccess) -> DataHealthAccessSnapshot {
+        let detail = switch state {
+        case .unverified:
+            "Not checked this session"
+        case .checking:
+            "Checking"
+        case .connected:
+            "Connected"
+        case .notConnected:
+            "Not connected"
+        case let .reconnect(cause):
+            "Reconnect needed: \(PDTLaunchMenu.reconnectReason(cause))"
+        case .subscriptionPaused:
+            "Paused: your PDT subscription has ended"
+        case .keychainUnavailable:
+            "Keychain unavailable"
         }
-        guard let lastSuccessfulCompleteFetchAsOf else {
-            return "Cached pulse available"
+        return DataHealthAccessSnapshot(state: state, detail: detail)
+    }
+
+    private static func cacheSummary(lastSyncAsOf: String?, lastCompleteSyncAsOf: String?) -> String {
+        guard let lastSyncAsOf else {
+            return "No saved portfolio"
         }
-        return "Last complete \(lastSuccessfulCompleteFetchAsOf)"
+        guard let lastCompleteSyncAsOf, lastCompleteSyncAsOf != lastSyncAsOf else {
+            return "Last sync \(lastSyncAsOf)"
+        }
+        return "Last sync \(lastSyncAsOf); last complete \(lastCompleteSyncAsOf)"
     }
 
     private static func detailFillSnapshot(_ input: DataHealthDetailFillInput) -> DataHealthDetailFillSnapshot {
+        var snapshot = DataHealthDetailFillSnapshot(
+            outcome: .notStarted,
+            phase: nil,
+            completedUnitCount: nil,
+            totalUnitCount: nil,
+            asOf: nil,
+            detail: "Not started"
+        )
         switch input {
         case .notStarted:
-            return DataHealthDetailFillSnapshot(
-                outcome: .notStarted,
-                phase: nil,
-                completedUnitCount: nil,
-                totalUnitCount: nil,
-                asOf: nil,
-                detail: "Not started"
-            )
-        case .completed(let asOf):
-            return DataHealthDetailFillSnapshot(
-                outcome: .completed,
-                phase: nil,
-                completedUnitCount: nil,
-                totalUnitCount: nil,
-                asOf: asOf,
-                detail: asOf.map { "Completed \($0)" } ?? "Completed"
-            )
+            break
+        case let .completed(asOf):
+            snapshot.outcome = .completed
+            snapshot.asOf = asOf
+            snapshot.detail = asOf.map { "Completed \($0)" } ?? "Completed"
         case .degraded:
-            return DataHealthDetailFillSnapshot(
-                outcome: .degraded,
-                phase: nil,
-                completedUnitCount: nil,
-                totalUnitCount: nil,
-                asOf: nil,
-                detail: "Degraded"
-            )
+            snapshot.outcome = .degraded
+            snapshot.detail = "Degraded"
         case .failed:
-            return DataHealthDetailFillSnapshot(
-                outcome: .failed,
-                phase: nil,
-                completedUnitCount: nil,
-                totalUnitCount: nil,
-                asOf: nil,
-                detail: "Failed"
-            )
-        case .inProgress(let progress):
-            let progressDetail: String
-            if let completed = progress.completedUnitCount,
-               let total = progress.totalUnitCount
-            {
-                progressDetail = "\(progress.phase.title) \(max(0, completed))/\(max(0, total))"
+            snapshot.outcome = .failed
+            snapshot.detail = "Failed"
+        case let .inProgress(progress):
+            snapshot.outcome = .inProgress
+            snapshot.phase = progress.phase
+            snapshot.completedUnitCount = progress.completedUnitCount
+            snapshot.totalUnitCount = progress.totalUnitCount
+            if let completed = progress.completedUnitCount, let total = progress.totalUnitCount {
+                snapshot.detail = "\(progress.phase.title) \(max(0, completed))/\(max(0, total))"
             } else {
-                progressDetail = progress.phase.title
+                snapshot.detail = progress.phase.title
             }
-            return DataHealthDetailFillSnapshot(
-                outcome: .inProgress,
-                phase: progress.phase,
-                completedUnitCount: progress.completedUnitCount,
-                totalUnitCount: progress.totalUnitCount,
-                asOf: nil,
-                detail: progressDetail
-            )
         }
+        return snapshot
     }
 
+    /// `partial` means the detail fill is incomplete, which is the Detail fill
+    /// row's fact; the prices themselves are current.
     private static func freshnessDetail(_ freshness: FreshnessSnapshot) -> String {
+        let oldest = freshness.oldestPriceAsOf.map { "; oldest \($0)" } ?? ""
         switch freshness.status {
-        case .fresh:
-            return freshness.oldestPriceAsOf.map { "Fresh; oldest \($0)" } ?? "Fresh"
+        case .fresh, .partial:
+            return "Current\(oldest)"
         case .stale:
-            return "\(freshness.staleHoldingCount) stale"
-        case .partial:
-            return freshness.oldestPriceAsOf.map { "Partial; oldest \($0)" } ?? "Partial"
+            return "\(freshness.staleHoldingCount) stale\(oldest)"
         case .unknown:
             return "Unknown"
         }
     }
 
-    private static func diagnosticSummary(_ diagnostic: PDTDetailRefreshFailureDiagnostic) -> DataHealthDiagnosticSummary {
-        let argumentKeys = diagnostic.argumentShape.joined(separator: ",")
-        let copyText = [
-            "PDTBar data health",
-            "tool: \(diagnostic.toolName)",
-            "phase: \(diagnostic.phase.rawValue)",
-            "category: \(diagnostic.category.rawValue)",
-            "attempts: \(diagnostic.attemptCount)",
-            "argument_keys: \(argumentKeys)",
-        ].joined(separator: "\n")
-        return DataHealthDiagnosticSummary(
-            available: true,
-            detail: "\(diagnostic.toolName); \(diagnostic.phase.rawValue); \(diagnostic.category.rawValue)",
-            copyText: copyText
-        )
+    private static func shownLabel(_ pulse: PulseLifecycleSource?) -> String {
+        switch pulse {
+        case .fetchedSnapshot, .refreshedSnapshot: "fetched this session"
+        case .cachedSnapshot: "saved copy"
+        case nil: "not fetched this session"
+        }
+    }
+
+    private static func accessLabel(_ state: DataHealthAccess) -> String {
+        switch state {
+        case .unverified: "not checked"
+        case .checking: "checking"
+        case .connected: "connected"
+        case .notConnected: "not connected"
+        case .reconnect(.signInExpired): "reconnect needed (sign-in expired)"
+        case .reconnect(.tokenExpired): "reconnect needed (token expired)"
+        case .reconnect(.tokenRevoked): "reconnect needed (token revoked)"
+        case .reconnect(.tokenInvalid): "reconnect needed (token rejected)"
+        case .reconnect(.readAccessMissing): "reconnect needed (read access missing)"
+        case .subscriptionPaused: "paused"
+        case .keychainUnavailable: "keychain unavailable"
+        }
+    }
+
+    private static func detailFillLabel(_ outcome: DataHealthDetailFillOutcome) -> String {
+        switch outcome {
+        case .notStarted: "not started"
+        case .inProgress: "in progress"
+        case .completed: "completed"
+        case .degraded: "degraded"
+        case .failed: "failed"
+        }
     }
 }

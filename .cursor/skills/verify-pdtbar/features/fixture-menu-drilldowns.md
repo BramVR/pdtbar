@@ -49,3 +49,4 @@ The image must show the Concentration Stack icon in its highlighted state and th
 - Fixtures with a prior snapshot (`big-mover.json`) seed it only through `real-user-pulse`. A plain `verify_pdtbar.sh launch` has no prior, so big-mover deltas may not show.
 - `fixture-proof` and `menu-polish-proof` render descriptors to SVG. They are not real menu pixels and must not stand as the only UI proof.
 - A fixture launch without `--snapshot-dir` writes to a temp dir. Always go through `verify_pdtbar.sh`.
+- Data health is hidden while healthy, so a fixture with current prices shows no Data health row. When shown, its rows are Source, Access, Cache, Prices, Detail fill, Read state, and Diagnostics, and they describe PDT API access. To see the failure rows and the `Copy diagnostics` text without a launch, read `failedSyncs` in the proof `swift run pdtbar-smoke scripted-api-snapshot --artifacts "$RUN/evidence"` writes.

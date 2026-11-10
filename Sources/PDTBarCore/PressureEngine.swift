@@ -144,6 +144,7 @@ public enum PressureEngine {
                 dataHealth: DataHealth.build(
                     DataHealthInput.default(
                         freshness: freshness,
+                        snapshotAsOf: snapshot.asOf,
                         readState: readState,
                         detailRefreshOutcome: effectiveDetailRefreshOutcome
                     )

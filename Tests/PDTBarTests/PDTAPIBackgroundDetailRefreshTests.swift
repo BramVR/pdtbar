@@ -23,7 +23,7 @@ struct PDTAPIBackgroundDetailRefreshTests {
         ])
         #expect(transport.requests.allSatisfy { $0.httpMethod == "GET" && $0.url?.host == "api.portfoliodividendtracker.com" })
         #expect(result.outcome == .completed)
-        #expect(result.diagnostics.isEmpty)
+        #expect(result.failures.isEmpty)
         #expect(recorder.phases == BackgroundDetailRefreshPhase.allCases)
 
         let saved = try #require(try store.loadPriorSnapshotResult().snapshot)
@@ -37,10 +37,10 @@ struct PDTAPIBackgroundDetailRefreshTests {
         #expect(saved.incomeEvents.allSatisfy { $0.quoteId != nil })
         #expect(Set(saved.priceSeries.map(\.quoteId)) == [9001, 9004])
         #expect(saved.performance == nil)
-        #expect(try store.loadLastDetailRefreshDiagnostic() == nil)
+        #expect(store.lastSyncFailure() == nil)
     }
 
-    @Test("A failed required base throws, keeps the last good snapshot, and records the diagnostic")
+    @Test("A failed required base throws, keeps the last good snapshot, and records the failure")
     func baseFailureKeepsLastGoodSnapshot() throws {
         let store = try seededStore()
         defer { try? FileManager.default.removeItem(at: store.directory) }
@@ -52,10 +52,27 @@ struct PDTAPIBackgroundDetailRefreshTests {
 
         #expect(transport.requests.count == 1)
         #expect(try store.loadPriorSnapshotResult().snapshot?.asOf == seededAsOf)
-        let diagnostic = try #require(try store.loadLastDetailRefreshDiagnostic())
-        #expect(diagnostic.phase == .baseHoldings)
-        #expect(diagnostic.toolName == "portfolio/holdings")
-        #expect(diagnostic.category == .transientFailure)
+        #expect(store.lastSyncFailure() == PDTSyncFailure(
+            phase: .baseHoldings,
+            endpoint: .holdings,
+            kind: .server(status: 503),
+            requestCount: 1
+        ))
+    }
+
+    @Test("A refresh that completes clears the failure an earlier refresh recorded")
+    func completedRefreshClearsEarlierFailure() throws {
+        let store = try seededStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        _ = try? refresh(ScriptedPDTHTTPTransport([apiError(503, "SERVICE_UNAVAILABLE")]), store: store)
+            .refresh(cancellation: nil, progress: { _ in })
+        #expect(store.lastSyncFailure() != nil)
+
+        let result = try refresh(ScriptedPDTHTTPTransport(try fullReplies()), store: store)
+            .refresh(cancellation: nil, progress: { _ in })
+
+        #expect(result.outcome == .completed)
+        #expect(store.lastSyncFailure() == nil)
     }
 
     @Test("A retried base failure persists the number of requests actually sent")
@@ -69,7 +86,7 @@ struct PDTAPIBackgroundDetailRefreshTests {
         }
 
         #expect(transport.requests.count == 3)
-        #expect(try store.loadLastDetailRefreshDiagnostic()?.attemptCount == 3)
+        #expect(store.lastSyncFailure()?.requestCount == 3)
     }
 
     @Test("A paged optional facet that fails after retries persists every request it sent")
@@ -85,8 +102,8 @@ struct PDTAPIBackgroundDetailRefreshTests {
 
         let calendarRequests = transport.requests.filter { $0.url!.path == "/v1/calendar-events" }.count
         #expect(calendarRequests == 4)
-        #expect(result.diagnostics.map(\.attemptCount) == [calendarRequests])
-        #expect(try store.loadLastDetailRefreshDiagnostic()?.attemptCount == calendarRequests)
+        #expect(result.failures.map(\.requestCount) == [calendarRequests])
+        #expect(store.lastSyncFailure()?.requestCount == calendarRequests)
     }
 
     @Test("A failed optional facet keeps its last good value and degrades the outcome")
@@ -99,28 +116,34 @@ struct PDTAPIBackgroundDetailRefreshTests {
         let result = try refresh(ScriptedPDTHTTPTransport(replies), store: store).refresh(cancellation: nil, progress: { _ in })
 
         #expect(result.outcome == .degraded)
-        #expect(result.diagnostics.map(\.phase) == [.allocation])
+        #expect(result.failures.map(\.phase) == [.allocation])
         let saved = try #require(try store.loadPriorSnapshotResult().snapshot)
         #expect(saved.asOf == "2026-06-22")
         #expect(saved.sectors.map(\.name) == ["last-good"])
         #expect(saved.xRayHoldings?.count == 3)
         #expect(saved.latestDetailFillOutcome == .degraded)
         #expect(saved.latestCompleteDetailFillAsOf == seededAsOf)
-        #expect(try store.loadLastDetailRefreshDiagnostic()?.toolName == "portfolio/distributions")
+        #expect(store.lastSyncFailure()?.endpoint == .distributions)
     }
 
-    @Test("A rate limit longer than the retry budget degrades the facet instead of stalling")
-    func longRateLimitDegrades() throws {
+    @Test("A rate limit longer than the retry budget ends the sync instead of stalling or asking PDT again")
+    func longRateLimitEndsSync() throws {
         let store = try seededStore { $0.xRayHoldings = [XRayHoldingSummary(weight: 0.42)] }
         defer { try? FileManager.default.removeItem(at: store.directory) }
+        let seeded = try #require(try store.loadPriorSnapshotResult().snapshot)
         var replies = try fullReplies()
         replies.replaceSubrange(2...3, with: [rateLimited(retryAfter: "120")])
+        let transport = ScriptedPDTHTTPTransport(replies)
 
-        let result = try refresh(ScriptedPDTHTTPTransport(replies), store: store).refresh(cancellation: nil, progress: { _ in })
+        let result = try refresh(transport, store: store, maxAttempts: 3).refresh(cancellation: nil, progress: { _ in })
 
+        #expect(transport.requests.map { $0.url!.path } == ["/v1/portfolio/holdings", "/v1/portfolio/distributions", "/v1/x-ray"])
         #expect(result.outcome == .degraded)
-        #expect(result.diagnostics.map(\.category) == [.transientFailure])
-        #expect(try store.loadPriorSnapshotResult().snapshot?.xRayHoldings?.map(\.weight) == [0.42])
+        #expect(result.failures.map(\.kind) == [.rateLimited(retryAfterSeconds: 120)])
+        let saved = try #require(try store.loadPriorSnapshotResult().snapshot)
+        #expect(saved.xRayHoldings?.map(\.weight) == [0.42])
+        #expect(saved.incomeEvents == seeded.incomeEvents)
+        #expect(saved.priceSeries == seeded.priceSeries)
     }
 
     @Test("A short rate limit is retried and the refresh completes")
@@ -149,7 +172,7 @@ struct PDTAPIBackgroundDetailRefreshTests {
 
         #expect(transport.requests.map { $0.url!.path } == ["/v1/portfolio/holdings", "/v1/portfolio/distributions"])
         #expect(result.outcome == .degraded)
-        #expect(result.diagnostics.map(\.category) == [.setupUnavailable])
+        #expect(result.failures.map(\.kind) == [.reconnect])
         let saved = try #require(try store.loadPriorSnapshotResult().snapshot)
         #expect(saved.xRayHoldings == seeded.xRayHoldings)
         #expect(saved.incomeEvents == seeded.incomeEvents)
@@ -174,8 +197,8 @@ struct PDTAPIBackgroundDetailRefreshTests {
 
         #expect(transport.requests.filter { $0.url!.path == "/v1/prices/batch" }.count == 1)
         #expect(result.outcome == .degraded)
-        #expect(result.diagnostics.map(\.phase) == [.priceHistory])
-        #expect(result.diagnostics.map(\.category) == [.setupUnavailable])
+        #expect(result.failures.map(\.phase) == [.priceHistory])
+        #expect(result.failures.map(\.kind) == [.reconnect])
         let saved = try #require(try store.loadPriorSnapshotResult().snapshot)
         #expect(saved.asOf == "2026-06-22")
         #expect(Set(saved.priceSeries.map(\.quoteId)) == [1, 51])
@@ -227,7 +250,7 @@ struct PDTAPIBackgroundDetailRefreshTests {
         let result = try refresh(ScriptedPDTHTTPTransport(replies), store: store).refresh(cancellation: nil, progress: { _ in })
 
         #expect(result.outcome == .degraded)
-        #expect(result.diagnostics.map(\.phase) == [.income])
+        #expect(result.failures.map(\.phase) == [.income])
         #expect(try store.loadPriorSnapshotResult().snapshot?.incomeEvents == seeded.incomeEvents)
     }
 

@@ -15,8 +15,9 @@ extension PDTBackgroundDetailRefresh: PDTBackgroundDetailRefreshing {}
 /// once, by `PressureRunner.refreshedPulse` after the last phase, so a cancel,
 /// a quit, or a failed required base leaves the last good snapshot on disk.
 /// A failed optional phase keeps the prior snapshot's facet and degrades the
-/// outcome. Once a phase sees an auth or setup outage, every later phase is
-/// skipped, price history included.
+/// outcome. Once a failure ends the sync (lost access, or a rate limit that
+/// outlasts the client's retries), every later phase is skipped, price
+/// history included.
 public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing, @unchecked Sendable {
     private let client: PDTAPIClient
     private let snapshotStore: SnapshotStore
@@ -43,8 +44,10 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void = { _ in }
     ) throws -> PDTBackgroundDetailRefreshResult {
         let cancellation = cancellation ?? PDTCancellation()
-        try throwIfCancelled(cancellation, .holdings(), phase: .baseHoldings)
-        try? snapshotStore.clearLastDetailRefreshDiagnostic()
+        try throwIfCancelled(cancellation)
+        // Cleared first so a refresh that ends without recording a failure
+        // (a cancel, a store error) cannot be explained by an older one.
+        snapshotStore.setLastSyncFailure(nil)
 
         let snapshotAsOf = asOf ?? dayString(from: now())
         let priorSnapshotLoad = try snapshotStore.loadPriorSnapshotResult()
@@ -55,11 +58,11 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
         do {
             rows = try client.getAllReportingAttempts(.holdings(), as: APIHolding.self, cancellation: cancellation).value
         } catch let failure as PDTAPIRequestFailure {
-            try throwIfCancelled(cancellation, .holdings(), phase: .baseHoldings)
-            try snapshotStore.saveLastDetailRefreshDiagnostic(diagnostic(for: failure, .holdings(), phase: .baseHoldings))
+            try throwIfCancelled(cancellation)
+            snapshotStore.setLastSyncFailure(PDTSyncFailure(failure, resource: .holdings(), phase: .baseHoldings))
             throw failure.underlyingError
         }
-        try throwIfCancelled(cancellation, .holdings(), phase: .baseHoldings)
+        try throwIfCancelled(cancellation)
 
         let holdingInputs = rows.map(\.baseHoldingInput)
         var snapshot = PDTSnapshotNormalizer.normalize(PDTSnapshotNormalizationInput(
@@ -70,26 +73,25 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
         PDTBackgroundDetailRefresh.preserveOptionalDetails(in: &snapshot, from: priorSnapshot)
         let openQuoteIDs = snapshot.openHoldings.map(\.quoteId)
 
-        var diagnostics: [PDTDetailRefreshFailureDiagnostic] = []
-        var setupUnavailable = false
-        func record(_ failure: PDTDetailRefreshFailureDiagnostic) {
-            diagnostics.append(failure)
-            if failure.category.indicatesUnavailableSetup {
-                setupUnavailable = true
+        var failures: [PDTSyncFailure] = []
+        var syncEnded = false
+        func record(_ failure: PDTSyncFailure) {
+            failures.append(failure)
+            if failure.kind.endsSync {
+                syncEnded = true
             }
         }
         func optionalPhase(_ phase: BackgroundDetailRefreshPhase, _ fill: () throws -> Void) throws {
-            guard !setupUnavailable else {
+            guard !syncEnded else {
                 return
             }
             progress(BackgroundDetailRefreshProgress(phase: phase))
             do {
                 try fill()
-            } catch let failure as PDTDetailRefreshToolError {
-                try throwIfCancelled(cancellation, phase: phase)
-                record(failure.diagnostic)
+            } catch let failed as PhaseFailed {
+                record(failed.failure)
             }
-            try throwIfCancelled(cancellation, phase: phase)
+            try throwIfCancelled(cancellation)
         }
 
         try optionalPhase(.allocation) {
@@ -139,7 +141,7 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
             snapshot.dividendRowCount = income.dividendRowCount
         }
 
-        if !setupUnavailable {
+        if !syncEnded {
             progress(BackgroundDetailRefreshProgress(
                 phase: .priceHistory,
                 completedUnitCount: 0,
@@ -152,7 +154,7 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
             for start in stride(from: 0, to: openQuoteIDs.count, by: PDTAPIResource.pricesBatchLimit) {
                 let chunk = Array(openQuoteIDs[start ..< min(start + PDTAPIResource.pricesBatchLimit, openQuoteIDs.count)])
                 let resource = PDTAPIResource.pricesBatch(symbolQuoteIds: chunk, dateFrom: dateFrom, dateTo: snapshotAsOf)
-                if setupUnavailable {
+                if syncEnded {
                     failedQuoteIDs.formUnion(chunk)
                 } else {
                     do {
@@ -162,9 +164,8 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
                         points += PDTOptionalDetailNormalizer.normalizePriceSeries(
                             batch.data.prices.joined().map(\.optionalDetailInput)
                         )
-                    } catch let failure as PDTDetailRefreshToolError {
-                        try throwIfCancelled(cancellation, resource, phase: .priceHistory)
-                        record(failure.diagnostic)
+                    } catch let failed as PhaseFailed {
+                        record(failed.failure)
                         failedQuoteIDs.formUnion(chunk)
                     }
                 }
@@ -175,7 +176,7 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
                     totalUnitCount: openQuoteIDs.count
                 ))
             }
-            try throwIfCancelled(cancellation, phase: .priceHistory)
+            try throwIfCancelled(cancellation)
             snapshot.priceSeries = PDTBackgroundDetailRefresh.priceSeriesWithPriorFallback(
                 refreshed: points,
                 failedQuoteIDs: failedQuoteIDs,
@@ -190,30 +191,26 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
         // so this phase reports unavailable without degrading, like a Claude
         // setup whose performance tools are missing.
         progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Performance unavailable"))
-        try throwIfCancelled(cancellation, phase: .performance)
+        try throwIfCancelled(cancellation)
 
-        let outcome: PDTBackgroundDetailRefreshOutcome = diagnostics.isEmpty ? .completed : .degraded
+        let outcome: PDTBackgroundDetailRefreshOutcome = failures.isEmpty ? .completed : .degraded
         let pulse = try PressureRunner.refreshedPulse(
             snapshot: snapshot,
             priorSnapshot: priorSnapshot,
             snapshotStore: snapshotStore,
             pulseReadStore: pulseReadStore,
             detailRefreshOutcome: outcome,
-            detailRefreshDiagnostic: diagnostics.last,
+            lastSyncFailure: failures.last,
             priorSnapshotLoadStatus: priorSnapshotLoad.status
         )
-        if let lastDiagnostic = diagnostics.last {
-            try snapshotStore.saveLastDetailRefreshDiagnostic(lastDiagnostic)
-        } else {
-            try snapshotStore.clearLastDetailRefreshDiagnostic()
-        }
+        snapshotStore.setLastSyncFailure(failures.last)
         return PDTBackgroundDetailRefreshResult(
             outcome: outcome,
             pulse: pulse,
             model: pulse.model,
             snapshotCommit: pulse.snapshotCommit,
             descriptor: pulse.descriptor,
-            diagnostics: diagnostics
+            failures: failures
         )
     }
 
@@ -226,40 +223,20 @@ public final class PDTAPIBackgroundDetailRefresh: PDTBackgroundDetailRefreshing,
         do {
             return try request().value
         } catch let failure as PDTAPIRequestFailure {
-            try throwIfCancelled(cancellation, resource, phase: phase)
-            throw PDTDetailRefreshToolError(diagnostic: diagnostic(for: failure, resource, phase: phase))
+            try throwIfCancelled(cancellation)
+            throw PhaseFailed(failure: PDTSyncFailure(failure, resource: resource, phase: phase))
         }
     }
 
-    private func diagnostic(
-        for failure: PDTAPIRequestFailure,
-        _ resource: PDTAPIResource,
-        phase: BackgroundDetailRefreshPhase
-    ) -> PDTDetailRefreshFailureDiagnostic {
-        PDTDetailRefreshFailureDiagnostic(
-            toolName: resource.path,
-            phase: phase,
-            attemptCount: failure.attemptCount,
-            category: pdtDetailRefreshFailureCategory(for: failure.underlyingError),
-            argumentShape: resource.argumentShape
-        )
+    private func throwIfCancelled(_ cancellation: PDTCancellation) throws {
+        if cancellation.isCancelled {
+            throw PDTAPIError.cancelled
+        }
     }
 
-    private func throwIfCancelled(
-        _ cancellation: PDTCancellation,
-        _ resource: PDTAPIResource? = nil,
-        phase: BackgroundDetailRefreshPhase
-    ) throws {
-        guard cancellation.isCancelled else {
-            return
-        }
-        throw PDTDetailRefreshToolError(diagnostic: PDTDetailRefreshFailureDiagnostic(
-            toolName: resource?.path ?? phase.rawValue,
-            phase: phase,
-            attemptCount: 0,
-            category: .timeout,
-            argumentShape: resource?.argumentShape ?? []
-        ))
+    /// One failed request of an optional phase, on its way to the phase's record.
+    private struct PhaseFailed: Error {
+        let failure: PDTSyncFailure
     }
 }
 

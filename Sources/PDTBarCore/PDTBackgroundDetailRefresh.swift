@@ -82,13 +82,6 @@ func pdtDetailRefreshFailureCategory(for error: Error) -> PDTDetailRefreshFailur
         .unavailable
     case PDTLiveDataSourceError.transientUnavailableToolResult:
         .transientFailure
-    case PDTAPIError.missingToken, PDTAPIError.unauthenticated, PDTAPIError.tokenInvalid,
-         PDTAPIError.insufficientScope, PDTAPIError.apiAccessPaused, PDTAPIError.forbidden:
-        .setupUnavailable
-    case PDTAPIError.invalidResponse:
-        .decode
-    case PDTAPIError.rateLimited, PDTAPIError.server, PDTAPIError.transport, PDTAPIError.paginationStalled:
-        .transientFailure
     default:
         .exit
     }
@@ -143,7 +136,10 @@ public struct PDTBackgroundDetailRefreshResult: Equatable {
     public var model: PortfolioPulseModel
     public var snapshotCommit: SnapshotCommit
     public var descriptor: MenuDescriptor
-    public var diagnostics: [PDTDetailRefreshFailureDiagnostic]
+    /// Filled by the Claude refresh only.
+    public var diagnostics: [PDTDetailRefreshFailureDiagnostic] = []
+    /// Filled by the PDT API refresh only.
+    public var failures: [PDTSyncFailure] = []
 }
 
 public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
@@ -397,7 +393,6 @@ public final class PDTBackgroundDetailRefresh: @unchecked Sendable {
             snapshotStore: snapshotStore,
             pulseReadStore: pulseReadStore,
             detailRefreshOutcome: outcome,
-            detailRefreshDiagnostic: diagnostics.last,
             priorSnapshotLoadStatus: originalPriorSnapshotLoad.status
         )
         if let lastDiagnostic = diagnostics.last {

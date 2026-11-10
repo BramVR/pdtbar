@@ -36,7 +36,7 @@ struct PDTAPIDataSourceTests {
         #expect(query(requests[13], "symbolQuoteIds[]") == ["9001", "9002", "9003", "9004", "9010", "9013"])
         #expect(query(requests[13], "dateFrom") == ["2026-06-15"])
         #expect(query(requests[13], "dateTo") == ["2026-06-22"])
-        #expect(run.diagnostics.isEmpty)
+        #expect(run.failures.isEmpty)
         #expect(run.snapshot.latestDetailFillOutcome == nil)
     }
 
@@ -153,13 +153,13 @@ struct PDTAPIDataSourceTests {
             ok(#"{"data":{"prices":[]}}"#),
         ])
         let unrequested = ScriptedPDTHTTPTransport([holdings])
-        let recorder = DiagnosticRecorder()
+        let recorder = FailureRecorder()
 
         let empty = try dataSource(requested, recorder: recorder).snapshot(asOf: "2026-06-22")
         let missing = try dataSource(unrequested, options: .firstFetch).snapshot(asOf: "2026-06-22")
 
         #expect(requested.requests.count == 7)
-        #expect(recorder.diagnostics.isEmpty)
+        #expect(recorder.failures.isEmpty)
         #expect(empty.xRayHoldings == [])
         #expect(empty.sectors.isEmpty)
         #expect(empty.incomeEvents.isEmpty)
@@ -173,7 +173,7 @@ struct PDTAPIDataSourceTests {
 
     @Test("A failed optional facet is missing, degrades the snapshot, and later facets still load")
     func failedOptionalFacetDegrades() throws {
-        let recorder = DiagnosticRecorder()
+        let recorder = FailureRecorder()
         let transport = ScriptedPDTHTTPTransport([
             ok(#"{"data":[\#(holdingRow(quoteId: 1, symbolId: 2))]}"#),
             ok(#"{"data":{"sectors":[{"categoryName":"energy","totalValue":{"value":"1.00","currency":"EUR"},"percentage":"most"}],"assetTypes":[]}}"#),
@@ -188,15 +188,15 @@ struct PDTAPIDataSourceTests {
         #expect(snapshot.xRayHoldings == nil)
         #expect(snapshot.priceSeries.map(\.closeAdjusted) == ["2.5"])
         #expect(snapshot.latestDetailFillOutcome == .degraded)
-        #expect(recorder.diagnostics == [
-            PDTDetailRefreshFailureDiagnostic(toolName: "portfolio/distributions", phase: .allocation, attemptCount: 1, category: .decode, argumentShape: []),
-            PDTDetailRefreshFailureDiagnostic(toolName: "x-ray", phase: .xRay, attemptCount: 1, category: .decode, argumentShape: ["limit", "offset"]),
+        #expect(recorder.failures == [
+            PDTSyncFailure(phase: .allocation, endpoint: .distributions, kind: .unreadableResponse, requestCount: 1),
+            PDTSyncFailure(phase: .xRay, endpoint: .xRay, kind: .unreadableResponse, requestCount: 1),
         ])
     }
 
-    @Test("An auth failure on an optional facet skips the remaining facets and keeps the token out of diagnostics")
+    @Test("An auth failure on an optional facet skips the remaining facets and keeps the token out of the failure")
     func authFailureSkipsRemainingFacets() throws {
-        let recorder = DiagnosticRecorder()
+        let recorder = FailureRecorder()
         let transport = ScriptedPDTHTTPTransport([
             ok(#"{"data":[\#(holdingRow(quoteId: 1, symbolId: 2))]}"#),
             ok(#"{"data":{"sectors":[],"assetTypes":[]}}"#),
@@ -209,30 +209,30 @@ struct PDTAPIDataSourceTests {
         #expect(snapshot.openHoldings.map(\.quoteId) == [1])
         #expect(snapshot.xRayHoldings == nil)
         #expect(snapshot.latestDetailFillOutcome == .degraded)
-        #expect(recorder.diagnostics == [
-            PDTDetailRefreshFailureDiagnostic(toolName: "x-ray", phase: .xRay, attemptCount: 1, category: .setupUnavailable, argumentShape: ["limit", "offset"]),
+        #expect(recorder.failures == [
+            PDTSyncFailure(phase: .xRay, endpoint: .xRay, kind: .reconnect, requestCount: 1),
         ])
-        let encoded = String(decoding: try stableJSONData(recorder.diagnostics), as: UTF8.self)
+        let encoded = String(decoding: try stableJSONData(recorder.failures), as: UTF8.self)
         #expect(!encoded.contains(testSecret))
         #expect(!encoded.contains("pdt_"))
     }
 
     @Test(
-        "REST errors map to refresh failure categories",
+        "REST errors map to typed sync failures",
         arguments: [
-            (403, "INSUFFICIENT_SCOPE", PDTDetailRefreshFailureCategory.setupUnavailable),
-            (403, "API_ACCESS_PAUSED", .setupUnavailable),
-            (403, "FORBIDDEN", .setupUnavailable),
-            (401, "UNAUTHENTICATED", .setupUnavailable),
-            (429, "RATE_LIMITED", .transientFailure),
-            (503, "SERVER_ERROR", .transientFailure),
-            (404, "NOT_FOUND", .exit),
-            (200, "not json", .decode),
+            (403, "INSUFFICIENT_SCOPE", PDTSyncFailure.Kind.readAccessMissing),
+            (403, "API_ACCESS_PAUSED", .accessPaused),
+            (403, "FORBIDDEN", .forbidden),
+            (401, "UNAUTHENTICATED", .reconnect),
+            (429, "RATE_LIMITED", .rateLimited(retryAfterSeconds: nil)),
+            (503, "SERVER_ERROR", .server(status: 503)),
+            (404, "NOT_FOUND", .unexpected(status: 404)),
+            (200, "not json", .unreadableResponse),
         ]
     )
-    func errorCategories(status: Int, code: String, category: PDTDetailRefreshFailureCategory) throws {
+    func errorKinds(status: Int, code: String, kind: PDTSyncFailure.Kind) throws {
         let reply = status == 200 ? ok(code) : apiError(status, code)
-        let recorder = DiagnosticRecorder()
+        let recorder = FailureRecorder()
         let transport = ScriptedPDTHTTPTransport([ok(#"{"data":[\#(holdingRow(quoteId: 1, symbolId: 2))]}"#), reply])
         let options = PDTAPIDataSourceOptions(
             includeXRayHoldings: false,
@@ -244,7 +244,7 @@ struct PDTAPIDataSourceTests {
 
         _ = try dataSource(transport, options: options, recorder: recorder).snapshot(asOf: "2026-06-22")
 
-        #expect(recorder.diagnostics.map(\.category) == [category])
+        #expect(recorder.failures.map(\.kind) == [kind])
     }
 
     @Test(
@@ -266,7 +266,7 @@ struct PDTAPIDataSourceTests {
         let expected = PressureEngine.buildModel(from: fixture, today: fixture.asOf)
         let actual = PressureEngine.buildModel(from: run.snapshot, today: fixture.asOf)
 
-        #expect(run.diagnostics.isEmpty)
+        #expect(run.failures.isEmpty)
         #expect(actual.allQuiet == expected.allQuiet)
         #expect(actual.rankedAttentionItems.map(\.id) == expected.rankedAttentionItems.map(\.id))
         #expect(actual.rankedAttentionItems.map(\.facet) == expected.rankedAttentionItems.map(\.facet))
@@ -284,7 +284,7 @@ private let packageRoot = URL(fileURLWithPath: #filePath)
 private struct ReplayRun {
     var snapshot: PortfolioSnapshot
     var transport: ScriptedPDTHTTPTransport
-    var diagnostics: [PDTDetailRefreshFailureDiagnostic]
+    var failures: [PDTSyncFailure]
 }
 
 private func replay(
@@ -298,15 +298,15 @@ private func replay(
         .sorted { $0.lastPathComponent < $1.lastPathComponent }
         .map { ScriptedPDTHTTPTransport.Reply.response(status: 200, body: try Data(contentsOf: $0)) }
     let transport = ScriptedPDTHTTPTransport(bodies)
-    let recorder = DiagnosticRecorder()
+    let recorder = FailureRecorder()
     let snapshot = try dataSource(transport, options: options, recorder: recorder).snapshot(asOf: asOf)
-    return ReplayRun(snapshot: snapshot, transport: transport, diagnostics: recorder.diagnostics)
+    return ReplayRun(snapshot: snapshot, transport: transport, failures: recorder.failures)
 }
 
 private func dataSource(
     _ transport: ScriptedPDTHTTPTransport,
     options: PDTAPIDataSourceOptions = PDTAPIDataSourceOptions(),
-    recorder: DiagnosticRecorder? = nil
+    recorder: FailureRecorder? = nil
 ) -> PDTAPIDataSource {
     PDTAPIDataSource(
         client: PDTAPIClient(
@@ -316,7 +316,7 @@ private func dataSource(
             sleeper: NoSleep()
         ),
         options: options,
-        onOptionalFacetFailure: { diagnostic in recorder?.record(diagnostic) }
+        onOptionalFacetFailure: { failure in recorder?.record(failure) }
     )
 }
 
@@ -355,19 +355,19 @@ private struct NoSleep: PDTAPISleeper {
     func sleep(seconds _: TimeInterval, cancellation _: PDTCancellation?) throws {}
 }
 
-private final class DiagnosticRecorder: @unchecked Sendable {
+private final class FailureRecorder: @unchecked Sendable {
     private let lock = NSLock()
-    private var recorded: [PDTDetailRefreshFailureDiagnostic] = []
+    private var recorded: [PDTSyncFailure] = []
 
-    var diagnostics: [PDTDetailRefreshFailureDiagnostic] {
+    var failures: [PDTSyncFailure] {
         lock.lock()
         defer { lock.unlock() }
         return recorded
     }
 
-    func record(_ diagnostic: PDTDetailRefreshFailureDiagnostic) {
+    func record(_ failure: PDTSyncFailure) {
         lock.lock()
         defer { lock.unlock() }
-        recorded.append(diagnostic)
+        recorded.append(failure)
     }
 }

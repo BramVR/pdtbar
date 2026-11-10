@@ -1573,17 +1573,18 @@ private func scriptedAPISnapshotSmoke(arguments: [String]) throws -> SmokeReport
         .sorted { $0.lastPathComponent < $1.lastPathComponent }
         .map { ScriptedPDTHTTPTransport.Reply.response(status: 200, body: try Data(contentsOf: $0)) }
     let transport = ScriptedPDTHTTPTransport(replies)
-    let diagnostics = SmokeDiagnosticRecorder()
+    let failures = SmokeSyncFailureRecorder()
     let dataSource = PDTAPIDataSource(
         client: PDTAPIClient(
             transport: transport,
             tokenProvider: InMemoryPDTAPITokenProvider(token: PDTAPIToken(secret))
         ),
-        onOptionalFacetFailure: { diagnostics.record($0) }
+        onOptionalFacetFailure: { failures.record($0) }
     )
     let snapshot = try dataSource.snapshot(asOf: "2026-06-22")
 
     let requests = transport.requests
+    let failedSyncs = try scriptedAPIFailedSyncProofs()
     let proofPayload = ScriptedAPISnapshotProof(
         requestCount: requests.count,
         paths: requests.compactMap { $0.url?.path },
@@ -1598,7 +1599,8 @@ private func scriptedAPISnapshotSmoke(arguments: [String]) throws -> SmokeReport
         dividendRows: snapshot.dividendRowCount,
         pricePoints: snapshot.priceSeries.count,
         degraded: snapshot.latestDetailFillOutcome == .degraded,
-        diagnostics: diagnostics.diagnostics
+        failures: failures.failures,
+        failedSyncs: failedSyncs
     )
     let proofData = try stableJSONData(proofPayload)
     try proofData.write(to: proof, options: .atomic)
@@ -1614,7 +1616,7 @@ private func scriptedAPISnapshotSmoke(arguments: [String]) throws -> SmokeReport
           proofPayload.dividendRows == 4,
           proofPayload.pricePoints == 4,
           !proofPayload.degraded,
-          proofPayload.diagnostics.isEmpty,
+          proofPayload.failures.isEmpty,
           !String(decoding: proofData, as: UTF8.self).contains(secret)
     else {
         return SmokeReport(
@@ -1624,12 +1626,112 @@ private func scriptedAPISnapshotSmoke(arguments: [String]) throws -> SmokeReport
             artifacts: [artifactPath(proof)]
         )
     }
+    let unproven = failedSyncs.filter { !$0.proven }.map(\.reply)
+    guard unproven.isEmpty, !String(decoding: proofData, as: UTF8.self).contains("SENTINEL") else {
+        return SmokeReport(
+            name: "scripted-api-snapshot",
+            status: SmokeStatus.failed,
+            detail: "scripted PDT REST failures did not each store a typed failure, say what to do in Data health, keep the saved copy, and keep PDT's answer out of Data health and the copied diagnostics: \(unproven.joined(separator: ", "))",
+            artifacts: [artifactPath(proof)]
+        )
+    }
     return SmokeReport(
         name: "scripted-api-snapshot",
         status: SmokeStatus.passed,
-        detail: "scripted PDT REST snapshot replayed \(requests.count) GET-only fixture replies from the PDT API origin, mapped holdings, allocation, x-ray, income, dividends, identifiers, and prices without degrading, and kept the token out of proof",
+        detail: "scripted PDT REST snapshot replayed \(requests.count) GET-only fixture replies from the PDT API origin, mapped holdings, allocation, x-ray, income, dividends, identifiers, and prices without degrading, and kept the token out of proof; \(failedSyncs.count) failed syncs (401, 403 scope, 403 paused, 429, 503, undecodable) each stored a typed failure, named what to do in Data health over the saved copy, and kept the planted token, account id, URL, and body out of Data health and the copied diagnostics",
         artifacts: [artifactPath(proof)]
     )
+}
+
+/// One failed background refresh per PDT answer, each over a store that holds a
+/// saved copy. Every answer carries a planted token, account id, URL, and body.
+private func scriptedAPIFailedSyncProofs() throws -> [ScriptedAPIFailedSyncProof] {
+    let token = "pdt_SENTINEL_TOKEN_0123456789abcdef0123456789abcdef"
+    let planted = [token, "acct-SENTINEL-4242", "https://api.portfoliodividendtracker.com/v1/accounts/acct-SENTINEL-4242", "RAW_BODY_SENTINEL"]
+    func answer(_ status: Int, _ code: String, retryAfter: String = "acct-SENTINEL-4242") -> ScriptedPDTHTTPTransport.Reply {
+        .response(
+            status: status,
+            body: Data(#"{"error":{"code":"\#(code)","message":"\#(planted[3]) \#(planted[1]) \#(token)","details":{"reason":"\#(planted[1])"},"traceId":"\#(planted[2])"}}"#.utf8),
+            headers: ["Retry-After": retryAfter, "X-Request-Id": token, "Authorization": "Bearer \(token)"]
+        )
+    }
+    let cases: [(reply: String, answer: ScriptedPDTHTTPTransport.Reply, kind: PDTSyncFailure.Kind, action: String)] = [
+        ("401 TOKEN_INVALID", answer(401, "TOKEN_INVALID"), .reconnect, "reconnect"),
+        ("403 INSUFFICIENT_SCOPE", answer(403, "INSUFFICIENT_SCOPE"), .readAccessMissing, "reconnect"),
+        ("403 API_ACCESS_PAUSED", answer(403, "API_ACCESS_PAUSED"), .accessPaused, "renew your subscription"),
+        ("429 RATE_LIMITED", answer(429, "RATE_LIMITED", retryAfter: "120"), .rateLimited(retryAfterSeconds: 120), "try again in 2 min"),
+        ("503 SERVER_ERROR", answer(503, "SERVER_ERROR"), .server(status: 503), "try again later"),
+        ("200 undecodable", .response(status: 200, body: Data(#"{"data":"\#(planted[3]) \#(planted[1]) \#(token)"}"#.utf8)), .unreadableResponse, "update PDTBar"),
+    ]
+    let completeSync = try scriptedAPIBackgroundRefreshResponses()
+    return try cases.map { reply, answer, kind, action in
+        let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-scripted-api-failed-sync")
+        defer {
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        func refresh(_ transport: ScriptedPDTHTTPTransport, asOf: String) -> PDTAPIBackgroundDetailRefresh {
+            PDTAPIBackgroundDetailRefresh(
+                client: PDTAPIClient(
+                    transport: transport,
+                    tokenProvider: InMemoryPDTAPITokenProvider(token: PDTAPIToken(token)),
+                    policy: PDTAPIRequestPolicy(maxAttempts: 1)
+                ),
+                snapshotStore: store,
+                asOf: asOf
+            )
+        }
+        _ = try refresh(ScriptedPDTAPIConfiguration(responses: completeSync).transport(), asOf: "2026-06-21").refresh()
+        let refreshFailed = (try? refresh(ScriptedPDTHTTPTransport([answer]), asOf: "2026-06-22").refresh()) == nil
+
+        let failure = store.lastSyncFailure()
+        let runtime = DataHealthRuntime(access: .connected, sync: .failed(failure))
+        let savedCopy = try PressureRunner.cachedPulse(snapshotStore: store, today: "2026-06-22")
+        let health = savedCopy.map { DataHealth.snapshot($0.model.facetSnapshots.dataHealth, in: runtime) }
+        let healthRow = savedCopy?.descriptor(in: runtime).sections
+            .first { $0.id == "freshness" }?.rows
+            .first { $0.id == "dataHealth" }
+        let diagnostics = healthRow?.children.first { $0.id == "dataHealth.diagnostic" }
+        let copyText = diagnostics?.children.first?.actionTarget?.copyText
+        let written = [
+            copyText ?? "",
+            healthRow.map { menuText(in: $0) } ?? "",
+            try health.map { String(decoding: try stableJSONData($0), as: UTF8.self) } ?? "",
+            (try? String(contentsOf: store.directory.appending(path: "latest-sync-failure.json"), encoding: .utf8)) ?? "",
+        ]
+        let redacted = written.allSatisfy { text in
+            !text.isEmpty && planted.allSatisfy { !text.contains($0) } && !text.contains("SENTINEL")
+        }
+        return ScriptedAPIFailedSyncProof(
+            reply: reply,
+            failure: failure,
+            dataHealthDetail: diagnostics?.detail,
+            copiedDiagnostics: copyText,
+            savedCopyAsOf: health?.cache.lastSyncAsOf,
+            proven: refreshFailed
+                && failure?.kind == kind
+                && failure?.endpoint == .holdings
+                && diagnostics?.detail?.hasSuffix("; \(action)") == true
+                && health?.source.pulse == .cachedSnapshot
+                && health?.status == .degraded
+                && health?.cache.lastSyncAsOf == "2026-06-21"
+                && redacted
+        )
+    }
+}
+
+private func menuText(in row: MenuRow) -> String {
+    ([row.title, row.detail ?? "", row.actionTarget?.copyText ?? ""] + row.children.map(menuText)).joined(separator: "\n")
+}
+
+/// Proof of one failed sync. Every field is a closed type, a literal, or text
+/// built from them, so the proof file is safe to attach.
+private struct ScriptedAPIFailedSyncProof: Codable {
+    var reply: String
+    var failure: PDTSyncFailure?
+    var dataHealthDetail: String?
+    var copiedDiagnostics: String?
+    var savedCopyAsOf: String?
+    var proven: Bool
 }
 
 private struct ScriptedAPISnapshotProof: Codable {
@@ -1646,23 +1748,24 @@ private struct ScriptedAPISnapshotProof: Codable {
     var dividendRows: Int
     var pricePoints: Int
     var degraded: Bool
-    var diagnostics: [PDTDetailRefreshFailureDiagnostic]
+    var failures: [PDTSyncFailure]
+    var failedSyncs: [ScriptedAPIFailedSyncProof]
 }
 
-private final class SmokeDiagnosticRecorder: @unchecked Sendable {
+private final class SmokeSyncFailureRecorder: @unchecked Sendable {
     private let lock = NSLock()
-    private var recorded: [PDTDetailRefreshFailureDiagnostic] = []
+    private var recorded: [PDTSyncFailure] = []
 
-    var diagnostics: [PDTDetailRefreshFailureDiagnostic] {
+    var failures: [PDTSyncFailure] {
         lock.lock()
         defer { lock.unlock() }
         return recorded
     }
 
-    func record(_ diagnostic: PDTDetailRefreshFailureDiagnostic) {
+    func record(_ failure: PDTSyncFailure) {
         lock.lock()
         defer { lock.unlock() }
-        recorded.append(diagnostic)
+        recorded.append(failure)
     }
 }
 
