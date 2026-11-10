@@ -171,7 +171,27 @@ Normalization the seam owns (all pure logic, no UI):
    holdings-only tool and project the ~15 fields the engine needs) rather than
    load the whole blob into the model each tick.
 
-None of these block v1 — every gap is closable with derivation or an extra
+### Supported REST path: known gaps (#250)
+
+The PDT REST API is the only data path. What it does not cover yet:
+
+- **Performance and gains.** `PDTAPIResource.performance` and `.gains` exist,
+  but the refresh does not map them (#246 scope). CAGR and total increase show
+  `Unavailable`, and a prior period's performance is never carried forward.
+  Scenario fixtures still carry performance for engine tests.
+- **Token expiry in Data health.** ADR-0002 §8 asks for the expiry date and an
+  `expiring_soon` warning. Nothing reads `expiresAt` yet (left by #287).
+- **Not read.** Corporate actions, benchmarks, transactions, and cash
+  corrections. Historical holdings (`/portfolio/holdings?date=`) and
+  `/portfolios` are allowlisted but unused by the refresh.
+- **Unconfirmed shapes.** Calendar, dividend, and symbol-quote row fields and
+  x-ray `weight` are assumed from the MCP tools, not seen live
+  (`fixtures/api/provenance.json`). The fixtures follow docs v0.8.1 and were
+  not re-checked against openapi v0.9.0.
+- **No API version signal.** PDT sends no version header, so a shape change
+  shows up as a typed decode failure in Data health, not as a version mismatch.
+
+None of the MCP-era gaps above block v1 — every gap is closable with derivation or an extra
 join call. `PDTAPIClient` sends only `GET` requests to an allowlisted set of
 read endpoints (`PDTAPIResource`). These gaps mean the **PortfolioDataSource is non-trivial normalization
 logic**, which was the key input to ADR-0001 below.
