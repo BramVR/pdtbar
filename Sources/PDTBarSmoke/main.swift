@@ -26,7 +26,6 @@ private let defaultFixture = packageRoot.appending(path: "docs/pdt/fixtures/quie
 private let scriptedPDTAsOf = "2026-06-22"
 private let menuNotCheckedByDesign = "menu: not checked (TCC unreachable by design)"
 
-/// Every subcommand. Dispatch, usage, and `scripted-api-matrix` read this list.
 private struct SmokeCommand: Sendable {
     var name: String
     var usage: String
@@ -83,8 +82,6 @@ do {
 
 // MARK: - Scripted PDT connection launches
 
-/// One app launch over `--scripted-pdt` with isolated app support. The fixture
-/// environment is a trap: a correct launch never writes the fixture sentinel.
 private struct ScriptedPDTLaunch {
     let appSupportDirectory: URL
     let script: URL
@@ -352,9 +349,6 @@ private struct APISmokeMatrixProof: Codable {
     var status: String
 }
 
-/// Runs the prompt-free API rows in this process after proving, from inside
-/// it, that `Scripts/api_smoke_matrix.sh`'s sandbox is in force. A skipped
-/// row fails the matrix.
 private func scriptedAPIMatrixSmoke(arguments: [String]) throws -> SmokeReport {
     let name = "scripted-api-matrix"
     let options = try SmokeOptions(arguments: arguments)
@@ -492,8 +486,6 @@ private func childOutcome(_ executable: URL, _ arguments: [String]) -> String {
     return "exited \(process.terminationStatus)"
 }
 
-/// What one sandbox probe saw when the sandbox let it run. Under
-/// `Scripts/api_smoke_matrix.sh` each probe is killed before it can report.
 private func sandboxProbeSmoke(arguments: [String]) throws -> SmokeReport {
     let observed: String
     switch arguments.first {

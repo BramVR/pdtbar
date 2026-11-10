@@ -259,7 +259,6 @@ struct PDTAPIDataSourceTests {
         let snapshot = try dataSource(transport, options: .firstFetch).snapshot(asOf: "2026-06-22")
 
         #expect(snapshot.openHoldings.map(\.quoteId) == [2001, 2002])
-        // 8100.00 EUR + 250.00 DKK / 2.0 = 8225.00 EUR.
         #expect(snapshot.totalValue == Money(value: "8225.00", currency: "EUR"))
     }
 

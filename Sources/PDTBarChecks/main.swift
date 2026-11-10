@@ -62,8 +62,6 @@ private func checkFixtureCorpus(_ fixtures: [URL]) throws {
     }
 }
 
-/// `docs/pdt/fixtures/api/provenance.json` must describe every replayed
-/// REST body, file for file, and say what the bodies were authored against.
 private func checkAPIFixtureProvenance() throws {
     struct Provenance: Decodable {
         struct Spec: Decodable {
@@ -323,8 +321,6 @@ private func checkPDTAPIDataHealth() throws {
     )
 }
 
-/// Product code reads PDT over HTTPS only: it starts no process and names no
-/// local CLI or MCP tool. Comments count, so a stale mention fails too.
 private func checkProductSpawnsNothing() throws {
     let pattern = #"Process\(|NSTask|posix_spawn|execv|claude|mcporter|\bmcp\b"#
     var hits: [String] = []

@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Runs `pdtbar-smoke scripted-api-matrix` with an empty environment and a
-# seatbelt profile. The profile is the claim: docs/smoke-checks.md lists what
-# each rule enforces, and the matrix's environment row probes every rule.
 
 set -euo pipefail
 

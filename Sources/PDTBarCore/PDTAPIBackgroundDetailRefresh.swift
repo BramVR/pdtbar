@@ -229,8 +229,6 @@ public final class PDTAPIBackgroundDetailRefresh: @unchecked Sendable {
         snapshot.incomeEvents = priorSnapshot.incomeEvents
         snapshot.dividendRowCount = priorSnapshot.dividendRowCount
         snapshot.priceSeries = priorSnapshot.priceSeries.filter { currentQuoteIDs.contains($0.quoteId) }
-        // Performance is period-bound to the latest report date. Do not carry
-        // an older period forward as if it described the refreshed portfolio.
         snapshot.latestCompleteDetailFillAsOf = priorSnapshot.latestCompleteDetailFillAsOf
     }
 
