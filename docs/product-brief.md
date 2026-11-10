@@ -32,9 +32,9 @@ Quiet at the top, everything available underneath.
 
 ## Current connection model
 
-Shipped today: PDTBar is Claude-only. No-argument launch probes the user's existing Claude CLI login and PDT MCP server, then performs the first read-only PDT fetch when ready. If setup is missing, the menu offers `Log in with Claude` and `Check again`.
+Shipped (#248): no-argument launch checks the stored PDT connection, then performs the first read-only PDT fetch. When not connected, the menu offers `Sign in with PDT` and `Use a PDT token…`; reconnect and paused-subscription states keep the last pulse visible.
 
-Accepted next ([ADR-0002](adr/0002-pdt-public-rest-api.md)): PDTBar talks to PDT's public REST API directly, read-only. The main path is `Sign in with PDT` in the browser, kept connected by background refresh. The fallback is pasting a read-only PDT token (`1_year` or `never` expiry). The token lives in this Mac's Keychain only. Once REST reaches parity the Claude path is removed. PDTBar never implements Codex login, write scopes, raw MCP JSON, or a mcporter runtime path.
+Decision ([ADR-0002](adr/0002-pdt-public-rest-api.md)): PDTBar talks to PDT's public REST API directly, read-only. The main path is `Sign in with PDT` in the browser, kept connected by background refresh. The fallback is pasting a read-only PDT token (`1_year` or `never` expiry). The token lives in this Mac's Keychain only. Once REST reaches parity the Claude path is removed. PDTBar never implements Codex login, write scopes, raw MCP JSON, or a mcporter runtime path.
 
 ## What it is NOT
 

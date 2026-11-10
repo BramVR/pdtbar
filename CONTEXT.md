@@ -4,7 +4,7 @@
 
 ## Product in one paragraph
 
-An ambient, plug-and-play companion for an investor's **whole** portfolio, built on Portfolio Dividend Tracker (PDT) data, read through PDT's public REST API (ADR-0002; the Claude CLI + PDT MCP path is being retired). PDT exposes holdings, performance, gains, allocation, transactions, cash, corporate actions, ETF x-ray, and benchmarks — not just dividends. It lives in the macOS menu bar and surfaces only the few things worth attention right now, via layered disclosure. It is **not** a clone of the PDT dashboard; the value is curation, not completeness.
+An ambient, plug-and-play companion for an investor's **whole** portfolio, built on Portfolio Dividend Tracker (PDT) data, read through PDT's public REST API (ADR-0002). Launch and the menu no longer use the Claude CLI or PDT MCP (#248). PDT exposes holdings, performance, gains, allocation, transactions, cash, corporate actions, ETF x-ray, and benchmarks — not just dividends. It lives in the macOS menu bar and surfaces only the few things worth attention right now, via layered disclosure. It is **not** a clone of the PDT dashboard; the value is curation, not completeness.
 
 ## Domain model (sharpen during grilling)
 
@@ -14,6 +14,7 @@ An ambient, plug-and-play companion for an investor's **whole** portfolio, built
 - **The model** — the structured output the engine emits and the bar renders: the ranked attention items + their supporting data + per-facet snapshots. (Likely JSON.)
 - **Pulse** — the menu-bar surface that renders the model.
 - **PDT connection** — PDTBar's read-only access to the user's PDT account: browser sign-in (main) or a pasted read-only token (fallback). One credential, stored in this Mac's Keychain only. *Disconnect* deletes it; *reconnect* is the state when PDT rejects it.
+- **Connection state** — what the menu says about the PDT connection (`PDTLaunchState`): *checking*, *not connected*, *connecting* (browser sign-in running), *connected* (with the portfolio sync fetching, failed, or current), *needs reconnect* with a cause (sign-in expired, token expired, revoked, invalid, or missing read access), *subscription paused* (`403 API_ACCESS_PAUSED`; the token stays stored), and *Keychain unavailable* (an unsigned build gets `errSecMissingEntitlement`, never a login-keychain fallback). Every state except *not connected* keeps a cached pulse on screen.
 - **Quiet-by-default** — the bar shows attention items at the glance and is silent ("all quiet") when nothing crosses a threshold; everything else is reachable underneath but never shouted.
 
 ## Shared language (ubiquitous language)

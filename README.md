@@ -2,7 +2,7 @@
 
 PDTBar is a quiet macOS menu bar companion for a Portfolio Dividend Tracker portfolio.
 
-It watches the whole portfolio through the user's existing Claude CLI + PDT MCP setup and surfaces only the few things worth attention right now: concentration, income events, big movers, current prices, and calm "all quiet" days.
+It reads the whole portfolio straight from PDT, read-only, and surfaces only the few things worth attention right now: concentration, income events, big movers, current prices, and calm "all quiet" days.
 
 ## What It Does
 
@@ -15,12 +15,15 @@ It watches the whole portfolio through the user's existing Claude CLI + PDT MCP 
 
 ## Current Status
 
-The product path is Claude-first:
+The product path connects to PDT directly ([ADR-0002](docs/adr/0002-pdt-public-rest-api.md)):
 
 1. Launch PDTBar.
-2. PDTBar checks Claude CLI login and the configured PDT MCP server.
-3. If ready, it fetches read-only PDT data and publishes the pulse.
-4. If setup is missing, the menu offers `Log in with Claude` and `Check again`.
+2. PDTBar checks its stored PDT connection. Nothing opens on its own.
+3. If you are not connected, the menu offers `Sign in with PDT` (your browser opens PDT's approval page) or `Use a PDT token…` (paste a read-only token from PDT's Integrations > API page).
+4. Once connected, it fetches read-only PDT data, saves it on this Mac, then shows the pulse.
+5. If PDT stops accepting the connection, the menu says `Reconnect to PDT` and keeps your last pulse visible. If your PDT subscription ended, it says `PDT access paused`.
+
+The connection is stored in this Mac's Keychain only. `Disconnect from PDT` deletes it; PDT keeps the approval until you remove PDTBar on PDT's connected apps page. No Claude CLI, MCP server, or other tool is needed.
 
 Fixture mode exists for development only and must be launched explicitly.
 
@@ -38,7 +41,7 @@ Once you have the zip:
 
 If macOS says the app was downloaded from the internet, right-click `PDTBar.app`, choose `Open`, then choose `Open` again. You should only need to do this once.
 
-PDTBar currently needs your existing Claude CLI + PDT MCP setup. If you do not have that yet, ask the person who gave you PDTBar to help set up the PDT connection. If the menu says `Add the PDT MCP server to Claude`, the app is installed correctly but the PDT connection still needs setup.
+PDTBar needs a PDT account with API access. Open the menu and choose `Sign in with PDT`. If the menu says `Keychain unavailable`, this copy of PDTBar was not signed for the Keychain; install the signed release instead.
 
 ## Use
 
@@ -48,7 +51,8 @@ After launch, look for the small Concentration Stack icon in the macOS menu bar.
 - Use `Refresh now` to fetch fresh PDT data.
 - Use `Open PDT` when you want the full dashboard.
 - Use `Settings...` to show or hide displayed portfolio values.
-- Use `Log in with Claude` if PDTBar asks for Claude login, then follow the browser steps and click `Check again`.
+- Use `Sign in with PDT` if PDTBar is not connected, then approve PDTBar in the browser.
+- Use `Check again` after renewing a paused PDT subscription, and `Disconnect from PDT` to remove the stored connection.
 
 ## Product Principles
 

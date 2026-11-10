@@ -1,5 +1,5 @@
 ---
-summary: "v1 scope: Claude-first product slice, facets, history, cold-start, and quiet-day behavior."
+summary: "v1 scope: PDT-connected product slice, facets, history, cold-start, and quiet-day behavior."
 read_when:
   - Scoping v1 work or deciding what to defer
   - Changing pressure facets, history, cold-start, or quiet-day behavior
@@ -8,15 +8,15 @@ read_when:
 
 # v1 Scope
 
-The goal of v1 is to ship the smallest coherent product: Claude-first launch, one real attention item or all-quiet state computed from PDT data, and a menu-bar pulse rendered from the normalized model. Everything else expands from that product spine.
+The goal of v1 is to ship the smallest coherent product: launch over the PDT connection, one real attention item or all-quiet state computed from PDT data, and a menu-bar pulse rendered from the normalized model. Everything else expands from that product spine.
 
 ## Definition Of Done
 
-**Launch PDTBar with no arguments → probe Claude/PDT MCP → fetch required read-only PDT data → normalize and snapshot → the engine emits the model → the bar renders it (Concentration Stack icon, glance, expand, and basic drill-down).**
+**Launch PDTBar with no arguments → check the PDT connection (sign in once) → fetch required read-only PDT data → normalize and snapshot → the engine emits the model → the bar renders it (Concentration Stack icon, glance, expand, and basic drill-down).**
 
 Concretely, v1 is "done" when:
 - The no-argument app path is the product path; fixture mode remains explicit `--fixture` developer tooling.
-- The app connects through the Claude CLI and configured PDT MCP server, then pulls only the required read tools. ADR-0002 replaces this with direct read-only PDT REST access (#243); the Claude path stays the shipped path until #248/#250 land.
+- The app reads PDT through its public REST API with read-only `GET` requests (ADR-0002): browser sign-in or a pasted read-only token, stored in the Keychain. Since #248 launch and the menu use only this path; #250 deletes the remaining Claude CLI + PDT MCP code. Sign-off on auth and token storage: Bram, 2026-11-10.
 - The engine computes pressure for the v1 facets and emits the structured model.
 - The bar shows the Concentration Stack status icon, the ranked attention item(s) at the glance, expansion to the supporting numbers, and an "all quiet" state.
 - Setup, fetch, stale, and retryable failure states are covered without publishing fixture or partial data as real.
@@ -24,7 +24,7 @@ Concretely, v1 is "done" when:
 ## Sequencing (do these in order)
 
 1. **Exercise the PDT MCP first.** Done for v1 on 2026-06-22; keep `docs/pdt/portfolio-data-source.md` as the data-shape source unless live PDT changes.
-2. **Ship the Claude-only launch/fetch tracer.** No-argument launch, readiness probe, setup menu, first fetch, local snapshot, and returning-launch refresh are the product spine.
+2. **Ship the launch/fetch tracer.** No-argument launch, connection check, sign-in menu, first fetch, local snapshot, and returning-launch refresh are the product spine. It shipped over the Claude CLI first and moved to the PDT connection in #248.
 3. **Scope to 2-3 facets** (below) and get one attention item or all-quiet pulse rendered end-to-end.
 4. **Then widen** — more facets, richer drill-down, tuning.
 
