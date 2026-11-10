@@ -42,6 +42,8 @@ do {
         report = try scriptedAPIClientSmoke(arguments: Array(arguments.dropFirst()))
     case "scripted-api-snapshot":
         report = try scriptedAPISnapshotSmoke(arguments: Array(arguments.dropFirst()))
+    case "scripted-api-auth":
+        report = try scriptedAPIAuthSmoke(arguments: Array(arguments.dropFirst()))
     case "copy-holding-identifier-action":
         report = copyHoldingIdentifierActionSmoke()
     case "scripted-first-fetch":
@@ -92,6 +94,7 @@ do {
       pdtbar-smoke scripted-pdt-connector [--artifacts <dir>]
       pdtbar-smoke scripted-api-client [--artifacts <dir>]
       pdtbar-smoke scripted-api-snapshot [--artifacts <dir>]
+      pdtbar-smoke scripted-api-auth [--artifacts <dir>]
       pdtbar-smoke copy-holding-identifier-action
       pdtbar-smoke scripted-first-fetch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
       pdtbar-smoke scripted-returning-launch [--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]
@@ -1616,6 +1619,168 @@ private struct ScriptedAPIClientProof: Codable {
     var xRayRows: Int
     var rateLimitRetried: Bool
     var expiredTokenClassified: Bool
+}
+
+private func scriptedAPIAuthSmoke(arguments: [String]) throws -> SmokeReport {
+    let options = try SmokeOptions(arguments: arguments)
+    let artifacts = options.artifacts ?? packageRoot.appending(path: ".build/pdtbar-smoke-artifacts")
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let proof = artifacts.appending(path: "pdtbar-scripted-api-auth-proof.json")
+    let secrets = ["scripted-code", "scripted-access-1", "scripted-refresh-1", "scripted-access-2", "scripted-refresh-2", "pdt_scripted_personal"]
+    let tokenReply = { (access: String, refresh: String) in
+        ScriptedPDTHTTPTransport.Reply.response(
+            status: 200,
+            body: Data(#"{"access_token":"\#(access)","expires_in":3600,"refresh_token":"\#(refresh)","token_type":"Bearer"}"#.utf8)
+        )
+    }
+    let ok = ScriptedPDTHTTPTransport.Reply.response(status: 200, body: Data(#"{"data":{}}"#.utf8))
+    let tokens = ScriptedPDTHTTPTransport([
+        tokenReply(secrets[1], secrets[2]),
+        tokenReply(secrets[3], secrets[4]),
+        .response(status: 400, body: Data(#"{"error":"invalid_grant"}"#.utf8)),
+    ])
+    let api = ScriptedPDTHTTPTransport(Array(repeating: ok, count: 7))
+    let clock = SmokeClock()
+    let tokenEndpoint = PDTTokenEndpoint(
+        client: PDTOAuthClient(id: "scripted-client", redirectPort: 0),
+        transport: tokens,
+        now: { clock.now }
+    )
+    let connection = PDTConnection(store: InMemoryPDTCredentialStore(), tokenEndpoint: tokenEndpoint, now: { clock.now })
+    let client = PDTAPIClient(transport: api, tokenProvider: connection)
+
+    let session = try PDTBrowserSignIn(tokenEndpoint: tokenEndpoint, timeout: 10) { authorize in
+        let query = Dictionary(
+            (URLComponents(url: authorize, resolvingAgainstBaseURL: false)?.queryItems ?? []).map { ($0.name, $0.value ?? "") },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var callback = URLComponents(string: query["redirect_uri"] ?? "")!
+        callback.queryItems = [URLQueryItem(name: "code", value: secrets[0]), URLQueryItem(name: "state", value: query["state"])]
+        URLSession(configuration: .ephemeral).dataTask(with: callback.url!).resume()
+    }.run()
+    try connection.signedIn(session)
+
+    clock.advance(by: 3600)
+    let concurrentFailures = SmokeCounter()
+    DispatchQueue.concurrentPerform(iterations: 6) { _ in
+        do {
+            _ = try client.get(.me)
+        } catch {
+            concurrentFailures.increment()
+        }
+    }
+    let refreshesForConcurrentReads = tokens.requests.count - 1
+
+    clock.advance(by: 3600)
+    var reconnectSurfaced = false
+    do {
+        _ = try client.get(.me)
+    } catch PDTAPIError.tokenInvalid {
+        reconnectSurfaced = true
+    }
+    let needsReconnect = try connection.state() == .needsReconnect(.browserSession, .refreshRejected)
+
+    try connection.connect(personalToken: PDTAPIToken.personal(pasted: secrets[5]))
+    _ = try client.get(.me)
+    let revokeAt = try connection.disconnect()
+    let disconnected = try connection.state() == .disconnected
+
+    let tokenRequests = tokens.requests
+    let apiRequests = api.requests
+    let proofPayload = ScriptedAPIAuthProof(
+        tokenRequestCount: tokenRequests.count,
+        apiRequestCount: apiRequests.count,
+        tokenRequestsOnlyPOSTToTokenEndpoint: tokenRequests.allSatisfy {
+            $0.httpMethod == "POST" && $0.url?.absoluteString == "https://auth.portfoliodividendtracker.com/oauth/token"
+        },
+        apiRequestsOnlyGET: apiRequests.allSatisfy { $0.httpMethod == "GET" && $0.httpBody == nil },
+        concurrentReadFailures: concurrentFailures.value,
+        refreshesForConcurrentReads: refreshesForConcurrentReads,
+        concurrentReadsUsedRotatedToken: apiRequests.prefix(6).allSatisfy {
+            $0.value(forHTTPHeaderField: "Authorization") == "Bearer \(secrets[3])"
+        },
+        invalidGrantNeedsReconnect: reconnectSurfaced && needsReconnect,
+        personalTokenSent: apiRequests.last?.value(forHTTPHeaderField: "Authorization") == "Bearer \(secrets[5])",
+        disconnected: disconnected,
+        revokeAt: revokeAt.absoluteString
+    )
+    let proofData = try stableJSONData(proofPayload)
+    try proofData.write(to: proof, options: .atomic)
+    let proofText = String(decoding: proofData, as: UTF8.self)
+
+    guard proofPayload.tokenRequestCount == 3,
+          proofPayload.apiRequestCount == 7,
+          proofPayload.tokenRequestsOnlyPOSTToTokenEndpoint,
+          proofPayload.apiRequestsOnlyGET,
+          proofPayload.concurrentReadFailures == 0,
+          proofPayload.refreshesForConcurrentReads == 1,
+          proofPayload.concurrentReadsUsedRotatedToken,
+          proofPayload.invalidGrantNeedsReconnect,
+          proofPayload.personalTokenSent,
+          proofPayload.disconnected,
+          secrets.allSatisfy({ !proofText.contains($0) })
+    else {
+        return SmokeReport(
+            name: "scripted-api-auth",
+            status: SmokeStatus.failed,
+            detail: "scripted PDT sign-in did not prove loopback code exchange, single-flight refresh, reconnect on invalid_grant, the pasted-token path, disconnect, or secret-free proof",
+            artifacts: [artifactPath(proof)]
+        )
+    }
+    return SmokeReport(
+        name: "scripted-api-auth",
+        status: SmokeStatus.passed,
+        detail: "scripted PDT sign-in exchanged a loopback callback code, shared one refresh across 6 concurrent reads, moved to reconnect on invalid_grant, read with a pasted token, disconnected, and kept every secret out of proof",
+        artifacts: [artifactPath(proof)]
+    )
+}
+
+private struct ScriptedAPIAuthProof: Codable {
+    var tokenRequestCount: Int
+    var apiRequestCount: Int
+    var tokenRequestsOnlyPOSTToTokenEndpoint: Bool
+    var apiRequestsOnlyGET: Bool
+    var concurrentReadFailures: Int
+    var refreshesForConcurrentReads: Int
+    var concurrentReadsUsedRotatedToken: Bool
+    var invalidGrantNeedsReconnect: Bool
+    var personalTokenSent: Bool
+    var disconnected: Bool
+    var revokeAt: String
+}
+
+private final class SmokeClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current = Date()
+
+    var now: Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return current
+    }
+
+    func advance(by seconds: TimeInterval) {
+        lock.lock()
+        current += seconds
+        lock.unlock()
+    }
+}
+
+private final class SmokeCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func increment() {
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
 }
 
 private func scriptedAPISnapshotSmoke(arguments: [String]) throws -> SmokeReport {
