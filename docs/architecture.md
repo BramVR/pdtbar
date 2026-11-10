@@ -65,8 +65,11 @@ error envelope, bounded retries for 429/5xx/transient transport failures with
 response logging. `URLSessionPDTHTTPTransport` refuses redirects so the bearer
 token never leaves the PDT origin. `getReportingAttempts` and
 `getAllReportingAttempts` also return how many requests a call sent, retries
-and pages included, and throw `PDTAPIRequestFailure` with that count, so
-refresh diagnostics persist real attempt counts.
+and pages included, and throw `PDTAPIRequestFailure` with that count, so a
+stored sync failure names the real request count. The failure also carries the
+trace id of the response that failed the call (`X-Request-Id`, else
+`error.traceId`), kept only when it is a canonical UUID or 32 hex digits
+(`PDTTraceID`).
 
 `PDTConnection` (#245) is the PDT credential layer; the app holds one per
 store through `PDTAppConnection` (#248). The stored value is `PDTConnectionState`: `disconnected`,
@@ -103,18 +106,49 @@ for the income join, and prices come from `prices/batch` in chunks of 50. Every
 phase fills one in-memory snapshot. The store is written once, by
 `PressureRunner.refreshedPulse`, so a cancel (quit, account switch) or a failed
 required base leaves the last good snapshot on disk. A failed optional phase
-keeps the prior facet and degrades the outcome. An auth or setup outage skips
-every later phase, price batches included. Performance is reported unavailable
-until the REST performance shapes are mapped.
+keeps the prior facet and degrades the outcome. A failure that ends the sync
+skips every later phase, price batches included: lost access (`401`, `403`, an
+unreadable credential store) or a `429` that outlasts the client's own retries
+(`PDTSyncFailure.Kind.endsSync`). Performance is reported unavailable until the
+REST performance shapes are mapped.
 
-`DataHealth` composes runtime/source facts into model state: Claude/PDT
-readiness, required read tools, read-only policy, cache/source, detail-fill,
-freshness, read-state, and redacted diagnostics. Menu descriptors render this
-state; AppKit does not derive health facts. Source facts follow the pulse
-source: live fetches claim verified readiness/tools/policy, cached snapshots
-claim nothing until the launch flow's last-known readiness is applied on
-republish, and cached-pulse freshness is evaluated against the current day
-rather than only the snapshot's own asOf.
+`PDTSyncFailure` (`Sources/PDTBarCore/PDTSyncFailure.swift`) is why one PDT
+request of a sync failed: the phase, the `PDTAPIEndpoint`, a `Kind`, the
+request count, and an optional `PDTTraceID`. `Kind.init` is one exhaustive
+switch over `PDTAPIError` with no `default`. Every stored property is a closed
+enum, an Int, or a validated trace id, and no initializer takes text, so a
+token, account id, URL, or response body cannot be stored, shown, or copied.
+`DataHealthRedactionTests` holds that line with a `Mirror` walk and planted
+secrets. The last failure is persisted as `latest-sync-failure.json`
+(`SnapshotStore.lastSyncFailure`); an unreadable or foreign file is no failure.
+The Claude refresh keeps its own `PDTDetailRefreshFailureDiagnostic` and
+`latest-detail-refresh-diagnostic.json` until #250 deletes it; neither feeds
+Data Health.
+
+`DataHealth` (`Sources/PDTBarCore/FreshnessHealth.swift`) reports PDT API
+access as separate facts, one row each in the Data health submenu:
+
+- Source: PDT, read-only, and whether the pulse was fetched this session or is
+  a saved copy.
+- Access: the connection, from `PDTLaunchState` (`DataHealthAccess`).
+- Cache: the last sync (`asOf` of the committed snapshot) and, when it differs,
+  the last sync that filled every detail.
+- Prices: price freshness, judged against the current day for a saved copy.
+- Detail fill, Read state, and Diagnostics: the last `PDTSyncFailure` with what
+  to do about it, plus `Copy diagnostics`.
+
+Each fact has one writer. The pulse owns source, cache, prices, read state, and
+the detail fill and failure of the sync that built it (`DataHealth.build`). The
+running app owns access and live sync activity, and
+`DataHealth.snapshot(_:in:)` merges those onto the pulse's health.
+`PDTLaunchRuntime.descriptor()` is the only caller in the app, through
+`PulseLifecycleResult.descriptor(in:)`, so every screen that keeps a pulse
+(refresh progress, failure, reconnect, paused, Keychain) shows the same health.
+The merge cannot write source, cache, or prices, so a failed refresh moves no
+date. A saved copy is never `healthy`, so a pulse from disk cannot look freshly
+fetched. Menu descriptors render this state; AppKit does not derive health
+facts. `FacetSnapshots` rebuilds `dataHealth` when the stored shape is not this
+one, so model JSON from an older build still decodes.
 
 Live and fixture PDT decoders both feed PDT-shaped DTO inputs into
 `PDTSnapshotNormalizer`, so holding filtering, symbol quote joins, dividend

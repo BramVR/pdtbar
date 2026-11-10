@@ -58,7 +58,10 @@ swift run pdtbar-smoke scripted-returning-launch
 
 `make check` is bounded to local deterministic checks: script syntax, Swift
 build, `pdtbar-checks`, and the sharded Swift test runner. The checks executable
-keeps command-style fixture/connector and tooling-contract proof; Swift tests
+keeps command-style fixture/connector and tooling-contract proof, plus PDT API
+Data health proof over an in-memory script (a saved copy is never healthy, last
+sync stays apart from price freshness after a failed refresh, and copied
+diagnostics hold nothing a `429` answer carried); Swift tests
 own core model, parser, runner, normalization, and rendering regressions. Non-AX
 scripted smokes can be run directly with `swift run pdtbar-smoke <name>` when
 launch/setup/menu behavior is in scope. Live Claude/PDT, Keychain, 1Password,
@@ -102,6 +105,18 @@ This uses no network, no real credentials, and no Keychain. It replays
 `pdtbar-scripted-api-snapshot-proof.json` with the request paths, GET-only and
 PDT-origin checks, per-facet counts, and the degraded flag. It fails if any facet
 degrades or the fake token appears in the proof.
+
+It then runs six failed background refreshes in-process, each over a store that
+holds a saved copy: `401 TOKEN_INVALID`, `403 INSUFFICIENT_SCOPE`,
+`403 API_ACCESS_PAUSED`, `429` with `Retry-After: 120`, `503`, and an
+undecodable `200`. Every answer carries a planted token, account id, URL, and
+body text. `failedSyncs` in the proof records, per answer, the stored
+`PDTSyncFailure`, the Data health Diagnostics detail, the copied diagnostics
+text, and the saved copy's last sync. The smoke fails unless each refresh
+stores the expected failure kind, the Diagnostics detail says what to do, the
+saved copy and its last sync are unchanged and not healthy, and no planted
+value appears in the stored failure, the Data health JSON, any Data health row,
+the copied text, or the proof.
 
 Scripted PDT sign-in:
 
