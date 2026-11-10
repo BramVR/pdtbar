@@ -20,6 +20,5 @@ A pass covers the model and its bounds only. Each skill lists what its model lea
 ## Models
 
 - `launch-runtime`: launch, PDT connection check / sign-in / disconnect, first fetch, cached pulse, background refresh wiring. Skill `verify-launch-runtime`. Check: `formal/launch-runtime/check.sh`. Mutations: `formal/launch-runtime/mutations.sh`.
-- `claude-login-process`: `claude auth login` PTY run, timeout, cancellation, process-group cleanup. Legacy: the app no longer starts a Claude login (#248); kept until #250 deletes `ClaudeLocalLoginRunner`. Skill `verify-claude-login-process`. Mutations: `formal/claude-login-process/mutations.sh`.
 - `pulse-read-state`: mark-as-read, read-state reset, snapshot commit ordering. Skill `verify-pulse-read-state`. Check: `formal/pulse-read-state/check.sh`.
 - `background-detail-refresh`: phases, retries, cancellation, outage skip, price-history worker pool and deadline. Skill `verify-background-detail-refresh`. Mutations: `formal/background-detail-refresh/mutations.sh`.
