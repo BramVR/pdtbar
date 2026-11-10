@@ -128,7 +128,7 @@ swift run pdtbar-dev pdt-disconnect --store <file>
 ```
 
 These use the registered "pdtbar" app, port 47245, and a mode-0600 file store at
-the given path, never the Keychain. Output is states, expiry, HTTP statuses,
+the given path (plus a sibling `<name>.lock`), never the Keychain. Output is states, expiry, HTTP statuses,
 `/v1/me` key names, and token SHA-256 fingerprints; never token values. Delete
 the store file after proof and revoke the grant in PDT's connected apps page.
 

@@ -66,14 +66,18 @@ app (#248). The stored value is `PDTConnectionState`: `disconnected`,
 `connected(PDTCredential)` (a browser session or a pasted personal token), or
 `needsReconnect(kind, reason)`, and `PDTConnectionState.applying` holds every
 transition. `PDTConnection` is the API client's token provider: it re-reads
-the store on each call, refreshes the browser session under one lock shortly
-before expiry or on `401 TOKEN_INVALID`, writes the rotated pair before
-returning it, and moves to `needsReconnect` on `invalid_grant`.
+the store on each call, refreshes the browser session shortly before expiry or
+on `401 TOKEN_INVALID` while holding the store's exclusive access (an in-process
+lock, or `flock` on a lock file for the file and Keychain stores) from load
+through the token endpoint to save, writes the rotated pair before returning
+it, keeps a pair the store refused until it is stored, backs off after a
+refresh that got no answer, and moves to `needsReconnect` on `invalid_grant`.
 `PDTBrowserSignIn` runs S256 PKCE with a random `state`, opens the injected
-browser, and waits for one callback on a `127.0.0.1:47245` loopback listener.
-Stores are `InMemoryPDTCredentialStore` (tests, smokes),
-`FilePDTCredentialStore` (dev proof, mode 0600), and
-`KeychainPDTCredentialStore` in app support (production). Tokens print only as
+browser, and waits on a `127.0.0.1:47245` loopback listener for the callback
+that carries that `state`; other requests get an error page. Stores are
+`InMemoryPDTCredentialStore` (tests, smokes), `FilePDTCredentialStore` (dev
+proof, mode 0600, sibling `.lock`), and `KeychainPDTCredentialStore` in app
+support (production, lock file in a given directory). Tokens print only as
 redacted descriptions or SHA-256 fingerprints.
 
 `PDTAPIDataSource` (#246) is the `PortfolioDataSource` over that client, also not
