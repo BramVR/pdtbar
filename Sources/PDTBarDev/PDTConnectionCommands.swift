@@ -49,7 +49,7 @@ enum PDTConnectionCommand {
             return ["state: disconnected"]
         case let .needsReconnect(kind, reason):
             let detail = switch reason {
-            case .refreshRejected: "refresh-rejected"
+            case let .refreshRejected(rejected): "refresh-rejected (\(rejected))"
             case let .tokenRejected(reason): "token-rejected (\(reason ?? "unknown"))"
             }
             return ["state: needs-reconnect", "credential: \(kind.rawValue)", "reason: \(detail)"]

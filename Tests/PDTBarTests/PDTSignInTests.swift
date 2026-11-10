@@ -215,16 +215,21 @@ struct PDTConnectionTests {
         #expect(try store.load() == .connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600))))
     }
 
-    @Test("A refresh PDT accepted wins over a concurrent rejection of the pair it rotated, and a stale refresh never regresses the store")
+    @Test("A refresh PDT accepted wins over a concurrent rejection of the pair it rotated, and a stale refresh or rejection never regresses the store")
     func acceptedRefreshWinsOverRejection() throws {
         let first = session("access-1", "refresh-1", expiresAt: testNow)
         let second = session("access-2", "refresh-2", expiresAt: testNow + 3600)
         let third = session("access-3", "refresh-3", expiresAt: testNow + 7200)
         let refreshedSecond = PDTConnectionEvent.refreshed(second, from: first.refreshToken)
+        let firstRejected = PDTConnectionState.needsReconnect(.browserSession, .refreshRejected(first.refreshToken.fingerprint))
+        let thirdRejected = PDTConnectionState.needsReconnect(.browserSession, .refreshRejected(third.refreshToken.fingerprint))
 
         #expect(PDTConnectionState.connected(.browserSession(first)).applying(refreshedSecond) == .connected(.browserSession(second)))
-        #expect(PDTConnectionState.needsReconnect(.browserSession, .refreshRejected).applying(refreshedSecond) == .connected(.browserSession(second)))
+        #expect(PDTConnectionState.connected(.browserSession(first)).applying(.refreshRejected(first.refreshToken)) == firstRejected)
+        #expect(firstRejected.applying(refreshedSecond) == .connected(.browserSession(second)))
+        #expect(thirdRejected.applying(refreshedSecond) == thirdRejected)
         #expect(PDTConnectionState.connected(.browserSession(third)).applying(refreshedSecond) == .connected(.browserSession(third)))
+        #expect(PDTConnectionState.connected(.browserSession(third)).applying(.refreshRejected(first.refreshToken)) == .connected(.browserSession(third)))
         #expect(PDTConnectionState.connected(.personalToken(PDTAPIToken("p"))).applying(refreshedSecond) == .connected(.personalToken(PDTAPIToken("p"))))
         #expect(PDTConnectionState.disconnected.applying(refreshedSecond) == .disconnected)
 
@@ -319,9 +324,54 @@ struct PDTConnectionTests {
         let connection = connection(store, tokens)
 
         #expect(throws: PDTAPIError.tokenInvalid(reason: nil)) { try connection.currentToken() }
-        #expect(try connection.state() == .needsReconnect(.browserSession, .refreshRejected))
+        #expect(try connection.state() == .needsReconnect(.browserSession, .refreshRejected(PDTRefreshToken("refresh-1").fingerprint)))
         #expect(throws: PDTAPIError.tokenInvalid(reason: nil)) { try connection.currentToken() }
         #expect(tokens.requests.count == 1)
+    }
+
+    @Test("A rotated pair the store refused survives a replacement the store also refuses, and the retried replacement lands", arguments: [false, true])
+    func rotatedPairSurvivesFailedReplacement(signIn: Bool) throws {
+        let store = FailingSaveStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1))), failures: 2)
+        let tokens = ScriptedPDTHTTPTransport([tokenReply(access: "access-2", refresh: "refresh-2"), oauthError(400, "invalid_grant")])
+        let connection = connection(store, tokens)
+        let replacement = session("access-9", "refresh-9", expiresAt: testNow + 3600)
+        let replace = {
+            if signIn {
+                try connection.signedIn(replacement)
+            } else {
+                try connection.disconnect()
+            }
+        }
+
+        #expect(throws: PDTCredentialStoreError.writeFailed(code: EIO)) { try connection.currentToken() }
+        #expect(throws: PDTCredentialStoreError.writeFailed(code: EIO)) { try replace() }
+
+        #expect(try connection.currentToken() == PDTAPIToken("access-2"))
+        #expect(try store.load() == .connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600))))
+
+        try replace()
+
+        #expect(try store.load() == (signIn ? .connected(.browserSession(replacement)) : .disconnected))
+        #expect(tokens.requests.count == 1)
+    }
+
+    @Test("A pending pair from a sign-in the user disconnected never reconnects it after a later sign-in is rejected")
+    func pendingPairFromDisconnectedSignInStaysDropped() throws {
+        let store = FailingSaveStore(.connected(.browserSession(session("access-x1", "refresh-x1", expiresAt: testNow - 1))), failures: 1)
+        let tokens = ScriptedPDTHTTPTransport([tokenReply(access: "access-x2", refresh: "refresh-x2"), oauthError(400, "invalid_grant")])
+        let stale = connection(store, tokens)
+        let current = connection(store, tokens)
+        let laterSignInRejected = PDTConnectionState.needsReconnect(.browserSession, .refreshRejected(PDTRefreshToken("refresh-y1").fingerprint))
+
+        #expect(throws: PDTCredentialStoreError.writeFailed(code: EIO)) { try stale.currentToken() }
+        try current.disconnect()
+        try current.signedIn(session("access-y1", "refresh-y1", expiresAt: testNow - 1))
+        #expect(throws: PDTAPIError.tokenInvalid(reason: nil)) { try current.currentToken() }
+        #expect(try store.load() == laterSignInRejected)
+
+        #expect(throws: PDTAPIError.tokenInvalid(reason: nil)) { try stale.currentToken() }
+        #expect(try store.load() == laterSignInRejected)
+        #expect(tokens.requests.count == 2)
     }
 
     @Test("invalid_grant after another process already rotated the pair adopts the stored pair")
@@ -371,7 +421,7 @@ struct PDTConnectionTests {
         }
         #expect(formItems(try #require(tokens.requests.only))["refresh_token"] == "refresh-1")
         #expect(api.requests.count == 1)
-        #expect(try store.load() == .needsReconnect(.browserSession, .refreshRejected))
+        #expect(try store.load() == .needsReconnect(.browserSession, .refreshRejected(PDTRefreshToken("refresh-1").fingerprint)))
     }
 
     @Test("A transient refresh failure keeps using an access token that has not expired yet")
@@ -425,7 +475,7 @@ struct PDTConnectionTests {
 
     @Test("Sign-in replaces a needs-reconnect state")
     func signInAfterReconnect() throws {
-        let store = InMemoryPDTCredentialStore(.needsReconnect(.browserSession, .refreshRejected))
+        let store = InMemoryPDTCredentialStore(.needsReconnect(.browserSession, .refreshRejected(PDTRefreshToken("refresh-1").fingerprint)))
         let connection = connection(store, ScriptedPDTHTTPTransport([]))
 
         try connection.signedIn(session("access-9", "refresh-9", expiresAt: testNow + 3600))
@@ -474,6 +524,7 @@ struct PDTCredentialStorageTests {
             PDTCredential.browserSession(browser),
             PDTConnectionState.connected(.browserSession(browser)),
             PDTConnectionState.connected(.personalToken(PDTAPIToken(secrets[2]))),
+            PDTConnectionState.needsReconnect(.browserSession, .refreshRejected(PDTRefreshToken(secrets[1]).fingerprint)),
             PDTConnectionEvent.signedIn(browser),
             PDTAPIToken(secrets[0]).fingerprint,
         ]

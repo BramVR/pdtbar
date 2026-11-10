@@ -5,9 +5,10 @@ import Foundation
 /// load through the token endpoint to save, so a refresh is single-flight
 /// across connections and processes: callers that arrive while it runs wait,
 /// then read the rotated pair from the store. A rotated pair the store
-/// refused stays in `unpersisted` until it is stored, because PDT has already
-/// killed the old one. A refresh that got no answer sets `hold`, and callers
-/// inside it share that failure instead of each sending a refresh.
+/// refused stays in `unpersisted` until it is stored or a sign-in, token, or
+/// disconnect replaces it in the store, because PDT has already killed the old
+/// one. A refresh that got no answer sets `hold`, and callers inside it share
+/// that failure instead of each sending a refresh.
 public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
     public static let refreshLeeway: TimeInterval = 300
     private static let refreshRetryBase: TimeInterval = 5
@@ -105,10 +106,12 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
         do {
             rotated = try tokenEndpoint.refresh(session.refreshToken)
         } catch PDTTokenEndpointError.invalidGrant {
-            if let rotated = try sessionRotatedByAnotherProcess(since: session) {
+            // The table ignores a rejection of a pair another process has already rotated past.
+            let state = try transition(.refreshRejected(session.refreshToken))
+            if case let .connected(.browserSession(rotated)) = state {
                 return rotated
             }
-            throw try connectionError(transition(.refreshRejected))
+            throw connectionError(state)
         } catch let PDTTokenEndpointError.unavailable(failure) {
             let failures = (hold?.failures ?? 0) + 1
             let delay = failure.retryAfter ?? min(Self.refreshRetryBase * pow(2, Double(failures - 1)), Self.refreshRetryCap)
@@ -140,16 +143,10 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
     }
 
     private func replace(with event: PDTConnectionEvent) throws {
+        // Cleared only once the replacement is stored: until then the pending pair is the only live one.
+        _ = try transition(event)
         unpersisted = nil
         hold = nil
-        _ = try transition(event)
-    }
-
-    private func sessionRotatedByAnotherProcess(since session: PDTBrowserSession) throws -> PDTBrowserSession? {
-        guard case let .connected(.browserSession(stored)) = try store.load(), stored.refreshToken != session.refreshToken else {
-            return nil
-        }
-        return stored
     }
 
     private func connectedCredential() throws -> PDTCredential {

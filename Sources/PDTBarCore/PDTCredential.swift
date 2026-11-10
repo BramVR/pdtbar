@@ -24,17 +24,18 @@ public struct PDTRefreshToken: Sendable, Equatable, Codable, CustomStringConvert
     public var customMirror: Mirror { Mirror(self, children: []) }
 }
 
-/// The only printable view of a secret: a SHA-256 prefix and the length.
-public struct PDTSecretFingerprint: Sendable, Equatable, CustomStringConvertible {
-    public let sha256Prefix: String
+/// The only non-secret view of a secret: its SHA-256 and length. It names a
+/// token in stored state and diagnostics; `description` shows a prefix.
+public struct PDTSecretFingerprint: Sendable, Equatable, Codable, CustomStringConvertible {
+    public let sha256: String
     public let length: Int
 
     init(_ secret: String) {
-        sha256Prefix = SHA256.hash(data: Data(secret.utf8)).prefix(4).map { String(format: "%02x", $0) }.joined()
+        sha256 = SHA256.hash(data: Data(secret.utf8)).map { String(format: "%02x", $0) }.joined()
         length = secret.utf8.count
     }
 
-    public var description: String { "sha256:\(sha256Prefix) len=\(length)" }
+    public var description: String { "sha256:\(sha256.prefix(8)) len=\(length)" }
 }
 
 /// What browser sign-in yields. PDT rotates both tokens on every refresh and
@@ -77,8 +78,9 @@ public enum PDTCredentialKind: String, Sendable, Equatable, Codable {
 }
 
 public enum PDTReconnectReason: Sendable, Equatable, Codable {
-    /// The token endpoint answered `invalid_grant`: the sign-in was revoked or lapsed.
-    case refreshRejected
+    /// The token endpoint answered `invalid_grant` for the refresh token with
+    /// this fingerprint: the sign-in was revoked or lapsed.
+    case refreshRejected(PDTSecretFingerprint)
     /// PDT answered `401 TOKEN_INVALID` for the current token and it could not
     /// be refreshed. `reason` is PDT's `details.reason`.
     case tokenRejected(reason: String?)
@@ -99,7 +101,8 @@ public enum PDTConnectionEvent: Sendable {
     case personalTokenEntered(PDTAPIToken)
     /// `from` is the refresh token PDT rotated to produce the session.
     case refreshed(PDTBrowserSession, from: PDTRefreshToken)
-    case refreshRejected
+    /// The token endpoint answered `invalid_grant` for this refresh token.
+    case refreshRejected(PDTRefreshToken)
     case tokenRejected(PDTAPIToken, reason: String?)
     case disconnected
 }
@@ -109,7 +112,9 @@ public extension PDTConnectionState {
     /// longer current (a refresh after a disconnect, a rejection of a token
     /// that was already rotated, a refresh of a pair the store has moved past)
     /// leave the state alone. A refresh PDT accepted proves the chain is live,
-    /// so it wins over a concurrent `refreshRejected` of the same pair.
+    /// so it wins over a concurrent `refreshRejected` of the pair it rotated,
+    /// and only of that pair: a rejection names the pair it lost, so a pair
+    /// from a sign-in the user has since replaced cannot reconnect it.
     func applying(_ event: PDTConnectionEvent) -> PDTConnectionState {
         switch (self, event) {
         case let (_, .signedIn(session)):
@@ -120,10 +125,10 @@ public extension PDTConnectionState {
             return .disconnected
         case let (.connected(.browserSession(current)), .refreshed(session, from)) where current.refreshToken == from:
             return .connected(.browserSession(session))
-        case let (.needsReconnect(.browserSession, .refreshRejected), .refreshed(session, _)):
+        case let (.needsReconnect(.browserSession, .refreshRejected(rejected)), .refreshed(session, from)) where from.fingerprint == rejected:
             return .connected(.browserSession(session))
-        case (.connected(.browserSession), .refreshRejected):
-            return .needsReconnect(.browserSession, .refreshRejected)
+        case let (.connected(.browserSession(current)), .refreshRejected(rejected)) where current.refreshToken == rejected:
+            return .needsReconnect(.browserSession, .refreshRejected(rejected.fingerprint))
         case let (.connected(credential), .tokenRejected(token, reason)) where credential.accessToken == token:
             return .needsReconnect(credential.kind, .tokenRejected(reason: reason))
         case (_, .refreshed), (_, .refreshRejected), (_, .tokenRejected):

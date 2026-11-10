@@ -1678,7 +1678,7 @@ private func scriptedAPIAuthSmoke(arguments: [String]) throws -> SmokeReport {
     } catch PDTAPIError.tokenInvalid {
         reconnectSurfaced = true
     }
-    let needsReconnect = try connection.state() == .needsReconnect(.browserSession, .refreshRejected)
+    let needsReconnect = try connection.state() == .needsReconnect(.browserSession, .refreshRejected(PDTRefreshToken(secrets[4]).fingerprint))
 
     try connection.connect(personalToken: PDTAPIToken.personal(pasted: secrets[5]))
     _ = try client.get(.me)
