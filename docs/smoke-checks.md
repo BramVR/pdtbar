@@ -126,6 +126,19 @@ swift run pdtbar-dev pdt-refresh --store <file>
 swift run pdtbar-dev pdt-disconnect --store <file>
 ```
 
+Live app over that store (opt-in, live PDT reads; never in the default gate):
+
+```bash
+swift build --product pdtbar
+.build/debug/pdtbar --app-support-dir .build/live/<run>/app-support --pdt-credential-file <file>
+```
+
+`--pdt-credential-file` runs the product path (connection check, first fetch,
+background refresh) over the dev file store instead of the Keychain, which an
+ad-hoc dev build cannot use. It requires an isolated `--app-support-dir`, and
+the snapshot it writes holds real portfolio data: keep it under `.build/`, never
+in proof. Report counts, statuses, and outcomes only.
+
 These use the registered "pdtbar" app, port 47245, and a mode-0600 file store at
 the given path (plus a sibling `<name>.lock`), never the Keychain. Output is states, expiry, HTTP statuses,
 `/v1/me` key names, and token SHA-256 fingerprints; never token values. Delete

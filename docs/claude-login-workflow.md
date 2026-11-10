@@ -22,7 +22,7 @@ Launch shows `Checking PDT connection`, loads the cached pulse, and only then re
 
 Launch never opens a browser, a Keychain prompt, or any other prompt. It never spawns the Claude CLI, `mcporter`, or any other process, and never falls back to fixtures.
 
-Smokes pass `--scripted-pdt <file>` together with an isolated `--app-support-dir`: an in-memory credential (or the Keychain store over a fake SecItem API), a scripted sign-in, and scripted API replies (`ScriptedPDTConnection`). The flag is refused without an isolated app support directory.
+Smokes pass `--scripted-pdt <file>` together with an isolated `--app-support-dir`: an in-memory credential (or the Keychain store over a fake SecItem API), a scripted sign-in, and scripted API replies (`ScriptedPDTConnection`). The flag is refused without an isolated app support directory. For dev live proof, `--pdt-credential-file <file>` runs the same path over the mode-0600 file store `pdtbar-dev pdt-*` uses (see [`smoke-checks.md`](smoke-checks.md)); it also needs an isolated app support directory.
 
 ## Connection states
 

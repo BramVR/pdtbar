@@ -40,6 +40,28 @@ struct LaunchOptionTests {
         #expect(options.appSupportDirectory == URL(fileURLWithPath: "/tmp/pdtbar-isolated"))
     }
 
+    @Test("A dev credential file runs only against an isolated app support directory and never with a script")
+    func credentialFileNeedsIsolatedAppSupport() throws {
+        for arguments in [
+            ["--pdt-credential-file", "/tmp/pdt.json"],
+            ["--app-support-dir", "/tmp/a", "--pdt-credential-file", "/tmp/pdt.json", "--scripted-pdt", "/tmp/s.json"],
+            ["--fixture", "/tmp/f.json", "--app-support-dir", "/tmp/a", "--pdt-credential-file", "/tmp/pdt.json"],
+        ] {
+            #expect(throws: PDTBarLaunchOptionError.usage, "\(arguments)") {
+                try PDTBarLaunchOptionParser.parse(arguments: arguments, environment: [:])
+            }
+        }
+
+        let options = try PDTBarLaunchOptionParser.parse(
+            arguments: ["--app-support-dir", "/tmp/pdtbar-isolated", "--pdt-credential-file", "/tmp/pdt.json"],
+            environment: [:]
+        )
+
+        #expect(options.mode == .pdtAPI)
+        #expect(options.credentialFile == URL(fileURLWithPath: "/tmp/pdt.json"))
+        #expect(options.scriptedConnection == nil)
+    }
+
     @Test("A scripted PDT connection cannot be combined with a fixture launch")
     func scriptedConnectionRejectsFixture() {
         #expect(throws: PDTBarLaunchOptionError.usage) {

@@ -33,15 +33,19 @@ public final class PDTAppConnection: @unchecked Sendable {
         self.log = log
     }
 
-    /// Keychain store with its lock in `<appSupport>/pdtbar`, URLSession, and browser sign-in.
+    /// URLSession and browser sign-in over the Keychain store (lock in
+    /// `<appSupport>/pdtbar`), or over a dev file store when `credentialFile` is set.
     public static func production(
         appSupportDirectory: URL,
+        credentialFile: URL? = nil,
         openBrowser: @escaping @Sendable (URL) throws -> Void
     ) -> PDTAppConnection {
         let transport = URLSessionPDTHTTPTransport()
         let tokenEndpoint = PDTTokenEndpoint(transport: transport)
+        let store: any PDTCredentialStore = credentialFile.map { FilePDTCredentialStore(url: $0) }
+            ?? KeychainPDTCredentialStore(lockDirectory: appSupportDirectory.appending(path: "pdtbar"))
         return PDTAppConnection(
-            store: KeychainPDTCredentialStore(lockDirectory: appSupportDirectory.appending(path: "pdtbar")),
+            store: store,
             tokenEndpoint: tokenEndpoint,
             apiTransport: transport,
             signIn: { cancellation in

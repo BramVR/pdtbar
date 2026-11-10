@@ -14,17 +14,23 @@ public struct PDTBarLaunchOptions: Equatable {
     /// `--scripted-pdt <file>`: fake credential store, sign-in, and API replies for
     /// smokes. Accepted only with an isolated app support directory.
     public var scriptedConnection: URL?
+    /// `--pdt-credential-file <file>`: dev live proof over the mode-0600 file store
+    /// `pdtbar-dev pdt-*` uses, instead of the Keychain (an ad-hoc dev build has no
+    /// keychain entitlement). Live PDT; accepted only with an isolated app support directory.
+    public var credentialFile: URL?
 
     public init(
         mode: PDTBarLaunchMode,
         snapshotDirectory: URL? = nil,
         appSupportDirectory: URL? = nil,
-        scriptedConnection: URL? = nil
+        scriptedConnection: URL? = nil,
+        credentialFile: URL? = nil
     ) {
         self.mode = mode
         self.snapshotDirectory = snapshotDirectory
         self.appSupportDirectory = appSupportDirectory
         self.scriptedConnection = scriptedConnection
+        self.credentialFile = credentialFile
     }
 }
 
@@ -41,6 +47,7 @@ public enum PDTBarLaunchOptionParser {
         var snapshotDirectory: URL?
         var appSupportDirectory: URL?
         var scriptedConnection: URL?
+        var credentialFile: URL?
         var index = 0
         while index < arguments.count {
             switch arguments[index] {
@@ -56,6 +63,9 @@ public enum PDTBarLaunchOptionParser {
             case "--scripted-pdt" where index + 1 < arguments.count:
                 scriptedConnection = URL(fileURLWithPath: arguments[index + 1])
                 index += 2
+            case "--pdt-credential-file" where index + 1 < arguments.count:
+                credentialFile = URL(fileURLWithPath: arguments[index + 1])
+                index += 2
             default:
                 throw PDTBarLaunchOptionError.usage
             }
@@ -65,7 +75,7 @@ public enum PDTBarLaunchOptionParser {
             ?? environment["PDTBAR_APP_SUPPORT_DIR"].map { URL(fileURLWithPath: $0) }
 
         if let fixture {
-            guard scriptedConnection == nil else {
+            guard scriptedConnection == nil, credentialFile == nil else {
                 throw PDTBarLaunchOptionError.usage
             }
             let configuredSnapshotDirectory = snapshotDirectory
@@ -77,14 +87,19 @@ public enum PDTBarLaunchOptionParser {
             )
         }
 
-        // A script never runs against the user's real app state.
-        guard snapshotDirectory == nil, scriptedConnection == nil || appSupportDirectory != nil else {
+        // A script or dev credential never runs against the user's real app state.
+        let overridesStore = scriptedConnection != nil || credentialFile != nil
+        guard snapshotDirectory == nil,
+              scriptedConnection == nil || credentialFile == nil,
+              !overridesStore || appSupportDirectory != nil
+        else {
             throw PDTBarLaunchOptionError.usage
         }
         return PDTBarLaunchOptions(
             mode: .pdtAPI,
             appSupportDirectory: appSupportDirectory,
-            scriptedConnection: scriptedConnection
+            scriptedConnection: scriptedConnection,
+            credentialFile: credentialFile
         )
     }
 }

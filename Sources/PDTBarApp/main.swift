@@ -83,7 +83,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return try ScriptedPDTConnection.load(script)
                 .appConnection(lockDirectory: appSupportDirectory().appending(path: "pdtbar"))
         }
-        return PDTAppConnection.production(appSupportDirectory: appSupportDirectory()) { url in
+        return PDTAppConnection.production(appSupportDirectory: appSupportDirectory(), credentialFile: options.credentialFile) { url in
             guard NSWorkspace.shared.open(url) else {
                 throw PDTSignInError.browserUnavailable
             }
@@ -1361,7 +1361,7 @@ do {
     }
 } catch {
     FileHandle.standardError.write(
-        Data("usage: pdtbar [--app-support-dir <path> [--scripted-pdt <file>]] | --fixture <path> [--snapshot-dir <path>]\n".utf8)
+        Data("usage: pdtbar [--app-support-dir <path> [--scripted-pdt <file> | --pdt-credential-file <file>]] | --fixture <path> [--snapshot-dir <path>]\n".utf8)
     )
     Foundation.exit(64)
 }
