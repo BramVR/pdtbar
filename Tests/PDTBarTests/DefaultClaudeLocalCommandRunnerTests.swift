@@ -63,6 +63,41 @@ struct DefaultClaudeLocalCommandRunnerTests {
         #expect(eventuallyProcessExits(childPID))
     }
 
+    @Test("Cancelled runs end a SIGTERM-ignoring helper spawned while the root handles SIGTERM")
+    func cancelledRunsEndHelperSpawnedDuringTermination() throws {
+        let runner = DefaultClaudeLocalCommandRunner()
+        let cancellation = PDTCancellation()
+        let pidFile = FileManager.default.temporaryDirectory
+            .appending(path: "pdtbar-termination-helper-\(UUID().uuidString).pid")
+        defer {
+            try? FileManager.default.removeItem(at: pidFile)
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
+            cancellation.cancel()
+        }
+
+        // The helper does not exist until the root receives SIGTERM, so only a signal to the
+        // whole group, sent after the root exits, can reach it.
+        let started = Date()
+        let result = try runner.run(
+            executable: "/bin/sh",
+            arguments: [
+                "-c",
+                #"trap '/bin/sh -c "trap \"\" TERM; exec sleep 15" & echo "$! $$" > "$PID_FILE"; exit 0' TERM; while :; do sleep 0.05; done"#,
+            ],
+            timeout: 10,
+            environment: ["PATH": "/usr/bin:/bin", "PID_FILE": pidFile.path],
+            cancellation: cancellation
+        )
+        let elapsed = Date().timeIntervalSince(started)
+
+        #expect(result.exitCode == -1)
+        #expect(elapsed < 5.0)
+        let helper = try StrayHelper(contentsOf: pidFile)
+        defer { helper.killIfStillInGroup() }
+        #expect(eventuallyProcessExits(helper.pid))
+    }
+
     @Test("Timed-out runs return promptly when an escaped grandchild keeps the pipes open")
     func timedOutRunsReturnPromptlyWhenEscapedGrandchildKeepsPipesOpen() throws {
         let runner = DefaultClaudeLocalCommandRunner()
