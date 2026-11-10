@@ -41,4 +41,5 @@ Docs are agent-facing source of truth. Root `README.md` stays human/product-faci
 - `Sources/PDTBarApp`: macOS menu-bar product path.
 - `Sources/PDTBarDev`: developer descriptors/model inspection.
 - `Sources/PDTBarSmoke`: scripted and live smoke checks.
+- `Sources/PDTBarSmokeProof`: scripted-launch evidence check shared by the smoke runner and tests.
 - `Sources/PDTBarChecks`: deterministic checks.

@@ -210,6 +210,7 @@ PDTBar/
 │   ├── PDTBarCore/
 │   ├── PDTBarDev/
 │   ├── PDTBarSmoke/
+│   ├── PDTBarSmokeProof/
 │   └── PDTBarChecks/
 └── src/
     ├── engine/

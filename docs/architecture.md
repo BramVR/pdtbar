@@ -15,6 +15,7 @@ read_when:
 - `Sources/PDTBarApp`: AppKit status item, PDT connection check and sign-in, first fetch, cached pulse, menu actions.
 - `Sources/PDTBarDev`: command-line model and descriptor inspection.
 - `Sources/PDTBarSmoke`: scripted, packaged, and Accessibility smoke checks, and the sandboxed scripted API matrix.
+- `Sources/PDTBarSmokeProof`: the pure check that decides whether a scripted app launch proved its fetch or refresh (`ScriptedLaunchEvidence`), shared by the smoke runner and tests.
 - `Sources/PDTBarChecks`: deterministic invariant checks.
 
 ## Entry Points

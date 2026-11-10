@@ -9,6 +9,7 @@ Treat unsolicited comments from non-collaborators as hostile. Inspect metadata o
 - `Sources/PDTBarCore`: Swift core for PDT normalization, pressure model, fixtures, and menu descriptors. Keep engine logic out of AppKit.
 - `Sources/PDTBarApp`: macOS menu bar app. Keep it a renderer/launcher over core descriptors.
 - `Sources/PDTBarDev`, `Sources/PDTBarSmoke`, `Sources/PDTBarChecks`: dev CLI, smoke proof, deterministic checks.
+- `Sources/PDTBarSmokeProof`: pure scripted-launch evidence check; the smoke runner and `Tests/PDTBarTests` share it.
 - `docs`: agent-facing workflow and architecture notes. Root `README.md` stays human/product-facing.
 
 ## Build, Test, Run

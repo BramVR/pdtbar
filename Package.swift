@@ -58,9 +58,13 @@ let package = Package(
             name: "PDTBarDev",
             dependencies: ["PDTBarCore"]
         ),
+        .target(
+            name: "PDTBarSmokeProof",
+            dependencies: ["PDTBarCore"]
+        ),
         .executableTarget(
             name: "PDTBarSmoke",
-            dependencies: ["PDTBarCore", "PDTBarAppSupport"]
+            dependencies: ["PDTBarCore", "PDTBarAppSupport", "PDTBarSmokeProof"]
         ),
         .executableTarget(
             name: "PDTBarChecks",
@@ -72,6 +76,7 @@ let package = Package(
             dependencies: [
                 "PDTBarCore",
                 "PDTBarAppSupport",
+                "PDTBarSmokeProof",
                 .product(name: "Testing", package: "swift-testing"),
             ],
             linkerSettings: testingInteropLinkerSettings

@@ -6,6 +6,7 @@ import Foundation
 import ImageIO
 import PDTBarAppSupport
 import PDTBarCore
+import PDTBarSmokeProof
 import Security
 
 private struct SmokeReport: Codable {
@@ -25,6 +26,9 @@ private let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirect
 private let defaultFixture = packageRoot.appending(path: "docs/pdt/fixtures/quiet-no-pressure.json")
 private let scriptedPDTAsOf = "2026-06-22"
 private let menuNotCheckedByDesign = "menu: not checked (TCC unreachable by design)"
+/// The app applies a finished fetch on its main queue after the snapshot and
+/// the last event are readable, so a sandbox kill there lands after both.
+private let scriptedLaunchLivenessHold: TimeInterval = 0.5
 
 private struct SmokeCommand: Sendable {
     var name: String
@@ -103,11 +107,16 @@ private struct ScriptedPDTLaunch {
         ["--app-support-dir", artifactPath(appSupportDirectory), "--scripted-pdt", artifactPath(script)]
     }
 
+    var events: [String] {
+        ((try? String(contentsOf: eventLog, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+    }
+
+    var publishedSnapshot: PortfolioSnapshot? {
+        try? JSONDecoder().decode(PortfolioSnapshot.self, from: Data(contentsOf: snapshot))
+    }
+
     func eventCount(_ event: String) -> Int {
-        guard let content = try? String(contentsOf: eventLog, encoding: .utf8) else {
-            return 0
-        }
-        return content.split(separator: "\n").filter { $0 == event }.count
+        events.filter { $0 == event }.count
     }
 
     func waitForEventCount(_ event: String, atLeast count: Int, timeout: TimeInterval) -> Bool {
@@ -201,13 +210,13 @@ private func scriptedHoldingsUnavailable() -> [ScriptedPDTAPIConfiguration.Respo
     )
 }
 
-/// The pulse the app's first fetch builds from the same scripted replies.
-private func expectedFirstFetchPulse(_ api: ScriptedPDTAPIConfiguration) throws -> PulseLifecycleResult {
+/// The pulse and snapshot the app's first fetch builds from the same scripted replies.
+private func expectedFirstFetch(_ api: ScriptedPDTAPIConfiguration) throws -> (pulse: PulseLifecycleResult, snapshot: PortfolioSnapshot?) {
     let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-scripted-first-fetch-expected")
     defer {
         try? FileManager.default.removeItem(at: store.directory)
     }
-    return try PDTCoalescedFirstPortfolioFetch(
+    let pulse = try PDTCoalescedFirstPortfolioFetch(
         dataSource: PDTAPIDataSource(
             client: PDTAPIClient(
                 transport: api.transport(),
@@ -218,6 +227,7 @@ private func expectedFirstFetchPulse(_ api: ScriptedPDTAPIConfiguration) throws 
         snapshotStore: store,
         asOf: api.asOf
     ).fetch()
+    return (pulse, try store.loadPriorSnapshot())
 }
 
 private struct MenuCheck: Codable {
@@ -317,6 +327,47 @@ private func isolation(_ launch: ScriptedPDTLaunch) -> ScriptedLaunchIsolation {
 
 private extension ScriptedLaunchIsolation {
     var clean: Bool { processStillRunning && fixtureSentinelEmpty }
+}
+
+/// Waits for `launch` to leave `expected` on disk and log `expectedEvents`,
+/// holds, then reads what it left behind. Call before the smoke stops the app.
+private func scriptedLaunchEvidence(
+    _ launch: ScriptedPDTLaunch,
+    seed: PortfolioSnapshot? = nil,
+    expected: PortfolioSnapshot?,
+    expectedEvents: [String],
+    timeout: TimeInterval
+) -> ScriptedLaunchEvidence {
+    let deadline = Date().addingTimeInterval(timeout)
+    while launch.process.isRunning,
+          Date() < deadline,
+          launch.publishedSnapshot != expected || launch.events != expectedEvents {
+        Thread.sleep(forTimeInterval: 0.1)
+    }
+    Thread.sleep(forTimeInterval: scriptedLaunchLivenessHold)
+    return ScriptedLaunchEvidence(
+        seed: seed,
+        expected: expected,
+        published: launch.publishedSnapshot,
+        expectedEvents: expectedEvents,
+        events: launch.events,
+        processStillRunning: launch.process.isRunning,
+        fixtureSentinelEmpty: launch.fixtureSentinelEmpty
+    )
+}
+
+private struct ScriptedLaunchEvidenceProof: Codable {
+    var violations: [ScriptedLaunchViolation]
+    var events: [String]
+    var seededOpenHoldingCount: Int?
+    var publishedOpenHoldingCount: Int?
+
+    init(_ evidence: ScriptedLaunchEvidence) {
+        violations = evidence.violations
+        events = evidence.events
+        seededOpenHoldingCount = evidence.seed?.openHoldings.count
+        publishedOpenHoldingCount = evidence.published?.openHoldings.count
+    }
 }
 
 // MARK: scripted-api-matrix
@@ -553,8 +604,10 @@ private struct ScriptedFirstFetchProof: Codable {
     var successSnapshotAsOf: String?
     var successOpenHoldingCount: Int
     var successHoldingsRequests: Int
+    var successEvidence: ScriptedLaunchEvidenceProof
     var successPulseMenu: MenuCheck?
     var failure: ScriptedLaunchIsolation
+    var failureEvidence: ScriptedLaunchEvidenceProof
     var failureHoldingsRequests: Int
     var failureSnapshotWritten: Bool
     var failureReported: Bool
@@ -575,7 +628,8 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
     let accessibilityChecked = options.menuChecks && AXIsProcessTrusted()
 
     let successAPI = ScriptedPDTAPIConfiguration(responses: [try scriptedHoldingsResponse()], asOf: scriptedPDTAsOf)
-    let expectedPulse = try expectedFirstFetchPulse(successAPI)
+    let expected = try expectedFirstFetch(successAPI)
+    let holdingsRequest = "request /v1/portfolio/holdings"
     let success = try launchScriptedPDTApp(
         app,
         script: ScriptedPDTConnection(connection: .personalToken, api: successAPI),
@@ -583,12 +637,18 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
         prefix: "\(name)-success"
     )
     defer { terminate(success.process) }
-    let successSnapshotWritten = waitForFile(success.snapshot, timeout: options.timeout + 3.0)
-    let publishedSnapshot = try? JSONDecoder().decode(PortfolioSnapshot.self, from: Data(contentsOf: success.snapshot))
+    let successEvidence = scriptedLaunchEvidence(
+        success,
+        expected: expected.snapshot,
+        // The background refresh that follows the first fetch asks for holdings again and finds the script empty.
+        expectedEvents: ["check", holdingsRequest, holdingsRequest],
+        timeout: options.timeout + 3.0
+    )
+    let publishedSnapshot = successEvidence.published
     let successPulseMenu = accessibilityChecked
         ? try checkMenu(
             "\(name)-success",
-            descriptor: expectedPulse.descriptor,
+            descriptor: expected.pulse.descriptor,
             pulse: true,
             process: success.process,
             timeout: options.timeout,
@@ -609,8 +669,13 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
     )
     defer { terminate(failure.process) }
     let attempts = PDTAPIRequestPolicy().maxAttempts
-    _ = failure.waitForEventCount("request /v1/portfolio/holdings", atLeast: attempts, timeout: options.timeout + 3.0)
     let failureReported = waitForFileContent(failure.stderrLog, contains: "first fetch failed", timeout: options.timeout + 3.0)
+    let failureEvidence = scriptedLaunchEvidence(
+        failure,
+        expected: nil,
+        expectedEvents: ["check"] + Array(repeating: holdingsRequest, count: attempts),
+        timeout: options.timeout + 3.0
+    )
     let failureMenu = accessibilityChecked
         ? try checkMenu(
             "\(name)-failure",
@@ -626,13 +691,15 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
     let proofPayload = ScriptedFirstFetchProof(
         success: successIsolation,
         successSnapshotPath: artifactPath(success.snapshot),
-        successSnapshotWritten: successSnapshotWritten,
+        successSnapshotWritten: publishedSnapshot != nil,
         successSnapshotAsOf: publishedSnapshot?.asOf,
         successOpenHoldingCount: publishedSnapshot?.openHoldings.count ?? 0,
-        successHoldingsRequests: success.eventCount("request /v1/portfolio/holdings"),
+        successHoldingsRequests: success.eventCount(holdingsRequest),
+        successEvidence: ScriptedLaunchEvidenceProof(successEvidence),
         successPulseMenu: successPulseMenu,
         failure: failureIsolation,
-        failureHoldingsRequests: failure.eventCount("request /v1/portfolio/holdings"),
+        failureEvidence: ScriptedLaunchEvidenceProof(failureEvidence),
+        failureHoldingsRequests: failure.eventCount(holdingsRequest),
         failureSnapshotWritten: failure.snapshotWritten,
         failureReported: failureReported,
         failureMenu: failureMenu,
@@ -643,13 +710,11 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
     let artifactsList = [artifactPath(proof)] + [successPulseMenu, failureMenu].compactMap { $0?.evidencePath }
 
     guard successIsolation.clean,
-          successSnapshotWritten,
+          successEvidence.violations.isEmpty,
           proofPayload.successSnapshotAsOf == scriptedPDTAsOf,
           proofPayload.successOpenHoldingCount > 0,
-          proofPayload.successHoldingsRequests >= 1,
           failureIsolation.clean,
-          proofPayload.failureHoldingsRequests == attempts,
-          !proofPayload.failureSnapshotWritten,
+          failureEvidence.violations.isEmpty,
           failureReported,
           successPulseMenu?.visible ?? true,
           failureMenu?.visible ?? true
@@ -657,7 +722,8 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
         return SmokeReport(
             name: name,
             status: SmokeStatus.failed,
-            detail: "scripted PDT first fetch did not prove publish-on-success, no snapshot on a failed holdings fetch, and no fixture fallback",
+            detail: "scripted PDT first fetch did not prove publish-on-success, no snapshot on a failed holdings fetch, and no fixture fallback"
+                + "; success: \(successEvidence.violations.map(\.rawValue)), failure: \(failureEvidence.violations.map(\.rawValue))",
             artifacts: artifactsList
         )
     }
@@ -1060,7 +1126,7 @@ private func readyLaunchSmoke(arguments: [String]) throws -> SmokeReport {
     }
     let artifacts = try smokeArtifacts(options)
     let api = ScriptedPDTAPIConfiguration(responses: [try scriptedHoldingsResponse()], asOf: scriptedPDTAsOf)
-    let expectedPulse = try expectedFirstFetchPulse(api)
+    let expectedPulse = try expectedFirstFetch(api).pulse
     let launch = try launchScriptedPDTApp(app, script: ScriptedPDTConnection(connection: .browserSession, api: api), options: options, prefix: name)
     defer { terminate(launch.process) }
     let snapshotWritten = waitForFile(launch.snapshot, timeout: options.timeout + 3.0)
@@ -2037,6 +2103,7 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
         snapshotStore: expectedFreshStore,
         asOf: refreshConfiguration.asOf
     ).refresh()
+    let expectedFreshSnapshot = try expectedFreshStore.loadPriorSnapshot()
 
     let successLaunch = try launchScriptedPDTApp(
         app,
@@ -2138,17 +2205,13 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
         }
     }
 
-    guard waitForSnapshotAsOf(successSnapshot, asOf: "2026-03-29", timeout: refreshDelay + options.timeout + 3.0),
-          let refreshedSnapshotAsOf = snapshotAsOf(successSnapshot),
-          refreshedSnapshotAsOf == "2026-03-29"
-    else {
-        return SmokeReport(
-            name: "scripted-returning-launch",
-            status: SmokeStatus.failed,
-            detail: "returning launch did not replace the local snapshot after complete scripted refresh",
-            artifacts: [artifactPath(successSnapshot)] + axArtifacts
-        )
-    }
+    let refreshEvidence = scriptedLaunchEvidence(
+        successLaunch,
+        seed: staleSnapshot,
+        expected: expectedFreshSnapshot,
+        expectedEvents: ["check"] + scriptedAPIBackgroundRefreshEvents(),
+        timeout: refreshDelay + options.timeout + 3.0
+    )
 
     if accessibilityChecked {
         let freshSurface = MenuBarSurfaceRenderer.render(descriptor: expectedFreshRun.descriptor)
@@ -2200,9 +2263,14 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
         terminate(failureProcess)
     }
     _ = waitForFileContent(failureLaunch.stderrLog, contains: "background refresh failed", timeout: options.timeout + 3.0)
-    let failurePreservedSnapshot = isolation(failureLaunch).clean
+    let failureEvidence = scriptedLaunchEvidence(
+        failureLaunch,
+        expected: staleSnapshot,
+        expectedEvents: ["check"] + Array(repeating: "request /v1/portfolio/holdings", count: PDTAPIRequestPolicy().maxAttempts),
+        timeout: options.timeout + 3.0
+    )
+    let failurePreservedSnapshot = failureEvidence.violations.isEmpty
         && failureLaunch.stderrContains("background refresh failed")
-        && snapshotAsOf(failureSnapshot) == staleSnapshot.asOf
 
     if accessibilityChecked {
         let failureSurface = MenuBarSurfaceRenderer.render(
@@ -2245,6 +2313,8 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
         staleSnapshotAsOf: staleSnapshot.asOf,
         refreshedSnapshotAsOf: snapshotAsOf(successSnapshot),
         failureSnapshotAsOf: snapshotAsOf(failureSnapshot),
+        refreshEvidence: ScriptedLaunchEvidenceProof(refreshEvidence),
+        failureEvidence: ScriptedLaunchEvidenceProof(failureEvidence),
         accessibilityChecked: accessibilityChecked,
         stalePulseVisibleDuringRefresh: stalePulseVisible,
         backgroundDetailProgressVisible: backgroundProgressVisible,
@@ -2258,7 +2328,8 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
     )
     try stableJSONData(proofPayload).write(to: proof, options: .atomic)
 
-    guard failurePreservedSnapshot,
+    guard refreshEvidence.violations.isEmpty,
+          failurePreservedSnapshot,
           !accessibilityChecked || (
               stalePulseVisible
               && backgroundProgressVisible
@@ -2270,7 +2341,8 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
         return SmokeReport(
             name: "scripted-returning-launch",
             status: SmokeStatus.failed,
-            detail: "scripted returning launch did not prove background progress visibility, fresh replacement, or transient failure preservation",
+            detail: "scripted returning launch did not prove background progress visibility, fresh replacement, or transient failure preservation"
+                + "; refresh: \(refreshEvidence.violations.map(\.rawValue)), failure: \(failureEvidence.violations.map(\.rawValue))",
             artifacts: [artifactPath(proof)] + axArtifacts
         )
     }
@@ -3222,6 +3294,8 @@ private struct ScriptedReturningLaunchProof: Codable {
     var staleSnapshotAsOf: String
     var refreshedSnapshotAsOf: String?
     var failureSnapshotAsOf: String?
+    var refreshEvidence: ScriptedLaunchEvidenceProof
+    var failureEvidence: ScriptedLaunchEvidenceProof
     var accessibilityChecked: Bool
     var stalePulseVisibleDuringRefresh: Bool
     var backgroundDetailProgressVisible: Bool
@@ -4326,6 +4400,20 @@ private func scriptedAPIBackgroundRefreshResponses() throws -> [ScriptedPDTAPICo
         .filter { $0.pathExtension == "json" && !$0.lastPathComponent.contains("symbol-quotes") }
         .sorted { $0.lastPathComponent < $1.lastPathComponent }
         .map { ScriptedPDTAPIConfiguration.Response(body: String(decoding: try Data(contentsOf: $0), as: UTF8.self)) }
+}
+
+/// The app's event-log line for each of those replies, in order.
+private func scriptedAPIBackgroundRefreshEvents() -> [String] {
+    [
+        "request /v1/portfolio/holdings",
+        "request /v1/portfolio/distributions",
+        "request /v1/x-ray",
+        "request /v1/x-ray",
+        "request /v1/calendar-events",
+        "request /v1/calendar-events",
+        "request /v1/dividends",
+        "request /v1/prices/batch",
+    ]
 }
 
 private func terminate(_ process: Process) {

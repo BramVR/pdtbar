@@ -100,6 +100,10 @@ synthetic REST fixtures; the last two launch the real app with
 own, as described below. The registry in `Sources/PDTBarSmoke/main.swift`
 marks which commands are matrix rows.
 
+A sandbox violation kills the launched app, so each of the four app launches
+in the last two rows must pass the scripted-launch evidence check below before
+the smoke stops it.
+
 Row zero checks the environment first. No `PATH` entry may hold a file named
 `claude`, `codex`, or `mcporter` (an existence check: an execute check would
 trip the exec rule), and every sandbox rule below must hold. Otherwise the
@@ -335,6 +339,33 @@ restore the prior display setting. The AX evidence records the active logical an
 pixel display dimensions. Layout tests also cover narrower widths and larger
 system-font metrics while preserving the two-column grid.
 
+Scripted-launch evidence:
+
+`scripted-first-fetch` and `scripted-returning-launch` judge every app launch
+with `ScriptedLaunchEvidence` (`Sources/PDTBarSmokeProof`). The smoke waits
+until the snapshot on disk equals the expected one and the event log equals
+the expected lines, holds 0.5 s (the app applies a finished fetch on its main
+queue after both are readable), and then reads the evidence before it stops
+the app. A launch fails with the named violations unless all of these hold:
+
+- `appNotRunning`: the app process is still running.
+- `fixtureStateWritten`: the fixture sentinel directory is empty.
+- `snapshotDiffersFromExpected`: the snapshot on disk equals, field for field,
+  the one the same scripted replies produce in-process (first fetch or
+  background refresh), the untouched seed after a failed refresh, or no file
+  after a failed first fetch.
+- `eventsDifferFromExpected`: the event log is exactly `check` followed by one
+  `request <path>` line per expected request, in order, and nothing else.
+- `scriptedRepliesMatchSeed`: where a refresh must replace a seed, the
+  expected snapshot's holding ids or total differ from the seed's, so a
+  rewritten date cannot stand in for a refresh.
+
+The row's proof records each launch's violations, event lines, and holding
+counts. `swift test --filter ScriptedLaunchEvidenceTests` holds the negative
+controls: an app that died after publishing, a seeded snapshot with only its
+date rewritten, a short or long request sequence, written fixture state, and a
+failed fetch that changed the snapshot each fail.
+
 Scripted first-fetch e2e:
 
 ```bash
@@ -345,13 +376,16 @@ swift run pdtbar-smoke scripted-first-fetch
 This uses isolated app-support directories and the scripted PDT connection with
 a stored personal token. The success launch answers the holdings request from
 `docs/pdt/fixtures/api/full/01-holdings.json` and verifies the first fetch writes
-`latest-portfolio-snapshot.json` (as-of `2026-06-22`) under isolated app state
-and, with Accessibility, shows the pulse. The failure launch answers every
-holdings attempt with `503` and verifies no snapshot is written, the app reports
-the failed first fetch, and, with Accessibility, the menu shows `Could not fetch
-portfolio` and `Try again`. Both launches fail if the fixture sentinel is
-written. Proof artifacts contain paths,
-selectors, status text, counts, and booleans only.
+`latest-portfolio-snapshot.json` (as-of `2026-06-22`) under isolated app state,
+equal to the snapshot the same reply produces in-process, and, with
+Accessibility, shows the pulse. Its event log must be `check` and two holdings
+requests: the first fetch, then the background refresh that follows it and
+finds the script empty. The failure launch answers every holdings attempt with
+`503` and verifies no snapshot is written, the event log is `check` and one
+holdings request per attempt, the app reports the failed first fetch, and,
+with Accessibility, the menu shows `Could not fetch portfolio` and `Try again`.
+Both launches must pass the scripted-launch evidence check. Proof artifacts
+contain paths, selectors, status text, event lines, counts, and booleans only.
 
 Scripted returning-launch e2e:
 
@@ -366,10 +400,16 @@ the app with a delayed scripted PDT REST refresh (the
 `docs/pdt/fixtures/api/full` replies, served through the script's `api` to
 `PDTAPIBackgroundDetailRefresh`), and verifies the cached pulse stays visible while the
 refresh is in progress. It then verifies complete refreshed data replaces the
-snapshot and pulse only after the scripted fetch finishes. A second launch
-whose holdings requests all answer `503` proves the previous snapshot stays in place and the
-menu shows `Details fill failed` plus `Fill details again`. Proof artifacts contain
-paths, selectors, status text, as-of dates, and booleans only.
+snapshot and pulse only after the scripted fetch finishes: the snapshot must
+equal the one `PDTAPIBackgroundDetailRefresh` builds in-process from the same
+seed and replies (6 holdings against the seed's 9), and the event log must be
+`check` and the eight refresh requests in order. A second launch whose holdings
+requests all answer `503` proves the previous snapshot stays in place, equal to
+the seed, with `check` and one holdings request per attempt in the event log,
+and the menu shows `Details fill failed` plus `Fill details again`. Both
+launches must pass the scripted-launch evidence check. Proof artifacts contain
+paths, selectors, status text, as-of dates, event lines, counts, and booleans
+only.
 
 Local/release packaged-app smoke:
 
