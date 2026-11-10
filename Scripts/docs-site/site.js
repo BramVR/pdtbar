@@ -26,9 +26,13 @@
     } catch {}
   });
 
-  osDark.addEventListener("change", (event) => {
+  function followSystemTheme(event) {
     if (!storedTheme()) applyTheme(event.matches ? "dark" : "light");
-  });
+  }
+
+  // Safari before 14 has only the deprecated addListener on MediaQueryList.
+  if (typeof osDark.addEventListener === "function") osDark.addEventListener("change", followSystemTheme);
+  else if (typeof osDark.addListener === "function") osDark.addListener(followSystemTheme);
 
   const headings = [...document.querySelectorAll(".doc .prose > h2[id]")];
   const railLinks = [...document.querySelectorAll(".rail a[href^='#']")];
