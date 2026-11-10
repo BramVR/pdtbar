@@ -42,13 +42,13 @@ public struct PDTAPIDataSourceOptions: Equatable, Sendable {
 public struct PDTAPIDataSource: PortfolioDataSource {
     public var client: PDTAPIClient
     public var options: PDTAPIDataSourceOptions
-    public var onOptionalFacetFailure: (@Sendable (PDTDetailRefreshFailureDiagnostic) -> Void)?
+    public var onOptionalFacetFailure: (@Sendable (PDTSyncFailure) -> Void)?
     private let now: @Sendable () -> Date
 
     public init(
         client: PDTAPIClient,
         options: PDTAPIDataSourceOptions = PDTAPIDataSourceOptions(),
-        onOptionalFacetFailure: (@Sendable (PDTDetailRefreshFailureDiagnostic) -> Void)? = nil,
+        onOptionalFacetFailure: (@Sendable (PDTSyncFailure) -> Void)? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.client = client
@@ -63,29 +63,23 @@ public struct PDTAPIDataSource: PortfolioDataSource {
         let rows: [APIHolding] = try client.getAll(.holdings())
 
         var degraded = false
-        var setupUnavailable = false
+        var syncEnded = false
         func optionalFacet<T>(
             _ enabled: Bool,
             _ resource: PDTAPIResource,
             phase: BackgroundDetailRefreshPhase,
             fetch: () throws -> T
         ) -> T? {
-            guard enabled, !setupUnavailable else {
+            guard enabled, !syncEnded else {
                 return nil
             }
             do {
                 return try fetch()
             } catch {
                 degraded = true
-                let diagnostic = PDTDetailRefreshFailureDiagnostic(
-                    toolName: resource.path,
-                    phase: phase,
-                    attemptCount: 1,
-                    category: pdtDetailRefreshFailureCategory(for: error),
-                    argumentShape: resource.argumentShape
-                )
-                onOptionalFacetFailure?(diagnostic)
-                setupUnavailable = diagnostic.category.indicatesUnavailableSetup
+                let failure = PDTSyncFailure(error, resource: resource, phase: phase)
+                onOptionalFacetFailure?(failure)
+                syncEnded = failure.kind.endsSync
                 return nil
             }
         }
@@ -179,23 +173,6 @@ public struct PDTAPIDataSource: PortfolioDataSource {
             let body = try client.get(.pricesBatch(symbolQuoteIds: chunk, dateFrom: dateFrom, dateTo: asOf))
             return try decodeAPIResponse(APIPricesBatchEnvelope.self, from: body).data.prices.joined().map(\.optionalDetailInput)
         }
-    }
-}
-
-extension PDTAPIResource {
-    /// Query names only, never values, for redacted refresh diagnostics.
-    var argumentShape: [String] {
-        let paging: [String] = switch pagination {
-        case .none: []
-        case .pages: ["page", "perPage"]
-        case .offset: ["limit", "offset"]
-        }
-        let names = switch self {
-        case .symbolQuotes: ["symbolId"]
-        case .pricesBatch: ["symbolQuoteIds[]", "dateFrom", "dateTo"]
-        default: queryItems.map(\.name)
-        }
-        return names + paging
     }
 }
 

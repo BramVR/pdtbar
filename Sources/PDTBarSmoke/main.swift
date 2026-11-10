@@ -1573,13 +1573,13 @@ private func scriptedAPISnapshotSmoke(arguments: [String]) throws -> SmokeReport
         .sorted { $0.lastPathComponent < $1.lastPathComponent }
         .map { ScriptedPDTHTTPTransport.Reply.response(status: 200, body: try Data(contentsOf: $0)) }
     let transport = ScriptedPDTHTTPTransport(replies)
-    let diagnostics = SmokeDiagnosticRecorder()
+    let failures = SmokeSyncFailureRecorder()
     let dataSource = PDTAPIDataSource(
         client: PDTAPIClient(
             transport: transport,
             tokenProvider: InMemoryPDTAPITokenProvider(token: PDTAPIToken(secret))
         ),
-        onOptionalFacetFailure: { diagnostics.record($0) }
+        onOptionalFacetFailure: { failures.record($0) }
     )
     let snapshot = try dataSource.snapshot(asOf: "2026-06-22")
 
@@ -1598,7 +1598,7 @@ private func scriptedAPISnapshotSmoke(arguments: [String]) throws -> SmokeReport
         dividendRows: snapshot.dividendRowCount,
         pricePoints: snapshot.priceSeries.count,
         degraded: snapshot.latestDetailFillOutcome == .degraded,
-        diagnostics: diagnostics.diagnostics
+        failures: failures.failures
     )
     let proofData = try stableJSONData(proofPayload)
     try proofData.write(to: proof, options: .atomic)
@@ -1614,7 +1614,7 @@ private func scriptedAPISnapshotSmoke(arguments: [String]) throws -> SmokeReport
           proofPayload.dividendRows == 4,
           proofPayload.pricePoints == 4,
           !proofPayload.degraded,
-          proofPayload.diagnostics.isEmpty,
+          proofPayload.failures.isEmpty,
           !String(decoding: proofData, as: UTF8.self).contains(secret)
     else {
         return SmokeReport(
@@ -1646,23 +1646,23 @@ private struct ScriptedAPISnapshotProof: Codable {
     var dividendRows: Int
     var pricePoints: Int
     var degraded: Bool
-    var diagnostics: [PDTDetailRefreshFailureDiagnostic]
+    var failures: [PDTSyncFailure]
 }
 
-private final class SmokeDiagnosticRecorder: @unchecked Sendable {
+private final class SmokeSyncFailureRecorder: @unchecked Sendable {
     private let lock = NSLock()
-    private var recorded: [PDTDetailRefreshFailureDiagnostic] = []
+    private var recorded: [PDTSyncFailure] = []
 
-    var diagnostics: [PDTDetailRefreshFailureDiagnostic] {
+    var failures: [PDTSyncFailure] {
         lock.lock()
         defer { lock.unlock() }
         return recorded
     }
 
-    func record(_ diagnostic: PDTDetailRefreshFailureDiagnostic) {
+    func record(_ failure: PDTSyncFailure) {
         lock.lock()
         defer { lock.unlock() }
-        recorded.append(diagnostic)
+        recorded.append(failure)
     }
 }
 

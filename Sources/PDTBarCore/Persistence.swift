@@ -698,6 +698,30 @@ public struct SnapshotStore: Sendable {
         directory.appending(path: "latest-detail-refresh-diagnostic.json")
     }
 
+    /// The last PDT API sync failure. An unreadable file, or one written by
+    /// another build with a kind or endpoint this build does not know, is no failure.
+    public func lastSyncFailure() -> PDTSyncFailure? {
+        let target = syncFailureFile
+        guard let data = try? Data(contentsOf: target) else {
+            return nil
+        }
+        try? OwnerOnlyLocalStore.protectExistingFile(target)
+        return try? JSONDecoder().decode(PDTSyncFailure.self, from: data)
+    }
+
+    /// Nil removes the file. Write errors are dropped: a diagnostic never fails a sync.
+    public func setLastSyncFailure(_ failure: PDTSyncFailure?) {
+        guard let failure, let data = try? stableJSONData(failure) else {
+            try? FileManager.default.removeItem(at: syncFailureFile)
+            return
+        }
+        try? OwnerOnlyLocalStore.write(data, to: syncFailureFile)
+    }
+
+    private var syncFailureFile: URL {
+        directory.appending(path: "latest-sync-failure.json")
+    }
+
     public var currentSnapshotPath: URL {
         directory.appending(path: "latest-portfolio-snapshot.json")
     }

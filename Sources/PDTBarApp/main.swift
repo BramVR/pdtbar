@@ -150,7 +150,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                     dataSource: PDTAPIDataSource(
                         client: connection.apiClient(),
                         options: .firstFetch,
-                        onOptionalFacetFailure: { try? snapshotStore.saveLastDetailRefreshDiagnostic($0) }
+                        onOptionalFacetFailure: { snapshotStore.setLastSyncFailure($0) }
                     ),
                     snapshotStore: snapshotStore,
                     asOf: connection.asOf,
