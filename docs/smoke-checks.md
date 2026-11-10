@@ -48,6 +48,7 @@ swift run pdtbar-checks
 swift run pdtbar-smoke scripted-pdt-connector
 swift run pdtbar-smoke scripted-api-client
 swift run pdtbar-smoke scripted-api-snapshot
+swift run pdtbar-smoke scripted-api-auth
 swift run pdtbar-smoke scripted-login-handoff
 swift run pdtbar-smoke scripted-setup-retry
 swift run pdtbar-smoke scripted-pulse-mark-read
@@ -102,6 +103,34 @@ This uses no network, no real credentials, and no Keychain. It replays
 `pdtbar-scripted-api-snapshot-proof.json` with the request paths, GET-only and
 PDT-origin checks, per-facet counts, and the degraded flag. It fails if any facet
 degrades or the fake token appears in the proof.
+
+Scripted PDT sign-in:
+
+```bash
+swift run pdtbar-smoke scripted-api-auth
+```
+
+This uses no network, no real credentials, and no Keychain. It runs
+`PDTBrowserSignIn` against a real loopback listener on a free port with a fake
+browser and a scripted token endpoint, then drives `PDTConnection` over an
+in-memory store: 6 concurrent reads after expiry share one refresh,
+`invalid_grant` moves to needs-reconnect, a pasted token reads, and disconnect
+clears the store. `pdtbar-scripted-api-auth-proof.json` holds request counts and
+checks only; the smoke fails if any scripted code or token appears in it.
+
+Live PDT sign-in (opt-in, needs Bram's PDT account and a browser):
+
+```bash
+swift run pdtbar-dev pdt-sign-in --store <file>
+swift run pdtbar-dev pdt-status --store <file>
+swift run pdtbar-dev pdt-refresh --store <file>
+swift run pdtbar-dev pdt-disconnect --store <file>
+```
+
+These use the registered "pdtbar" app, port 47245, and a mode-0600 file store at
+the given path, never the Keychain. Output is states, expiry, HTTP statuses,
+`/v1/me` key names, and token SHA-256 fingerprints; never token values. Delete
+the store file after proof and revoke the grant in PDT's connected apps page.
 
 Scripted Claude PDT connector e2e:
 
