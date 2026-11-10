@@ -27,6 +27,7 @@ const allowlist = new Set(sections.flatMap(([, rels]) => rels));
 const pages = loadPages().filter((page) => allowlist.has(page.rel));
 const pageMap = new Map(pages.map((page) => [page.rel, page]));
 assertManifestPagesExist();
+assertPagesHaveTemplateStrings();
 const nav = sections
   .map(([name, rels]) => ({ name, pages: rels.map((rel) => pageMap.get(rel)).filter(Boolean) }))
   .filter((section) => section.pages.length);
@@ -102,6 +103,9 @@ function assertManifestPagesExist() {
   if (missing.length) {
     throw new Error(`docs-site manifest references missing pages: ${missing.join(", ")}`);
   }
+}
+
+function assertPagesHaveTemplateStrings() {
   const untranslated = pages.filter((page) => !strings[page.lang]);
   if (untranslated.length) {
     throw new Error(`docs-site pages use a language without template strings: ${untranslated.map((page) => page.rel).join(", ")}`);
