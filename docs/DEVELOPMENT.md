@@ -95,7 +95,9 @@ old scripted handoff env. Deterministic login smokes use the explicit
 `pdtbar-dev pdt-sign-in|pdt-status|pdt-refresh|pdt-disconnect --store <file>`
 is the opt-in live PDT sign-in proof. It keeps the credential in a mode-0600
 file at the given path, never the Keychain, and prints only states, expiry,
-statuses, key names, and token fingerprints. See `docs/smoke-checks.md`.
+statuses, key names, and token fingerprints. `pdt-sign-in ... --no-browser`
+prints the authorize URL instead of opening it, for shells whose `open` does
+not reach the user's browser. See `docs/smoke-checks.md`.
 
 Historical workaround only: launching raw `.build/debug/pdtbar`, keeping it
 alive in a foreground shell, `tmux`, or `nohup`, and checking truncated process

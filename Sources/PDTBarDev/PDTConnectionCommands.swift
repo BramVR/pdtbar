@@ -5,7 +5,8 @@ enum PDTConnectionCommand {
     static let names: Set<String> = ["pdt-sign-in", "pdt-status", "pdt-refresh", "pdt-disconnect"]
 
     static func run(_ arguments: [String]) throws -> [String] {
-        guard arguments.count == 3, names.contains(arguments[0]), arguments[1] == "--store" else {
+        let noBrowser = arguments.count == 4 && arguments[0] == "pdt-sign-in" && arguments[3] == "--no-browser"
+        guard arguments.count == 3 || noBrowser, names.contains(arguments[0]), arguments[1] == "--store" else {
             throw CommandError.usage
         }
         let tokenEndpoint = PDTTokenEndpoint(transport: URLSessionPDTHTTPTransport())
@@ -17,6 +18,10 @@ enum PDTConnectionCommand {
         switch arguments[0] {
         case "pdt-sign-in":
             let session = try PDTBrowserSignIn(tokenEndpoint: tokenEndpoint) { url in
+                if noBrowser {
+                    FileHandle.standardError.write(Data("Open this URL in a browser signed in to PDT and approve PDTBar:\n\(url.absoluteString)\n".utf8))
+                    return
+                }
                 try openInBrowser(url)
                 FileHandle.standardError.write(Data("Approve PDTBar in the browser window that opened; waiting for PDT to send you back.\n".utf8))
             }.run()

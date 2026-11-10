@@ -121,7 +121,7 @@ checks only; the smoke fails if any scripted code or token appears in it.
 Live PDT sign-in (opt-in, needs Bram's PDT account and a browser):
 
 ```bash
-swift run pdtbar-dev pdt-sign-in --store <file>
+swift run pdtbar-dev pdt-sign-in --store <file>   # add --no-browser to print the URL instead of opening it
 swift run pdtbar-dev pdt-status --store <file>
 swift run pdtbar-dev pdt-refresh --store <file>
 swift run pdtbar-dev pdt-disconnect --store <file>

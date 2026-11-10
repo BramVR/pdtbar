@@ -68,6 +68,7 @@ do {
                    pdtbar-dev descriptor --fixture <path> [--portfolio-values <visible|hidden>]
                    pdtbar-dev <run|seed-prior> --fixture <path> --snapshot-dir <path>
                    pdtbar-dev <pdt-sign-in|pdt-status|pdt-refresh|pdt-disconnect> --store <path>
+                   pdtbar-dev pdt-sign-in --store <path> --no-browser
             """.utf8
         )
     )
