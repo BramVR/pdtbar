@@ -73,7 +73,7 @@ public struct DefaultClaudeLocalCommandRunner: ClaudeLocalCommandRunning {
         return ClaudeLocalProcessResult(
             stdout: String(decoding: stdoutDrain.snapshot(), as: UTF8.self),
             stderr: String(decoding: stderrDrain.snapshot(), as: UTF8.self),
-            exitCode: exitStatus ?? -1
+            exitCode: cancellation?.isCancelled == true ? -1 : exitStatus ?? -1
         )
     }
 

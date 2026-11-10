@@ -124,6 +124,25 @@ struct DefaultClaudeLocalCommandRunnerTests {
         #expect(eventuallyProcessExits(helperPID))
     }
 
+    @Test("Cancellation that lands after the root exits still reports a cancelled run")
+    func cancellationAfterRootExitReportsCancelled() throws {
+        let runner = DefaultClaudeLocalCommandRunner()
+        let cancellation = PDTCancellation()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
+            cancellation.cancel()
+        }
+
+        let result = try runner.run(
+            executable: "/bin/sh",
+            arguments: ["-c", "sleep 0.02"],
+            timeout: 10,
+            environment: ["PATH": "/usr/bin:/bin"],
+            cancellation: cancellation
+        )
+
+        #expect(result.exitCode == -1)
+    }
+
     @Test("Normal runs still drain output larger than the pipe buffer in full")
     func normalRunsStillDrainOutputLargerThanPipeBufferInFull() throws {
         let runner = DefaultClaudeLocalCommandRunner()
