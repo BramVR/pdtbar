@@ -107,7 +107,7 @@ struct DefaultClaudeLocalCommandRunnerTests {
             executable: "/bin/sh",
             arguments: [
                 "-c",
-                #"( /bin/sh -c 'trap "" TERM; exec sleep 15' & echo $! > "$PID_FILE" ); echo done"#,
+                #"( /bin/sh -c 'trap "" TERM; exec sleep 15' & echo "$! $$" > "$PID_FILE" ); echo done"#,
             ],
             timeout: 10,
             environment: ["PATH": "/usr/bin:/bin", "PID_FILE": pidFile.path]
@@ -117,11 +117,9 @@ struct DefaultClaudeLocalCommandRunnerTests {
         #expect(result.exitCode == 0)
         #expect(result.stdout.contains("done"))
         #expect(elapsed < 4.0)
-        let helperPID = try #require(pid_t(
-            String(contentsOf: pidFile).trimmingCharacters(in: .whitespacesAndNewlines)
-        ))
-        defer { kill(helperPID, SIGKILL) }
-        #expect(eventuallyProcessExits(helperPID))
+        let helper = try StrayHelper(contentsOf: pidFile)
+        defer { helper.killIfStillInGroup() }
+        #expect(eventuallyProcessExits(helper.pid))
     }
 
     @Test("Cancellation that lands after the root exits still reports a cancelled run")
@@ -159,16 +157,5 @@ struct DefaultClaudeLocalCommandRunnerTests {
         #expect(result.exitCode == 0)
         #expect(result.stdout.count == (expectedLine.count + 1) * expectedLineCount)
         #expect(result.stderr.contains("drained-err"))
-    }
-
-    private func eventuallyProcessExits(_ pid: pid_t) -> Bool {
-        let deadline = Date().addingTimeInterval(2.0)
-        repeat {
-            if kill(pid, 0) != 0, errno == ESRCH {
-                return true
-            }
-            Thread.sleep(forTimeInterval: 0.05)
-        } while Date() < deadline
-        return false
     }
 }

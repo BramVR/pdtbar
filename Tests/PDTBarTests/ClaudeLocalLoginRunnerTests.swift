@@ -133,7 +133,7 @@ struct ClaudeLocalLoginRunnerTests {
             name: "login.sh",
             body: """
             #!/bin/sh
-            ( /bin/sh -c 'trap "" TERM; exec sleep 30' & echo $! > "\(pidFile.path)" )
+            ( /bin/sh -c 'trap "" TERM; exec sleep 30' & echo "$! $$" > "\(pidFile.path)" )
             \(rootEnding)
             """
         )
@@ -162,23 +162,10 @@ struct ClaudeLocalLoginRunnerTests {
         case .cancel: .cancelled
         }
         #expect(outcome == expected)
-        let helperPID = try #require(pid_t(
-            String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        ))
-        defer { kill(helperPID, SIGKILL) }
-        #expect(processHasExited(helperPID), "helper \(helperPID) outlived the \(end.rawValue) attempt")
+        let helper = try StrayHelper(contentsOf: pidFile)
+        defer { helper.killIfStillInGroup() }
+        #expect(eventuallyProcessExits(helper.pid), "helper \(helper.pid) outlived the \(end.rawValue) attempt")
     }
-}
-
-private func processHasExited(_ pid: pid_t) -> Bool {
-    let deadline = Date().addingTimeInterval(1.0)
-    repeat {
-        if kill(pid, 0) != 0, errno == ESRCH {
-            return true
-        }
-        Thread.sleep(forTimeInterval: 0.05)
-    } while Date() < deadline
-    return false
 }
 
 private func temporaryDirectory(prefix: String) throws -> URL {
