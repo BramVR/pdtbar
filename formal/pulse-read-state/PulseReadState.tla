@@ -16,7 +16,8 @@
 (* Persistence.swift:126). Paths are Swift file:line at commit 1b6ffd4,    *)
 (* under Sources/PDTBarCore/ unless they say main.swift (PDTBarApp). The   *)
 (* mark-read and publish actions cite the code after the #268/#269 fix,   *)
-(* the commit and reset actions the code after the #270 fix.              *)
+(* the commit and reset actions the code after the #270 fix. Comments     *)
+(* that name a symbol without a line describe the code after #250.        *)
 (***************************************************************************)
 EXTENDS FiniteSets
 
@@ -55,11 +56,11 @@ NoDisplay == [shown |-> FALSE, inc |-> "none", conc |-> "none", read |-> {}]
 
 WorkerPcs == {"idle",
               "ffLoad", "ffEarlyReset", "ffCommit", "ffReset", "ffReady",
-              "bgLoadPrior", "bgEarlyReset", "bgBaseCommit", "bgDetails",
+              "bgLoadPrior", "bgEarlyReset", "bgCommit", "bgLoadRead",
               "bgReset", "bgReady"}
 
 \* Worker states after the crossing snapshot is on disk and before the reset.
-AwaitingReset == {"ffReset", "bgDetails", "bgReset"}
+AwaitingReset == {"ffReset", "bgLoadRead", "bgReset"}
 
 VARIABLES
     pdt,        \* portfolio values PDT would return now
@@ -252,14 +253,12 @@ CommitEffect(to) ==
                    mainFp, mainLoaded, intended>>
 
 -----------------------------------------------------------------------------
-(* First fetch: startFirstPortfolioFetch, main.swift:159, running          *)
-(* PDTCoalescedFirstPortfolioFetch.fetch, PDTLiveDataSource.swift:416,     *)
-(* which runs PressureRunner.run, Persistence.swift:411. It takes no       *)
-(* cancellation.                                                           *)
+(* First fetch: startFirstPortfolioFetch (main.swift) running              *)
+(* PDTCoalescedFirstPortfolioFetch.fetch, which runs PressureRunner.run.   *)
+(* It takes no cancellation.                                               *)
 
-\* main.swift:159 startFirstPortfolioFetch, effect of
-\* PDTLaunchRuntime.completeReadinessProbe, LaunchRuntime.swift:1068, when no
-\* pulse is shown.
+\* startFirstPortfolioFetch for PDTLaunchRuntime's .startFirstFetch effect: a
+\* connection status applied, or retryFirstFetch, while no pulse is shown.
 FirstFetchStart ==
     /\ wPc = "idle"
     /\ mainPc = "idle"
@@ -305,15 +304,17 @@ FirstFetchPublish ==
     /\ UNCHANGED <<pdt, snap, store, mainPc, mainFp, mainLoaded, intended, owed>>
 
 -----------------------------------------------------------------------------
-(* Background detail refresh: startBackgroundPortfolioRefresh,             *)
-(* main.swift:257, running PDTBackgroundDetailRefresh.refresh,             *)
-(* PDTBackgroundDetailRefresh.swift:166, with a PDTCancellation that only  *)
-(* applicationWillTerminate cancels (main.swift:1117). A cancelled refresh *)
-(* throws at its next throwIfCancelled check and touches no file after     *)
-(* that, so cancellation is one way the worker stops: see Relaunch.        *)
+(* Background detail refresh: startBackgroundPortfolioRefresh (main.swift) *)
+(* running PDTAPIBackgroundDetailRefresh.refresh with a PDTCancellation    *)
+(* that only applicationWillTerminate cancels. The refresh fills one       *)
+(* in-memory snapshot and writes no file before its last throwIfCancelled. *)
+(* PressureRunner.refreshedPulse then commits once, so a cancelled refresh *)
+(* writes nothing: see Relaunch. formal/background-detail-refresh checks   *)
+(* that single commit.                                                     *)
 
-\* main.swift:257 startBackgroundPortfolioRefresh, from completeReadinessProbe
-\* (LaunchRuntime.swift:1068), retryFirstFetch (1117), or the refresh action.
+\* startBackgroundPortfolioRefresh for PDTLaunchRuntime's
+\* .startBackgroundDetailRefresh effect: a connection status applied, or
+\* retryFirstFetch, while a pulse is shown, or beginBackgroundDetailRefresh.
 BgStart ==
     /\ wPc = "idle"
     /\ mainPc = "idle"
@@ -322,40 +323,34 @@ BgStart ==
     /\ UNCHANGED <<pdt, snap, store, display, wPrior, wNew, wLoaded, wRead,
                    mainPc, mainFp, mainLoaded, intended, owed>>
 
-\* PDTBackgroundDetailRefresh.refresh, PDTBackgroundDetailRefresh.swift:198
-\* originalPriorSnapshot, then 202 baseSnapshot. Only this worker writes the
-\* snapshot while it runs, so the prior cannot change between the two.
+\* refresh: loadPriorSnapshotResult, then the base holdings fetch. The
+\* optional phases that follow only fill the in-memory snapshot, so they are
+\* folded in here. Only this worker writes the snapshot while it runs, so the
+\* prior cannot change before the commit.
 BgLoadPrior ==
     /\ wPc = "bgLoadPrior"
     /\ wPrior' = snap
     /\ wNew' = pdt
-    /\ wPc' = IF ResetBeforeSnapshotCommit THEN "bgEarlyReset" ELSE "bgBaseCommit"
+    /\ wPc' = IF ResetBeforeSnapshotCommit THEN "bgEarlyReset" ELSE "bgCommit"
     /\ UNCHANGED <<pdt, snap, store, display, wLoaded, wRead, mainPc, mainFp,
                    mainLoaded, intended, owed>>
 
 BgEarlyReset ==
     /\ wPc = "bgEarlyReset"
-    /\ EarlyResetEffect("bgBaseCommit")
+    /\ EarlyResetEffect("bgCommit")
 
-\* PDTBackgroundDetailRefresh.swift:232 base-holdings commit. The
-\* allocation/xRay/income/performance phase commits (271, 295, 329, 386)
-\* rewrite the same holdings against the base already on disk, so their
-\* early reset finds no crossing. They are folded into bgDetails, as are
-\* the throwIfCancelled checks between them (256-410).
-BgBaseCommit ==
-    /\ wPc = "bgBaseCommit"
-    /\ CommitEffect("bgDetails")
+\* refreshedPulse's commitCurrentSnapshot: the refresh's one snapshot write.
+\* No cancellation check runs from here to the return.
+BgCommit ==
+    /\ wPc = "bgCommit"
+    /\ CommitEffect("bgLoadRead")
 
-\* PDTBackgroundDetailRefresh.swift:413 calls PressureRunner.refreshedPulse,
-\* Persistence.swift:468 commitCurrentSnapshot of the same holdings, whose
-\* early reset finds no crossing against the base on disk, then 469
-\* displayReadState. No cancellation check runs from here to the return.
+\* refreshedPulse: displayReadState after the commit.
 BgLoadReadState ==
-    /\ wPc = "bgDetails"
+    /\ wPc = "bgLoadRead"
     /\ wLoaded' = store
-    /\ snap' = wNew
     /\ wPc' = "bgReset"
-    /\ UNCHANGED <<pdt, store, display, wPrior, wNew, wRead, mainPc, mainFp,
+    /\ UNCHANGED <<pdt, snap, store, display, wPrior, wNew, wRead, mainPc, mainFp,
                    mainLoaded, intended, owed>>
 
 \* PressureRunner.lifecycleResult, Persistence.swift:508, reset branch.
@@ -363,9 +358,9 @@ BgReset ==
     /\ wPc = "bgReset"
     /\ ResetEffect("bgReady")
 
-\* main.swift:301 finishBackgroundPortfolioRefresh and
-\* PDTLaunchRuntime.completeBackgroundDetailRefresh, LaunchRuntime.swift:1219,
-\* shows the pulse through DisplayedPulse.show, which re-reads the store (1033).
+\* finishBackgroundPortfolioRefresh (main.swift) and
+\* PDTLaunchRuntime.completeBackgroundDetailRefresh show the pulse through
+\* DisplayedPulse.show, which re-reads the store.
 BgPublish ==
     /\ wPc = "bgReady"
     /\ mainPc = "idle"
@@ -378,8 +373,8 @@ BgPublish ==
 \* The app quits or crashes at any point and launches again. In-flight work
 \* is lost; files stay. A normal quit runs applicationWillTerminate
 \* (main.swift:1117-1119): it cancels a background refresh and waits up to
-\* 4 s, so a refresh in bgDetails stops at its next throwIfCancelled, before
-\* refreshedPulse, and its finishBackgroundPortfolioRefresh never runs. A
+\* 4 s, so a refresh that has not reached refreshedPulse stops at its next
+\* throwIfCancelled and its finishBackgroundPortfolioRefresh never runs. A
 \* crash, force quit, or the 4 s timeout can stop the worker at any step.
 \* Then AppDelegate.launch, main.swift:82, and startCachedPulseLoad, 106.
 Relaunch ==
@@ -395,7 +390,7 @@ Next ==
     \/ MarkReadReload
     \/ FirstFetchStart \/ FirstFetchLoad \/ FirstFetchEarlyReset
     \/ FirstFetchCommit \/ FirstFetchReset \/ FirstFetchPublish
-    \/ BgStart \/ BgLoadPrior \/ BgEarlyReset \/ BgBaseCommit
+    \/ BgStart \/ BgLoadPrior \/ BgEarlyReset \/ BgCommit
     \/ BgLoadReadState \/ BgReset \/ BgPublish
     \/ Relaunch
 
