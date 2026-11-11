@@ -123,23 +123,35 @@ public final class PDTAppConnection: @unchecked Sendable {
         PDTAPIClient(transport: apiTransport, tokenProvider: connection)
     }
 
-    /// Sorts a fetch error. `PDTConnection` has already stored `needsReconnect`
-    /// for a rejected refresh or token, so the stored state decides those.
+    /// Sorts a thrown fetch error. Only the two facts a `PDTSyncFailure.Kind`
+    /// drops are read here: PDT's token-invalid reason and the Keychain problem.
     public func failure(for error: Error) -> PDTFetchFailure {
         let error = (error as? PDTAPIRequestFailure)?.underlyingError ?? error
         if error is PDTCredentialStoreError {
             return .connection(PDTConnectionStatus(storeError: error))
         }
-        switch error as? PDTAPIError {
-        case .apiAccessPaused:
-            return .connection(.subscriptionPaused)
-        case .insufficientScope:
-            return .connection(.needsReconnect(storedKind() ?? .personalToken, .readAccessMissing))
-        case .tokenInvalid(let reason):
+        if case let .tokenInvalid(reason)? = error as? PDTAPIError {
             return rejected(PDTReconnectCause(tokenInvalidReason: reason))
-        case .missingToken, .unauthenticated:
+        }
+        return failure(for: PDTSyncFailure.Kind(error))
+    }
+
+    /// What a failed request means for the connection, whichever phase it ran
+    /// in. `PDTConnection` has already stored `needsReconnect` for a rejected
+    /// refresh or token, so the stored state decides those. A plain `403` has no
+    /// connection state of its own and stays retryable.
+    public func failure(for kind: PDTSyncFailure.Kind) -> PDTFetchFailure {
+        switch kind {
+        case .accessPaused:
+            return .connection(.subscriptionPaused)
+        case .readAccessMissing:
+            return .connection(.needsReconnect(storedKind() ?? .personalToken, .readAccessMissing))
+        case .reconnect:
             return rejected(.tokenInvalid)
-        default:
+        case .credentialStore:
+            let status = status()
+            return status == .connected ? .unavailable : .connection(status)
+        case .forbidden, .rateLimited, .network, .server, .unreadableResponse, .unexpected, .cancelled:
             return .unavailable
         }
     }

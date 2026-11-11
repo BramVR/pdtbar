@@ -224,7 +224,8 @@ public enum PDTLaunchMenu {
         for state: PDTLaunchState,
         cachedPulse: MenuDescriptor? = nil,
         notice: PDTConnectionNotice? = nil,
-        fetchingElapsedSeconds: Int? = nil
+        fetchingElapsedSeconds: Int? = nil,
+        syncFailure: PDTSyncFailure? = nil
     ) -> MenuDescriptor {
         switch state {
         case .connected(.fetching):
@@ -249,7 +250,7 @@ public enum PDTLaunchMenu {
                     statusTitle: "Could not fetch portfolio",
                     statusVisual: StatusVisualState(isDimmed: true),
                     sections: [
-                        MenuSection(id: "portfolioFetch", title: "Portfolio", rows: portfolioFetchFailureRows()),
+                        MenuSection(id: "portfolioFetch", title: "Portfolio", rows: portfolioFetchFailureRows(syncFailure)),
                         connectionSection(rows: [disconnectRow()]),
                     ]
                 ).trustingPortfolioValueMetadata()
@@ -572,13 +573,13 @@ public enum PDTLaunchMenu {
         return rows
     }
 
-    private static func portfolioFetchFailureRows() -> [MenuRow] {
+    private static func portfolioFetchFailureRows(_ syncFailure: PDTSyncFailure?) -> [MenuRow] {
         [
             MenuRow(
                 id: "portfolioFetch.failed",
                 role: .fetchStatus,
                 title: "Could not fetch portfolio",
-                detail: "No partial pulse published"
+                detail: syncFailure.map { sentenceCased($0.kind.menuDetail) } ?? "No partial pulse published"
             ),
             MenuRow(
                 id: "portfolioFetch.retry",
@@ -636,11 +637,19 @@ public struct PDTOnboardingUpdate: Equatable {
 
 public enum PDTLaunchFetchResult: Equatable {
     case succeeded(PulseLifecycleResult)
-    case failed(PDTFetchFailure)
+    /// `failure`: the typed record of the holdings request, which the menu names.
+    case failed(PDTFetchFailure, failure: PDTSyncFailure? = nil)
 }
 
 public enum PDTLaunchBackgroundDetailRefreshResult: Equatable {
-    case succeeded(PulseLifecycleResult, outcome: PDTBackgroundDetailRefreshOutcome)
+    /// The snapshot was committed. `connection` is what the sync learned about
+    /// access: an optional phase that lost access after the base holdings
+    /// succeeded leaves a committed pulse and a connection that is gone.
+    case succeeded(
+        PulseLifecycleResult,
+        outcome: PDTBackgroundDetailRefreshOutcome,
+        connection: PDTConnectionStatus = .connected
+    )
     case failed(PDTFetchFailure, failure: PDTSyncFailure? = nil)
 }
 
@@ -680,8 +689,14 @@ public final class PDTLaunchRuntime {
         case launchState(fetchingElapsedSeconds: Int?)
         case detailProgress(BackgroundDetailRefreshProgress)
         case detailDegraded
-        case detailFailed(PDTSyncFailure?)
         case refreshed
+    }
+
+    /// A sync that ended without committing a snapshot, so no pulse carries its
+    /// record. It outlives connection screens and connection operations, so a
+    /// reconnect screen can still copy its trace id; the next sync replaces it.
+    private struct UncommittedSync {
+        var failure: PDTSyncFailure?
     }
 
     private var displayed: DisplayedPulse
@@ -694,6 +709,7 @@ public final class PDTLaunchRuntime {
     public private(set) var backgroundDetailRefreshInFlight = false
     private var notice: PDTConnectionNotice?
     private var screen = Screen.launchState(fetchingElapsedSeconds: nil)
+    private var uncommittedSync: UncommittedSync?
 
     /// `loadReadState` reads the pulse read store; see `DisplayedPulse.show`.
     public init(loadReadState: @escaping () -> PulseReadState? = { nil }) {
@@ -771,8 +787,7 @@ public final class PDTLaunchRuntime {
         if let currentPulse {
             return startBackgroundDetailRefresh(with: currentPulse)
         }
-        firstFetchInFlight = true
-        return update(state: .connected(.fetching), effect: .startFirstFetch)
+        return startFirstFetch()
     }
 
     public func firstFetchProgress(fetchingElapsedSeconds: Int) -> PDTOnboardingUpdate? {
@@ -793,10 +808,8 @@ public final class PDTLaunchRuntime {
             state = .connected(.current)
             screen = .refreshed
             return currentUpdate()
-        case .failed(.connection(let status)):
-            return apply(status)
-        case .failed(.unavailable):
-            return update(state: .connected(.failed))
+        case .failed(let fetchFailure, let failure):
+            return endUncommitted(fetchFailure, failure: failure)
         }
     }
 
@@ -822,20 +835,17 @@ public final class PDTLaunchRuntime {
         }
         backgroundDetailRefreshInFlight = false
         switch result {
-        case let .succeeded(pulse, outcome):
+        case let .succeeded(pulse, outcome, connection):
             show(pulse)
+            guard connection == .connected else {
+                // The committed pulse carries the failure; the connection screen says why.
+                return update(state: PDTLaunchState(connection))
+            }
             state = .connected(.current)
             screen = outcome == .degraded ? .detailDegraded : .refreshed
             return currentUpdate()
-        case .failed(.connection(let status), _):
-            return apply(status)
-        case .failed(.unavailable, let failure):
-            guard currentPulse != nil else {
-                return update(state: .connected(.failed))
-            }
-            state = .connected(.failed)
-            screen = .detailFailed(failure)
-            return currentUpdate()
+        case let .failed(fetchFailure, failure):
+            return endUncommitted(fetchFailure, failure: failure)
         }
     }
 
@@ -869,6 +879,23 @@ public final class PDTLaunchRuntime {
         if let currentPulse {
             return startBackgroundDetailRefresh(with: currentPulse)
         }
+        return startFirstFetch()
+    }
+
+    /// A sync that committed nothing: keep its record, then show the connection
+    /// state it found or the retryable failure.
+    private func endUncommitted(_ fetchFailure: PDTFetchFailure, failure: PDTSyncFailure?) -> PDTOnboardingUpdate {
+        uncommittedSync = UncommittedSync(failure: failure)
+        switch fetchFailure {
+        case .connection(let status):
+            return apply(status)
+        case .unavailable:
+            return update(state: .connected(.failed))
+        }
+    }
+
+    private func startFirstFetch() -> PDTOnboardingUpdate {
+        uncommittedSync = nil
         firstFetchInFlight = true
         return update(state: .connected(.fetching), effect: .startFirstFetch)
     }
@@ -887,6 +914,7 @@ public final class PDTLaunchRuntime {
     }
 
     private func startBackgroundDetailRefresh(with pulse: PulseLifecycleResult) -> PDTOnboardingUpdate {
+        uncommittedSync = nil
         backgroundDetailRefreshInFlight = true
         state = .connected(.fetching)
         screen = .detailProgress(BackgroundDetailRefreshProgress(phase: .baseHoldings))
@@ -911,7 +939,12 @@ public final class PDTLaunchRuntime {
         // The only pulse menu this function may use: every screen that keeps a
         // pulse shows Data Health as this run knows it, never the pulse's own guess.
         guard let pulse = currentPulse else {
-            return PDTLaunchMenu.descriptor(for: state, notice: notice, fetchingElapsedSeconds: screenElapsedSeconds)
+            return PDTLaunchMenu.descriptor(
+                for: state,
+                notice: notice,
+                fetchingElapsedSeconds: screenElapsedSeconds,
+                syncFailure: uncommittedSync?.failure
+            )
         }
         let pulseMenu = pulse.descriptor(in: healthRuntime())
         guard case .connected = state else {
@@ -929,8 +962,6 @@ public final class PDTLaunchRuntime {
             )
         case .detailDegraded:
             descriptor = PDTLaunchMenu.descriptorForBackgroundDetailDegraded(cachedPulse: pulseMenu)
-        case .detailFailed:
-            descriptor = PDTLaunchMenu.descriptorForBackgroundRefreshFailure(cachedPulse: pulseMenu)
         case .refreshed:
             descriptor = PDTLaunchMenu.descriptorWithRefreshDetailsAction(cachedPulse: pulseMenu)
         }
@@ -945,12 +976,12 @@ public final class PDTLaunchRuntime {
     }
 
     private func healthRuntime() -> DataHealthRuntime {
-        let sync: DataHealthSync = switch screen {
-        case .detailProgress(let progress):
+        let sync: DataHealthSync = switch (screen, uncommittedSync) {
+        case (.detailProgress(let progress), _):
             .running(progress)
-        case .detailFailed(let failure):
-            .failed(failure)
-        case .launchState, .detailDegraded, .refreshed:
+        case (_, let uncommitted?):
+            .failed(uncommitted.failure)
+        case (_, nil):
             state == .connected(.fetching) ? .running(BackgroundDetailRefreshProgress(phase: .baseHoldings)) : .idle
         }
         return DataHealthRuntime(access: DataHealthAccess(state), sync: sync)

@@ -83,7 +83,7 @@ public struct PDTSyncFailure: Codable, Equatable, Sendable {
 
         /// Exhaustive over `PDTAPIError`, no `default`: a new API error does not
         /// compile until someone decides what it means here.
-        init(_ error: any Error) {
+        public init(_ error: any Error) {
             if error is PDTCredentialStoreError {
                 self = .credentialStore
                 return
@@ -202,7 +202,8 @@ public struct PDTSyncFailure: Codable, Equatable, Sendable {
     }
 }
 
-private extension PDTSyncFailure.Kind {
+extension PDTSyncFailure.Kind {
+    /// What failed and the next action, lower-case to follow a step title.
     var menuDetail: String {
         switch self {
         case .reconnect:
@@ -230,7 +231,7 @@ private extension PDTSyncFailure.Kind {
         }
     }
 
-    var reportLabel: String {
+    fileprivate var reportLabel: String {
         switch self {
         case .reconnect:
             "reconnect needed (HTTP 401 or no stored credential)"

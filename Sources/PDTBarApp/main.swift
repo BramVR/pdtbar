@@ -12,6 +12,8 @@ private struct PortfolioFetchOutcome: @unchecked Sendable {
     var errorDescription: String?
     var detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome?
     var syncFailure: PDTSyncFailure?
+    /// After a committed refresh: not `.connected` when an optional phase lost access.
+    var connectionAfterSync: PDTConnectionStatus = .connected
 }
 
 private struct CachedPulseLoadOutcome: @unchecked Sendable {
@@ -144,13 +146,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let pulseReadStore = PulseReadStore(directory: stateDirectory)
         DispatchQueue.global(qos: .userInitiated).async {
             let outcome: PortfolioFetchOutcome
+            // Cleared first, so a fetch that fails without a PDT request cannot show an older record.
+            snapshotStore.setLastSyncFailure(nil)
             do {
                 // The coalesced fetch persists the snapshot before it returns a pulse.
                 let pulse = try PDTCoalescedFirstPortfolioFetch(
                     dataSource: PDTAPIDataSource(
                         client: connection.apiClient(),
                         options: .firstFetch,
-                        onOptionalFacetFailure: { snapshotStore.setLastSyncFailure($0) }
+                        onSyncFailure: { snapshotStore.setLastSyncFailure($0) }
                     ),
                     snapshotStore: snapshotStore,
                     asOf: connection.asOf,
@@ -158,7 +162,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 ).fetch()
                 outcome = PortfolioFetchOutcome(pulse: pulse)
             } catch {
-                outcome = PortfolioFetchOutcome(failure: connection.failure(for: error), errorDescription: PDTAppConnection.logLabel(for: error))
+                outcome = PortfolioFetchOutcome(
+                    failure: connection.failure(for: error),
+                    errorDescription: PDTAppConnection.logLabel(for: error),
+                    syncFailure: snapshotStore.lastSyncFailure()
+                )
             }
             DispatchQueue.main.async { [weak self] in
                 self?.finishFirstPortfolioFetch(outcome)
@@ -176,7 +184,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         FileHandle.standardError.write(Data("pdtbar: first fetch failed: \(outcome.errorDescription ?? "unknown error")\n".utf8))
-        handleLaunchUpdate(launchRuntime.completeFirstFetch(.failed(outcome.failure)))
+        handleLaunchUpdate(launchRuntime.completeFirstFetch(.failed(outcome.failure, failure: outcome.syncFailure)))
     }
 
     private func startPortfolioFetchProgressTimer() {
@@ -248,7 +256,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                         self.installMenuBarItem(update.descriptor, cancelOpenMenu: false)
                     }
                 }
-                outcome = PortfolioFetchOutcome(pulse: result.pulse, detailRefreshOutcome: result.outcome)
+                var connectionAfterSync = PDTConnectionStatus.connected
+                if let ending = result.failures.last, case let .connection(status) = connection.failure(for: ending.kind) {
+                    connectionAfterSync = status
+                }
+                outcome = PortfolioFetchOutcome(
+                    pulse: result.pulse,
+                    detailRefreshOutcome: result.outcome,
+                    connectionAfterSync: connectionAfterSync
+                )
             } catch {
                 outcome = PortfolioFetchOutcome(
                     failure: connection.failure(for: error),
@@ -267,7 +283,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         activeRefreshCompletion = nil
         if let pulse = outcome.pulse {
             handleLaunchUpdate(launchRuntime.completeBackgroundDetailRefresh(
-                .succeeded(pulse, outcome: outcome.detailRefreshOutcome ?? .completed)
+                .succeeded(pulse, outcome: outcome.detailRefreshOutcome ?? .completed, connection: outcome.connectionAfterSync)
             ))
             return
         }

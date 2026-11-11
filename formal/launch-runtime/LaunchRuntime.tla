@@ -39,10 +39,18 @@ VARIABLES
     cacheLoad,    \* "running" | "done" (App startCachedPulseLoad)
     ffWorkers,    \* running first fetches (App startFirstPortfolioFetch)
     bgWorkers,    \* running background detail refreshes (App startBackgroundPortfolioRefresh)
-    opsStarted, retries
+    opsStarted, retries,
+    \* PDTLaunchRuntime.uncommittedSync: "kept" while the record of a sync that committed
+    \* nothing is shown in Data Health (Copy diagnostics), "none" otherwise.
+    record,
+    \* ghosts (#191): the last finished sync committed nothing, and no sync started since
+    uncommitted,
+    \* ghost (#191): a committed refresh reported lost access, and no connection result since
+    lostAccess
 
 vars == <<state, pulse, opInFlight, attemptID, cacheLoading, ffInFlight, bgInFlight,
-          menu, ops, cacheLoad, ffWorkers, bgWorkers, opsStarted, retries>>
+          menu, ops, cacheLoad, ffWorkers, bgWorkers, opsStarted, retries,
+          record, uncommitted, lostAccess>>
 
 ---------------------------------------------------------------------------------
 (* Runtime predicates, Core PDTLaunchState / PDTLaunchRuntime.isIdle *)
@@ -97,9 +105,13 @@ Init ==
     /\ bgWorkers = 0
     /\ opsStarted = 0
     /\ retries = 0
+    /\ record = "none"
+    /\ uncommitted = FALSE
+    /\ lostAccess = FALSE
 
 \* beginConnectionOperation: new attempt, operation slot taken, effect runs it.
 BeginOp(st, kind) ==
+    /\ record' = IF "connectionOpDropsRecord" \in Mutations THEN "none" ELSE record
     /\ attemptID' = attemptID + 1
     /\ opInFlight' = TRUE
     /\ state' = st
@@ -107,12 +119,17 @@ BeginOp(st, kind) ==
     /\ opsStarted' = opsStarted + 1
 
 \* startBackgroundDetailRefresh (Core) + startBackgroundPortfolioRefresh (App)
+\* Every sync start clears the uncommitted record (startFirstFetch / startBackgroundDetailRefresh).
+SyncStarts == record' = "none" /\ uncommitted' = FALSE
+
 StartBg ==
+    /\ SyncStarts
     /\ bgInFlight' = TRUE
     /\ bgWorkers' = bgWorkers + 1
     /\ state' = "fetching"
 
 StartFirstFetch ==
+    /\ SyncStarts
     /\ ffInFlight' = TRUE
     /\ ffWorkers' = ffWorkers + 1
     /\ state' = "fetching"
@@ -124,7 +141,8 @@ Apply(s, p) ==
     THEN IF p # "none" /\ "ignoreCachedPulse" \notin Mutations
          THEN /\ StartBg /\ UNCHANGED <<ffInFlight, ffWorkers>>
          ELSE /\ StartFirstFetch /\ UNCHANGED <<bgInFlight, bgWorkers>>
-    ELSE /\ state' = s /\ UNCHANGED <<ffInFlight, ffWorkers, bgInFlight, bgWorkers>>
+    ELSE /\ state' = s /\ UNCHANGED <<ffInFlight, ffWorkers, bgInFlight, bgWorkers, uncommitted>>
+         /\ record' = IF "connectionScreenDropsRecord" \in Mutations THEN "none" ELSE record
 
 \* startCachedPulseLoad main-queue block + completeCachedPulseLoad: install the pulse,
 \* then begin the connection check (no check runs before the cache load returns).
@@ -135,9 +153,9 @@ CacheLoadReturns ==
     /\ \E hasCache \in BOOLEAN :
          /\ pulse' = IF hasCache /\ pulse = "none" THEN "cached" ELSE pulse
          /\ IF "checkDuringCacheLoad" \in Mutations
-            THEN UNCHANGED <<state, opInFlight, attemptID, ops, opsStarted>>
+            THEN UNCHANGED <<state, opInFlight, attemptID, ops, opsStarted, record>>
             ELSE BeginOp("checkingConnection", "check")
-    /\ UNCHANGED <<ffInFlight, bgInFlight, ffWorkers, bgWorkers, retries>>
+    /\ UNCHANGED <<ffInFlight, bgInFlight, ffWorkers, bgWorkers, retries, uncommitted, lostAccess>>
     /\ Render
 
 \* runConnectionOperation result on the main queue + completeConnection (stale attempts dropped).
@@ -147,8 +165,10 @@ OpReturns ==
         /\ ops' = ops \ {op}
         /\ UNCHANGED <<attemptID, cacheLoading, cacheLoad, opsStarted, retries>>
         /\ IF ~(opInFlight /\ op.id = attemptID) /\ "checkDuringCacheLoad" \notin Mutations
-           THEN UNCHANGED <<state, pulse, opInFlight, ffInFlight, bgInFlight, ffWorkers, bgWorkers, menu>>
+           THEN UNCHANGED <<state, pulse, opInFlight, ffInFlight, bgInFlight, ffWorkers, bgWorkers, menu,
+                            record, uncommitted, lostAccess>>
            ELSE /\ opInFlight' = FALSE
+                /\ lostAccess' = FALSE
                 /\ UNCHANGED pulse
                 /\ Apply(s, pulse)
                 /\ Render
@@ -159,7 +179,8 @@ ClickSignIn ==
     /\ Idle(cacheLoading, opInFlight, ffInFlight, bgInFlight)
     /\ OffersSignIn(state)
     /\ BeginOp("connecting", "signIn")
-    /\ UNCHANGED <<pulse, cacheLoading, ffInFlight, bgInFlight, cacheLoad, ffWorkers, bgWorkers, retries>>
+    /\ UNCHANGED <<pulse, cacheLoading, ffInFlight, bgInFlight, cacheLoad, ffWorkers, bgWorkers, retries,
+                   uncommitted, lostAccess>>
     /\ Render
 
 \* connect(token:): Use a PDT token -> .checkingConnection, effect .connectToken
@@ -168,7 +189,8 @@ ClickToken ==
     /\ Idle(cacheLoading, opInFlight, ffInFlight, bgInFlight)
     /\ OffersSignIn(state)
     /\ BeginOp("checkingConnection", "token")
-    /\ UNCHANGED <<pulse, cacheLoading, ffInFlight, bgInFlight, cacheLoad, ffWorkers, bgWorkers, retries>>
+    /\ UNCHANGED <<pulse, cacheLoading, ffInFlight, bgInFlight, cacheLoad, ffWorkers, bgWorkers, retries,
+                   uncommitted, lostAccess>>
     /\ Render
 
 \* checkAgain()
@@ -177,7 +199,8 @@ ClickCheckAgain ==
     /\ Idle(cacheLoading, opInFlight, ffInFlight, bgInFlight)
     /\ OffersCheckAgain(state)
     /\ BeginOp("checkingConnection", "check")
-    /\ UNCHANGED <<pulse, cacheLoading, ffInFlight, bgInFlight, cacheLoad, ffWorkers, bgWorkers, retries>>
+    /\ UNCHANGED <<pulse, cacheLoading, ffInFlight, bgInFlight, cacheLoad, ffWorkers, bgWorkers, retries,
+                   uncommitted, lostAccess>>
     /\ Render
 
 \* disconnect()
@@ -186,7 +209,8 @@ ClickDisconnect ==
     /\ Idle(cacheLoading, opInFlight, ffInFlight, bgInFlight)
     /\ OffersDisconnect(state)
     /\ BeginOp("disconnecting", "disconnect")
-    /\ UNCHANGED <<pulse, cacheLoading, ffInFlight, bgInFlight, cacheLoad, ffWorkers, bgWorkers, retries>>
+    /\ UNCHANGED <<pulse, cacheLoading, ffInFlight, bgInFlight, cacheLoad, ffWorkers, bgWorkers, retries,
+                   uncommitted, lostAccess>>
     /\ Render
 
 \* retryFirstFetch(): accepted only while connected and idle
@@ -198,7 +222,7 @@ ClickRetry ==
     /\ IF pulse # "none"
        THEN /\ StartBg /\ UNCHANGED <<ffInFlight, ffWorkers>>
        ELSE /\ StartFirstFetch /\ UNCHANGED <<bgInFlight, bgWorkers>>
-    /\ UNCHANGED <<pulse, opInFlight, attemptID, cacheLoading, ops, cacheLoad, opsStarted>>
+    /\ UNCHANGED <<pulse, opInFlight, attemptID, cacheLoading, ops, cacheLoad, opsStarted, lostAccess>>
     /\ Render
 
 \* finishFirstPortfolioFetch (App) + completeFirstFetch (Core). Success publishes the
@@ -211,13 +235,17 @@ FirstFetchReturns ==
         CASE r = "ok" ->
                 /\ pulse' = "live"
                 /\ IF "keepFirstFetchFlag" \in Mutations
-                   THEN /\ state' = "current" /\ UNCHANGED <<bgInFlight, bgWorkers>>
+                   THEN /\ state' = "current" /\ UNCHANGED <<bgInFlight, bgWorkers, record, uncommitted>>
                    ELSE /\ bgInFlight' = TRUE /\ bgWorkers' = bgWorkers + 1 /\ state' = "fetching"
+                        /\ SyncStarts
           [] r = "unavailable" ->
                 /\ UNCHANGED <<pulse, bgInFlight, bgWorkers>> /\ state' = "fetchFailed"
+                /\ record' = "kept" /\ uncommitted' = TRUE
           [] OTHER ->
                 /\ UNCHANGED <<pulse, bgInFlight, bgWorkers>> /\ state' = r
-    /\ UNCHANGED <<opInFlight, attemptID, cacheLoading, ops, cacheLoad, opsStarted, retries>>
+                /\ record' = IF "connectionScreenDropsRecord" \in Mutations THEN "none" ELSE "kept"
+                /\ uncommitted' = TRUE
+    /\ UNCHANGED <<opInFlight, attemptID, cacheLoading, ops, cacheLoad, opsStarted, retries, lostAccess>>
     /\ Render
 
 \* backgroundDetailRefreshProgress: re-renders progress while the refresh runs
@@ -225,20 +253,35 @@ BackgroundProgress ==
     /\ bgWorkers > 0 /\ bgInFlight /\ pulse # "none"
     /\ state' = "fetching"
     /\ UNCHANGED <<pulse, opInFlight, attemptID, cacheLoading, ffInFlight, bgInFlight,
-                   ops, cacheLoad, ffWorkers, bgWorkers, opsStarted, retries>>
+                   ops, cacheLoad, ffWorkers, bgWorkers, opsStarted, retries, record, uncommitted, lostAccess>>
     /\ Render
 
 \* finishBackgroundPortfolioRefresh (App) + completeBackgroundDetailRefresh (Core).
-\* A connection failure moves to that connection state and keeps the pulse.
+\* A base failure commits nothing: it keeps the pulse and its record, and a connection
+\* failure moves to that connection state. A committed refresh whose optional phase lost
+\* access ("lost:<state>", #191) publishes the pulse and moves to that connection state.
+LostResults == {"lost:needsReconnect", "lost:subscriptionPaused", "lost:keychainUnavailable"}
+LostState(r) == CASE r = "lost:needsReconnect" -> "needsReconnect"
+                  [] r = "lost:subscriptionPaused" -> "subscriptionPaused"
+                  [] OTHER -> "keychainUnavailable"
+
 BackgroundReturns ==
     /\ bgWorkers > 0
     /\ bgWorkers' = bgWorkers - 1
     /\ bgInFlight' = FALSE
-    /\ \E r \in {"ok", "unavailable"} \cup ConnectionStates :
+    /\ \E r \in {"ok", "unavailable"} \cup ConnectionStates \cup LostResults :
         CASE r = "ok" -> /\ pulse' = "live" /\ state' = "current"
+                         /\ UNCHANGED <<record, uncommitted>> /\ lostAccess' = FALSE
+          [] r \in LostResults ->
+                /\ pulse' = "live"
+                /\ state' = IF "optionalAccessLossStaysConnected" \in Mutations THEN "current" ELSE LostState(r)
+                /\ UNCHANGED <<record, uncommitted>> /\ lostAccess' = TRUE
           [] r = "unavailable" -> /\ UNCHANGED pulse /\ state' = "fetchFailed"
+                /\ record' = "kept" /\ uncommitted' = TRUE /\ lostAccess' = FALSE
           [] OTHER -> /\ UNCHANGED pulse
                       /\ state' = IF "failureStaysFetching" \in Mutations THEN "fetching" ELSE r
+                      /\ record' = IF "connectionScreenDropsRecord" \in Mutations THEN "none" ELSE "kept"
+                      /\ uncommitted' = TRUE /\ lostAccess' = FALSE
     /\ UNCHANGED <<opInFlight, attemptID, cacheLoading, ffInFlight, ops, cacheLoad, ffWorkers, opsStarted, retries>>
     /\ Render
 
@@ -264,6 +307,7 @@ Spec == Init /\ [][Next]_vars
 
 TypeOK ==
     /\ state \in States
+    /\ record \in {"none", "kept"}
     /\ pulse \in {"none", "cached", "live"}
     /\ ffWorkers \in 0..3 /\ bgWorkers \in 0..3
 
@@ -307,6 +351,14 @@ OfferedActionsAreLive ==
     /\ (CanCheckAgain => idle /\ OffersCheckAgain(state))
     /\ (CanDisconnect => idle /\ OffersDisconnect(state))
     /\ (CanRetry => idle /\ Connected(state))
+
+\* #191: a committed refresh that lost access in an optional phase never leaves the menu
+\* saying connected until a connection result says so again.
+AccessLossLeavesConnected == lostAccess => ~Connected(state)
+
+\* #191: the record of a sync that committed nothing stays copyable on every screen,
+\* connection screens and connection operations included, until the next sync starts.
+UncommittedRecordKept == uncommitted => record = "kept"
 
 \* The user is never stranded: something is running or the menu offers a way forward.
 NeverStranded ==

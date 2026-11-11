@@ -45,6 +45,8 @@ Passing today:
 - `NotConnectedShowsSetup`: after a disconnect, or with no credential, the menu shows setup only.
 - `OfferedActionsAreLive`: every clickable Sign in / Use a token / Check again / Disconnect / Try again / Refresh now row is accepted by the runtime.
 - `NeverStranded`: something is running, or the menu offers a way forward.
+- `AccessLossLeavesConnected` (#191): a committed refresh whose optional phase lost access (401, `INSUFFICIENT_SCOPE`, `API_ACCESS_PAUSED`, Keychain) moves to that connection state; the menu never says connected until a connection result does (mutation `optionalAccessLossStaysConnected`).
+- `UncommittedRecordKept` (#191): the failure record of a sync that committed nothing stays in Data Health on connection screens and through connection operations until the next sync starts (mutations `connectionScreenDropsRecord`, `connectionOpDropsRecord`).
 
 The runtime also refuses connection actions while any work runs (`isIdle`). The state guard already covers that in every reachable state, so that guard is pinned by `LaunchFlowTests` rather than by a mutation here.
 
