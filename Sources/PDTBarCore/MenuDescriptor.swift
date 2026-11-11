@@ -146,6 +146,7 @@ public struct MenuSection: Codable, Equatable {
         self.rows = rows
     }
 
+
     enum CodingKeys: String, CodingKey {
         case id
         case title
@@ -527,6 +528,9 @@ public struct MenuBarSectionSurface: Codable, Equatable {
     public var title: String
     public var accessibilityIdentifier: String
     public var rows: [MenuBarRowSurface]
+
+    /// An untitled section renders its rows with no heading item.
+    public var showsHeading: Bool { !title.isEmpty }
 
     public init(id: String, title: String, accessibilityIdentifier: String, rows: [MenuBarRowSurface]) {
         self.id = id

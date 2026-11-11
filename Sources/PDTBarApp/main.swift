@@ -411,11 +411,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private func makeMenuItems(from surface: MenuBarSurface) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
         for section in surface.sections {
-            let heading = makeSectionHeadingItem(
-                title: section.title,
-                accessibilityIdentifier: section.accessibilityIdentifier
-            )
-            items.append(heading)
+            if section.showsHeading {
+                items.append(makeSectionHeadingItem(
+                    title: section.title,
+                    accessibilityIdentifier: section.accessibilityIdentifier
+                ))
+            }
             for row in section.rows {
                 items.append(makeMenuItem(from: row))
             }

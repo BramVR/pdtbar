@@ -226,7 +226,7 @@ public enum MenuDescriptorRenderer {
             sections: [
                 MenuSection(
                     id: "summary",
-                    title: "Summary",
+                    title: "",
                     rows: [portfolioSummaryRow(for: model, settings: settings)]
                 ),
                 MenuSection(

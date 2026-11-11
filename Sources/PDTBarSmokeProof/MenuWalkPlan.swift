@@ -28,7 +28,7 @@ public struct MenuWalkPlan: Equatable, Sendable {
     public static let cohesiveUI = MenuWalkPlan(
         fixture: "concentration-pressure.json",
         topLevel: [
-            MenuSelector("Summary", "pdtbar.section.summary"),
+            MenuSelector("Summary", "pdtbar.row.summary.performance"),
             MenuSelector("Pulse", "pdtbar.section.pulse"),
             MenuSelector("Allocation", "pdtbar.section.allocation"),
             MenuSelector("Overview", "pdtbar.row.allocation.portfolio"),
