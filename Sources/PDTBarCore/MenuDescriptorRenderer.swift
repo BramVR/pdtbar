@@ -465,12 +465,14 @@ public enum MenuDescriptorRenderer {
                     role: .settings,
                     title: "Settings..."
                 ),
-            ]
+            ].compactMap { $0 }
         )
     }
 
-    private static func refreshActionRow(state: MenuRefreshActionState) -> MenuRow {
+    private static func refreshActionRow(state: MenuRefreshActionState) -> MenuRow? {
         switch state {
+        case .retryOfferedAbove:
+            return nil
         case .available:
             return MenuRow(
                 id: "actions.refreshNow",
@@ -1124,6 +1126,8 @@ enum MenuRefreshActionState {
     case inProgress
     /// Shown but not clickable: a refresh may start only once readiness comes back ready.
     case waitingForSetup
+    /// No row: the failure notice above the pulse already carries the retry.
+    case retryOfferedAbove
 }
 
 public enum IncomeCalendarDescriptor {

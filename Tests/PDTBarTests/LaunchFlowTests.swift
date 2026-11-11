@@ -225,7 +225,8 @@ struct PDTLaunchMenuTests {
         #expect(cachedFailure.statusVisual.barHeights == cachedPulse.statusVisual.barHeights)
         #expect(rowTitles(in: cachedFailure).contains("Details fill failed"))
         #expect(rowTitles(in: cachedFailure).contains("Fill details again"))
-        #expect(actionRow("actions.refreshNow", in: cachedFailure)?.role == .fetchRetry)
+        #expect(actionRow("actions.refreshNow", in: cachedFailure) == nil)
+        #expect(actionRow("actions.openPDT", in: cachedFailure)?.role == .openPDT)
         #expect(freshnessRefreshDetailsAction(in: cachedRefreshAction)?.role == .fetchRetry)
         #expect(actionRow("actions.refreshNow", in: cachedRefreshAction)?.title == "Refresh now")
         #expect(!cachedRefreshAction.sections.map(\.id).contains("portfolioFetch"))
@@ -656,6 +657,39 @@ struct PDTLaunchRuntimeTests {
         #expect(runtime.currentPulse?.source == .fetchedSnapshot)
         #expect(rowTitles(in: degraded.descriptor).contains("Details partially filled"))
         #expect(rowTitles(in: degraded.descriptor).contains("Fill details again"))
+    }
+
+    @Test("A failed or partly filled refresh offers its retry once, beside the notice, and that retry starts a refresh")
+    func failedOrDegradedRefreshOffersRetryOnce() throws {
+        let failedRuntime = PDTLaunchRuntime()
+        _ = launched(failedRuntime, cachedPulse: try cachedQuietFixturePulse(), status: .connected)
+        let failed = failedRuntime.completeBackgroundDetailRefresh(.failed(.unavailable))
+
+        let degradedRuntime = PDTLaunchRuntime()
+        _ = launched(degradedRuntime, cachedPulse: try cachedQuietFixturePulse(), status: .connected)
+        let degraded = degradedRuntime.completeBackgroundDetailRefresh(.succeeded(try quietFixturePulse(), outcome: .degraded))
+
+        for (runtime, update, notice) in [
+            (failedRuntime, failed, "Details fill failed"),
+            (degradedRuntime, degraded, "Details partially filled"),
+        ] {
+            let fetchRows = try #require(update.descriptor.sections.first { $0.id == "portfolioFetch" }).rows
+            #expect(fetchRows.map(\.title) == [notice, "Fill details again"], "\(notice)")
+            #expect(rowRoles(in: update.descriptor).filter { $0 == .fetchRetry }.count == 1, "\(notice)")
+            #expect(actionRow("actions.refreshNow", in: update.descriptor) == nil, "\(notice)")
+            #expect(actionRow("actions.openPDT", in: update.descriptor)?.role == .openPDT, "\(notice)")
+            #expect(actionRow("actions.settings", in: update.descriptor)?.role == .settings, "\(notice)")
+
+            let retry = try #require(runtime.retryFirstFetch(), "\(notice)")
+            #expect(retry.effect == .startBackgroundDetailRefresh, "\(notice)")
+            #expect(actionRow("actions.refreshNow", in: retry.descriptor)?.title == "Refreshing now", "\(notice)")
+        }
+
+        let completedRuntime = PDTLaunchRuntime()
+        _ = launched(completedRuntime, cachedPulse: try cachedQuietFixturePulse(), status: .connected)
+        let completed = completedRuntime.completeBackgroundDetailRefresh(.succeeded(try quietFixturePulse(), outcome: .completed))
+        #expect(actionRow("actions.refreshNow", in: completed.descriptor)?.role == .fetchRetry)
+        #expect(actionRow("actions.refreshNow", in: completed.descriptor)?.title == "Refresh now")
     }
 
     @Test("A failed background refresh keeps the cached pulse, says what to do, and retries once at a time")
