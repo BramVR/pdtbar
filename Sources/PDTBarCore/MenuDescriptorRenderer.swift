@@ -311,7 +311,7 @@ public enum MenuDescriptorRenderer {
 
     private static func portfolioSummaryPercent(_ value: Double?) -> String {
         guard let value = finite(value) else {
-            return "Unavailable"
+            return MenuRowPortfolioSummary.unavailable
         }
         if value > 0 {
             return "+\(percent(value))"

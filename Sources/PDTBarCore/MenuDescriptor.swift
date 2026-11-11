@@ -340,8 +340,16 @@ public struct MenuRowPortfolioSummary: Codable, Equatable {
         self.totalIncrease = totalIncrease
     }
 
+    public static let unavailable = "Unavailable"
+
+    /// False when PDT returned neither return figure, so the card shows the total alone.
+    public var showsPerformance: Bool {
+        cagr != Self.unavailable || totalIncrease != Self.unavailable
+    }
+
     public var accessibilityLabel: String {
-        "Total portfolio value, \(totalValue); CAGR, \(cagr); Total increase, \(totalIncrease)"
+        guard showsPerformance else { return "Total portfolio value, \(totalValue)" }
+        return "Total portfolio value, \(totalValue); CAGR, \(cagr); Total increase, \(totalIncrease)"
     }
 }
 

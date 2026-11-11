@@ -113,7 +113,7 @@ struct PortfolioSummaryTests {
         #expect(descriptor.sections.firstIndex { $0.id == "summary" }! < descriptor.sections.firstIndex { $0.id == "allocation" }!)
     }
 
-    @Test("Missing performance data stays explicitly unavailable")
+    @Test("Missing performance data shows the total alone")
     func missingPerformanceIsUnavailable() throws {
         var snapshot = try quietSnapshotForSummary()
         snapshot.performance = nil
@@ -124,7 +124,8 @@ struct PortfolioSummaryTests {
         #expect(summary.totalValue == "EUR 51,200.00")
         #expect(summary.cagr == "Unavailable")
         #expect(summary.totalIncrease == "Unavailable")
-        #expect(summary.accessibilityLabel == "Total portfolio value, EUR 51,200.00; CAGR, Unavailable; Total increase, Unavailable")
+        #expect(!summary.showsPerformance)
+        #expect(summary.accessibilityLabel == "Total portfolio value, EUR 51,200.00")
         #expect(!row.accessibilityIdentifier.isEmpty)
     }
 

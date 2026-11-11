@@ -542,7 +542,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     ) -> NSView {
         let layout = PortfolioSummaryGridLayout(
             width: menuItemViewWidth,
-            systemFontSize: NSFont.systemFontSize
+            systemFontSize: NSFont.systemFontSize,
+            showsPerformance: summary.showsPerformance
         )
         let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: layout.rowHeight))
         container.autoresizingMask = [.width]
@@ -564,6 +565,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         performance.distribution = .fill
         performance.spacing = PortfolioSummaryGridLayout.columnGap
 
+        performance.isHidden = !summary.showsPerformance
         let grid = NSStackView(views: [total, performance])
         grid.orientation = .vertical
         grid.alignment = .leading

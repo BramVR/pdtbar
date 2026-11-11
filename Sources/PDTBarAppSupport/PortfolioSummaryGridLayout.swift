@@ -8,9 +8,12 @@ public struct PortfolioSummaryGridLayout: Equatable, Sendable {
     public var width: CGFloat
     public var systemFontSize: CGFloat
 
-    public init(width: CGFloat, systemFontSize: CGFloat = Self.baseSystemFontSize) {
+    public var showsPerformance: Bool
+
+    public init(width: CGFloat, systemFontSize: CGFloat = Self.baseSystemFontSize, showsPerformance: Bool = true) {
         self.width = width
         self.systemFontSize = max(Self.baseSystemFontSize, systemFontSize)
+        self.showsPerformance = showsPerformance
     }
 
     public var columnWidth: CGFloat {
@@ -18,6 +21,6 @@ public struct PortfolioSummaryGridLayout: Equatable, Sendable {
     }
 
     public var rowHeight: CGFloat {
-        86 * systemFontSize / Self.baseSystemFontSize
+        (showsPerformance ? 86 : 46) * systemFontSize / Self.baseSystemFontSize
     }
 }
