@@ -27,6 +27,23 @@ struct DataHealthTests {
         #expect(pricesRow(in: fetched.descriptor)?.children.isEmpty == true)
     }
 
+    @Test("All quiet over a saved copy says the saved copy is quiet, not that it is quiet right now")
+    func allQuietNamesTheSavedCopy() throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "docs/pdt/fixtures/quiet-no-pressure.json")
+        let quietSnapshot = try PDTFixtureDataSource.snapshot(from: fixture)
+        let store = try SnapshotStore.temporaryTestStore(prefix: "data-health-cached-quiet")
+        _ = try store.commitCurrentSnapshot(quietSnapshot)
+        let cached = try #require(try PressureRunner.cachedPulse(snapshotStore: store, today: quietSnapshot.asOf))
+        let quiet = { (descriptor: MenuDescriptor) in
+            descriptor.sections.flatMap(\.rows).first { $0.id == "pulse.quiet" }?.detail
+        }
+
+        #expect(quiet(cached.descriptor) == "No attention items in the saved copy.")
+        #expect(quiet(MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: quietSnapshot))) == "No attention items right now.")
+    }
+
     @Test("A saved copy is never healthy and never claims a checked connection")
     func savedCopyIsNeverHealthy() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "data-health-cached-truth")

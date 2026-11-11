@@ -177,7 +177,9 @@ public enum MenuDescriptorRenderer {
                     id: "pulse.quiet",
                     role: .pulseQuiet,
                     title: model.allQuietSignal.title,
-                    detail: model.allQuietSignal.detail,
+                    detail: dataHealth.source.pulse == .cachedSnapshot
+                        ? "No attention items in the saved copy."
+                        : model.allQuietSignal.detail,
                     children: [
                         MenuRow(
                             id: "pulse.quiet.holdings",
