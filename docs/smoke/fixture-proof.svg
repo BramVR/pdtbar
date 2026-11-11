@@ -8,12 +8,12 @@
 </g>
   <rect x="30" y="100" width="520" height="320" rx="8" fill="#ffffff" stroke="#d6d3ca"/>
   <text x="44" y="132" class="heading">Fixture menu proof</text>
-  <text x="44" y="154" class="row">Pulse</text>
-<text x="44" y="182" class="row">EUR 51,200.00 - All quiet</text>
+  <text x="44" y="154" class="row">Portfolio summary</text>
+<text x="44" y="182" class="row">Pulse</text>
 <text x="44" y="210" class="row">All quiet - No attention items right now.</text>
 <text x="44" y="238" class="row">Allocation</text>
 <text x="44" y="266" class="row">Portfolio</text>
-<text x="44" y="294" class="row">Detailed info - Full allocation list</text>
+<text x="44" y="294" class="row">Full allocation list</text>
 <text x="44" y="322" class="row">Income</text>
 <text x="44" y="350" class="row">No income events - No calendar events in the next window</text>
   <style>

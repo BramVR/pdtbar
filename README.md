@@ -9,7 +9,7 @@ It reads the whole portfolio straight from PDT, read-only, and surfaces only the
 - Shows a compact Concentration Stack icon in the macOS menu bar.
 - Fills up to three bars when attention items are present.
 - Opens to a ranked pulse instead of a dashboard grid.
-- Keeps `Refresh now` and `Open PDT` available from top-level menu actions.
+- Keeps `Open PDT` in the top-level actions, and a refresh one click away: `Refresh now` there, or `Fill details again` next to a failed or partial refresh.
 - Keeps portfolio data local and read-only by default.
 - Uses deterministic pressure rules, not financial advice.
 

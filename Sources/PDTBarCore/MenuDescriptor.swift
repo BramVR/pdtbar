@@ -331,18 +331,14 @@ public struct MenuRowPortfolioSummary: Codable, Equatable {
     public var totalValue: String
     public var cagr: String
     public var totalIncrease: String
+    /// False when PDT returned neither return figure, so the card shows the total alone.
+    public var showsPerformance: Bool
 
-    public init(totalValue: String, cagr: String, totalIncrease: String) {
+    public init(totalValue: String, cagr: String, totalIncrease: String, showsPerformance: Bool = true) {
         self.totalValue = totalValue
         self.cagr = cagr
         self.totalIncrease = totalIncrease
-    }
-
-    public static let unavailable = "Unavailable"
-
-    /// False when PDT returned neither return figure, so the card shows the total alone.
-    public var showsPerformance: Bool {
-        cagr != Self.unavailable || totalIncrease != Self.unavailable
+        self.showsPerformance = showsPerformance
     }
 
     public var accessibilityLabel: String {

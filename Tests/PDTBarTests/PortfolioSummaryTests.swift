@@ -129,6 +129,25 @@ struct PortfolioSummaryTests {
         #expect(!row.accessibilityIdentifier.isEmpty)
     }
 
+    @Test("One return figure is enough to show the performance row")
+    func oneReturnFigureShowsPerformance() throws {
+        var snapshot = try quietSnapshotForSummary()
+        snapshot.performance = PortfolioPerformanceSummary.build(
+            totalGainPercentage: 0.05,
+            periodStart: nil,
+            periodEnd: nil
+        )
+        let summary = try #require(
+            MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: snapshot))
+                .sections.first?.rows.first?.portfolioSummary
+        )
+
+        #expect(summary.cagr == "Unavailable")
+        #expect(summary.totalIncrease == "+5.0%")
+        #expect(summary.showsPerformance)
+        #expect(summary.accessibilityLabel.contains("Total increase, +5.0%"))
+    }
+
     @Test("Short performance periods explain unavailable CAGR with values shown or hidden")
     func shortPerformancePeriodExplainsUnavailableCAGR() throws {
         var snapshot = try quietSnapshotForSummary()

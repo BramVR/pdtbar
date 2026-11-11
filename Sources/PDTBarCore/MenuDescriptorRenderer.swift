@@ -294,13 +294,20 @@ public enum MenuDescriptorRenderer {
             portfolioSummary: MenuRowPortfolioSummary(
                 totalValue: display(model.portfolioGlance.totalValue, settings: settings),
                 cagr: portfolioSummaryCAGR(model.portfolioPerformance),
-                totalIncrease: portfolioSummaryPercent(model.portfolioPerformance.totalPercentageIncrease)
+                totalIncrease: portfolioSummaryPercent(model.portfolioPerformance.totalPercentageIncrease),
+                showsPerformance: hasReturnFigures(model.portfolioPerformance)
             )
         )
         row.portfolioValueSummaryTotal = settings.showPortfolioValues
             ? model.portfolioGlance.totalValue
             : nil
         return row
+    }
+
+    private static func hasReturnFigures(_ performance: PortfolioPerformanceSummary) -> Bool {
+        finite(performance.cagr) != nil
+            || finite(performance.totalPercentageIncrease) != nil
+            || performance.hasInsufficientCAGRPeriod
     }
 
     private static func portfolioSummaryCAGR(_ performance: PortfolioPerformanceSummary) -> String {
@@ -312,7 +319,7 @@ public enum MenuDescriptorRenderer {
 
     private static func portfolioSummaryPercent(_ value: Double?) -> String {
         guard let value = finite(value) else {
-            return MenuRowPortfolioSummary.unavailable
+            return "Unavailable"
         }
         if value > 0 {
             return "+\(percent(value))"
