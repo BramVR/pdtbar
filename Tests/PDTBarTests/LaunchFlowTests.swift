@@ -709,7 +709,7 @@ struct PDTLaunchRuntimeTests {
         #expect(runtime.currentPulse?.source == .cachedSnapshot)
         #expect(failed.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
         #expect(rowTitles(in: failed.descriptor).contains("Details fill failed"))
-        #expect(healthRow(in: failed.descriptor)?.detail == "Needs attention")
+        #expect(healthRow(in: failed.descriptor)?.detail == "Detail fill failed")
         #expect(healthDetail("access", in: failed.descriptor) == "Connected")
         #expect(healthDetail("detailFill", in: failed.descriptor) == "Failed")
         #expect(healthDetail("diagnostic", in: failed.descriptor) == "Base holdings: PDT rate limit; try again in 2 min")
@@ -748,20 +748,20 @@ struct PDTLaunchRuntimeTests {
     @Test(
         "A connection screen over a saved copy says in Data health why access stopped",
         arguments: [
-            (PDTConnectionStatus.needsReconnect(.browserSession, .signInExpired), "Reconnect needed: your PDT sign-in has expired"),
-            (.needsReconnect(.personalToken, .tokenRevoked), "Reconnect needed: PDTBar's access was revoked in PDT"),
-            (.needsReconnect(.personalToken, .readAccessMissing), "Reconnect needed: this connection can't read your portfolio"),
-            (.subscriptionPaused, "Paused: your PDT subscription has ended"),
-            (.keychainUnavailable(.failed), "Keychain unavailable"),
+            (PDTConnectionStatus.needsReconnect(.browserSession, .signInExpired), "Reconnect needed", "Reconnect needed: your PDT sign-in has expired"),
+            (.needsReconnect(.personalToken, .tokenRevoked), "Reconnect needed", "Reconnect needed: PDTBar's access was revoked in PDT"),
+            (.needsReconnect(.personalToken, .readAccessMissing), "Reconnect needed", "Reconnect needed: this connection can't read your portfolio"),
+            (.subscriptionPaused, "Subscription paused", "Paused: your PDT subscription has ended"),
+            (.keychainUnavailable(.failed), "Keychain unavailable", "Keychain unavailable"),
         ]
     )
-    func connectionScreenNamesAccessProblem(status: PDTConnectionStatus, access: String) throws {
+    func connectionScreenNamesAccessProblem(status: PDTConnectionStatus, summary: String, access: String) throws {
         let runtime = PDTLaunchRuntime()
 
         let screen = launched(runtime, cachedPulse: try cachedQuietFixturePulse(), status: status)
 
         #expect(screen.descriptor.sections.first?.id == "pdtConnection")
-        #expect(healthRow(in: screen.descriptor)?.detail == "Needs attention")
+        #expect(healthRow(in: screen.descriptor)?.detail == summary)
         #expect(healthDetail("access", in: screen.descriptor) == access)
         #expect(healthDetail("source", in: screen.descriptor)?.contains("saved copy") == true)
     }

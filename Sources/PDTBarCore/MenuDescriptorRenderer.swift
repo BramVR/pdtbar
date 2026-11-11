@@ -800,11 +800,11 @@ public enum MenuDescriptorRenderer {
     }
 
     private static func dataHealthSummaryDetail(for health: DataHealthSnapshot) -> String {
-        switch health.status {
+        switch DataHealth.verdict(of: health) {
         case .healthy:
             "Healthy"
-        case .degraded:
-            "Needs attention"
+        case let .attention(cause):
+            cause.summary(for: health)
         case .checking:
             "Checking"
         case .refreshing:
