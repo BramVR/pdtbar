@@ -27,6 +27,8 @@ usage:
   Scripts/verify_pdtbar.sh capture record <run-dir> <name> <seconds>    # <run>/evidence/<name>.mov + -poster.png
   Scripts/verify_pdtbar.sh menu-walk <run-dir>      # walk the cohesive-ui plan; <run>/evidence/menu-walk/
   Scripts/verify_pdtbar.sh menu-smoke               # build, launch the plan fixture, menu-walk, stop
+  Scripts/verify_pdtbar.sh menu-measure <fixture.json>   # build, launch, root menu rows + menu.png, stop
+  Scripts/verify_pdtbar.sh menu-measure --scripted <script.json> <seed-snapshot.json>   # same over launch-scripted
 EOF
   exit 64
 }
@@ -231,6 +233,25 @@ menu_smoke() {
   printf 'evidence: %s/evidence/menu-walk\n' "${run}"
 }
 
+menu_measure() {
+  local fixture="$1" run
+  (cd "${ROOT_DIR}" && swift build --product pdtbar && swift build --product pdtbar-capture) >&2 || fail "build failed"
+  require_capture_tool
+  if [[ "${fixture}" == --scripted ]]; then
+    fixture="$2"
+    run="$(launch_scripted "$2" "$3" | sed -n 's/^ready: //p')"
+  else
+    run="$(launch "${fixture}" | sed -n 's/^ready: //p')"
+  fi
+  [[ -n "${run}" ]] || fail "launch did not report ready"
+  trap "stop '${run}' >&2 || true" EXIT
+  # Scripted replies (retries included) finish after the first check; let the menu settle.
+  [[ "$(cat "${run}/fixture")" != scripted:* ]] || sleep 3
+  "${CAPTURE}" measure --pid "$(cat "${run}/pid")" --fixture "${fixture}" --out-dir "${run}/evidence/measure" \
+    || fail "menu-measure did not capture the menu (reason above)"
+  printf 'evidence: %s/evidence/measure\n' "${run}"
+}
+
 case "${1:-}" in
   launch) shift; launch "$@" ;;
   launch-scripted) [[ $# -ge 2 && $# -le 3 ]] || usage; shift; launch_scripted "$@" ;;
@@ -240,5 +261,6 @@ case "${1:-}" in
   capture) shift; capture "$@" ;;
   menu-walk) [[ $# -eq 2 ]] || usage; menu_walk "${2%/}" ;;
   menu-smoke) [[ $# -eq 1 ]] || usage; menu_smoke ;;
+  menu-measure) [[ $# -eq 2 || ( $# -eq 4 && "$2" == --scripted ) ]] || usage; shift; menu_measure "$@" ;;
   *) usage ;;
 esac

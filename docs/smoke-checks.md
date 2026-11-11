@@ -25,6 +25,8 @@ read_when:
 - Each PNG is composed on flat grey from the status item crop and PDTBar's menu windows captured by window id, so desktop content, windows behind the translucent menu, and other menu bar items stay out. Raw captures stay in a temp dir; only the composite lands in evidence.
 - Fixture data only. No network, Keychain, or account access. It moves no mouse unless AXPress fails to open a submenu, then it hovers the row.
 
+`Scripts/verify_pdtbar.sh menu-measure <fixture.json>` (or `menu-measure --scripted <script.json> <seed-snapshot.json>`) builds, launches any fixture or scripted connection, opens only the root menu, and writes `menu.png` plus `measure.json` (menu width and height in pt, and each top-level row's role, identifier, visible text, height, submenu flag, and enabled state) to `<run>/evidence/measure/`. Same preflight and redaction rules as the walk. Use it to compare menu layouts across fixtures.
+
 ## Redaction rules
 
 Public proof may report command names, selectors, row text, scenario status,
