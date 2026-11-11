@@ -598,23 +598,6 @@ func walk(pid: pid_t, planName: String, fixture: String, outDir: URL) {
 
 // MARK: Menu measure
 
-struct MeasuredRow: Encodable {
-    let role: String
-    let identifier: String?
-    let text: String
-    let y: Int
-    let height: Int
-    let hasSubmenu: Bool
-    let enabled: Bool
-}
-
-struct MeasureReport: Encodable {
-    let fixture: String
-    let menuWidth: Int
-    let menuHeight: Int
-    let rows: [MeasuredRow]
-}
-
 /// Visible text of a row: its own title plus the static text inside a custom row view, without
 /// descending into a submenu's rows.
 func rowText(_ element: AXUIElement) -> String {
@@ -635,7 +618,7 @@ func rowText(_ element: AXUIElement) -> String {
     return parts.joined(separator: " | ")
 }
 
-func measure(pid: pid_t, fixture: String, outDir: URL) {
+func measure(pid: pid_t, fixture: String, outDir: URL, allowSensitiveText: Bool) {
     if let failure = runPreflight().firstFailure {
         fail("measure cannot capture the menu (\(failure.name): \(failure.detail))", code: 3)
     }
@@ -654,6 +637,7 @@ func measure(pid: pid_t, fixture: String, outDir: URL) {
         fail("status menu did not open")
     }
     Thread.sleep(forTimeInterval: 0.3)
+    let salt = MeasureReport.newSalt()
     let rows = axChildren(root).compactMap { item -> MeasuredRow? in
         guard let frame = axFrame(item), frame.height > 0 else { return nil }
         var enabled: CFTypeRef?
@@ -661,7 +645,9 @@ func measure(pid: pid_t, fixture: String, outDir: URL) {
         return MeasuredRow(
             role: axString(item, "AXRole") ?? "?",
             identifier: axString(item, "AXIdentifier"),
-            text: rowText(item),
+            rawText: rowText(item),
+            salt: salt,
+            includeText: allowSensitiveText,
             y: Int((frame.minY - window.frame.minY).rounded()),
             height: Int(frame.height.rounded()),
             hasSubmenu: axChildren(item).contains { axString($0, "AXRole") == (kAXMenuRole as String) },
@@ -674,7 +660,8 @@ func measure(pid: pid_t, fixture: String, outDir: URL) {
     if let failure { fail("menu capture failed: \(failure)") }
     let report = MeasureReport(
         fixture: URL(fileURLWithPath: fixture).lastPathComponent,
-        menuWidth: Int(window.frame.width.rounded()), menuHeight: Int(window.frame.height.rounded()), rows: rows
+        menuWidth: Int(window.frame.width.rounded()), menuHeight: Int(window.frame.height.rounded()),
+        sensitiveText: allowSensitiveText, rows: rows
     )
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -694,7 +681,7 @@ usage:
   pdtbar-capture screenshot --pid <pid> --out <file.png> [--closed]
   pdtbar-capture record --pid <pid> --seconds <1-30> --out <file.mov>
   pdtbar-capture walk --pid <pid> --plan <name> --fixture <file.json> --out-dir <dir>
-  pdtbar-capture measure --pid <pid> --fixture <name> --out-dir <dir>
+  pdtbar-capture measure --pid <pid> --fixture <name> --out-dir <dir> [--allow-sensitive-text]
 """
 
 func option(_ name: String, in arguments: [String]) -> String? {
@@ -745,7 +732,10 @@ case "measure":
     else {
         fail(usage, code: 64)
     }
-    measure(pid: pid, fixture: fixture, outDir: URL(fileURLWithPath: outDir))
+    measure(
+        pid: pid, fixture: fixture, outDir: URL(fileURLWithPath: outDir),
+        allowSensitiveText: arguments.contains("--allow-sensitive-text")
+    )
 default:
     fail(usage, code: 64)
 }

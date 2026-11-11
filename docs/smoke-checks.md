@@ -25,7 +25,7 @@ read_when:
 - Each PNG is composed on flat grey from the status item crop and PDTBar's menu windows captured by window id, so desktop content, windows behind the translucent menu, and other menu bar items stay out. Raw captures stay in a temp dir; only the composite lands in evidence.
 - Fixture data only. No network, Keychain, or account access. It moves no mouse unless AXPress fails to open a submenu, then it hovers the row.
 
-`Scripts/verify_pdtbar.sh menu-measure <fixture.json>` (or `menu-measure --scripted <script.json> <seed-snapshot.json>`) builds, launches any fixture or scripted connection, opens only the root menu, and writes `menu.png` plus `measure.json` (menu width and height in pt, and each top-level row's role, identifier, visible text, height, submenu flag, and enabled state) to `<run>/evidence/measure/`. Same preflight and redaction rules as the walk. Use it to compare menu layouts across fixtures.
+`Scripts/verify_pdtbar.sh menu-measure <fixture.json>` (or `menu-measure --scripted <script.json> <seed-snapshot.json>`) builds, launches any fixture or scripted connection, opens only the root menu, and writes `menu.png` plus `measure.json` to `<run>/evidence/measure/`. The report holds menu width and height in pt and, per top-level row, its role, its identifier with digit runs masked (`kind`), height, submenu and enabled flags, and the row text's length, error flags, and a primary-label digest salted per run (for duplicate detection). It writes no row text by default, so no amounts or holding names reach disk; `pdtbar-capture measure ... --allow-sensitive-text` adds the raw text for fixture debugging. Same preflight and redaction rules as the walk. Use it to compare menu layouts across fixtures.
 
 ## Redaction rules
 
