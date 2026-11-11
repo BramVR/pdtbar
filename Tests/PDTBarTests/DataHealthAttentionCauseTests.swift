@@ -1,0 +1,166 @@
+import Foundation
+import Testing
+@testable import PDTBarCore
+
+@Suite("Data health attention cause")
+struct DataHealthAttentionCauseTests {
+    @Test("Every attention cause names itself in the summary and in its own row", arguments: DataHealthAttentionCause.allCases)
+    func everyCauseIsNamed(cause: DataHealthAttentionCause) {
+        let example = example(of: cause)
+        let health = DataHealth.build(example.input)
+        let row = MenuDescriptorRenderer.dataHealthRow(for: health)
+        let baseline = MenuDescriptorRenderer.dataHealthRow(for: DataHealth.build(healthyInput()))
+        let named = row.children.first { $0.id == cause.rowID }
+
+        #expect(health.status == .degraded)
+        #expect(row.detail == example.summary)
+        #expect(named?.detail == example.rowDetail)
+        #expect(named?.detail != baseline.children.first { $0.id == cause.rowID }?.detail)
+        #expect(row.children.map(\.id) == [
+            "dataHealth.source",
+            "dataHealth.access",
+            "dataHealth.cache",
+            "dataHealth.freshness",
+            "dataHealth.detailFill",
+            "dataHealth.readState",
+            "dataHealth.diagnostic",
+        ])
+    }
+
+    @Test("Concentration-pressure in the running app says its prices are stale")
+    func concentrationPressureNamesStalePrices() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "data-health-cause-concentration")
+        let fixture = packageRoot.appending(path: "docs/pdt/fixtures/concentration-pressure.json")
+        let run = try PressureRunner.run(dataSource: PDTFixtureDataSource(fixture: fixture), snapshotStore: store)
+        let descriptor = run.descriptor(in: DataHealthRuntime(access: .connected))
+        let section = descriptor.sections.first { $0.id == "freshness" }
+        let health = try #require(section?.rows.first { $0.id == "dataHealth" })
+
+        #expect(health.detail == "2 stale prices")
+        #expect(health.children.first { $0.id == "dataHealth.freshness" }?.detail == "2 stale; oldest 2026-06-18")
+    }
+
+    @Test("A blocked connection is named before a saved copy or stale prices")
+    func blockedAccessIsNamedFirst() {
+        var input = healthyInput()
+        input.pulseSource = .cachedSnapshot
+        input.freshness = staleFreshness
+        #expect(MenuDescriptorRenderer.dataHealthRow(for: DataHealth.build(input)).detail == "Showing a saved copy")
+
+        input.access = .reconnect(.tokenRevoked)
+        #expect(MenuDescriptorRenderer.dataHealthRow(for: DataHealth.build(input)).detail == "Reconnect needed")
+    }
+}
+
+private struct CauseExample {
+    var input: DataHealthInput
+    var summary: String
+    var rowDetail: String
+}
+
+private func example(of cause: DataHealthAttentionCause) -> CauseExample {
+    var input = healthyInput()
+    switch cause {
+    case .notConnected:
+        input.access = .notConnected
+        return CauseExample(input: input, summary: "Not connected", rowDetail: "Not connected")
+    case .reconnectNeeded:
+        input.access = .reconnect(.tokenRevoked)
+        return CauseExample(
+            input: input,
+            summary: "Reconnect needed",
+            rowDetail: "Reconnect needed: PDTBar's access was revoked in PDT"
+        )
+    case .subscriptionPaused:
+        input.access = .subscriptionPaused
+        return CauseExample(
+            input: input,
+            summary: "Subscription paused",
+            rowDetail: "Paused: your PDT subscription has ended"
+        )
+    case .keychainUnavailable:
+        input.access = .keychainUnavailable
+        return CauseExample(input: input, summary: "Keychain unavailable", rowDetail: "Keychain unavailable")
+    case .detailFillFailed:
+        input.detailFill = .failed
+        return CauseExample(input: input, summary: "Detail fill failed", rowDetail: "Failed")
+    case .savedCopy:
+        input.pulseSource = .cachedSnapshot
+        return CauseExample(
+            input: input,
+            summary: "Showing a saved copy",
+            rowDetail: "PDT, read-only; saved copy from 2026-06-25"
+        )
+    case .notFetched:
+        input.pulseSource = nil
+        return CauseExample(
+            input: input,
+            summary: "Not fetched this session",
+            rowDetail: "PDT, read-only; not fetched this session"
+        )
+    case .accessNotChecked:
+        input.access = .unverified
+        return CauseExample(input: input, summary: "Connection not checked", rowDetail: "Not checked this session")
+    case .unknownPriceDates:
+        input.freshness = freshness(.unknown, staleCount: 0, oldest: nil)
+        return CauseExample(input: input, summary: "Unknown price dates", rowDetail: "Unknown")
+    case .stalePrices:
+        input.freshness = staleFreshness
+        return CauseExample(
+            input: input,
+            summary: "2 stale prices",
+            rowDetail: "2 stale; oldest 2026-06-18"
+        )
+    case .detailFillIncomplete:
+        input.freshness = freshness(.partial, staleCount: 0, oldest: "2026-06-24")
+        input.detailFill = .completed(asOf: "2026-06-20")
+        return CauseExample(
+            input: input,
+            summary: "Detail fill incomplete",
+            rowDetail: "Incomplete; last complete 2026-06-20"
+        )
+    case .failureRecorded:
+        input.lastFailure = PDTSyncFailure(phase: .priceHistory, endpoint: .pricesBatch, kind: .server(status: 503), requestCount: 1)
+        return CauseExample(
+            input: input,
+            summary: "Last sync failed",
+            rowDetail: "Price history: PDT server problem; try again later"
+        )
+    }
+}
+
+private func healthyInput() -> DataHealthInput {
+    DataHealthInput(
+        access: .connected,
+        pulseSource: .fetchedSnapshot,
+        lastSyncAsOf: "2026-06-25",
+        lastCompleteSyncAsOf: "2026-06-25",
+        priorSnapshotStatus: nil,
+        detailFill: .completed(asOf: "2026-06-25"),
+        freshness: freshness(.fresh, staleCount: 0, oldest: "2026-06-24"),
+        readState: nil,
+        lastFailure: nil
+    )
+}
+
+private var staleFreshness: FreshnessSnapshot {
+    freshness(.stale, staleCount: 2, oldest: "2026-06-18")
+}
+
+private let packageRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+
+private func freshness(_ status: FreshnessState, staleCount: Int, oldest: String?) -> FreshnessSnapshot {
+    FreshnessSnapshot(
+        status: status,
+        worstPriceAsOf: oldest,
+        stale: status == .stale,
+        staleHoldingCount: staleCount,
+        oldestPriceAsOf: oldest,
+        oldestRows: [],
+        latestCompleteDetailFillAsOf: "2026-06-25",
+        sourceCaveats: []
+    )
+}
