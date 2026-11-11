@@ -42,7 +42,7 @@ Scripts/verify_pdtbar.sh capture record "$RUN" menu-clip 4
 Scripts/verify_pdtbar.sh stop "$RUN"
 ```
 
-For the whole cohesive menu plus the `Detailed info` and `Data health` submenus in one run, use `Scripts/verify_pdtbar.sh menu-smoke`. It prints `menu-walk: ok` and the evidence dir holding `menu.png`, `allocation-overview.png`, and `data-health.png`.
+For the whole cohesive menu plus the `Full allocation list` and `Data health` submenus in one run, use `Scripts/verify_pdtbar.sh menu-smoke`. It prints `menu-walk: ok` and the evidence dir holding `menu.png`, `allocation-overview.png`, and `data-health.png`.
 
 The image must show the Concentration Stack icon in its highlighted state and the open menu with Summary, Pulse, Allocation with its chart, Income, Data, and Actions. `capture` does not open submenus; `menu-smoke` does. Swap the fixture for the state under test, such as `quiet-no-pressure.json`.
 

@@ -188,7 +188,7 @@ struct PortfolioOverviewTests {
         #expect(chartRow.children.isEmpty)
         #expect(detailsRow.id == "allocation.portfolio.details")
         #expect(detailsRow.role == .portfolioOverviewDetails)
-        #expect(detailsRow.title == "Detailed info")
+        #expect(detailsRow.title == "Full allocation list")
         #expect(detailsRow.children.map(\.id) == [
             "allocation.9001",
             "allocation.9002",

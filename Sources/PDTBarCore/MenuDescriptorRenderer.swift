@@ -479,8 +479,7 @@ public enum MenuDescriptorRenderer {
             return MenuRow(
                 id: "actions.refreshNow",
                 role: .fetchRetry,
-                title: "Refresh now",
-                detail: "Fill latest details"
+                title: "Refresh now"
             )
         case .inProgress:
             return MenuRow(
@@ -548,8 +547,7 @@ public enum MenuDescriptorRenderer {
         return MenuRow(
             id: "allocation.portfolio.details",
             role: .portfolioOverviewDetails,
-            title: "Detailed info",
-            detail: "Full allocation list",
+            title: "Full allocation list",
             children: allocationHoldingRows(
                 for: allocation.topHoldings,
                 model: model,

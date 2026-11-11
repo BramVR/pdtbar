@@ -23,7 +23,7 @@ public struct MenuWalkPlan: Equatable, Sendable {
     public var submenus: [MenuWalkSubmenu]
 
     /// Issue #147's cohesive-UI walk, keyed to today's identifiers. The portfolio overview is the
-    /// Allocation chart row, its submenu is "Detailed info", the Freshness section is titled "Data",
+    /// Allocation chart row, its submenu is "Full allocation list", the Freshness section is titled "Data",
     /// and Data health is a row in it. Holding id 9001 belongs to the pinned fixture.
     public static let cohesiveUI = MenuWalkPlan(
         fixture: "concentration-pressure.json",
