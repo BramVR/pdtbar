@@ -292,13 +292,15 @@ public enum MenuDescriptorRenderer {
             role: .portfolioSummary,
             title: "Portfolio summary",
             portfolioSummary: MenuRowPortfolioSummary(
-                totalValue: display(model.portfolioGlance.totalValue, settings: settings),
+                totalValue: model.portfolioGlance.openHoldingCount == 0
+                    ? "No open holdings"
+                    : display(model.portfolioGlance.totalValue, settings: settings),
                 cagr: portfolioSummaryCAGR(model.portfolioPerformance),
                 totalIncrease: portfolioSummaryPercent(model.portfolioPerformance.totalPercentageIncrease),
                 showsPerformance: hasReturnFigures(model.portfolioPerformance)
             )
         )
-        row.portfolioValueSummaryTotal = settings.showPortfolioValues
+        row.portfolioValueSummaryTotal = settings.showPortfolioValues && model.portfolioGlance.openHoldingCount > 0
             ? model.portfolioGlance.totalValue
             : nil
         return row

@@ -5,6 +5,21 @@ import PDTBarAppSupport
 
 @Suite("Portfolio performance summary")
 struct PortfolioSummaryTests {
+    @Test("A portfolio with no open holdings says so instead of a zero total", arguments: [
+        ("income-event", "No open holdings"),
+        ("concentration-pressure", "EUR 64,000.00"),
+    ])
+    func summaryTotalNamesAnEmptyPortfolio(_ fixtureName: String, _ total: String) throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "docs/pdt/fixtures/\(fixtureName).json")
+        let model = PressureEngine.buildModel(from: try PDTFixtureDataSource.snapshot(from: fixture))
+        let summary = MenuDescriptorRenderer.render(model: model).sections
+            .flatMap(\.rows).first { $0.id == "summary.performance" }?.portfolioSummary
+
+        #expect(summary?.totalValue == total)
+    }
+
     @Test("Performance summary annualizes PDT's selected full-period return")
     func performanceSummaryCalculatesCAGR() throws {
         let summary = PortfolioPerformanceSummary.build(
