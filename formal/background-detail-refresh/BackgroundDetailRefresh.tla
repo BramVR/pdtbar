@@ -10,9 +10,11 @@
 (* snapshot. PressureRunner.refreshedPulse writes the store once, after    *)
 (* the last phase. Each request is one PDTAPIClient call whose own         *)
 (* retries, pages, and backoff are folded into its final outcome: success  *)
-(* or one PDTSyncFailure.Kind. A failure whose kind endsSync sets          *)
-(* `syncEnded`, and every later phase and price batch is skipped without a *)
-(* request.                                                                *)
+(* or one PDTSyncFailure.Kind. X-ray and income are paged. collectPages   *)
+(* and collectOffsets return rows only after the last page, and a page     *)
+(* that fails fails the whole call, so a partial read is a failure. A     *)
+(* failure whose kind endsSync sets `syncEnded`, and every later phase and *)
+(* price batch is skipped without a request.                               *)
 (*                                                                         *)
 (* Cancellation (PDTCancellation) is one flag that only turns on. The      *)
 (* client checks it before every request, and fetch's catch rethrows it as *)
@@ -30,9 +32,12 @@ EXTENDS Naturals, Sequences
 
 CONSTANTS
     ChunkCount,   \* price-history batches of pricesBatchLimit open holdings
+    PageCount,    \* pages behind each paged facet (X-ray offsets, income pages)
     Kinds         \* PDTSyncFailure.Kind values a request may end with
 
 Facets == {"allocation", "xRay", "income"}
+\* getAllReportingAttempts follows pages for these; distributions is one GET.
+PagesOf(f) == IF f \in {"xRay", "income"} THEN PageCount ELSE 1
 Chunks == 1 .. ChunkCount
 FailurePhases == {"base", "priceHistory"} \cup Facets
 
@@ -52,10 +57,10 @@ VARIABLES
     phase,          \* the statement refresh() runs next, or "returned" / "threw"
     chunk,          \* the price batch the loop is on
     cancelled,      \* the caller's PDTCancellation was cancelled
-    started,        \* refresh() passed its first checkpoint
     syncEnded,      \* `syncEnded` local in refresh()
     failures,       \* `failures` local, the phase of each recorded PDTSyncFailure
     snap,           \* facets of the in-memory `snapshot` local
+    pagesBehind,    \* ghost: pages read by the call that set each "fresh" facet
     chunkRes,       \* "pending" | "ok" | "failed": `points` / `failedQuoteIDs` per batch
     prices,         \* `snapshot.priceSeries`, per batch
     outcome,        \* PDTBackgroundDetailRefreshOutcome
@@ -67,7 +72,7 @@ VARIABLES
     lateRequest,    \* a request was sent after `ended`
     cancelEarly     \* Cancel landed before the final throwIfCancelled
 
-vars == <<phase, chunk, cancelled, started, syncEnded, failures, snap, chunkRes, prices,
+vars == <<phase, chunk, cancelled, syncEnded, failures, snap, pagesBehind, chunkRes, prices,
           outcome, writes, readReset, storedFailure, ended, lateRequest, cancelEarly>>
 
 LastFailure == IF failures = <<>> THEN "none" ELSE failures[Len(failures)]
@@ -87,10 +92,10 @@ Init ==
     /\ phase = "start"
     /\ chunk = 1
     /\ cancelled = FALSE
-    /\ started = FALSE
     /\ syncEnded = FALSE
     /\ failures = <<>>
     /\ snap = [f \in Facets |-> "prior"]
+    /\ pagesBehind = [f \in Facets |-> 0]
     /\ chunkRes = [c \in Chunks |-> "pending"]
     /\ prices = [c \in Chunks |-> "prior"]
     /\ outcome = "none"
@@ -111,7 +116,7 @@ Cancel ==
     /\ phase \notin {"returned", "threw"}
     /\ cancelled' = TRUE
     /\ cancelEarly' = (phase \in BeforeFinalCheck)
-    /\ UNCHANGED <<phase, chunk, started, syncEnded, failures, snap, chunkRes, prices>>
+    /\ UNCHANGED <<phase, chunk, syncEnded, failures, snap, pagesBehind, chunkRes, prices>>
     /\ UNCHANGED <<outcome, writes, readReset, storedFailure, ended, lateRequest>>
 
 \* throwIfCancelled, setLastSyncFailure(nil), loadPriorSnapshotResult.
@@ -119,11 +124,10 @@ Start ==
     /\ phase = "start"
     /\ IF cancelled
          THEN /\ phase' = "threw"
-              /\ UNCHANGED <<started, storedFailure>>
+              /\ UNCHANGED storedFailure
          ELSE /\ phase' = "base"
-              /\ started' = TRUE
               /\ storedFailure' = "none"
-    /\ UNCHANGED <<chunk, cancelled, syncEnded, failures, snap, chunkRes, prices>>
+    /\ UNCHANGED <<chunk, cancelled, syncEnded, failures, snap, pagesBehind, chunkRes, prices>>
     /\ UNCHANGED <<outcome, writes, readReset, ended, lateRequest, cancelEarly>>
 
 \* getAllReportingAttempts(.holdings()). Success, throwIfCancelled, then
@@ -139,30 +143,35 @@ Base ==
                  /\ UNCHANGED storedFailure
               \/ /\ phase' = "threw"
                  /\ storedFailure' = "base"
-    /\ UNCHANGED <<chunk, cancelled, started, syncEnded, failures, snap, chunkRes, prices>>
+    /\ UNCHANGED <<chunk, cancelled, syncEnded, failures, snap, pagesBehind, chunkRes, prices>>
     /\ UNCHANGED <<outcome, writes, readReset, ended, lateRequest, cancelEarly>>
 
 \* optionalPhase(.allocation / .xRay / .income): the `!syncEnded` guard skips
 \* the phase with no request and no checkpoint. Otherwise fill() sends its
 \* requests. Success sets the facet. A PhaseFailed is recorded and the facet
-\* keeps the prior. Then throwIfCancelled. Income's two requests and X-ray's
-\* pages are one call here.
+\* keeps the prior. Then throwIfCancelled. `read` is how many pages came
+\* back before the call ended. Only a call that read every page succeeds.
+\* Any shorter read, a slow or failed first page included, throws a
+\* PhaseFailed. Income's two requests are one call here.
 Optional(p) ==
     /\ phase = p
     /\ IF syncEnded
          THEN /\ phase' = NextOf(p)
-              /\ UNCHANGED <<syncEnded, failures, snap, ended, lateRequest>>
+              /\ UNCHANGED <<syncEnded, failures, snap, pagesBehind, ended, lateRequest>>
          ELSE IF cancelled
          THEN /\ phase' = "threw"
-              /\ UNCHANGED <<syncEnded, failures, snap, ended, lateRequest>>
+              /\ UNCHANGED <<syncEnded, failures, snap, pagesBehind, ended, lateRequest>>
          ELSE /\ lateRequest' = (lateRequest \/ ended)
-              /\ \/ /\ snap' = [snap EXCEPT ![p] = "fresh"]
-                    /\ UNCHANGED <<syncEnded, failures, ended>>
-                 \/ \E k \in Kinds :
-                       /\ Record(p, k)
-                       /\ UNCHANGED snap
+              /\ \E read \in 0 .. PagesOf(p) :
+                    IF read = PagesOf(p)
+                      THEN /\ snap' = [snap EXCEPT ![p] = "fresh"]
+                           /\ pagesBehind' = [pagesBehind EXCEPT ![p] = read]
+                           /\ UNCHANGED <<syncEnded, failures, ended>>
+                      ELSE \E k \in Kinds :
+                           /\ Record(p, k)
+                           /\ UNCHANGED <<snap, pagesBehind>>
               /\ phase' = NextOf(p)
-    /\ UNCHANGED <<chunk, cancelled, started, chunkRes, prices>>
+    /\ UNCHANGED <<chunk, cancelled, chunkRes, prices>>
     /\ UNCHANGED <<outcome, writes, readReset, storedFailure, cancelEarly>>
 
 \* `if !syncEnded` around the price-history block. Skipping it leaves the
@@ -170,7 +179,7 @@ Optional(p) ==
 PriceEnter ==
     /\ phase = "priceHistory"
     /\ phase' = IF syncEnded THEN "performance" ELSE "priceChunk"
-    /\ UNCHANGED <<chunk, cancelled, started, syncEnded, failures, snap, chunkRes, prices>>
+    /\ UNCHANGED <<chunk, cancelled, syncEnded, failures, snap, pagesBehind, chunkRes, prices>>
     /\ UNCHANGED <<outcome, writes, readReset, storedFailure, ended, lateRequest, cancelEarly>>
 
 AdvanceChunk ==
@@ -200,7 +209,7 @@ PriceChunk ==
                        /\ Record("priceHistory", k)
                        /\ chunkRes' = [chunkRes EXCEPT ![chunk] = "failed"]
               /\ AdvanceChunk
-    /\ UNCHANGED <<cancelled, started, snap, prices>>
+    /\ UNCHANGED <<cancelled, snap, pagesBehind, prices>>
     /\ UNCHANGED <<outcome, writes, readReset, storedFailure, cancelEarly>>
 
 \* throwIfCancelled after the loop, then priceSeriesWithPriorFallback: the
@@ -212,7 +221,7 @@ PriceMerge ==
               /\ UNCHANGED prices
          ELSE /\ phase' = "performance"
               /\ prices' = [c \in Chunks |-> IF chunkRes[c] = "ok" THEN "fresh" ELSE "prior"]
-    /\ UNCHANGED <<chunk, cancelled, started, syncEnded, failures, snap, chunkRes>>
+    /\ UNCHANGED <<chunk, cancelled, syncEnded, failures, snap, pagesBehind, chunkRes>>
     /\ UNCHANGED <<outcome, writes, readReset, storedFailure, ended, lateRequest, cancelEarly>>
 
 \* progress(.performance, "Performance unavailable"), then the last
@@ -220,7 +229,7 @@ PriceMerge ==
 Performance ==
     /\ phase = "performance"
     /\ phase' = IF cancelled THEN "threw" ELSE "commit"
-    /\ UNCHANGED <<chunk, cancelled, started, syncEnded, failures, snap, chunkRes, prices>>
+    /\ UNCHANGED <<chunk, cancelled, syncEnded, failures, snap, pagesBehind, chunkRes, prices>>
     /\ UNCHANGED <<outcome, writes, readReset, storedFailure, ended, lateRequest, cancelEarly>>
 
 \* `failures.isEmpty ? .completed : .degraded`, then PressureRunner.refreshedPulse
@@ -231,7 +240,7 @@ Commit ==
     /\ outcome' = IF failures = <<>> THEN "completed" ELSE "degraded"
     /\ writes' = writes + 1
     /\ phase' = "readReset"
-    /\ UNCHANGED <<chunk, cancelled, started, syncEnded, failures, snap, chunkRes, prices>>
+    /\ UNCHANGED <<chunk, cancelled, syncEnded, failures, snap, pagesBehind, chunkRes, prices>>
     /\ UNCHANGED <<readReset, storedFailure, ended, lateRequest, cancelEarly>>
 
 \* refreshedPulse: displayReadState, then lifecycleResult prunes stale read
@@ -240,7 +249,7 @@ ReadReset ==
     /\ phase = "readReset"
     /\ readReset' = TRUE
     /\ phase' = "storeFailure"
-    /\ UNCHANGED <<chunk, cancelled, started, syncEnded, failures, snap, chunkRes, prices>>
+    /\ UNCHANGED <<chunk, cancelled, syncEnded, failures, snap, pagesBehind, chunkRes, prices>>
     /\ UNCHANGED <<outcome, writes, storedFailure, ended, lateRequest, cancelEarly>>
 
 \* setLastSyncFailure(failures.last), then return.
@@ -248,7 +257,7 @@ StoreFailure ==
     /\ phase = "storeFailure"
     /\ storedFailure' = LastFailure
     /\ phase' = "returned"
-    /\ UNCHANGED <<chunk, cancelled, started, syncEnded, failures, snap, chunkRes, prices>>
+    /\ UNCHANGED <<chunk, cancelled, syncEnded, failures, snap, pagesBehind, chunkRes, prices>>
     /\ UNCHANGED <<outcome, writes, readReset, ended, lateRequest, cancelEarly>>
 
 Finished ==
@@ -272,6 +281,7 @@ TypeOK ==
     /\ chunk \in Chunks
     /\ failures \in Seq(FailurePhases)
     /\ snap \in [Facets -> {"prior", "fresh", "none"}]
+    /\ pagesBehind \in [Facets -> 0 .. PageCount]
     /\ chunkRes \in [Chunks -> {"pending", "ok", "failed"}]
     /\ prices \in [Chunks -> {"prior", "fresh", "none"}]
     /\ outcome \in {"none", "completed", "degraded"}
@@ -294,15 +304,20 @@ FailedSliceKeepsPrior ==
     /\ \A f \in Facets : snap[f] \in {"prior", "fresh"}
     /\ \A c \in Chunks : prices[c] \in {"prior", "fresh"}
 
+\* A facet is replaced only by a call that read every page (#275). A slow
+\* or failed first page, or a later page that fails, keeps the prior.
+FreshFacetReadEveryPage == \A f \in Facets : snap[f] = "fresh" => pagesBehind[f] = PagesOf(f)
+
 \* `degraded` exactly when some facet or price batch was not refreshed.
 OutcomeHonest ==
     outcome /= "none" =>
         (outcome = "completed" <=> (\A f \in Facets : snap[f] = "fresh") /\ (\A c \in Chunks : prices[c] = "fresh"))
 
-\* After the first checkpoint, the stored failure is never an earlier run's,
+\* Once refresh() has run its first statement, the stored failure is never
+\* an earlier run's, a cancel before the first checkpoint included (#289),
 \* and a returned refresh leaves its own last failure, or none.
 StoredFailureIsThisRuns ==
-    /\ started => storedFailure /= "earlierRun"
+    /\ phase /= "start" => storedFailure /= "earlierRun"
     /\ phase = "returned" => storedFailure = LastFailure
 
 \* The refresh always returns or throws, cancelled or not.
