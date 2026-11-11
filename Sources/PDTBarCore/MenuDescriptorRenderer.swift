@@ -566,7 +566,6 @@ public enum MenuDescriptorRenderer {
             MenuRowBarChart.Bar(
                 id: "allocation.portfolio.chart.\(holding.quoteId)",
                 label: holdingChartLabel(holding),
-                axisLabel: holdingChartAxisLabel(holding),
                 weight: holding.weight,
                 percentageLabel: percent(holding.weight),
                 detail: holdingBarDetail(for: holding).rendered(settings: settings)
@@ -646,20 +645,6 @@ public enum MenuDescriptorRenderer {
             return nil
         }
         return String(token.prefix(12))
-    }
-
-    private static func holdingChartAxisLabel(_ holding: HoldingSummary) -> String {
-        let publicLabel = holdingChartLabel(holding)
-        if let first = publicLabel.first(where: { $0.isLetter }) {
-            return String(first).uppercased()
-        }
-        if let first = holding.name.first(where: { $0.isLetter }) {
-            return String(first).uppercased()
-        }
-        if let first = publicLabel.first(where: { $0.isNumber }) ?? holding.name.first(where: { $0.isNumber }) {
-            return String(first)
-        }
-        return "?"
     }
 
     private static func portfolioOverviewDistributionRow(

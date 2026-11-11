@@ -560,7 +560,7 @@ private func renderedTextValues(in row: MenuRow) -> [String] {
         row.actionPayload,
     ]
     values.append(contentsOf: row.barChart?.bars.flatMap {
-        [$0.label, $0.axisLabel, $0.percentageLabel, $0.detail]
+        [$0.label, $0.percentageLabel, $0.detail]
     } ?? [])
     values.append(contentsOf: row.children.flatMap(renderedTextValues))
     return values.compactMap { $0 }
@@ -588,7 +588,7 @@ private func renderedTextValues(in row: MenuBarRowSurface) -> [String] {
         row.portfolioSummary?.accessibilityLabel,
     ]
     values.append(contentsOf: row.barChart?.bars.flatMap {
-        [$0.label, $0.axisLabel, $0.percentageLabel, $0.detail]
+        [$0.label, $0.percentageLabel, $0.detail]
     } ?? [])
     values.append(contentsOf: row.children.flatMap(renderedTextValues))
     return values.compactMap { $0 }

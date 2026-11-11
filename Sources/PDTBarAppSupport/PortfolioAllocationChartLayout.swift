@@ -2,7 +2,7 @@ import AppKit
 
 public struct PortfolioAllocationChartLayout {
     public static let visibleSlotCount = 30
-    public static let chartHeight: CGFloat = 114
+    public static let chartHeight: CGFloat = 84
     public static let minimumPositiveBarHeight: CGFloat = 10
     public static let barCornerRadius: CGFloat = 2
 
@@ -97,17 +97,6 @@ public struct PortfolioAllocationChartLayout {
 
     public func slotCenterX(at index: Int) -> CGFloat {
         plotRect.minX + slotWidth * (CGFloat(leadingSlotCount + index) + 0.5)
-    }
-
-    public func labelRect(at index: Int, axisHeight: CGFloat) -> NSRect {
-        let centerX = slotCenterX(at: index)
-        let labelWidth = max(slotWidth, 10)
-        return NSRect(
-            x: centerX - labelWidth / 2,
-            y: 0,
-            width: labelWidth,
-            height: axisHeight
-        )
     }
 
     public func barRect(at index: Int) -> NSRect {

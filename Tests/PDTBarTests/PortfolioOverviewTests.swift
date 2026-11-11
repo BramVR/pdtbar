@@ -238,7 +238,6 @@ struct PortfolioOverviewTests {
             "Zephyr",
             "Cash",
         ])
-        #expect(chart.bars.map(\.axisLabel) == ["N", "O", "H", "A", "A", "C", "M", "Z", "C"])
         #expect(chart.bars.map(\.weight) == [
             0.1171875,
             0.1171875,
@@ -294,8 +293,8 @@ struct PortfolioOverviewTests {
         #expect(chart.bars.last?.percentageLabel == "0.1%")
     }
 
-    @Test("Portfolio allocation layout keeps twenty labels aligned and tiny positive bars visible")
-    func portfolioAllocationLayoutKeepsTwentyLabelsAlignedAndTinyPositiveBarsVisible() {
+    @Test("Portfolio allocation layout keeps tiny positive bars visible across twenty holdings")
+    func portfolioAllocationLayoutKeepsTinyPositiveBarsVisibleAcrossTwentyHoldings() {
         let weights = [
             0.18, 0.15, 0.12, 0.10, 0.08,
             0.07, 0.06, 0.05, 0.04, 0.03,
@@ -317,9 +316,7 @@ struct PortfolioOverviewTests {
 
         for index in weights.indices {
             let barRect = layout.barRect(at: index)
-            let labelRect = layout.labelRect(at: index, axisHeight: 16)
 
-            #expect(abs(barRect.midX - labelRect.midX) < 0.001)
             #expect(barRect.height >= PortfolioAllocationChartLayout.minimumPositiveBarHeight)
             #expect(barRect.width >= 6)
             #expect(barRect.width < 10)

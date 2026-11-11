@@ -660,8 +660,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         accessibilityIdentifier: String
     ) -> NSView {
         let hasDetail = detail?.isEmpty == false
-        let rowHeight: CGFloat = hasDetail ? 226 : 212
-        let container = PortfolioAllocationChartRowView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: rowHeight))
+        let rowHeight: CGFloat = hasDetail ? 181 : 167
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: rowHeight))
         container.autoresizingMask = [.width]
         let chartSummary = barChart.bars.map { "\($0.label) \($0.percentageLabel)" }.joined(separator: ", ")
         configureStaticMenuViewAccessibility(
@@ -707,11 +707,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             viewportWidth: chartViewportWidth,
             barCount: barChart.bars.count
         )
-        let xAxisView = PortfolioAllocationXAxisView(bars: barChart.bars)
 
         let usesHorizontalScroll = barChart.bars.count > PortfolioAllocationChartLayout.visibleSlotCount
         let chartHostView: NSView
-        let xAxisHostView: NSView
         let selectedTextTrailingAnchor: NSLayoutXAxisAnchor
         var chartHostConstraints: [NSLayoutConstraint] = []
         if usesHorizontalScroll {
@@ -735,42 +733,17 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             chartView.autoresizingMask = [.height]
             chartScrollView.documentView = chartView
 
-            let xAxisScrollView = NSScrollView()
-            xAxisScrollView.borderType = .noBorder
-            xAxisScrollView.drawsBackground = false
-            xAxisScrollView.hasVerticalScroller = false
-            xAxisScrollView.hasHorizontalScroller = false
-            xAxisScrollView.horizontalScrollElasticity = .none
-            xAxisScrollView.scrollerStyle = .overlay
-            xAxisScrollView.translatesAutoresizingMaskIntoConstraints = false
-            container.addSubview(xAxisScrollView)
-
-            xAxisView.frame = NSRect(
-                x: 0,
-                y: 0,
-                width: chartContentWidth,
-                height: PortfolioAllocationXAxisView.axisHeight
-            )
-            xAxisView.autoresizingMask = [.height]
-            xAxisScrollView.documentView = xAxisView
-            container.mirrorHorizontalScroll(from: chartScrollView, to: xAxisScrollView)
-
             chartHostView = chartScrollView
-            xAxisHostView = xAxisScrollView
             selectedTextTrailingAnchor = chartScrollView.trailingAnchor
         } else {
             chartView.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(chartView)
-            xAxisView.translatesAutoresizingMaskIntoConstraints = false
-            container.addSubview(xAxisView)
 
             chartHostView = chartView
-            xAxisHostView = xAxisView
             selectedTextTrailingAnchor = chartView.trailingAnchor
-            chartHostConstraints += [
-                chartView.widthAnchor.constraint(greaterThanOrEqualToConstant: chartContentWidth),
-                xAxisView.widthAnchor.constraint(equalTo: chartView.widthAnchor),
-            ]
+            chartHostConstraints.append(
+                chartView.widthAnchor.constraint(greaterThanOrEqualToConstant: chartContentWidth)
+            )
         }
 
         let selectedAccent = NSBox()
@@ -824,19 +797,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             chartHostView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -28),
             chartHostView.heightAnchor.constraint(equalToConstant: PortfolioAllocationChartLayout.chartHeight),
 
-            xAxisHostView.leadingAnchor.constraint(equalTo: chartHostView.leadingAnchor),
-            xAxisHostView.trailingAnchor.constraint(equalTo: chartHostView.trailingAnchor),
-            xAxisHostView.topAnchor.constraint(equalTo: chartHostView.bottomAnchor, constant: -1),
-            xAxisHostView.heightAnchor.constraint(equalToConstant: PortfolioAllocationXAxisView.axisHeight),
-
             selectedAccent.leadingAnchor.constraint(equalTo: chartAxisView.leadingAnchor),
-            selectedAccent.topAnchor.constraint(equalTo: xAxisHostView.bottomAnchor, constant: 8),
+            selectedAccent.topAnchor.constraint(equalTo: chartHostView.bottomAnchor, constant: 8),
             selectedAccent.widthAnchor.constraint(equalToConstant: 2),
             selectedAccent.heightAnchor.constraint(equalToConstant: 30),
 
             selectedTitleField.leadingAnchor.constraint(equalTo: selectedAccent.trailingAnchor, constant: 8),
             selectedTitleField.trailingAnchor.constraint(equalTo: selectedTextTrailingAnchor),
-            selectedTitleField.topAnchor.constraint(equalTo: xAxisHostView.bottomAnchor, constant: 5),
+            selectedTitleField.topAnchor.constraint(equalTo: chartHostView.bottomAnchor, constant: 5),
 
             selectedDetailField.leadingAnchor.constraint(equalTo: selectedTitleField.leadingAnchor),
             selectedDetailField.trailingAnchor.constraint(equalTo: selectedTitleField.trailingAnchor),
@@ -1038,35 +1006,6 @@ private struct PDTBarSettingsView: View {
     }
 }
 
-private final class PortfolioAllocationChartRowView: NSView {
-    private weak var sourceScrollView: NSScrollView?
-    private weak var targetScrollView: NSScrollView?
-
-    func mirrorHorizontalScroll(from sourceScrollView: NSScrollView, to targetScrollView: NSScrollView) {
-        NotificationCenter.default.removeObserver(self, name: NSView.boundsDidChangeNotification, object: nil)
-        self.sourceScrollView = sourceScrollView
-        self.targetScrollView = targetScrollView
-        sourceScrollView.contentView.postsBoundsChangedNotifications = true
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(sourceBoundsDidChange(_:)),
-            name: NSView.boundsDidChangeNotification,
-            object: sourceScrollView.contentView
-        )
-    }
-
-    @objc
-    private func sourceBoundsDidChange(_ notification: Notification) {
-        guard let sourceScrollView, let targetScrollView else { return }
-        let origin = sourceScrollView.contentView.bounds.origin
-        targetScrollView.contentView.setBoundsOrigin(NSPoint(x: origin.x, y: 0))
-    }
-
-    deinit {
-        NotificationCenter.default.removeObserver(self)
-    }
-}
-
 private final class PortfolioAllocationVerticalBarChartView: NSView {
     static let barColor = NSColor(calibratedRed: 0.28, green: 0.68, blue: 0.73, alpha: 0.92)
 
@@ -1233,51 +1172,6 @@ private final class PortfolioAllocationVerticalBarChartView: NSView {
 
     static func tickStep(for maxWeight: CGFloat) -> CGFloat {
         PortfolioAllocationChartLayout.tickStep(for: maxWeight)
-    }
-}
-
-private final class PortfolioAllocationXAxisView: NSView {
-    static let axisHeight: CGFloat = 16
-
-    private let bars: [MenuRowBarChart.Bar]
-
-    override var isFlipped: Bool {
-        true
-    }
-
-    init(bars: [MenuRowBarChart.Bar]) {
-        self.bars = bars
-        super.init(frame: .zero)
-        self.wantsLayer = true
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) is unavailable")
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        guard !self.bars.isEmpty, self.bounds.width > 1, self.bounds.height > 1 else { return }
-
-        let layout = PortfolioAllocationChartLayout(
-            bounds: self.bounds,
-            weights: self.bars.map(\.weight)
-        )
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-        paragraph.lineBreakMode = .byTruncatingTail
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize - 1, weight: .regular),
-            .foregroundColor: NSColor.tertiaryLabelColor,
-            .paragraphStyle: paragraph,
-        ]
-
-        for index in self.bars.indices {
-            let labelRect = layout.labelRect(at: index, axisHeight: Self.axisHeight)
-            let label = self.bars[index].axisLabel ?? String(self.bars[index].label.prefix(1)).uppercased()
-            NSString(string: label).draw(in: labelRect, withAttributes: attrs)
-        }
     }
 }
 

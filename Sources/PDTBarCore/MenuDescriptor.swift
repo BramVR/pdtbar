@@ -306,7 +306,6 @@ public struct MenuRowBarChart: Codable, Equatable {
     public struct Bar: Codable, Equatable {
         public var id: String
         public var label: String
-        public var axisLabel: String?
         public var weight: Double
         public var percentageLabel: String
         public var detail: String
@@ -314,14 +313,12 @@ public struct MenuRowBarChart: Codable, Equatable {
         public init(
             id: String,
             label: String,
-            axisLabel: String? = nil,
             weight: Double,
             percentageLabel: String,
             detail: String
         ) {
             self.id = id
             self.label = label
-            self.axisLabel = axisLabel
             self.weight = weight
             self.percentageLabel = percentageLabel
             self.detail = detail
