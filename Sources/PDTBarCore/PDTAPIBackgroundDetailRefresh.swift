@@ -49,10 +49,11 @@ public final class PDTAPIBackgroundDetailRefresh: @unchecked Sendable {
         progress: @escaping @Sendable (BackgroundDetailRefreshProgress) -> Void = { _ in }
     ) throws -> PDTBackgroundDetailRefreshResult {
         let cancellation = cancellation ?? PDTCancellation()
-        try throwIfCancelled(cancellation)
-        // Cleared first so a refresh that ends without recording a failure
-        // (a cancel, a store error) cannot be explained by an older one.
+        // Cleared before the first cancel check so a refresh that ends without
+        // recording a failure (a cancel, a store error) cannot be explained by
+        // an older one.
         snapshotStore.setLastSyncFailure(nil)
+        try throwIfCancelled(cancellation)
 
         let snapshotAsOf = asOf ?? dayString(from: now())
         let priorSnapshotLoad = try snapshotStore.loadPriorSnapshotResult()

@@ -34,9 +34,9 @@ PY
 
 # The Claude refresh's shape: an optional phase that refreshed its facet commits it.
 mutate perPhaseCommit OneCommitAtEnd \
-  "    /\\ UNCHANGED <<chunk, cancelled, started, chunkRes, prices>>
+  "    /\\ UNCHANGED <<chunk, cancelled, chunkRes, prices>>
     /\\ UNCHANGED <<outcome, writes, readReset, storedFailure, cancelEarly>>" \
-  "    /\\ UNCHANGED <<chunk, cancelled, started, chunkRes, prices>>
+  "    /\\ UNCHANGED <<chunk, cancelled, chunkRes, prices>>
     /\\ writes' = IF snap' /= snap THEN writes + 1 ELSE writes
     /\\ UNCHANGED <<outcome, readReset, storedFailure, cancelEarly>>"
 
@@ -61,10 +61,11 @@ mutate rateLimitKeepsSyncing NoRequestAfterSyncEnded \
 
 # A failed optional phase clears its facet instead of keeping the prior.
 mutate failedPhaseDropsPrior FailedSliceKeepsPrior \
-  "                       /\\ Record(p, k)
-                       /\\ UNCHANGED snap" \
-  "                       /\\ Record(p, k)
-                       /\\ snap' = [snap EXCEPT ![p] = \"none\"]"
+  "                           /\\ Record(p, k)
+                           /\\ UNCHANGED <<snap, pagesBehind>>" \
+  "                           /\\ Record(p, k)
+                           /\\ snap' = [snap EXCEPT ![p] = \"none\"]
+                           /\\ UNCHANGED pagesBehind"
 
 # The outcome stops reading `failures`.
 mutate outcomeIgnoresFailures OutcomeHonest \
@@ -73,8 +74,23 @@ mutate outcomeIgnoresFailures OutcomeHonest \
 
 # refresh() stops clearing the stored failure before it starts.
 mutate noFailureClearAtStart StoredFailureIsThisRuns \
-  "              /\\ storedFailure' = \"none\"" \
-  "              /\\ storedFailure' = storedFailure"
+  "    /\\ storedFailure' = \"none\"" \
+  "    /\\ storedFailure' = storedFailure"
+
+# The #289 fix reverted: throwIfCancelled runs before setLastSyncFailure(nil).
+mutate cancelBeforeFailureClear StoredFailureIsThisRuns \
+  "    /\\ storedFailure' = \"none\"" \
+  "    /\\ storedFailure' = IF cancelled THEN storedFailure ELSE \"none\""
+
+# #275's shape: a call that read no page (a slow or failed first page) returns an empty list as success.
+mutate zeroPageCommits FreshFacetReadEveryPage \
+  "                    IF read = PagesOf(p)" \
+  "                    IF read = PagesOf(p) \\/ (read = 0 /\\ PagesOf(p) > 1)"
+
+# A call that failed after some pages returns the rows it collected as success.
+mutate partialPagesCommit FreshFacetReadEveryPage \
+  "                    IF read = PagesOf(p)" \
+  "                    IF read > 0"
 
 # The throwIfCancelled before refreshedPulse is dropped.
 mutate noFinalCancelCheck AbortWritesNothing \

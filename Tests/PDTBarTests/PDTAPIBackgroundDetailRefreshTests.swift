@@ -254,6 +254,101 @@ struct PDTAPIBackgroundDetailRefreshTests {
         #expect(try store.loadPriorSnapshotResult().snapshot?.incomeEvents == seeded.incomeEvents)
     }
 
+    @Test("A first X-ray page that times out on every attempt keeps the saved X-ray (#275)")
+    func timedOutFirstXRayPageKeepsSavedXRay() throws {
+        let store = try seededStore { $0.xRayHoldings = [XRayHoldingSummary(weight: 0.42)] }
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        var replies = try fullReplies()
+        replies.replaceSubrange(2...3, with: Array(repeating: .failure(.timedOut), count: 3))
+        let transport = ScriptedPDTHTTPTransport(replies)
+
+        let result = try refresh(transport, store: store, maxAttempts: 3).refresh(cancellation: nil, progress: { _ in })
+
+        #expect(transport.requests.filter { $0.url!.path == "/v1/x-ray" }.count == 3)
+        #expect(result.outcome == .degraded)
+        #expect(result.failures.map(\.phase) == [.xRay])
+        #expect(result.failures.map(\.kind) == [.network(urlErrorCode: URLError.timedOut.rawValue)])
+        let saved = try #require(try store.loadPriorSnapshotResult().snapshot)
+        #expect(saved.asOf == "2026-06-22")
+        #expect(saved.xRayHoldings?.map(\.weight) == [0.42])
+        #expect(store.lastSyncFailure()?.phase == .xRay)
+    }
+
+    @Test("A first income page that times out on every attempt keeps the saved income (#275)")
+    func timedOutFirstIncomePageKeepsSavedIncome() throws {
+        let store = try seededStore {
+            $0.incomeEvents = Array($0.incomeEvents.prefix(1))
+            $0.dividendRowCount = 999
+        }
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let seeded = try #require(try store.loadPriorSnapshotResult().snapshot)
+        var replies = try fullReplies()
+        replies.replaceSubrange(4...6, with: Array(repeating: .failure(.timedOut), count: 3))
+        let transport = ScriptedPDTHTTPTransport(replies)
+
+        let result = try refresh(transport, store: store, maxAttempts: 3).refresh(cancellation: nil, progress: { _ in })
+
+        #expect(transport.requests.filter { $0.url!.path == "/v1/calendar-events" }.count == 3)
+        #expect(transport.requests.filter { $0.url!.path == "/v1/dividends" }.isEmpty)
+        #expect(result.outcome == .degraded)
+        #expect(result.failures.map(\.phase) == [.income])
+        #expect(result.failures.map(\.endpoint) == [.calendarEvents])
+        #expect(result.failures.map(\.kind) == [.network(urlErrorCode: URLError.timedOut.rawValue)])
+        let saved = try #require(try store.loadPriorSnapshotResult().snapshot)
+        #expect(saved.incomeEvents.count == 1)
+        #expect(saved.incomeEvents == seeded.incomeEvents)
+        #expect(saved.dividendRowCount == 999)
+    }
+
+    @Test("A later X-ray page that fails keeps the saved X-ray instead of the pages already read")
+    func failedLaterXRayPageKeepsSavedXRay() throws {
+        let store = try seededStore { $0.xRayHoldings = [XRayHoldingSummary(weight: 0.42)] }
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        var replies = try fullReplies()
+        replies[3] = .failure(.timedOut)
+
+        let result = try refresh(ScriptedPDTHTTPTransport(replies), store: store).refresh(cancellation: nil, progress: { _ in })
+
+        #expect(result.outcome == .degraded)
+        #expect(result.failures.map(\.phase) == [.xRay])
+        #expect(try store.loadPriorSnapshotResult().snapshot?.xRayHoldings?.map(\.weight) == [0.42])
+    }
+
+    @Test("Every page of a multi-page facet read in full replaces the saved X-ray")
+    func completedMultiPageXRayReplacesSavedXRay() throws {
+        let store = try seededStore { $0.xRayHoldings = [XRayHoldingSummary(weight: 0.42)] }
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let transport = ScriptedPDTHTTPTransport(try fullReplies())
+
+        let result = try refresh(transport, store: store).refresh(cancellation: nil, progress: { _ in })
+
+        #expect(transport.requests.filter { $0.url!.path == "/v1/x-ray" }.count == 2)
+        #expect(result.outcome == .completed)
+        let saved = try #require(try store.loadPriorSnapshotResult().snapshot)
+        #expect(saved.xRayHoldings?.count == 3)
+        #expect(!(saved.xRayHoldings ?? []).contains { $0.weight == 0.42 })
+    }
+
+    @Test("A refresh cancelled before it starts clears the failure an earlier refresh recorded")
+    func cancelBeforeStartClearsEarlierFailure() throws {
+        let store = try seededStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        _ = try? refresh(ScriptedPDTHTTPTransport([apiError(503, "SERVICE_UNAVAILABLE")]), store: store)
+            .refresh(cancellation: nil, progress: { _ in })
+        #expect(store.lastSyncFailure() != nil)
+        let cancelled = PDTCancellation()
+        cancelled.cancel()
+        let transport = ScriptedPDTHTTPTransport(try fullReplies())
+
+        #expect(throws: PDTAPIError.cancelled) {
+            try refresh(transport, store: store).refresh(cancellation: cancelled, progress: { _ in })
+        }
+
+        #expect(transport.requests.isEmpty)
+        #expect(store.lastSyncFailure() == nil)
+        #expect(try store.loadPriorSnapshotResult().snapshot?.asOf == seededAsOf)
+    }
+
     @Test("A holding that crosses back into concentration clears its old read mark")
     func readStateResetsOnRecrossing() throws {
         let replies = syntheticReplies(quoteIDs: [1, 2], weights: ["0.6", "0.4"]) + [prices(quoteID: 1)]
