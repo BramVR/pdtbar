@@ -507,9 +507,10 @@ public enum PDTLaunchMenu {
         rowsFirst: Bool = false,
         rows: [MenuRow]
     ) -> MenuDescriptor {
+        // Above the pulse the notice rows name themselves; a heading is only needed below Actions.
         let fetchSection = MenuSection(
             id: "portfolioFetch",
-            title: "Portfolio",
+            title: rowsFirst ? "" : "Portfolio",
             rows: rows
         )
         var descriptor = MenuDescriptor(
