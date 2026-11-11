@@ -114,7 +114,7 @@ struct PortfolioSummaryTests {
     }
 
     @Test("Missing performance data shows the total alone")
-    func missingPerformanceIsUnavailable() throws {
+    func missingPerformanceShowsTotalAlone() throws {
         var snapshot = try quietSnapshotForSummary()
         snapshot.performance = nil
         let descriptor = MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: snapshot))
