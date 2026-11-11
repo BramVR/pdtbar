@@ -242,7 +242,12 @@ public enum MenuDescriptorRenderer {
                         : [
                             portfolioOverviewChartRow(for: allocation.portfolioOverview, settings: settings),
                             portfolioOverviewDetailsRow(for: allocation, model: model, settings: settings),
-                        ]) + allocationPressureRows(for: allocation, model: model, settings: settings)
+                        ]) + allocationPressureRows(
+                        for: allocation,
+                        shownInPulse: Set(pulseRows.map(\.id)),
+                        model: model,
+                        settings: settings
+                    )
                 ),
                 MenuSection(
                     id: "income",
@@ -595,10 +600,11 @@ public enum MenuDescriptorRenderer {
 
     private static func allocationPressureRows(
         for allocation: AllocationSnapshot,
+        shownInPulse: Set<String>,
         model: PortfolioPulseModel,
         settings: PortfolioValueDisplaySettings
     ) -> [MenuRow] {
-        allocation.allocationPressureItems.map { item in
+        allocation.allocationPressureItems.filter { !shownInPulse.contains("\($0.id).glance") }.map { item in
             MenuRow(
                 id: "\(item.id).allocation",
                 role: .allocationDrillDown,
