@@ -16,6 +16,15 @@ read_when:
 - Scripted smokes inject fixture env vars only as sentinels; they fail if the fixture sentinel is written.
 - Missing macOS Accessibility/Screen Recording permission should skip with a setup-required detail unless the smoke is specifically testing that failure.
 
+## Real-menu smoke (local gate)
+
+`make smoke-menu` (`Scripts/verify_pdtbar.sh menu-smoke`) builds `pdtbar` and `pdtbar-capture`, launches the `concentration-pressure` fixture, opens the real status menu through Accessibility, opens the `Detailed info` (allocation overview) and `Data health` submenus, and writes `menu.png`, `allocation-overview.png`, `data-health.png`, and `menu-walk.json` to `<run>/evidence/menu-walk/`. The selectors live in `MenuWalkPlan.cohesiveUI` (`Sources/PDTBarSmokeProof`); `MenuWalkPlanTests` fails in CI when a selector stops matching the menu its fixture renders.
+
+- Local/verify gate only. It needs an unlocked console session, Screen Recording, and Accessibility already granted to the host. It never requests either. Hosted CI sets `CI`, so it would fail there by design; CI runs the plan test instead.
+- It fails, never skips: a missing permission, a locked screen, a missing selector, a submenu that does not open, or a blank image exits non-zero with the reason.
+- Each PNG is composed on flat grey from the status item crop and PDTBar's menu windows captured by window id, so desktop content, windows behind the translucent menu, and other menu bar items stay out. Raw captures stay in a temp dir; only the composite lands in evidence.
+- Fixture data only. No network, Keychain, or account access. It moves no mouse unless AXPress fails to open a submenu, then it hovers the row.
+
 ## Redaction rules
 
 Public proof may report command names, selectors, row text, scenario status,
