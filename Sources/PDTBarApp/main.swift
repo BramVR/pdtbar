@@ -751,7 +751,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let selectedTitleField = NSTextField(labelWithString: "")
         selectedTitleField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize)
         selectedTitleField.textColor = NSColor.secondaryLabelColor
-        selectedTitleField.lineBreakMode = .byTruncatingTail
+        // Middle truncation: a long holding name gives way before the weight and value at the end.
+        selectedTitleField.lineBreakMode = .byTruncatingMiddle
         selectedTitleField.maximumNumberOfLines = 1
         selectedTitleField.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(selectedTitleField)
@@ -1193,7 +1194,11 @@ private final class PortfolioAllocationYAxisView: NSView {
         ]
 
         for tick in PortfolioAllocationVerticalBarChartView.tickValues(for: self.bars) {
-            let y = plotRect.maxY - plotRect.height * tick / scaleMax
+            let y = plotRect.maxY - PortfolioAllocationChartLayout.barHeight(
+                for: tick,
+                plotHeight: plotRect.height,
+                scaleMaxWeight: scaleMax
+            )
             let tickPath = NSBezierPath()
             tickPath.move(to: NSPoint(x: axisX - 5, y: y))
             tickPath.line(to: NSPoint(x: axisX, y: y))

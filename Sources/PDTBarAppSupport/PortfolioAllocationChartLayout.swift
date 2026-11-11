@@ -95,15 +95,24 @@ public struct PortfolioAllocationChartLayout {
         Self.scaleMaxWeight(for: weights)
     }
 
+    /// Bars and axis ticks share this mapping, so a tick lines up with a bar of the same weight.
+    public static func barHeight(for weight: CGFloat, plotHeight: CGFloat, scaleMaxWeight: CGFloat) -> CGFloat {
+        guard weight > 0, plotHeight > 0 else { return 0 }
+        // Offset from the floor instead of clamping to it, so two different small weights never draw the same height.
+        let floor = min(minimumPositiveBarHeight, plotHeight)
+        return floor + (plotHeight - floor) * weight / scaleMaxWeight
+    }
+
     public func slotCenterX(at index: Int) -> CGFloat {
         plotRect.minX + slotWidth * (CGFloat(leadingSlotCount + index) + 0.5)
     }
 
     public func barRect(at index: Int) -> NSRect {
-        let weight = Self.clampedWeight(weights[index])
-        // Offset from the floor instead of clamping to it, so two different small weights never draw the same height.
-        let floor = min(Self.minimumPositiveBarHeight, plotRect.height)
-        let barHeight = weight > 0 ? floor + (plotRect.height - floor) * weight / scaleMaxWeight : 0
+        let barHeight = Self.barHeight(
+            for: Self.clampedWeight(weights[index]),
+            plotHeight: plotRect.height,
+            scaleMaxWeight: scaleMaxWeight
+        )
         let barWidth = Self.barWidth(slotWidth: slotWidth)
         let centerX = slotCenterX(at: index)
         return NSRect(
