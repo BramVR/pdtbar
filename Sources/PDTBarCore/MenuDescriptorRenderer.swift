@@ -264,8 +264,7 @@ public enum MenuDescriptorRenderer {
                             id: "bigMovers.summary",
                             role: .bigMoverSummary,
                             title: bigMoverTitle(for: bigMovers.maxMove, allocation: allocation),
-                            detail: bigMovers.maxMove.map { "\(percent($0.percentChange)) over recent window" }
-                                ?? "\(bigMovers.priceSeriesCount) price rows checked"
+                            detail: bigMoverDetail(for: bigMovers)
                         ),
                     ]
                 ),
@@ -318,6 +317,15 @@ public enum MenuDescriptorRenderer {
             return "+\(percent(value))"
         }
         return percent(value)
+    }
+
+    private static func bigMoverDetail(for bigMovers: BigMoversSnapshot) -> String {
+        if let move = bigMovers.maxMove {
+            return "\(percent(move.percentChange)) over recent window"
+        }
+        return bigMovers.priceSeriesCount == 0
+            ? "No recent price history to compare"
+            : "\(bigMovers.priceSeriesCount) price rows checked"
     }
 
     private static func bigMoverTitle(for move: PriceMoveSummary?, allocation: AllocationSnapshot) -> String {
