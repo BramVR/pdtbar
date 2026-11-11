@@ -4,7 +4,10 @@ public enum FreshnessState: String, Codable, Equatable {
     case fresh
     case stale
     case partial
+    /// Holdings exist but at least one has no price date.
     case unknown
+    /// No open holdings, so there is no price to date.
+    case noHoldings
 }
 
 public struct FreshnessHoldingRow: Codable, Equatable {
@@ -92,6 +95,7 @@ public struct FreshnessSnapshot: Codable, Equatable {
 }
 
 public enum FreshnessLedger {
+    static let noHoldingsDetail = "No holdings to price"
     public static let staleBusinessDayGrace = 1
     public static let oldestRowLimit = 3
 
@@ -125,7 +129,7 @@ public enum FreshnessLedger {
         }
         let oldestRows = Array(sortedRows.prefix(oldestRowLimit).map(\.row))
         let oldestPriceAsOf = sortedRows.first?.row.priceAsOf
-        let hasUnknownPriceDates = snapshot.openHoldings.isEmpty || datedRows.count != snapshot.openHoldings.count
+        let hasUnknownPriceDates = datedRows.count != snapshot.openHoldings.count
         let stale = !staleRows.isEmpty
         let latestCompleteDetailFillAsOf = effectiveDetailRefreshOutcome == .completed
             ? snapshot.latestCompleteDetailFillAsOf ?? snapshot.asOf
@@ -133,7 +137,9 @@ public enum FreshnessLedger {
         let detailFillIncomplete = effectiveDetailRefreshOutcome == .degraded
             || (latestCompleteDetailFillAsOf != nil && latestCompleteDetailFillAsOf != snapshot.asOf)
         let status: FreshnessState
-        if hasUnknownPriceDates {
+        if snapshot.openHoldings.isEmpty {
+            status = .noHoldings
+        } else if hasUnknownPriceDates {
             status = .unknown
         } else if stale {
             status = .stale
@@ -624,7 +630,7 @@ public enum DataHealth {
         case .unknown: return .attention(.unknownPriceDates)
         case .stale: return .attention(.stalePrices)
         case .partial: return .attention(.detailFillIncomplete)
-        case .fresh: break
+        case .fresh, .noHoldings: break
         }
         if health.detailFill.outcome == .degraded {
             return .attention(.detailFillIncomplete)
@@ -729,6 +735,8 @@ public enum DataHealth {
             return "\(freshness.staleHoldingCount) stale\(oldest)"
         case .unknown:
             return "Unknown"
+        case .noHoldings:
+            return FreshnessLedger.noHoldingsDetail
         }
     }
 

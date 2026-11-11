@@ -824,7 +824,10 @@ public enum MenuDescriptorRenderer {
                 )
             )
         }
-        if freshness.status != .fresh {
+        switch freshness.status {
+        case .fresh, .noHoldings:
+            break
+        case .stale, .partial, .unknown:
             rows.append(
                 MenuRow(
                     id: "freshness.oldestPrice",
@@ -857,6 +860,8 @@ public enum MenuDescriptorRenderer {
             return "Partial"
         case .unknown:
             return "Unknown"
+        case .noHoldings:
+            return FreshnessLedger.noHoldingsDetail
         }
     }
 
@@ -871,6 +876,8 @@ public enum MenuDescriptorRenderer {
             return freshness.oldestPriceAsOf.map { "Partial; oldest \($0)" } ?? "Partial"
         case .unknown:
             return "Unknown price dates"
+        case .noHoldings:
+            return FreshnessLedger.noHoldingsDetail
         }
     }
 

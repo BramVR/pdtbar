@@ -40,6 +40,18 @@ struct DataHealthAttentionCauseTests {
         #expect(health.children.first { $0.id == "dataHealth.freshness" }?.detail == "2 stale; oldest 2026-06-18")
     }
 
+    @Test("An empty portfolio in the running app raises no Data health cause")
+    func emptyPortfolioIsNotADataHealthProblem() throws {
+        let store = try SnapshotStore.temporaryTestStore(prefix: "data-health-cause-empty-portfolio")
+        let fixture = packageRoot.appending(path: "docs/pdt/fixtures/income-event.json")
+        let run = try PressureRunner.run(dataSource: PDTFixtureDataSource(fixture: fixture), snapshotStore: store)
+        let descriptor = run.descriptor(in: DataHealthRuntime(access: .connected))
+        let section = try #require(descriptor.sections.first { $0.id == "freshness" })
+
+        #expect(run.model.portfolioGlance.openHoldingCount == 0)
+        #expect(section.rows.map(\.id) == ["freshness.summary"])
+    }
+
     @Test("A blocked connection is named before a saved copy or stale prices")
     func blockedAccessIsNamedFirst() {
         var input = healthyInput()
