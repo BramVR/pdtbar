@@ -3,6 +3,7 @@ import ApplicationServices
 import AVFoundation
 import CoreGraphics
 import ImageIO
+import PDTBarSmokeProof
 
 // Opt-in visual proof for the verify-pdtbar skill. Never requests TCC access:
 // it only preflights Screen Recording and only drives the menu when AX is already trusted.
@@ -72,6 +73,7 @@ func requireCapture() {
 // MARK: Windows
 
 struct ScreenWindow {
+    let id: CGWindowID
     let ownerPID: pid_t
     let layer: Int
     let frame: CGRect
@@ -86,7 +88,8 @@ func onScreenWindows() -> [ScreenWindow] {
     let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
         as? [[String: Any]] ?? []
     return info.compactMap { window in
-        guard let owner = window[kCGWindowOwnerPID as String] as? Int,
+        guard let id = window[kCGWindowNumber as String] as? Int,
+              let owner = window[kCGWindowOwnerPID as String] as? Int,
               let layer = window[kCGWindowLayer as String] as? Int,
               (window[kCGWindowAlpha as String] as? Double ?? 1) > 0,
               let boundsDict = window[kCGWindowBounds as String] as? NSDictionary,
@@ -95,7 +98,7 @@ func onScreenWindows() -> [ScreenWindow] {
         else {
             return nil
         }
-        return ScreenWindow(ownerPID: pid_t(owner), layer: layer, frame: frame)
+        return ScreenWindow(id: CGWindowID(id), ownerPID: pid_t(owner), layer: layer, frame: frame)
     }
 }
 
@@ -170,15 +173,26 @@ func axValue(_ element: AXUIElement, _ attribute: String) -> AXValue? {
     return (value as! AXValue)
 }
 
-func findElement(in root: AXUIElement, where matches: (AXUIElement) -> Bool) -> AXUIElement? {
+func findElement(in root: AXUIElement, limit: Int = 500, where matches: (AXUIElement) -> Bool) -> AXUIElement? {
     var stack = [root]
     var visited = 0
-    while let element = stack.popLast(), visited < 500 {
+    while let element = stack.popLast(), visited < limit {
         visited += 1
         if matches(element) { return element }
         stack.append(contentsOf: axChildren(element))
     }
     return nil
+}
+
+func axFrame(_ element: AXUIElement) -> CGRect? {
+    var position = CGPoint.zero
+    var size = CGSize.zero
+    guard let positionValue = axValue(element, kAXPositionAttribute), let sizeValue = axValue(element, kAXSizeAttribute),
+          AXValueGetValue(positionValue, .cgPoint, &position), AXValueGetValue(sizeValue, .cgSize, &size)
+    else {
+        return nil
+    }
+    return CGRect(origin: position, size: size)
 }
 
 struct StatusMenu {
@@ -198,16 +212,7 @@ struct StatusMenu {
         self.status = status
     }
 
-    var statusFrame: CGRect? {
-        var position = CGPoint.zero
-        var size = CGSize.zero
-        guard let positionValue = axValue(status, kAXPositionAttribute), let sizeValue = axValue(status, kAXSizeAttribute),
-              AXValueGetValue(positionValue, .cgPoint, &position), AXValueGetValue(sizeValue, .cgSize, &size)
-        else {
-            return nil
-        }
-        return CGRect(origin: position, size: size)
-    }
+    var statusFrame: CGRect? { axFrame(status) }
 
     func open() -> Bool {
         if !menuWindows(pid: pid).isEmpty { return true }
@@ -376,6 +381,221 @@ func writePoster(movie out: URL) async {
     reportImage(poster)
 }
 
+// MARK: Menu walk
+
+struct WalkStep: Encodable {
+    let name: String
+    let opened: Bool
+    let via: String
+    let missing: [String]
+    let screenshot: String?
+}
+
+struct WalkReport: Encodable {
+    let plan: String
+    let fixture: String
+    let steps: [WalkStep]
+    let ok: Bool
+}
+
+/// Identifiers under `root` whose element is on screen inside one of `windows`. Closed submenus keep their
+/// rows in the AX tree, so a frame check is what proves a row is visible where the walk expects it.
+func visibleIdentifiers(under root: AXUIElement, inside windows: [CGRect]) -> Set<String> {
+    var found: Set<String> = []
+    _ = findElement(in: root, limit: 5000) { element in
+        if let identifier = axString(element, "AXIdentifier"), !identifier.isEmpty, let frame = axFrame(element),
+           windows.contains(where: { $0.contains(CGPoint(x: frame.midX, y: frame.midY)) }) {
+            found.insert(identifier)
+        }
+        return false
+    }
+    return found
+}
+
+func element(_ identifier: String, under root: AXUIElement) -> AXUIElement? {
+    findElement(in: root, limit: 5000) { axString($0, "AXIdentifier") == identifier }
+}
+
+/// A submenu has opened once the app owns more menu-level windows than before.
+func openSubmenu(_ opener: AXUIElement, pid: pid_t) -> String? {
+    let baseline = menuWindows(pid: pid).count
+    for action in [kAXPressAction, kAXShowMenuAction] {
+        _ = AXUIElementPerformAction(opener, action as CFString)
+        if waitFor(timeout: 1.5, { menuWindows(pid: pid).count > baseline }) { return action }
+    }
+    guard let frame = axFrame(opener) else { return nil }
+    let center = CGPoint(x: frame.midX, y: frame.midY)
+    CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: center, mouseButton: .left)?
+        .post(tap: .cghidEventTap)
+    return waitFor(timeout: 2, { menuWindows(pid: pid).count > baseline }) ? "hover" : nil
+}
+
+func runScreencapture(_ arguments: [String]) -> Bool {
+    let capture = screencapture(arguments)
+    do { try capture.run() } catch { return false }
+    capture.waitUntilExit()
+    return capture.terminationStatus == 0
+}
+
+func loadImage(_ url: URL) -> CGImage? {
+    CGImageSourceCreateWithURL(url as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+}
+
+/// Proof image on a flat grey ground: the status item cropped from the screen, and each PDTBar menu
+/// captured by window id, so neither desktop content nor neighboring menu bar items reach the PNG.
+/// Raw captures stay in a private temp dir; only the composite is published to `out`.
+func shoot(pid: pid_t, status: CGRect, statusItem: CGRect, minMenus: Int, out: URL) -> String? {
+    Thread.sleep(forTimeInterval: 0.3)
+    let menus = menuWindows(pid: pid)
+    guard menus.count >= minMenus else { return "expected \(minMenus) open menu windows at capture, saw \(menus.count)" }
+    let rect = captureRect(status: status, menus: menus)
+    let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("pdtbar-walk-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: scratch) }
+    do {
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+    } catch {
+        return "cannot create \(scratch.path): \(error)"
+    }
+    let base = scratch.appendingPathComponent("base.png")
+    guard runScreencapture(["-x", "-R", rectArgument(rect), base.path]), let screen = loadImage(base) else {
+        return "screencapture of \(rectArgument(rect)) failed"
+    }
+    let scale = CGFloat(screen.width) / rect.width
+    func pixels(_ frame: CGRect) -> CGRect {
+        CGRect(
+            x: (frame.minX - rect.minX) * scale, y: CGFloat(screen.height) - (frame.maxY - rect.minY) * scale,
+            width: frame.width * scale, height: frame.height * scale
+        )
+    }
+    guard let context = CGContext(
+        data: nil, width: screen.width, height: screen.height, bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else {
+        return "cannot allocate composite"
+    }
+    let bounds = CGRect(x: 0, y: 0, width: screen.width, height: screen.height)
+    context.setFillColor(CGColor(gray: 0.5, alpha: 1))
+    context.fill(bounds)
+    context.saveGState()
+    context.clip(to: pixels(statusItem))
+    context.draw(screen, in: bounds)
+    context.restoreGState()
+    // macOS 26 captures a menu window together with its open submenus, at their union size.
+    let group = menus.dropFirst().reduce(menus[0].frame) { $0.union($1.frame) }
+    func fits(_ image: CGImage, _ frame: CGRect) -> Bool {
+        abs(CGFloat(image.width) / scale - frame.width) <= 2 && abs(CGFloat(image.height) / scale - frame.height) <= 2
+    }
+    for window in menus {
+        let shot = scratch.appendingPathComponent("window-\(window.id).png")
+        guard runScreencapture(["-x", "-o", "-l", String(window.id), shot.path]), let image = loadImage(shot) else {
+            return "screencapture of menu window \(window.id) failed"
+        }
+        if fits(image, group) {
+            context.draw(image, in: pixels(group))
+            break
+        }
+        guard fits(image, window.frame) else {
+            return "menu window \(window.id) captured at \(image.width)x\(image.height)px, matching neither its frame nor the menu group"
+        }
+        context.draw(image, in: pixels(window.frame))
+    }
+    guard let composite = context.makeImage() else { return "cannot render composite" }
+    let staged = scratch.appendingPathComponent("final.png")
+    writePNG(composite, to: staged)
+    do {
+        try? FileManager.default.removeItem(at: out)
+        try FileManager.default.moveItem(at: staged, to: out)
+    } catch {
+        return "cannot publish \(out.path): \(error)"
+    }
+    let check = blankCheck(composite)
+    print("image: \(out.path) \(composite.width)x\(composite.height) blank-check: \(check.ok ? "" : "FAIL ")\(check.detail)")
+    return check.ok ? nil : "blank image: \(check.detail)"
+}
+
+func closeMenu(_ menu: StatusMenu) {
+    // A cancel or Escape can close only the open submenu, so try twice.
+    if !menu.close() { menu.close() }
+}
+
+func walk(pid: pid_t, planName: String, fixture: String, outDir: URL) {
+    guard let plan = MenuWalkPlan.named[planName] else {
+        fail("unknown plan \(planName); known: \(MenuWalkPlan.named.keys.sorted().joined(separator: ", "))", code: 64)
+    }
+    guard URL(fileURLWithPath: fixture).lastPathComponent == plan.fixture else {
+        fail("plan \(planName) needs fixture \(plan.fixture); this run uses \(fixture)")
+    }
+    if let failure = runPreflight().firstFailure {
+        fail("menu-walk cannot capture the menu (\(failure.name): \(failure.detail))", code: 3)
+    }
+    guard AXIsProcessTrusted() else {
+        fail("menu-walk cannot open the menu: Accessibility is not granted to this host process", code: 3)
+    }
+    guard let menu = StatusMenu(pid: pid), let status = statusItemFrame(pid: pid, menu: menu) else {
+        fail("status item pdtbar.status not found for pid \(pid) (menu bar hidden or item overflowed?)")
+    }
+    let statusItem = menu.statusFrame ?? status
+    do { try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true) } catch {
+        fail("cannot create \(outDir.path): \(error)")
+    }
+
+    var steps: [WalkStep] = []
+    func record(_ name: String, opened: Bool, via: String, missing: [MenuSelector], shot: URL?, minMenus: Int = 1) {
+        let failure = shot.flatMap { shoot(pid: pid, status: status, statusItem: statusItem, minMenus: minMenus, out: $0) }
+        let missingLabels = missing.map { "\($0.label) (\($0.identifier))" } + (failure.map { [$0] } ?? [])
+        steps.append(WalkStep(
+            name: name, opened: opened, via: via, missing: missingLabels,
+            screenshot: failure == nil ? shot?.lastPathComponent : nil
+        ))
+        print("step \(name): \(opened && missingLabels.isEmpty ? "ok" : "FAIL") via=\(via)"
+            + (missingLabels.isEmpty ? "" : " missing=\(missingLabels.joined(separator: "; "))"))
+    }
+
+    if menu.open() {
+        let root = menuWindows(pid: pid).map(\.frame)
+        let missing = plan.topLevel.missing(from: visibleIdentifiers(under: menu.status, inside: root))
+        record("menu", opened: true, via: "status item", missing: missing, shot: outDir.appendingPathComponent("menu.png"))
+        closeMenu(menu)
+    } else {
+        record("menu", opened: false, via: "status item", missing: plan.topLevel, shot: nil)
+    }
+
+    for submenu in plan.submenus {
+        guard menu.open(), let opener = element(submenu.opener.identifier, under: menu.status) else {
+            record(submenu.name, opened: false, via: "none", missing: [submenu.opener], shot: nil)
+            closeMenu(menu)
+            continue
+        }
+        let root = menuWindows(pid: pid).map(\.frame)
+        guard let via = openSubmenu(opener, pid: pid) else {
+            record(submenu.name, opened: false, via: "none", missing: submenu.expectedChildren, shot: nil)
+            closeMenu(menu)
+            continue
+        }
+        Thread.sleep(forTimeInterval: 0.2)
+        let opened = menuWindows(pid: pid).map(\.frame).filter { !root.contains($0) }
+        let missing = submenu.expectedChildren.missing(from: visibleIdentifiers(under: opener, inside: opened))
+        record(submenu.name, opened: true, via: via, missing: missing,
+               shot: outDir.appendingPathComponent("\(submenu.name).png"), minMenus: root.count + 1)
+        closeMenu(menu)
+    }
+
+    let report = WalkReport(
+        plan: planName, fixture: plan.fixture, steps: steps,
+        ok: steps.allSatisfy { $0.opened && $0.missing.isEmpty }
+    )
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    do {
+        try encoder.encode(report).write(to: outDir.appendingPathComponent("menu-walk.json"))
+    } catch {
+        fail("cannot write report: \(error)")
+    }
+    print("report: \(outDir.appendingPathComponent("menu-walk.json").path)")
+    print("menu-walk: \(report.ok ? "ok" : "FAIL")")
+    if !report.ok { exit(1) }
+}
+
 // MARK: CLI
 
 let usage = """
@@ -383,6 +603,7 @@ usage:
   pdtbar-capture preflight
   pdtbar-capture screenshot --pid <pid> --out <file.png> [--closed]
   pdtbar-capture record --pid <pid> --seconds <1-30> --out <file.mov>
+  pdtbar-capture walk --pid <pid> --plan <name> --fixture <file.json> --out-dir <dir>
 """
 
 func option(_ name: String, in arguments: [String]) -> String? {
@@ -417,6 +638,15 @@ case "record":
     }
     record(pid: pid, seconds: seconds, out: URL(fileURLWithPath: out))
     await writePoster(movie: URL(fileURLWithPath: out))
+case "walk":
+    guard let pid = option("--pid", in: arguments).flatMap(pid_t.init),
+          let plan = option("--plan", in: arguments),
+          let fixture = option("--fixture", in: arguments),
+          let outDir = option("--out-dir", in: arguments)
+    else {
+        fail(usage, code: 64)
+    }
+    walk(pid: pid, planName: plan, fixture: fixture, outDir: URL(fileURLWithPath: outDir))
 default:
     fail(usage, code: 64)
 }

@@ -1,4 +1,4 @@
-.PHONY: docs-list docs-site docs-site-test docs-site-clean start restart stop build test check smoke-api
+.PHONY: docs-list docs-site docs-site-test docs-site-clean start restart stop build test check smoke-api smoke-menu
 
 docs-list:
 	node Scripts/docs-list.mjs
@@ -31,3 +31,6 @@ check:
 
 smoke-api:
 	./Scripts/api_smoke_matrix.sh
+
+smoke-menu:
+	./Scripts/verify_pdtbar.sh menu-smoke
