@@ -6,6 +6,17 @@ import PDTBarAppSupport
 
 @Suite("Portfolio overview")
 struct PortfolioOverviewTests {
+    @Test("Allocation without holdings says so in one row instead of an empty chart")
+    func allocationWithoutHoldingsSaysSo() throws {
+        let snapshot = try PDTFixtureDataSource.snapshot(
+            from: packageRoot.appending(path: "docs/pdt/fixtures/income-event.json")
+        )
+        let descriptor = MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: snapshot))
+        let rows = try #require(descriptor.sections.first { $0.id == "allocation" }?.rows)
+
+        #expect(rows.map(\.title) == ["No holdings to show"])
+    }
+
     @Test("Module builds whole-portfolio overview from normalized facts")
     func moduleBuildsWholePortfolioOverview() throws {
         let overview = PortfolioOverview.build(from: try quietSnapshot())
@@ -188,7 +199,7 @@ struct PortfolioOverviewTests {
         #expect(chartRow.children.isEmpty)
         #expect(detailsRow.id == "allocation.portfolio.details")
         #expect(detailsRow.role == .portfolioOverviewDetails)
-        #expect(detailsRow.title == "Detailed info")
+        #expect(detailsRow.title == "Full allocation list")
         #expect(detailsRow.children.map(\.id) == [
             "allocation.9001",
             "allocation.9002",
@@ -238,7 +249,6 @@ struct PortfolioOverviewTests {
             "Zephyr",
             "Cash",
         ])
-        #expect(chart.bars.map(\.axisLabel) == ["N", "O", "H", "A", "A", "C", "M", "Z", "C"])
         #expect(chart.bars.map(\.weight) == [
             0.1171875,
             0.1171875,
@@ -294,8 +304,8 @@ struct PortfolioOverviewTests {
         #expect(chart.bars.last?.percentageLabel == "0.1%")
     }
 
-    @Test("Portfolio allocation layout keeps twenty labels aligned and tiny positive bars visible")
-    func portfolioAllocationLayoutKeepsTwentyLabelsAlignedAndTinyPositiveBarsVisible() {
+    @Test("Portfolio allocation layout keeps tiny positive bars visible across twenty holdings")
+    func portfolioAllocationLayoutKeepsTinyPositiveBarsVisibleAcrossTwentyHoldings() {
         let weights = [
             0.18, 0.15, 0.12, 0.10, 0.08,
             0.07, 0.06, 0.05, 0.04, 0.03,
@@ -317,9 +327,7 @@ struct PortfolioOverviewTests {
 
         for index in weights.indices {
             let barRect = layout.barRect(at: index)
-            let labelRect = layout.labelRect(at: index, axisHeight: 16)
 
-            #expect(abs(barRect.midX - labelRect.midX) < 0.001)
             #expect(barRect.height >= PortfolioAllocationChartLayout.minimumPositiveBarHeight)
             #expect(barRect.width >= 6)
             #expect(barRect.width < 10)

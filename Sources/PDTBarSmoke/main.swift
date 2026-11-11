@@ -3196,7 +3196,9 @@ private func requiredPulseMenuTargets(in surface: MenuBarSurface) -> [PulseTarge
             targets.append(PulseTarget(accessibilityIdentifier: "missing.section.\(sectionID)", title: sectionID))
             continue
         }
-        targets.append(PulseTarget(accessibilityIdentifier: section.accessibilityIdentifier, title: section.title))
+        if section.showsHeading {
+            targets.append(PulseTarget(accessibilityIdentifier: section.accessibilityIdentifier, title: section.title))
+        }
         for row in section.rows {
             targets.append(contentsOf: requiredMenuTargets(for: row))
         }
@@ -3207,7 +3209,7 @@ private func requiredPulseMenuTargets(in surface: MenuBarSurface) -> [PulseTarge
 
 private func requiredSetupMenuTargets(in surface: MenuBarSurface) -> [PulseTarget] {
     surface.sections.flatMap { section in
-        [PulseTarget(accessibilityIdentifier: section.accessibilityIdentifier, title: section.title)]
+        (section.showsHeading ? [PulseTarget(accessibilityIdentifier: section.accessibilityIdentifier, title: section.title)] : [])
             + section.rows.flatMap(requiredMenuTargets)
     }
 }
@@ -4704,7 +4706,7 @@ private func toolResultErrorCount(in object: Any) -> Int {
 
 private func fixtureProofSVG(descriptor: MenuDescriptor) -> String {
     let rows = descriptor.sections.flatMap { section in
-        [section.title] + section.rows.prefix(2).map { row in
+        (section.title.isEmpty ? [] : [section.title]) + section.rows.prefix(2).map { row in
             row.detail.map { "\(row.title) - \($0)" } ?? row.title
         }
     }.prefix(8)
@@ -4821,7 +4823,7 @@ private struct MenuProofRow {
 
 private func menuProofRows(descriptor: MenuDescriptor) -> [MenuProofRow] {
     descriptor.sections.flatMap { section in
-        [MenuProofRow(text: section.title, isSection: true, isChild: false)]
+        (section.title.isEmpty ? [] : [MenuProofRow(text: section.title, isSection: true, isChild: false)])
             + section.rows.flatMap { menuProofRows(row: $0, depth: 0) }
     }
 }

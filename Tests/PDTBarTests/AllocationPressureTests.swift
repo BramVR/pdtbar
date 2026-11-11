@@ -106,7 +106,7 @@ struct AllocationPressureTests {
         #expect(!driftMissingPrior.rankedAttentionItems.contains { $0.id == "allocation.concentrationDrift.top3" })
     }
 
-    @Test("Descriptor places allocation pressure in Pulse and Allocation without hiding details")
+    @Test("Allocation pressure shows once: in Pulse, and in Allocation only when Pulse has no room for it")
     func descriptorPlacesAllocationPressureRows() throws {
         let model = PressureEngine.buildModel(from: try fixtureSnapshot("concentration-pressure.json"))
         let descriptor = MenuDescriptorRenderer.render(model: model)
@@ -115,7 +115,7 @@ struct AllocationPressureTests {
         let detailsRow = try #require(allocationRows.first { $0.id == "allocation.portfolio.details" })
 
         #expect(pulseIDs.contains("allocation.sector.information-technology.glance"))
-        #expect(allocationRows.contains { $0.id == "allocation.sector.information-technology.allocation" })
+        #expect(!allocationRows.contains { $0.id == "allocation.sector.information-technology.allocation" })
         #expect(detailsRow.children.contains { $0.id == "allocation.portfolio.sectors" })
         #expect(detailsRow.children.contains { $0.id == "allocation.9001" })
     }

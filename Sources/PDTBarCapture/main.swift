@@ -596,6 +596,83 @@ func walk(pid: pid_t, planName: String, fixture: String, outDir: URL) {
     if !report.ok { exit(1) }
 }
 
+// MARK: Menu measure
+
+/// Visible text of a row: its own title plus the static text inside a custom row view, without
+/// descending into a submenu's rows.
+func rowText(_ element: AXUIElement) -> String {
+    var parts: [String] = []
+    var stack = [element]
+    var visited = 0
+    while let node = stack.popLast(), visited < 200 {
+        visited += 1
+        if node != element, axString(node, "AXRole") == (kAXMenuRole as String) { continue }
+        for attribute in ["AXTitle", "AXValue", "AXDescription"] {
+            if let text = axString(node, attribute)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty,
+               !parts.contains(text) {
+                parts.append(text)
+            }
+        }
+        stack.append(contentsOf: axChildren(node).reversed())
+    }
+    return parts.joined(separator: " | ")
+}
+
+func measure(pid: pid_t, fixture: String, outDir: URL, allowSensitiveText: Bool) {
+    if let failure = runPreflight().firstFailure {
+        fail("measure cannot capture the menu (\(failure.name): \(failure.detail))", code: 3)
+    }
+    guard AXIsProcessTrusted() else {
+        fail("measure cannot open the menu: Accessibility is not granted to this host process", code: 3)
+    }
+    guard let menu = StatusMenu(pid: pid), let status = statusItemFrame(pid: pid, menu: menu) else {
+        fail("status item pdtbar.status not found for pid \(pid)")
+    }
+    do { try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true) } catch {
+        fail("cannot create \(outDir.path): \(error)")
+    }
+    guard menu.open(), let window = menuWindows(pid: pid).first,
+          let root = findElement(in: menu.status, where: { axString($0, "AXRole") == (kAXMenuRole as String) })
+    else {
+        fail("status menu did not open")
+    }
+    Thread.sleep(forTimeInterval: 0.3)
+    let salt = MeasureReport.newSalt()
+    let rows = axChildren(root).compactMap { item -> MeasuredRow? in
+        guard let frame = axFrame(item), frame.height > 0 else { return nil }
+        var enabled: CFTypeRef?
+        AXUIElementCopyAttributeValue(item, kAXEnabledAttribute as CFString, &enabled)
+        return MeasuredRow(
+            role: axString(item, "AXRole") ?? "?",
+            identifier: axString(item, "AXIdentifier"),
+            rawText: rowText(item),
+            salt: salt,
+            includeText: allowSensitiveText,
+            y: Int((frame.minY - window.frame.minY).rounded()),
+            height: Int(frame.height.rounded()),
+            hasSubmenu: axChildren(item).contains { axString($0, "AXRole") == (kAXMenuRole as String) },
+            enabled: (enabled as? Bool) ?? true
+        )
+    }
+    let failure = shoot(pid: pid, status: status, statusItem: menu.statusFrame ?? status, minMenus: 1,
+                        out: outDir.appendingPathComponent("menu.png"))
+    closeMenu(menu)
+    if let failure { fail("menu capture failed: \(failure)") }
+    let report = MeasureReport(
+        fixture: URL(fileURLWithPath: fixture).lastPathComponent,
+        menuWidth: Int(window.frame.width.rounded()), menuHeight: Int(window.frame.height.rounded()),
+        sensitiveText: allowSensitiveText, rows: rows
+    )
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    do {
+        try encoder.encode(report).write(to: outDir.appendingPathComponent("measure.json"))
+    } catch {
+        fail("cannot write report: \(error)")
+    }
+    print("measure: \(rows.count) rows, \(report.menuHeight)pt -> \(outDir.appendingPathComponent("measure.json").path)")
+}
+
 // MARK: CLI
 
 let usage = """
@@ -604,6 +681,7 @@ usage:
   pdtbar-capture screenshot --pid <pid> --out <file.png> [--closed]
   pdtbar-capture record --pid <pid> --seconds <1-30> --out <file.mov>
   pdtbar-capture walk --pid <pid> --plan <name> --fixture <file.json> --out-dir <dir>
+  pdtbar-capture measure --pid <pid> --fixture <name> --out-dir <dir> [--allow-sensitive-text]
 """
 
 func option(_ name: String, in arguments: [String]) -> String? {
@@ -647,6 +725,17 @@ case "walk":
         fail(usage, code: 64)
     }
     walk(pid: pid, planName: plan, fixture: fixture, outDir: URL(fileURLWithPath: outDir))
+case "measure":
+    guard let pid = option("--pid", in: arguments).flatMap(pid_t.init),
+          let fixture = option("--fixture", in: arguments),
+          let outDir = option("--out-dir", in: arguments)
+    else {
+        fail(usage, code: 64)
+    }
+    measure(
+        pid: pid, fixture: fixture, outDir: URL(fileURLWithPath: outDir),
+        allowSensitiveText: arguments.contains("--allow-sensitive-text")
+    )
 default:
     fail(usage, code: 64)
 }

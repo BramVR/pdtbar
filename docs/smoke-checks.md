@@ -18,12 +18,14 @@ read_when:
 
 ## Real-menu smoke (local gate)
 
-`make smoke-menu` (`Scripts/verify_pdtbar.sh menu-smoke`) builds `pdtbar` and `pdtbar-capture`, launches the `concentration-pressure` fixture, opens the real status menu through Accessibility, opens the `Detailed info` (allocation overview) and `Data health` submenus, and writes `menu.png`, `allocation-overview.png`, `data-health.png`, and `menu-walk.json` to `<run>/evidence/menu-walk/`. The selectors live in `MenuWalkPlan.cohesiveUI` (`Sources/PDTBarSmokeProof`); `MenuWalkPlanTests` fails in CI when a selector stops matching the menu its fixture renders.
+`make smoke-menu` (`Scripts/verify_pdtbar.sh menu-smoke`) builds `pdtbar` and `pdtbar-capture`, launches the `concentration-pressure` fixture, opens the real status menu through Accessibility, opens the `Full allocation list` (allocation overview) and `Data health` submenus, and writes `menu.png`, `allocation-overview.png`, `data-health.png`, and `menu-walk.json` to `<run>/evidence/menu-walk/`. The selectors live in `MenuWalkPlan.cohesiveUI` (`Sources/PDTBarSmokeProof`); `MenuWalkPlanTests` fails in CI when a selector stops matching the menu its fixture renders.
 
 - Local/verify gate only. It needs an unlocked console session, Screen Recording, and Accessibility already granted to the host. It never requests either. Hosted CI sets `CI`, so it would fail there by design; CI runs the plan test instead.
 - It fails, never skips: a missing permission, a locked screen, a missing selector, a submenu that does not open, or a blank image exits non-zero with the reason.
 - Each PNG is composed on flat grey from the status item crop and PDTBar's menu windows captured by window id, so desktop content, windows behind the translucent menu, and other menu bar items stay out. Raw captures stay in a temp dir; only the composite lands in evidence.
 - Fixture data only. No network, Keychain, or account access. It moves no mouse unless AXPress fails to open a submenu, then it hovers the row.
+
+`Scripts/verify_pdtbar.sh menu-measure <fixture.json>` (or `menu-measure --scripted <script.json> <seed-snapshot.json>`) builds, launches any fixture or scripted connection, opens only the root menu, and writes `menu.png` plus `measure.json` to `<run>/evidence/measure/`. The report holds menu width and height in pt and, per top-level row, its role, its identifier with digit runs masked (`kind`), height, submenu and enabled flags, and the row text's length, error flags, and a primary-label digest salted per run (for duplicate detection). It writes no row text by default, so no amounts or holding names reach disk; `pdtbar-capture measure ... --allow-sensitive-text` adds the raw text for fixture debugging. Same preflight and redaction rules as the walk. Use it to compare menu layouts across fixtures.
 
 ## Redaction rules
 

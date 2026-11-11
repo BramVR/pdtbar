@@ -113,8 +113,8 @@ struct PortfolioSummaryTests {
         #expect(descriptor.sections.firstIndex { $0.id == "summary" }! < descriptor.sections.firstIndex { $0.id == "allocation" }!)
     }
 
-    @Test("Missing performance data stays explicitly unavailable")
-    func missingPerformanceIsUnavailable() throws {
+    @Test("Missing performance data shows the total alone")
+    func missingPerformanceShowsTotalAlone() throws {
         var snapshot = try quietSnapshotForSummary()
         snapshot.performance = nil
         let descriptor = MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: snapshot))
@@ -124,8 +124,28 @@ struct PortfolioSummaryTests {
         #expect(summary.totalValue == "EUR 51,200.00")
         #expect(summary.cagr == "Unavailable")
         #expect(summary.totalIncrease == "Unavailable")
-        #expect(summary.accessibilityLabel == "Total portfolio value, EUR 51,200.00; CAGR, Unavailable; Total increase, Unavailable")
+        #expect(!summary.showsPerformance)
+        #expect(summary.accessibilityLabel == "Total portfolio value, EUR 51,200.00")
         #expect(!row.accessibilityIdentifier.isEmpty)
+    }
+
+    @Test("One return figure is enough to show the performance row")
+    func oneReturnFigureShowsPerformance() throws {
+        var snapshot = try quietSnapshotForSummary()
+        snapshot.performance = PortfolioPerformanceSummary.build(
+            totalGainPercentage: 0.05,
+            periodStart: nil,
+            periodEnd: nil
+        )
+        let summary = try #require(
+            MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: snapshot))
+                .sections.first?.rows.first?.portfolioSummary
+        )
+
+        #expect(summary.cagr == "Unavailable")
+        #expect(summary.totalIncrease == "+5.0%")
+        #expect(summary.showsPerformance)
+        #expect(summary.accessibilityLabel.contains("Total increase, +5.0%"))
     }
 
     @Test("Short performance periods explain unavailable CAGR with values shown or hidden")

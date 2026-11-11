@@ -32,6 +32,16 @@ struct BigMoverPressureTests {
         #expect(row.title == "Nova Lithography")
     }
 
+    @Test("Big-mover summary says so when no price history was there to compare")
+    func bigMoverSummaryNamesMissingPriceHistory() throws {
+        let descriptor = MenuDescriptorRenderer.render(model: try model("concentration-pressure"))
+        let row = try #require(
+            descriptor.sections.first { $0.id == "bigMovers" }?.rows.first { $0.id == "bigMovers.summary" }
+        )
+
+        #expect(row.detail == "No recent price history to compare")
+    }
+
     @Test("Cold-start price history thresholds on exact move before rounding")
     func coldStartPriceHistoryThresholdsOnExactMoveBeforeRounding() throws {
         var snapshot = try snapshot("big-mover")

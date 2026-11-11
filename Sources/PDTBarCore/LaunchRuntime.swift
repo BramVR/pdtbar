@@ -434,7 +434,7 @@ public enum PDTLaunchMenu {
 
     public static func descriptorForBackgroundRefreshFailure(cachedPulse: MenuDescriptor) -> MenuDescriptor {
         cachedPulseDescriptor(
-            cachedPulse.withRefreshAction(.available),
+            cachedPulse.withRefreshAction(.retryOfferedAbove),
             statusVisual: cachedPulse.statusVisual.withDimming(true),
             rowsFirst: true,
             rows: [
@@ -470,7 +470,7 @@ public enum PDTLaunchMenu {
 
     public static func descriptorForBackgroundDetailDegraded(cachedPulse: MenuDescriptor) -> MenuDescriptor {
         cachedPulseDescriptor(
-            cachedPulse.withRefreshAction(.available),
+            cachedPulse.withRefreshAction(.retryOfferedAbove),
             statusVisual: cachedPulse.statusVisual.withDimming(true),
             rowsFirst: true,
             rows: [

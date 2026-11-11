@@ -10,7 +10,7 @@ struct MenuWalkPlanTests {
         let plan = MenuWalkPlan.cohesiveUI
         let surface = try renderedSurface(fixture: plan.fixture)
         let topRows = surface.sections.flatMap(\.rows)
-        let topLevel = Set(surface.sections.map(\.accessibilityIdentifier) + topRows.map(\.accessibilityIdentifier))
+        let topLevel = Set(surface.sections.filter(\.showsHeading).map(\.accessibilityIdentifier) + topRows.map(\.accessibilityIdentifier))
 
         #expect(plan.topLevel.missing(from: topLevel).map(\.identifier) == [])
         for submenu in plan.submenus {

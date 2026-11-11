@@ -146,6 +146,7 @@ public struct MenuSection: Codable, Equatable {
         self.rows = rows
     }
 
+
     enum CodingKeys: String, CodingKey {
         case id
         case title
@@ -175,7 +176,6 @@ public enum MenuRowRole: String, Codable, Equatable {
     case connectionRevoke
     case fetchStatus
     case fetchRetry
-    case pulseSummary
     case pulseQuiet
     case pulseAttention
     case pulseAttentionExpansion
@@ -191,6 +191,7 @@ public enum MenuRowRole: String, Codable, Equatable {
     case portfolioOverviewCash
     case allocationHolding
     case allocationDrillDown
+    case allocationEmpty
     case incomeEmpty
     case incomeSummary
     case incomeNext
@@ -306,7 +307,6 @@ public struct MenuRowBarChart: Codable, Equatable {
     public struct Bar: Codable, Equatable {
         public var id: String
         public var label: String
-        public var axisLabel: String?
         public var weight: Double
         public var percentageLabel: String
         public var detail: String
@@ -314,14 +314,12 @@ public struct MenuRowBarChart: Codable, Equatable {
         public init(
             id: String,
             label: String,
-            axisLabel: String? = nil,
             weight: Double,
             percentageLabel: String,
             detail: String
         ) {
             self.id = id
             self.label = label
-            self.axisLabel = axisLabel
             self.weight = weight
             self.percentageLabel = percentageLabel
             self.detail = detail
@@ -333,15 +331,19 @@ public struct MenuRowPortfolioSummary: Codable, Equatable {
     public var totalValue: String
     public var cagr: String
     public var totalIncrease: String
+    /// False when PDT returned neither return figure, so the card shows the total alone.
+    public var showsPerformance: Bool
 
-    public init(totalValue: String, cagr: String, totalIncrease: String) {
+    public init(totalValue: String, cagr: String, totalIncrease: String, showsPerformance: Bool = true) {
         self.totalValue = totalValue
         self.cagr = cagr
         self.totalIncrease = totalIncrease
+        self.showsPerformance = showsPerformance
     }
 
     public var accessibilityLabel: String {
-        "Total portfolio value, \(totalValue); CAGR, \(cagr); Total increase, \(totalIncrease)"
+        guard showsPerformance else { return "Total portfolio value, \(totalValue)" }
+        return "Total portfolio value, \(totalValue); CAGR, \(cagr); Total increase, \(totalIncrease)"
     }
 }
 
@@ -522,6 +524,9 @@ public struct MenuBarSectionSurface: Codable, Equatable {
     public var title: String
     public var accessibilityIdentifier: String
     public var rows: [MenuBarRowSurface]
+
+    /// An untitled section renders its rows with no heading item.
+    public var showsHeading: Bool { !title.isEmpty }
 
     public init(id: String, title: String, accessibilityIdentifier: String, rows: [MenuBarRowSurface]) {
         self.id = id

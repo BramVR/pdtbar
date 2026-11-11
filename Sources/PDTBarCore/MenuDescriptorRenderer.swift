@@ -226,27 +226,28 @@ public enum MenuDescriptorRenderer {
             sections: [
                 MenuSection(
                     id: "summary",
-                    title: "Summary",
+                    title: "",
                     rows: [portfolioSummaryRow(for: model, settings: settings)]
                 ),
                 MenuSection(
                     id: "pulse",
                     title: "Pulse",
-                    rows: [
-                        MenuRow(
-                            id: "pulse.status",
-                            role: .pulseSummary,
-                            title: statusTitle
-                        ),
-                    ] + pulseRows
+                    rows: pulseRows
                 ),
                 MenuSection(
                     id: "allocation",
                     title: "Allocation",
-                    rows: [
-                        portfolioOverviewChartRow(for: allocation.portfolioOverview, settings: settings),
-                        portfolioOverviewDetailsRow(for: allocation, model: model, settings: settings),
-                    ] + allocationPressureRows(for: allocation, model: model, settings: settings)
+                    rows: (allocation.topHoldings.isEmpty
+                        ? [MenuRow(id: "allocation.empty", role: .allocationEmpty, title: "No holdings to show")]
+                        : [
+                            portfolioOverviewChartRow(for: allocation.portfolioOverview, settings: settings),
+                            portfolioOverviewDetailsRow(for: allocation, model: model, settings: settings),
+                        ]) + allocationPressureRows(
+                        for: allocation,
+                        shownInPulse: Set(pulseRows.map(\.id)),
+                        model: model,
+                        settings: settings
+                    )
                 ),
                 MenuSection(
                     id: "income",
@@ -264,8 +265,7 @@ public enum MenuDescriptorRenderer {
                             id: "bigMovers.summary",
                             role: .bigMoverSummary,
                             title: bigMoverTitle(for: bigMovers.maxMove, allocation: allocation),
-                            detail: bigMovers.maxMove.map { "\(percent($0.percentChange)) over recent window" }
-                                ?? "\(bigMovers.priceSeriesCount) price rows checked"
+                            detail: bigMoverDetail(for: bigMovers)
                         ),
                     ]
                 ),
@@ -294,13 +294,20 @@ public enum MenuDescriptorRenderer {
             portfolioSummary: MenuRowPortfolioSummary(
                 totalValue: display(model.portfolioGlance.totalValue, settings: settings),
                 cagr: portfolioSummaryCAGR(model.portfolioPerformance),
-                totalIncrease: portfolioSummaryPercent(model.portfolioPerformance.totalPercentageIncrease)
+                totalIncrease: portfolioSummaryPercent(model.portfolioPerformance.totalPercentageIncrease),
+                showsPerformance: hasReturnFigures(model.portfolioPerformance)
             )
         )
         row.portfolioValueSummaryTotal = settings.showPortfolioValues
             ? model.portfolioGlance.totalValue
             : nil
         return row
+    }
+
+    private static func hasReturnFigures(_ performance: PortfolioPerformanceSummary) -> Bool {
+        finite(performance.cagr) != nil
+            || finite(performance.totalPercentageIncrease) != nil
+            || performance.hasInsufficientCAGRPeriod
     }
 
     private static func portfolioSummaryCAGR(_ performance: PortfolioPerformanceSummary) -> String {
@@ -318,6 +325,15 @@ public enum MenuDescriptorRenderer {
             return "+\(percent(value))"
         }
         return percent(value)
+    }
+
+    private static func bigMoverDetail(for bigMovers: BigMoversSnapshot) -> String {
+        if let move = bigMovers.maxMove {
+            return "\(percent(move.percentChange)) over recent window"
+        }
+        return bigMovers.priceSeriesCount == 0
+            ? "No recent price history to compare"
+            : "\(bigMovers.priceSeriesCount) price rows checked"
     }
 
     private static func bigMoverTitle(for move: PriceMoveSummary?, allocation: AllocationSnapshot) -> String {
@@ -461,18 +477,19 @@ public enum MenuDescriptorRenderer {
                     role: .settings,
                     title: "Settings..."
                 ),
-            ]
+            ].compactMap { $0 }
         )
     }
 
-    private static func refreshActionRow(state: MenuRefreshActionState) -> MenuRow {
+    private static func refreshActionRow(state: MenuRefreshActionState) -> MenuRow? {
         switch state {
+        case .retryOfferedAbove:
+            return nil
         case .available:
             return MenuRow(
                 id: "actions.refreshNow",
                 role: .fetchRetry,
-                title: "Refresh now",
-                detail: "Fill latest details"
+                title: "Refresh now"
             )
         case .inProgress:
             return MenuRow(
@@ -540,8 +557,7 @@ public enum MenuDescriptorRenderer {
         return MenuRow(
             id: "allocation.portfolio.details",
             role: .portfolioOverviewDetails,
-            title: "Detailed info",
-            detail: "Full allocation list",
+            title: "Full allocation list",
             children: allocationHoldingRows(
                 for: allocation.topHoldings,
                 model: model,
@@ -558,7 +574,6 @@ public enum MenuDescriptorRenderer {
             MenuRowBarChart.Bar(
                 id: "allocation.portfolio.chart.\(holding.quoteId)",
                 label: holdingChartLabel(holding),
-                axisLabel: holdingChartAxisLabel(holding),
                 weight: holding.weight,
                 percentageLabel: percent(holding.weight),
                 detail: holdingBarDetail(for: holding).rendered(settings: settings)
@@ -592,10 +607,11 @@ public enum MenuDescriptorRenderer {
 
     private static func allocationPressureRows(
         for allocation: AllocationSnapshot,
+        shownInPulse: Set<String>,
         model: PortfolioPulseModel,
         settings: PortfolioValueDisplaySettings
     ) -> [MenuRow] {
-        allocation.allocationPressureItems.map { item in
+        allocation.allocationPressureItems.filter { !shownInPulse.contains("\($0.id).glance") }.map { item in
             MenuRow(
                 id: "\(item.id).allocation",
                 role: .allocationDrillDown,
@@ -638,20 +654,6 @@ public enum MenuDescriptorRenderer {
             return nil
         }
         return String(token.prefix(12))
-    }
-
-    private static func holdingChartAxisLabel(_ holding: HoldingSummary) -> String {
-        let publicLabel = holdingChartLabel(holding)
-        if let first = publicLabel.first(where: { $0.isLetter }) {
-            return String(first).uppercased()
-        }
-        if let first = holding.name.first(where: { $0.isLetter }) {
-            return String(first).uppercased()
-        }
-        if let first = publicLabel.first(where: { $0.isNumber }) ?? holding.name.first(where: { $0.isNumber }) {
-            return String(first)
-        }
-        return "?"
     }
 
     private static func portfolioOverviewDistributionRow(
@@ -1137,6 +1139,8 @@ enum MenuRefreshActionState {
     case inProgress
     /// Shown but not clickable: a refresh may start only once readiness comes back ready.
     case waitingForSetup
+    /// No row: the failure notice above the pulse already carries the retry.
+    case retryOfferedAbove
 }
 
 public enum IncomeCalendarDescriptor {
