@@ -388,7 +388,7 @@ private func dataSource(
             sleeper: NoSleep()
         ),
         options: options,
-        onOptionalFacetFailure: { failure in recorder?.record(failure) }
+        onSyncFailure: { failure in recorder?.record(failure) }
     )
 }
 

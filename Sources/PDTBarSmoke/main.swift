@@ -1761,7 +1761,7 @@ private func scriptedAPISnapshotSmoke(arguments: [String]) throws -> SmokeReport
             transport: transport,
             tokenProvider: InMemoryPDTAPITokenProvider(token: PDTAPIToken(secret))
         ),
-        onOptionalFacetFailure: { failures.record($0) }
+        onSyncFailure: { failures.record($0) }
     )
     let snapshot = try dataSource.snapshot(asOf: "2026-06-22")
 

@@ -41,6 +41,10 @@ Scripts/verify_pdtbar.sh stop "$RUN"
 
 The image must show the status item and the open menu with `Pulse` at the top and the attention rows under it. It shows the fixture pulse, not a scripted first fetch. Label it that way.
 
+## Sync failure states (#191)
+
+`docs/pdt/fixtures/scripted/sync-failure-*.json` script each failure state for `Scripts/verify_pdtbar.sh launch-scripted <script> [seed]`: `first-fetch-429` and `first-fetch-503` (no seed) show `Could not fetch portfolio` with the failure and its next action; `optional-401` and `optional-paused` (seed with any fixture launch's `snapshots/latest-portfolio-snapshot.json`) commit fresh holdings, then show `Reconnect to PDT` or `PDT access paused` over the pulse; `base-401` (seeded) shows the reconnect screen with Data health > Diagnostics still present. Prove that last one with `.build/debug/pdtbar-capture walk --pid <pid> --plan sync-failure-reconnect --fixture "$(cat $RUN/fixture)" --out-dir $RUN/evidence/menu-walk`. Give each launch about 3 seconds after `ready` for the scripted replies to finish.
+
 ## Gotchas
 
 - The smoke scripts PDT at the app's connection boundary (`--scripted-pdt`). It does not prove live PDT reachability, and live PDT is never driven without the user.

@@ -38,29 +38,36 @@ public struct PDTAPIDataSourceOptions: Equatable, Sendable {
 
 /// `PortfolioDataSource` over the read-only PDT REST API (ADR-0002). Holdings are
 /// required; every other facet is optional and degrades the snapshot on failure.
-/// Requests run sequentially in a fixed order.
+/// Requests run sequentially in a fixed order. `onSyncFailure` gets the typed
+/// record of every failed request, holdings included, before holdings rethrows.
 public struct PDTAPIDataSource: PortfolioDataSource {
     public var client: PDTAPIClient
     public var options: PDTAPIDataSourceOptions
-    public var onOptionalFacetFailure: (@Sendable (PDTSyncFailure) -> Void)?
+    public var onSyncFailure: (@Sendable (PDTSyncFailure) -> Void)?
     private let now: @Sendable () -> Date
 
     public init(
         client: PDTAPIClient,
         options: PDTAPIDataSourceOptions = PDTAPIDataSourceOptions(),
-        onOptionalFacetFailure: (@Sendable (PDTSyncFailure) -> Void)? = nil,
+        onSyncFailure: (@Sendable (PDTSyncFailure) -> Void)? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.client = client
         self.options = options
-        self.onOptionalFacetFailure = onOptionalFacetFailure
+        self.onSyncFailure = onSyncFailure
         self.now = now
     }
 
     public func snapshot(asOf: String? = nil) throws -> PortfolioSnapshot {
         let snapshotAsOf = asOf ?? dayString(from: now())
         let incomeEnd = dayString(snapshotAsOf, addingDays: 30)
-        let rows: [APIHolding] = try client.getAll(.holdings())
+        let rows: [APIHolding]
+        do {
+            rows = try client.getAllReportingAttempts(.holdings(), as: APIHolding.self).value
+        } catch let failure as PDTAPIRequestFailure {
+            onSyncFailure?(PDTSyncFailure(failure, resource: .holdings(), phase: .baseHoldings))
+            throw failure.underlyingError
+        }
 
         var degraded = false
         var syncEnded = false
@@ -78,7 +85,7 @@ public struct PDTAPIDataSource: PortfolioDataSource {
             } catch {
                 degraded = true
                 let failure = PDTSyncFailure(error, resource: resource, phase: phase)
-                onOptionalFacetFailure?(failure)
+                onSyncFailure?(failure)
                 syncEnded = failure.kind.endsSync
                 return nil
             }

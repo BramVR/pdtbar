@@ -31,5 +31,8 @@ done <<'LIST'
 "reconnectHidesPulse"                            ProblemKeepsPulseVisible
 "notConnectedShowsPulse"                         NotConnectedShowsSetup
 "connectionScreenOffersRefresh"                  OfferedActionsAreLive
+"optionalAccessLossStaysConnected"               AccessLossLeavesConnected
+"connectionScreenDropsRecord"                    UncommittedRecordKept
+"connectionOpDropsRecord"                        UncommittedRecordKept
 LIST
 rm -f .mutation.cfg .mutation.cfg.bak

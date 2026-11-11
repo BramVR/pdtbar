@@ -66,7 +66,33 @@ public struct MenuWalkPlan: Equatable, Sendable {
         ]
     )
 
-    public static let named: [String: MenuWalkPlan] = ["cohesive-ui": cohesiveUI]
+    /// Issue #191: a returning launch whose holdings request PDT rejects with `401`. The reconnect
+    /// screen keeps the failure record, so Data health still offers Diagnostics with its copy row.
+    public static let syncFailureReconnect = MenuWalkPlan(
+        fixture: "sync-failure-base-401.json",
+        topLevel: [
+            MenuSelector("Reconnect", "pdtbar.row.pdtConnection.status"),
+            MenuSelector("Sign in", "pdtbar.row.pdtConnection.signIn"),
+            MenuSelector("Check again", "pdtbar.row.pdtConnection.check"),
+            MenuSelector("Data health", "pdtbar.row.dataHealth"),
+        ],
+        submenus: [
+            MenuWalkSubmenu(
+                name: "data-health",
+                opener: MenuSelector("Data health", "pdtbar.row.dataHealth"),
+                expectedChildren: [
+                    MenuSelector("Access", "pdtbar.row.dataHealth.access"),
+                    MenuSelector("Detail fill", "pdtbar.row.dataHealth.detailFill"),
+                    MenuSelector("Diagnostics", "pdtbar.row.dataHealth.diagnostic"),
+                ]
+            ),
+        ]
+    )
+
+    public static let named: [String: MenuWalkPlan] = [
+        "cohesive-ui": cohesiveUI,
+        "sync-failure-reconnect": syncFailureReconnect,
+    ]
 }
 
 extension Array where Element == MenuSelector {
