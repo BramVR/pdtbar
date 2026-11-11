@@ -3,10 +3,15 @@
 # launch runs fixture mode; launch-scripted runs the product path over a --scripted-pdt script (in-memory
 # credential, scripted sign-in, scripted API replies). Neither calls PDT, the Keychain, Accessibility, or Screen Recording.
 # can-capture/capture are opt-in visual proof: they only preflight Screen Recording and use Accessibility when already granted.
+# menu-walk/menu-smoke drive the real menu through submenus; they fail, never skip, when Accessibility or capture is missing.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="${ROOT_DIR}/.build/debug/pdtbar"
+APP_SOURCES=("${ROOT_DIR}/Sources/PDTBarApp" "${ROOT_DIR}/Sources/PDTBarAppSupport" "${ROOT_DIR}/Sources/PDTBarCore")
+CAPTURE_SOURCES=("${ROOT_DIR}/Sources/PDTBarCapture" "${ROOT_DIR}/Sources/PDTBarSmokeProof" "${ROOT_DIR}/Sources/PDTBarCore")
+MENU_PLAN="cohesive-ui"
+MENU_FIXTURE="${ROOT_DIR}/docs/pdt/fixtures/concentration-pressure.json"
 CAPTURE="${ROOT_DIR}/.build/debug/pdtbar-capture"
 RUNS_DIR="${ROOT_DIR}/.build/verify-pdtbar"
 
@@ -20,6 +25,8 @@ usage:
   Scripts/verify_pdtbar.sh can-capture                                  # exit 0 yes, 3 no (with reason)
   Scripts/verify_pdtbar.sh capture screenshot <run-dir> <name>          # <run>/evidence/<name>.png
   Scripts/verify_pdtbar.sh capture record <run-dir> <name> <seconds>    # <run>/evidence/<name>.mov + -poster.png
+  Scripts/verify_pdtbar.sh menu-walk <run-dir>      # walk the cohesive-ui plan; <run>/evidence/menu-walk/
+  Scripts/verify_pdtbar.sh menu-smoke               # build, launch the plan fixture, menu-walk, stop
 EOF
   exit 64
 }
@@ -131,11 +138,11 @@ doctor() {
   kill -0 "${pid}" 2>/dev/null || fail "process ${pid} not running; see ${run}/app.log"
   ours "${pid}" "${run}" || fail "pid ${pid} is not this run's fixture app: $(pid_command "${pid}")"
   printf 'process: ours (%s)\n' "${APP}"
-  # The capture tool is not part of the app, so editing it must not mark the app stale.
-  newest="$(find "${ROOT_DIR}/Sources" -path "${ROOT_DIR}/Sources/PDTBarCapture" -prune -o -name '*.swift' -newer "${APP}" -print -quit)"
+  # Only the app's own targets count; editing the capture tool or smoke proof must not mark the app stale.
+  newest="$(find "${APP_SOURCES[@]}" -name '*.swift' -newer "${APP}" -print -quit)"
   [[ -z "${newest}" ]] || fail "stale build: ${newest} is newer than ${APP}; rebuild and relaunch"
   [[ "$(stat -f '%i %m' "${APP}")" == "$(cat "${run}/binary")" ]] || fail "binary rebuilt after launch; running process has old code; stop and relaunch"
-  printf 'build: fresh (binary unchanged since launch; no Sources/*.swift newer)\n'
+  printf 'build: fresh (binary unchanged since launch; no app source newer)\n'
   if [[ -f "${run}/scripted-pdt.json" ]]; then
     grep -qx check "${run}/events.log" 2>/dev/null || fail "scripted run never checked the connection"
     printf 'events: %s\n' "$(tr '\n' ' ' < "${run}/events.log")"
@@ -174,7 +181,7 @@ stop() {
 require_capture_tool() {
   local newest
   [[ -x "${CAPTURE}" ]] || fail "missing ${CAPTURE}; run: swift build --product pdtbar-capture"
-  newest="$(find "${ROOT_DIR}/Sources/PDTBarCapture" -name '*.swift' -newer "${CAPTURE}" -print -quit)"
+  newest="$(find "${CAPTURE_SOURCES[@]}" -name '*.swift' -newer "${CAPTURE}" -print -quit)"
   [[ -z "${newest}" ]] || fail "stale ${CAPTURE}; run: swift build --product pdtbar-capture"
 }
 
@@ -203,6 +210,27 @@ capture() {
   fi
 }
 
+menu_walk() {
+  local run report
+  require_capture_tool
+  run="$(resolve_run "$1")"
+  report="$(doctor "${run}" 2>&1)" || { printf '%s\n' "${report}" >&2; fail "doctor not ok for ${run}"; }
+  "${CAPTURE}" walk --pid "$(cat "${run}/pid")" --plan "${MENU_PLAN}" --fixture "$(cat "${run}/fixture")" \
+    --out-dir "${run}/evidence/menu-walk" \
+    || fail "menu-walk did not prove the real menu (reason above); this gate never skips"
+}
+
+menu_smoke() {
+  local run
+  (cd "${ROOT_DIR}" && swift build --product pdtbar && swift build --product pdtbar-capture) >&2 || fail "build failed"
+  run="$(launch "${MENU_FIXTURE}" | sed -n 's/^ready: //p')"
+  [[ -n "${run}" ]] || fail "launch did not report ready"
+  # Expanded now: the EXIT trap runs after this function's locals are gone.
+  trap "stop '${run}' >&2 || true" EXIT
+  menu_walk "${run}"
+  printf 'evidence: %s/evidence/menu-walk\n' "${run}"
+}
+
 case "${1:-}" in
   launch) shift; launch "$@" ;;
   launch-scripted) [[ $# -ge 2 && $# -le 3 ]] || usage; shift; launch_scripted "$@" ;;
@@ -210,5 +238,7 @@ case "${1:-}" in
   stop) [[ $# -eq 2 ]] || usage; stop "${2%/}" ;;
   can-capture) [[ $# -eq 1 ]] || usage; can_capture ;;
   capture) shift; capture "$@" ;;
+  menu-walk) [[ $# -eq 2 ]] || usage; menu_walk "${2%/}" ;;
+  menu-smoke) [[ $# -eq 1 ]] || usage; menu_smoke ;;
   *) usage ;;
 esac

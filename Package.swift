@@ -70,7 +70,10 @@ let package = Package(
             name: "PDTBarChecks",
             dependencies: ["PDTBarCore"]
         ),
-        .executableTarget(name: "PDTBarCapture"),
+        .executableTarget(
+            name: "PDTBarCapture",
+            dependencies: ["PDTBarSmokeProof"]
+        ),
         .testTarget(
             name: "PDTBarTests",
             dependencies: [

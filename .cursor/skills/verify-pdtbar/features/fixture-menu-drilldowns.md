@@ -27,7 +27,7 @@ swift run pdtbar-smoke fixture-proof --fixture docs/pdt/fixtures/big-mover.json 
 Scripts/verify_pdtbar.sh stop "$RUN"
 ```
 
-`ready-launch` opens the real pulse menu through AX after a scripted PDT first fetch. Setup and retryable-error menus are covered by `logged-out-launch`, `scripted-setup-retry`, and `scripted-first-fetch`. No prompt-free smoke opens the Data/Prices or Data health submenus through AX; read their rows from the descriptor above. None of these captures the screen.
+`ready-launch` opens the real pulse menu through AX after a scripted PDT first fetch. Setup and retryable-error menus are covered by `logged-out-launch`, `scripted-setup-retry`, and `scripted-first-fetch`. No prompt-free smoke opens the Data/Prices or Data health submenus through AX; read their rows from the descriptor above. None of these captures the screen. The opt-in `Scripts/verify_pdtbar.sh menu-smoke` opens the allocation overview and Data health submenus and captures them (see Visual proof).
 
 Opt-in pixel proof captures the screen, so ask the user first: `swift run pdtbar-smoke real-user-pulse --fixture <f> --snapshot-dir "$RUN/real-user-pulse" --artifacts "$RUN/evidence" --peekaboo /opt/homebrew/bin/peekaboo`.
 
@@ -42,7 +42,9 @@ Scripts/verify_pdtbar.sh capture record "$RUN" menu-clip 4
 Scripts/verify_pdtbar.sh stop "$RUN"
 ```
 
-The image must show the Concentration Stack icon in its highlighted state and the open menu with Summary, Pulse, Allocation with its chart, Income, Data, and Actions. Capture does not hover rows, so submenus stay closed. Swap the fixture for the state under test, such as `quiet-no-pressure.json`.
+For the whole cohesive menu plus the `Detailed info` and `Data health` submenus in one run, use `Scripts/verify_pdtbar.sh menu-smoke`. It prints `menu-walk: ok` and the evidence dir holding `menu.png`, `allocation-overview.png`, and `data-health.png`.
+
+The image must show the Concentration Stack icon in its highlighted state and the open menu with Summary, Pulse, Allocation with its chart, Income, Data, and Actions. `capture` does not open submenus; `menu-smoke` does. Swap the fixture for the state under test, such as `quiet-no-pressure.json`.
 
 ## Gotchas
 
