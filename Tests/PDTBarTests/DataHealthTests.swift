@@ -39,7 +39,7 @@ struct DataHealthTests {
         #expect(health.source.pulse == .cachedSnapshot)
         #expect(health.access.state == .unverified)
         #expect(health.status == .degraded)
-        #expect(healthRow(in: cached.descriptor)?.detail == "Needs attention")
+        #expect(healthRow(in: cached.descriptor)?.detail == "Showing a saved copy")
         #expect(healthDetail("source", in: cached.descriptor) == "PDT, read-only; saved copy from 2026-06-25")
         #expect(healthDetail("access", in: cached.descriptor) == "Not checked this session")
         for access in [DataHealthAccess.connected, .checking, .unverified] {
@@ -57,7 +57,7 @@ struct DataHealthTests {
         ]))
         let cached = try #require(try PressureRunner.cachedPulse(snapshotStore: store, today: "2026-07-01"))
 
-        #expect(healthRow(in: cached.descriptor)?.detail == "Needs attention")
+        #expect(healthRow(in: cached.descriptor)?.detail == "Showing a saved copy")
         #expect(healthDetail("source", in: cached.descriptor) == "PDT, read-only; saved copy from 2026-06-25")
         #expect(healthDetail("access", in: cached.descriptor) == "Not checked this session")
         #expect(healthDetail("freshness", in: cached.descriptor) == "2 stale; oldest 2026-06-22")
@@ -70,7 +70,7 @@ struct DataHealthTests {
 
         let failure = PDTSyncFailure(phase: .baseHoldings, endpoint: .holdings, kind: .server(status: 503), requestCount: 3)
         let failed = cached.descriptor(in: DataHealthRuntime(access: .connected, sync: .failed(failure)))
-        #expect(healthRow(in: failed)?.detail == "Needs attention")
+        #expect(healthRow(in: failed)?.detail == "Detail fill failed")
         #expect(healthDetail("source", in: failed) == "PDT, read-only; saved copy from 2026-06-25")
         #expect(healthDetail("cache", in: failed) == "Last sync 2026-06-25")
         #expect(healthDetail("freshness", in: failed) == "2 stale; oldest 2026-06-22")
@@ -367,11 +367,11 @@ struct DataHealthTests {
         #expect(healthDetail("detailFill", in: refreshing) == "Price history 1/3")
         #expect(healthDetail("diagnostic", in: refreshing) == "Price history: PDT server problem; try again later")
 
-        #expect(healthRow(in: idle)?.detail == "Needs attention")
+        #expect(healthRow(in: idle)?.detail == "Detail fill incomplete")
         #expect(healthDetail("detailFill", in: idle) == "Degraded")
         #expect(healthDetail("diagnostic", in: idle) == "Price history: PDT server problem; try again later")
 
-        #expect(healthRow(in: failedWithoutRecord)?.detail == "Needs attention")
+        #expect(healthRow(in: failedWithoutRecord)?.detail == "Detail fill failed")
         #expect(healthDetail("cache", in: failedWithoutRecord) == "Last sync 2026-06-25")
         #expect(healthDetail("detailFill", in: failedWithoutRecord) == "Failed")
         #expect(healthDetail("diagnostic", in: failedWithoutRecord) == "None recorded")

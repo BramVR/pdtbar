@@ -245,6 +245,77 @@ public enum DataHealthStatus: String, Codable, Equatable {
     case refreshing
 }
 
+/// Why Data health needs attention, in the order `DataHealth.verdict(of:)` checks.
+enum DataHealthAttentionCause: CaseIterable, Equatable, Sendable {
+    case notConnected
+    case reconnectNeeded
+    case subscriptionPaused
+    case keychainUnavailable
+    case detailFillFailed
+    case savedCopy
+    case notFetched
+    case accessNotChecked
+    case unknownPriceDates
+    case stalePrices
+    case detailFillIncomplete
+    case failureRecorded
+
+    /// The Data health child row that names this cause.
+    var rowID: String {
+        switch self {
+        case .notConnected, .reconnectNeeded, .subscriptionPaused, .keychainUnavailable, .accessNotChecked:
+            "dataHealth.access"
+        case .savedCopy, .notFetched:
+            "dataHealth.source"
+        case .unknownPriceDates, .stalePrices:
+            "dataHealth.freshness"
+        case .detailFillFailed, .detailFillIncomplete:
+            "dataHealth.detailFill"
+        case .failureRecorded:
+            "dataHealth.diagnostic"
+        }
+    }
+
+    func summary(for health: DataHealthSnapshot) -> String {
+        switch self {
+        case .notConnected: "Not connected"
+        case .reconnectNeeded: "Reconnect needed"
+        case .subscriptionPaused: "Subscription paused"
+        case .keychainUnavailable: "Keychain unavailable"
+        case .detailFillFailed: "Detail fill failed"
+        case .savedCopy: "Showing a saved copy"
+        case .notFetched: "Not fetched this session"
+        case .accessNotChecked: "Connection not checked"
+        case .unknownPriceDates: "Unknown price dates"
+        case .stalePrices:
+            switch health.freshness.staleHoldingCount {
+            case 1: "1 stale price"
+            case let count where count > 1: "\(count) stale prices"
+            default: "Stale prices"
+            }
+        case .detailFillIncomplete: "Detail fill incomplete"
+        case .failureRecorded: "Last sync failed"
+        }
+    }
+}
+
+/// `DataHealthStatus` with the cause kept, so attention cannot be shown without one.
+enum DataHealthVerdict: Equatable {
+    case healthy
+    case checking
+    case refreshing
+    case attention(DataHealthAttentionCause)
+
+    var status: DataHealthStatus {
+        switch self {
+        case .healthy: .healthy
+        case .checking: .checking
+        case .refreshing: .refreshing
+        case .attention: .degraded
+        }
+    }
+}
+
 public enum DataHealthDetailFillOutcome: String, Codable, Equatable {
     case notStarted
     case inProgress
@@ -476,14 +547,14 @@ public enum DataHealth {
                 oldestPriceAsOf: input.freshness.oldestPriceAsOf,
                 detail: freshnessDetail(input.freshness)
             ),
-            detailFill: detailFillSnapshot(input.detailFill),
+            detailFill: detailFillSnapshot(input.detailFill, freshness: input.freshness.status),
             readState: DataHealthReadStateSnapshot(
                 readFingerprintCount: input.readState?.readFingerprints.count ?? 0,
                 detail: "\(input.readState?.readFingerprints.count ?? 0) read"
             ),
             lastFailure: input.lastFailure
         )
-        health.status = status(of: health)
+        health.status = verdict(of: health).status
         return health
     }
 
@@ -503,7 +574,7 @@ public enum DataHealth {
             health.detailFill = detailFillSnapshot(.failed)
             health.lastFailure = failure
         }
-        health.status = status(of: health)
+        health.status = verdict(of: health).status
         return health
     }
 
@@ -523,28 +594,45 @@ public enum DataHealth {
         ] + failure.reportLines).joined(separator: "\n")
     }
 
+    /// The first failing check wins; every switch is exhaustive so a new access,
+    /// source, outcome or freshness case must name a cause before it compiles.
     /// A saved copy is never healthy, whatever its prices say: nothing in this
     /// run has read PDT yet.
-    private static func status(of health: DataHealthSnapshot) -> DataHealthStatus {
+    static func verdict(of health: DataHealthSnapshot) -> DataHealthVerdict {
         switch health.access.state {
-        case .checking:
-            return .checking
-        case .notConnected, .reconnect, .subscriptionPaused, .keychainUnavailable:
-            return .degraded
-        case .unverified, .connected:
-            break
+        case .checking: return .checking
+        case .notConnected: return .attention(.notConnected)
+        case .reconnect: return .attention(.reconnectNeeded)
+        case .subscriptionPaused: return .attention(.subscriptionPaused)
+        case .keychainUnavailable: return .attention(.keychainUnavailable)
+        case .unverified, .connected: break
         }
-        if health.detailFill.outcome == .inProgress {
-            return .refreshing
+        switch health.detailFill.outcome {
+        case .inProgress: return .refreshing
+        case .failed: return .attention(.detailFillFailed)
+        case .notStarted, .completed, .degraded: break
         }
-        let healthy = health.access.state == .connected
-            && health.source.pulse != nil
-            && health.source.pulse != .cachedSnapshot
-            && health.detailFill.outcome != .degraded
-            && health.detailFill.outcome != .failed
-            && health.freshness.status == .fresh
-            && health.lastFailure == nil
-        return healthy ? .healthy : .degraded
+        switch health.source.pulse {
+        case .cachedSnapshot: return .attention(.savedCopy)
+        case nil: return .attention(.notFetched)
+        case .fetchedSnapshot, .refreshedSnapshot: break
+        }
+        if health.access.state == .unverified {
+            return .attention(.accessNotChecked)
+        }
+        switch health.freshness.status {
+        case .unknown: return .attention(.unknownPriceDates)
+        case .stale: return .attention(.stalePrices)
+        case .partial: return .attention(.detailFillIncomplete)
+        case .fresh: break
+        }
+        if health.detailFill.outcome == .degraded {
+            return .attention(.detailFillIncomplete)
+        }
+        if health.lastFailure != nil {
+            return .attention(.failureRecorded)
+        }
+        return .healthy
     }
 
     private static func sourceDetail(_ pulse: PulseLifecycleSource?, lastSyncAsOf: String?) -> String {
@@ -588,7 +676,10 @@ public enum DataHealth {
         return "Last sync \(lastSyncAsOf); last complete \(lastCompleteSyncAsOf)"
     }
 
-    private static func detailFillSnapshot(_ input: DataHealthDetailFillInput) -> DataHealthDetailFillSnapshot {
+    private static func detailFillSnapshot(
+        _ input: DataHealthDetailFillInput,
+        freshness: FreshnessState? = nil
+    ) -> DataHealthDetailFillSnapshot {
         var snapshot = DataHealthDetailFillSnapshot(
             outcome: .notStarted,
             phase: nil,
@@ -603,7 +694,10 @@ public enum DataHealth {
         case let .completed(asOf):
             snapshot.outcome = .completed
             snapshot.asOf = asOf
-            snapshot.detail = asOf.map { "Completed \($0)" } ?? "Completed"
+            // `partial` here means the last complete fill predates this sync.
+            snapshot.detail = freshness == .partial
+                ? asOf.map { "Incomplete; last complete \($0)" } ?? "Incomplete"
+                : asOf.map { "Completed \($0)" } ?? "Completed"
         case .degraded:
             snapshot.outcome = .degraded
             snapshot.detail = "Degraded"
