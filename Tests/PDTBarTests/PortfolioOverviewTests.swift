@@ -332,6 +332,9 @@ struct PortfolioOverviewTests {
             #expect(barRect.width >= 6)
             #expect(barRect.width < 10)
         }
+        let heights = weights.indices.map { layout.barRect(at: $0).height }
+        #expect(zip(heights, heights.dropFirst()).allSatisfy { $0 > $1 }, "a smaller weight draws a shorter bar")
+        #expect(heights.first == layout.plotRect.height)
     }
 
     @Test("Portfolio allocation layout centers sparse charts and scrolls dense charts")

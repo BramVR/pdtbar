@@ -101,8 +101,9 @@ public struct PortfolioAllocationChartLayout {
 
     public func barRect(at index: Int) -> NSRect {
         let weight = Self.clampedWeight(weights[index])
-        let rawHeight = plotRect.height * weight / scaleMaxWeight
-        let barHeight = weight > 0 ? min(plotRect.height, max(Self.minimumPositiveBarHeight, rawHeight)) : 0
+        // Offset from the floor instead of clamping to it, so two different small weights never draw the same height.
+        let floor = min(Self.minimumPositiveBarHeight, plotRect.height)
+        let barHeight = weight > 0 ? floor + (plotRect.height - floor) * weight / scaleMaxWeight : 0
         let barWidth = Self.barWidth(slotWidth: slotWidth)
         let centerX = slotCenterX(at: index)
         return NSRect(
