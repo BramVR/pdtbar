@@ -43,12 +43,15 @@ struct MenuWalkPlanTests {
     }
 }
 
+/// The fixture's menu as the launched app draws it: fetched this run, over a connected PDT.
 private func renderedSurface(fixture: String) throws -> MenuBarSurface {
     let root = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .deletingLastPathComponent()
-    let snapshot = try PDTFixtureDataSource.snapshot(from: root.appending(path: "docs/pdt/fixtures/\(fixture)"))
-    let descriptor = MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: snapshot))
-    return MenuBarSurfaceRenderer.render(descriptor: descriptor)
+    let run = try PressureRunner.run(
+        dataSource: PDTFixtureDataSource(fixture: root.appending(path: "docs/pdt/fixtures/\(fixture)")),
+        snapshotStore: try SnapshotStore.temporaryTestStore(prefix: "menu-walk-plan")
+    )
+    return MenuBarSurfaceRenderer.render(descriptor: run.descriptor(in: DataHealthRuntime(access: .connected)))
 }

@@ -702,10 +702,16 @@ public enum MenuDescriptorRenderer {
 
     private static func dataRows(freshness: FreshnessSnapshot, health: DataHealthSnapshot) -> [MenuRow] {
         var rows = [freshnessSummaryRow(for: freshness)]
-        if health.status != .healthy {
+        if showsDataHealthRow(for: health) {
             rows.append(dataHealthRow(for: health))
         }
         return rows
+    }
+
+    /// The Prices row above already shows stale and unknown price dates, so
+    /// Data health is listed only when it has something else to report.
+    private static func showsDataHealthRow(for health: DataHealthSnapshot) -> Bool {
+        DataHealth.verdictBeyondPriceFreshness(of: health) != .healthy
     }
 
     static func dataHealthRow(for health: DataHealthSnapshot) -> MenuRow {
@@ -724,7 +730,7 @@ public enum MenuDescriptorRenderer {
     ) -> MenuDescriptor {
         var descriptor = descriptor
         let portfolioValueProtectionState = descriptor.portfolioValueProtectionState
-        if health.status == .healthy {
+        guard showsDataHealthRow(for: health) else {
             descriptor.sections = descriptor.sections.map { section in
                 guard section.id == "freshness" else {
                     return section

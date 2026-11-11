@@ -27,7 +27,7 @@ swift run pdtbar-smoke fixture-proof --fixture docs/pdt/fixtures/big-mover.json 
 Scripts/verify_pdtbar.sh stop "$RUN"
 ```
 
-`ready-launch` opens the real pulse menu through AX after a scripted PDT first fetch. Setup and retryable-error menus are covered by `logged-out-launch`, `scripted-setup-retry`, and `scripted-first-fetch`. No prompt-free smoke opens the Data/Prices or Data health submenus through AX; read their rows from the descriptor above. None of these captures the screen. The opt-in `Scripts/verify_pdtbar.sh menu-smoke` opens the allocation overview and Data health submenus and captures them (see Visual proof).
+`ready-launch` opens the real pulse menu through AX after a scripted PDT first fetch. Setup and retryable-error menus are covered by `logged-out-launch`, `scripted-setup-retry`, and `scripted-first-fetch`. No prompt-free smoke opens the Data/Prices or Data health submenus through AX; read their rows from the descriptor above. None of these captures the screen. The opt-in `Scripts/verify_pdtbar.sh menu-smoke` opens the allocation overview submenu and captures it (see Visual proof).
 
 Opt-in pixel proof captures the screen, so ask the user first: `swift run pdtbar-smoke real-user-pulse --fixture <f> --snapshot-dir "$RUN/real-user-pulse" --artifacts "$RUN/evidence" --peekaboo /opt/homebrew/bin/peekaboo`.
 
@@ -42,7 +42,7 @@ Scripts/verify_pdtbar.sh capture record "$RUN" menu-clip 4
 Scripts/verify_pdtbar.sh stop "$RUN"
 ```
 
-For the whole cohesive menu plus the `Full allocation list` and `Data health` submenus in one run, use `Scripts/verify_pdtbar.sh menu-smoke`. It prints `menu-walk: ok` and the evidence dir holding `menu.png`, `allocation-overview.png`, and `data-health.png`.
+For the whole cohesive menu plus the `Full allocation list` submenu in one run, use `Scripts/verify_pdtbar.sh menu-smoke`. It prints `menu-walk: ok` and the evidence dir holding `menu.png` and `allocation-overview.png`.
 
 The image must show the Concentration Stack icon in its highlighted state and the open menu with Summary, Pulse, Allocation with its chart, Income, Data, and Actions. `capture` does not open submenus; `menu-smoke` does. Swap the fixture for the state under test, such as `quiet-no-pressure.json`.
 
@@ -51,4 +51,4 @@ The image must show the Concentration Stack icon in its highlighted state and th
 - Fixtures with a prior snapshot (`big-mover.json`) seed it only through `real-user-pulse`. A plain `verify_pdtbar.sh launch` has no prior, so big-mover deltas may not show.
 - `fixture-proof` and `menu-polish-proof` render descriptors to SVG. They are not real menu pixels and must not stand as the only UI proof.
 - A fixture launch without `--snapshot-dir` writes to a temp dir. Always go through `verify_pdtbar.sh`.
-- Data health is hidden while healthy, so a fixture with current prices shows no Data health row. When shown, its rows are Source, Access, Cache, Prices, Detail fill, Read state, and Diagnostics, and they describe PDT API access. To see the failure rows and the `Copy diagnostics` text without a launch, read `failedSyncs` in the proof `swift run pdtbar-smoke scripted-api-snapshot --artifacts "$RUN/evidence"` writes.
+- Data health is hidden while healthy and while stale or unknown price dates are its only cause, so a fixture launch with current or merely stale prices, such as `concentration-pressure.json`, shows no Data health row. When shown, its rows are Source, Access, Cache, Prices, Detail fill, Read state, and Diagnostics, and they describe PDT API access. To see the failure rows and the `Copy diagnostics` text without a launch, read `failedSyncs` in the proof `swift run pdtbar-smoke scripted-api-snapshot --artifacts "$RUN/evidence"` writes.

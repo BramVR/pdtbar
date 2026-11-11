@@ -605,6 +605,16 @@ public enum DataHealth {
     /// A saved copy is never healthy, whatever its prices say: nothing in this
     /// run has read PDT yet.
     static func verdict(of health: DataHealthSnapshot) -> DataHealthVerdict {
+        verdict(of: health, countingPriceFreshness: true)
+    }
+
+    /// `verdict(of:)` with stale and unknown price dates set aside: what Data
+    /// health knows beyond what the Prices row already shows.
+    static func verdictBeyondPriceFreshness(of health: DataHealthSnapshot) -> DataHealthVerdict {
+        verdict(of: health, countingPriceFreshness: false)
+    }
+
+    private static func verdict(of health: DataHealthSnapshot, countingPriceFreshness: Bool) -> DataHealthVerdict {
         switch health.access.state {
         case .checking: return .checking
         case .notConnected: return .attention(.notConnected)
@@ -627,10 +637,10 @@ public enum DataHealth {
             return .attention(.accessNotChecked)
         }
         switch health.freshness.status {
-        case .unknown: return .attention(.unknownPriceDates)
-        case .stale: return .attention(.stalePrices)
+        case .unknown where countingPriceFreshness: return .attention(.unknownPriceDates)
+        case .stale where countingPriceFreshness: return .attention(.stalePrices)
         case .partial: return .attention(.detailFillIncomplete)
-        case .fresh, .noHoldings: break
+        case .fresh, .noHoldings, .unknown, .stale: break
         }
         if health.detailFill.outcome == .degraded {
             return .attention(.detailFillIncomplete)

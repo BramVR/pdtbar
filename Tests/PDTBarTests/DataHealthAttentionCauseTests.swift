@@ -27,17 +27,64 @@ struct DataHealthAttentionCauseTests {
         ])
     }
 
-    @Test("Concentration-pressure in the running app says its prices are stale")
-    func concentrationPressureNamesStalePrices() throws {
+    @Test("Concentration-pressure in the running app shows its stale prices once, in the Prices row")
+    func concentrationPressureShowsStalePricesOnce() throws {
         let store = try SnapshotStore.temporaryTestStore(prefix: "data-health-cause-concentration")
-        let fixture = packageRoot.appending(path: "docs/pdt/fixtures/concentration-pressure.json")
-        let run = try PressureRunner.run(dataSource: PDTFixtureDataSource(fixture: fixture), snapshotStore: store)
-        let descriptor = run.descriptor(in: DataHealthRuntime(access: .connected))
-        let section = descriptor.sections.first { $0.id == "freshness" }
-        let health = try #require(section?.rows.first { $0.id == "dataHealth" })
+        let run = try PressureRunner.run(dataSource: PDTFixtureDataSource(fixture: concentrationFixture), snapshotStore: store)
 
-        #expect(health.detail == "2 stale prices")
-        #expect(health.children.first { $0.id == "dataHealth.freshness" }?.detail == "2 stale; oldest 2026-06-18")
+        #expect(run.model.facetSnapshots.dataHealth.status == .degraded)
+        for descriptor in [run.descriptor, run.descriptor(in: DataHealthRuntime(access: .connected))] {
+            let rows = dataRows(in: descriptor)
+            #expect(rows.map(\.id) == ["freshness.summary"])
+            #expect(rows.first?.detail == "2 stale; oldest 2026-06-18")
+        }
+    }
+
+    @Test("Stale prices with a recorded sync failure still show Data health, summary unchanged")
+    func stalePricesWithRecordedFailureKeepDataHealth() throws {
+        let rows = dataRows(in: try menu(showing: staleWithRecordedFailure))
+
+        #expect(rows.map(\.id) == ["freshness.summary", "dataHealth"])
+        #expect(rows.first?.detail == "2 stale; oldest 2026-06-18")
+        #expect(rows.last?.detail == "2 stale prices")
+        #expect(rows.last?.children.first { $0.id == "dataHealth.diagnostic" }?.detail
+            == "Price history: PDT server problem; try again later")
+    }
+
+    @Test("A saved copy with stale prices still shows Data health")
+    func savedCopyWithStalePricesKeepsDataHealth() throws {
+        var input = staleOnly
+        input.pulseSource = .cachedSnapshot
+        let rows = dataRows(in: try menu(showing: input))
+
+        #expect(rows.map(\.id) == ["freshness.summary", "dataHealth"])
+        #expect(rows.last?.detail == "Showing a saved copy")
+    }
+
+    @Test("The running app's Data health replacement hides and shows the row by the same rule")
+    func runtimeReplacementFollowsTheSameRule() throws {
+        var unknownOnly = healthyInput()
+        unknownOnly.freshness = freshness(.unknown, staleCount: 0, oldest: nil)
+        let replacedRows = { (menu: MenuDescriptor, health: DataHealthSnapshot) in
+            dataRows(in: MenuDescriptorRenderer.descriptorByReplacingDataHealth(in: menu, with: health))
+        }
+
+        for menu in [try menu(showing: staleOnly), try menu(showing: staleWithRecordedFailure)] {
+            for priceFreshnessOnly in [staleOnly, unknownOnly] {
+                #expect(replacedRows(menu, DataHealth.build(priceFreshnessOnly)).map(\.id) == ["freshness.summary"])
+            }
+
+            let failed = replacedRows(menu, DataHealth.build(staleWithRecordedFailure))
+            #expect(failed.map(\.id) == ["freshness.summary", "dataHealth"])
+            #expect(failed.last?.detail == "2 stale prices")
+
+            let refreshing = replacedRows(menu, DataHealth.snapshot(
+                DataHealth.build(staleOnly),
+                in: DataHealthRuntime(access: .connected, sync: .running(BackgroundDetailRefreshProgress(phase: .priceHistory)))
+            ))
+            #expect(refreshing.map(\.id) == ["freshness.summary", "dataHealth"])
+            #expect(refreshing.last?.detail == "Refreshing")
+        }
     }
 
     @Test("An empty portfolio in the running app raises no Data health cause")
@@ -159,10 +206,35 @@ private var staleFreshness: FreshnessSnapshot {
     freshness(.stale, staleCount: 2, oldest: "2026-06-18")
 }
 
+private var staleOnly: DataHealthInput {
+    var input = healthyInput()
+    input.freshness = staleFreshness
+    return input
+}
+
+private var staleWithRecordedFailure: DataHealthInput {
+    var input = staleOnly
+    input.lastFailure = PDTSyncFailure(phase: .priceHistory, endpoint: .pricesBatch, kind: .server(status: 503), requestCount: 1)
+    return input
+}
+
+/// The concentration-pressure menu, whose Prices row reads "2 stale; oldest 2026-06-18", with this Data health.
+private func menu(showing input: DataHealthInput) throws -> MenuDescriptor {
+    var model = PressureEngine.buildModel(from: try PDTFixtureDataSource.snapshot(from: concentrationFixture))
+    model.facetSnapshots.dataHealth = DataHealth.build(input)
+    return MenuDescriptorRenderer.render(model: model)
+}
+
+private func dataRows(in descriptor: MenuDescriptor) -> [MenuRow] {
+    descriptor.sections.first { $0.id == "freshness" }?.rows ?? []
+}
+
 private let packageRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
     .deletingLastPathComponent()
+
+private let concentrationFixture = packageRoot.appending(path: "docs/pdt/fixtures/concentration-pressure.json")
 
 private func freshness(_ status: FreshnessState, staleCount: Int, oldest: String?) -> FreshnessSnapshot {
     FreshnessSnapshot(

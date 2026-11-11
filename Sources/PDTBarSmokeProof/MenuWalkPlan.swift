@@ -23,8 +23,9 @@ public struct MenuWalkPlan: Equatable, Sendable {
     public var submenus: [MenuWalkSubmenu]
 
     /// Issue #147's cohesive-UI walk, keyed to today's identifiers. The portfolio overview is the
-    /// Allocation chart row, its submenu is "Full allocation list", the Freshness section is titled "Data",
-    /// and Data health is a row in it. Holding id 9001 belongs to the pinned fixture.
+    /// Allocation chart row, its submenu is "Full allocation list", and the Freshness section is titled "Data".
+    /// Data health is not walked: the fixture's only cause is stale prices, which the Prices row already shows.
+    /// Holding id 9001 belongs to the pinned fixture.
     public static let cohesiveUI = MenuWalkPlan(
         fixture: "concentration-pressure.json",
         topLevel: [
@@ -37,7 +38,6 @@ public struct MenuWalkPlan: Equatable, Sendable {
             MenuSelector("Big movers", "pdtbar.section.bigMovers"),
             MenuSelector("Freshness", "pdtbar.section.freshness"),
             MenuSelector("Prices", "pdtbar.row.freshness.summary"),
-            MenuSelector("Data health", "pdtbar.row.dataHealth"),
             MenuSelector("Actions", "pdtbar.section.actions"),
         ],
         submenus: [
@@ -48,19 +48,6 @@ public struct MenuWalkPlan: Equatable, Sendable {
                     MenuSelector("Top holding", "pdtbar.row.allocation.9001"),
                     MenuSelector("Sectors", "pdtbar.row.allocation.portfolio.sectors"),
                     MenuSelector("Asset types", "pdtbar.row.allocation.portfolio.assetTypes"),
-                ]
-            ),
-            MenuWalkSubmenu(
-                name: "data-health",
-                opener: MenuSelector("Data health", "pdtbar.row.dataHealth"),
-                expectedChildren: [
-                    MenuSelector("Source", "pdtbar.row.dataHealth.source"),
-                    MenuSelector("Access", "pdtbar.row.dataHealth.access"),
-                    MenuSelector("Cache", "pdtbar.row.dataHealth.cache"),
-                    MenuSelector("Prices", "pdtbar.row.dataHealth.freshness"),
-                    MenuSelector("Detail fill", "pdtbar.row.dataHealth.detailFill"),
-                    MenuSelector("Read state", "pdtbar.row.dataHealth.readState"),
-                    MenuSelector("Diagnostics", "pdtbar.row.dataHealth.diagnostic"),
                 ]
             ),
         ]

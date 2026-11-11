@@ -18,7 +18,7 @@ read_when:
 
 ## Real-menu smoke (local gate)
 
-`make smoke-menu` (`Scripts/verify_pdtbar.sh menu-smoke`) builds `pdtbar` and `pdtbar-capture`, launches the `concentration-pressure` fixture, opens the real status menu through Accessibility, opens the `Full allocation list` (allocation overview) and `Data health` submenus, and writes `menu.png`, `allocation-overview.png`, `data-health.png`, and `menu-walk.json` to `<run>/evidence/menu-walk/`. The selectors live in `MenuWalkPlan.cohesiveUI` (`Sources/PDTBarSmokeProof`); `MenuWalkPlanTests` fails in CI when a selector stops matching the menu its fixture renders.
+`make smoke-menu` (`Scripts/verify_pdtbar.sh menu-smoke`) builds `pdtbar` and `pdtbar-capture`, launches the `concentration-pressure` fixture, opens the real status menu through Accessibility, opens the `Full allocation list` (allocation overview) submenu, and writes `menu.png`, `allocation-overview.png`, and `menu-walk.json` to `<run>/evidence/menu-walk/`. The selectors live in `MenuWalkPlan.cohesiveUI` (`Sources/PDTBarSmokeProof`); `MenuWalkPlanTests` fails in CI when a selector stops matching the menu its fixture renders. The walk has no Data health step: the fixture's only cause is stale prices, so the row is hidden.
 
 - Local/verify gate only. It needs an unlocked console session, Screen Recording, and Accessibility already granted to the host. It never requests either. Hosted CI sets `CI`, so it would fail there by design; CI runs the plan test instead.
 - It fails, never skips: a missing permission, a locked screen, a missing selector, a submenu that does not open, or a blank image exits non-zero with the reason.
