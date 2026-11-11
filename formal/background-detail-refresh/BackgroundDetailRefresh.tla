@@ -119,14 +119,11 @@ Cancel ==
     /\ UNCHANGED <<phase, chunk, syncEnded, failures, snap, pagesBehind, chunkRes, prices>>
     /\ UNCHANGED <<outcome, writes, readReset, storedFailure, ended, lateRequest>>
 
-\* throwIfCancelled, setLastSyncFailure(nil), loadPriorSnapshotResult.
+\* setLastSyncFailure(nil), throwIfCancelled, loadPriorSnapshotResult.
 Start ==
     /\ phase = "start"
-    /\ IF cancelled
-         THEN /\ phase' = "threw"
-              /\ UNCHANGED storedFailure
-         ELSE /\ phase' = "base"
-              /\ storedFailure' = "none"
+    /\ storedFailure' = "none"
+    /\ phase' = IF cancelled THEN "threw" ELSE "base"
     /\ UNCHANGED <<chunk, cancelled, syncEnded, failures, snap, pagesBehind, chunkRes, prices>>
     /\ UNCHANGED <<outcome, writes, readReset, ended, lateRequest, cancelEarly>>
 
