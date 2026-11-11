@@ -5,7 +5,7 @@ description: "Check a PDT API background detail refresh change against its TLA+ 
 
 # Verify background detail refresh
 
-`formal/background-detail-refresh/BackgroundDetailRefresh.tla` models one run of `PDTAPIBackgroundDetailRefresh.refresh`. It covers the phase order, the `syncEnded` skip, the cancellation checkpoints, the single snapshot commit, the outcome, and the stored sync failure. TLC checks every request outcome in every phase, two price batches, and a cancel landing between any two steps.
+`formal/background-detail-refresh/BackgroundDetailRefresh.tla` models one run of `PDTAPIBackgroundDetailRefresh.refresh`. It covers the phase order, paged facets, the `syncEnded` skip, the cancellation checkpoints, the single snapshot commit, the outcome, and the stored sync failure. TLC checks every request outcome in every phase, every page count a paged facet can stop at, two price batches, and a cancel landing between any two steps.
 
 ## Promises checked
 
@@ -13,25 +13,26 @@ description: "Check a PDT API background detail refresh change against its TLA+ 
 - `AbortWritesNothing`. A failed base fetch, or a cancel that lands before the last `throwIfCancelled`, leaves the snapshot and the pulse read state untouched.
 - `NoRequestAfterSyncEnded`. Once a failure that ends the sync is recorded, no later phase or price batch sends a request. The kinds that end it are written out in the model apart from `PDTSyncFailure.Kind.endsSync`, so a classifier change shows up.
 - `FailedSliceKeepsPrior`. A facet or price batch that failed or was skipped keeps the prior snapshot's data. Nothing is lost.
+- `FreshFacetReadEveryPage`. X-ray or income is replaced only by a call that read every page. A slow or failed first page, or a later page that fails, keeps the prior facet (#275). A ghost, `pagesBehind`, records the pages behind each fresh facet.
 - `OutcomeHonest`. The outcome is `degraded` exactly when some facet or price batch was not refreshed.
-- `StoredFailureIsThisRuns`. After the first checkpoint, `SnapshotStore.lastSyncFailure()` never holds an earlier run's failure, and a returned refresh leaves `failures.last`, or none.
+- `StoredFailureIsThisRuns`. Once `refresh` has run its first statement, `SnapshotStore.lastSyncFailure()` never holds an earlier run's failure, a cancel before the first checkpoint included (#289). A returned refresh leaves `failures.last`, or none.
 - `Terminates`. The refresh always returns or throws.
 
 ## Covered code and sync commit
 
-Sync commit: `33b5faa`. The model was last confirmed against the code at this commit.
+Sync commit: `bcbbcf9`. The model was last confirmed against the code at this commit.
 
 - `PDTAPIBackgroundDetailRefresh.refresh` in `Sources/PDTBarCore/PDTAPIBackgroundDetailRefresh.swift`: the checkpoints, `setLastSyncFailure(nil)`, the base fetch and its catch, `record`, `optionalPhase`, the three facet closures, the price batch loop, the performance progress and final checkpoint, the outcome, the `refreshedPulse` call, `setLastSyncFailure(failures.last)`. Also `fetch` and `throwIfCancelled` in the same type.
 - `PDTAPIBackgroundDetailRefresh.preserveOptionalDetails` and `priceSeriesWithPriorFallback`. #250 moved these statics from the deleted Claude `PDTBackgroundDetailRefresh` without a behavior change.
 - `PDTSyncFailure.Kind.endsSync` in `Sources/PDTBarCore/PDTSyncFailure.swift`.
-- `PDTAPIClient.send` and `sendOnce` in `Sources/PDTBarCore/PDTAPIClient.swift`. Only the cancel check before each request is modeled, and the fact that every failure reaches `fetch` as a `PDTAPIRequestFailure`.
+- `PDTAPIClient.send`, `sendOnce`, `collectPages`, and `collectOffsets` in `Sources/PDTBarCore/PDTAPIClient.swift`. Only the cancel check before each request is modeled, the fact that every failure reaches `fetch` as a `PDTAPIRequestFailure`, and the fact that a paged call returns rows only after its last page.
 - `PressureRunner.refreshedPulse` and `SnapshotStore.commitCurrentSnapshot`, `setLastSyncFailure` in `Sources/PDTBarCore/Persistence.swift`.
 - `PDTCancellation` in `Sources/PDTBarCore/PDTCancellation.swift`.
 
 Every action's comment names the statement or symbol it models. To see whether a change touches this model, run:
 
 ```bash
-git diff 33b5faa -- Sources/PDTBarCore/PDTAPIBackgroundDetailRefresh.swift Sources/PDTBarCore/PDTSyncFailure.swift Sources/PDTBarCore/PDTAPIClient.swift Sources/PDTBarCore/Persistence.swift Sources/PDTBarCore/PDTCancellation.swift
+git diff bcbbcf9 -- Sources/PDTBarCore/PDTAPIBackgroundDetailRefresh.swift Sources/PDTBarCore/PDTSyncFailure.swift Sources/PDTBarCore/PDTAPIClient.swift Sources/PDTBarCore/Persistence.swift Sources/PDTBarCore/PDTCancellation.swift
 ```
 
 Recheck the model when a hunk falls inside one of the symbols above.
@@ -47,12 +48,12 @@ formal/background-detail-refresh/mutations.sh
 
 Expected at the sync commit:
 
-- The model run prints `No error has been found` with 1,453 states generated, 990 distinct, depth 15, in about a second. Any failure means the change broke something or the model needs updating.
-- `mutations.sh` prints one row per mutation with the invariant it expects to be violated, and exits 0 in about 6 seconds. A row that reports `No error has been found` means the model lost its teeth.
+- The model run prints `No error has been found` with 1,470 states generated, 989 distinct, depth 15, in about a second. Any failure means the change broke something or the model needs updating.
+- `mutations.sh` prints one row per mutation with the invariant it expects to be violated, and exits 0 in about 8 seconds. A row that reports `No error has been found` means the model lost its teeth.
 
 ## Mutations
 
-Each row breaks one statement of the model the way a code change could. Each was confirmed at `33b5faa`.
+Each row breaks one statement of the model the way a code change could. Each was confirmed at `bcbbcf9`.
 
 - `perPhaseCommit`: an optional phase that refreshed its facet commits it, the Claude refresh's shape. Caught by `OneCommitAtEnd`.
 - `optionalIgnoresSyncEnded`: `optionalPhase` loses `guard !syncEnded`. Caught by `NoRequestAfterSyncEnded`.
@@ -61,6 +62,9 @@ Each row breaks one statement of the model the way a code change could. Each was
 - `failedPhaseDropsPrior`: a failed optional phase clears its facet. Caught by `FailedSliceKeepsPrior`.
 - `outcomeIgnoresFailures`: the outcome stops reading `failures`. Caught by `OutcomeHonest`.
 - `noFailureClearAtStart`: `refresh` stops calling `setLastSyncFailure(nil)` first. Caught by `StoredFailureIsThisRuns`.
+- `cancelBeforeFailureClear`: the #289 fix reverted, so `throwIfCancelled` runs before `setLastSyncFailure(nil)`. Caught by `StoredFailureIsThisRuns`. TLC's shortest trace: the cancel lands, `Start` throws, and the earlier run's failure is still stored.
+- `zeroPageCommits`: #275's shape. A paged call that read no page returns an empty list as success. Caught by `FreshFacetReadEveryPage`. TLC's shortest trace: X-ray reads 0 of 2 pages and is marked fresh.
+- `partialPagesCommit`: a paged call that failed after some pages returns the rows it collected. Caught by `FreshFacetReadEveryPage`.
 - `noFinalCancelCheck`: the `throwIfCancelled` before `refreshedPulse` is dropped. Caught by `AbortWritesNothing`. TLC's shortest trace: income fails with an ending kind, price history is skipped with no checkpoint, the cancel lands, and the commit runs.
 
 Dropping the `if !syncEnded` around the price block fails nothing, and the model is right about that. The per-batch gate already stops every request, and skipping the block leaves the same prior series.
@@ -88,7 +92,7 @@ Atomicity the model relies on:
 ## Modeling choices
 
 - Each request is one `PDTAPIClient` call whose retries, pages, backoff, token refresh retry, and semaphore wait are folded into its final outcome: success or one `PDTSyncFailure.Kind`.
-- Income's two requests and X-ray's pages are one call per phase. A change that sends income's dividends request after the calendar request ended the sync would not show.
+- Each optional phase is one step. Its call ends after `read` pages, from 0 up to the facet's page count, and only a full read succeeds. `PageCount = 2` is the smallest count with both a zero-page and a partial read. Income's two requests are one call. A change that sends income's dividends request after the calendar request ended the sync would not show.
 - `Kinds = {"reconnect", "rateLimited", "server"}`: lost access, the 429 that outlasted the client's retries, and a failure that does not end the sync. The other ending kinds behave like `reconnect`.
 - `ChunkCount = 2`: the smallest count where an ending failure in one batch can be followed by another batch.
 - The base failure's kind does not matter. It always throws.
@@ -115,5 +119,7 @@ When a covered symbol changes on purpose:
 - Progress callbacks, snapshot contents beyond `prior` / `fresh` / `none`, and performance, which is always unavailable and never carried.
 
 ## History
+
+#275 asked whether a pagination deadline could commit an empty X-ray or income list. The deadline lived in the Claude path's `paginatePDTList` and went with #250. The REST client has no pagination deadline, so on `ad90cdc` a slow or failed first page fails the phase and keeps the prior. `FreshFacetReadEveryPage` and the `zeroPageCommits` and `partialPagesCommit` rows keep it that way. #289's review found the early cancel that skipped `setLastSyncFailure(nil)`. `bcbbcf9` fixed it, and `cancelBeforeFailureClear` guards it.
 
 Until #250 this model described the Claude CLI refresh, `PDTBackgroundDetailRefresh`, with its price-history worker pool, phase deadlines, per-phase commits, and category retries. Its retired findings (#272, the outage gate, and #236, retries after the price deadline) are in the git history of this file before #250.
