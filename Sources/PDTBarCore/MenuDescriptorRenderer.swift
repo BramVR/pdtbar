@@ -1350,7 +1350,7 @@ private func incomeEventActionTarget(for event: IncomeEventSummary, rowID: Strin
 private func incomeEventDetail(for event: IncomeEventSummary) -> PortfolioValueText {
     var components: [PortfolioValueText.Component] = [
         .literal(
-            "\(incomeEventKindLabel(for: event.kind)) on \(event.date); "
+            "\(incomeEventDatePhrase(for: event)); "
                 + (event.estimated ? "estimated" : "confirmed")
         ),
     ]
@@ -1362,6 +1362,15 @@ private func incomeEventDetail(for event: IncomeEventSummary) -> PortfolioValueT
         components.append(contentsOf: change.components)
     }
     return PortfolioValueText(components)
+}
+
+/// Short enough that a detail with an amount fits the native subtitle on one line.
+private func incomeEventDatePhrase(for event: IncomeEventSummary) -> String {
+    switch event.kind {
+    case "ex-dividend": "Ex-dividend \(event.date)"
+    case "payment-dividend": "Payment \(event.date)"
+    default: "\(event.kind) on \(event.date)"
+    }
 }
 
 private func incomeEventKindLabel(for kind: String) -> String {

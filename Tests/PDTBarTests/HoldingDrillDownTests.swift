@@ -46,7 +46,7 @@ struct HoldingDrillDownTests {
         #expect(holdingRow.children.first { $0.id == "allocation.9001.nextIncome" }?.title == "Next income")
         #expect(
             holdingRow.children.first { $0.id == "allocation.9001.nextIncome" }?.detail
-                == "Ex-dividend date on 2026-06-25; confirmed"
+                == "Ex-dividend 2026-06-25; confirmed"
         )
     }
 
@@ -66,7 +66,7 @@ struct HoldingDrillDownTests {
         let holdingRow = try holdingRow(for: 9001, snapshot: snapshot)
         let incomeRow = holdingRow.children.first { $0.id == "allocation.9001.nextIncome" }
 
-        #expect(incomeRow?.detail == "Dividend payment date on 2026-06-26; estimated")
+        #expect(incomeRow?.detail == "Payment 2026-06-26; estimated")
         #expect(incomeRow?.detail?.localizedCaseInsensitiveContains("pressure") == false)
         #expect(incomeRow?.detail?.localizedCaseInsensitiveContains("urgent") == false)
     }
