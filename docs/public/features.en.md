@@ -10,26 +10,26 @@ description: "Detailed guide to PDTBar's menu-bar pulse, portfolio sections, ref
 
 # Features
 
-PDTBar is built around one small question: what is worth noticing in your Portfolio Dividend Tracker portfolio right now?
+PDTBar shows what is worth noticing in your Portfolio Dividend Tracker portfolio right now.
 
 The app keeps the full dashboard in PDT and uses the macOS menu bar for a shorter view: a status icon, a ranked pulse, and drill-down sections for the facts behind it.
 
-## Menu-Bar Pulse
+## Menu-bar pulse
 
 The menu-bar icon is a compact Concentration Stack. It stays visible while PDTBar runs.
 
-- Bar heights show the current concentration shape.
+- Bar heights show the current concentration pattern.
 - Filled bars show how many unread attention items exist, capped at three.
 - The tooltip and accessibility label include the current status in words.
-- If nothing needs attention, the icon stays calm instead of showing a fake alert.
+- If nothing needs attention, the icon shows no alert.
 
 Click the icon to open the menu. The first section is `Pulse`, which shows the portfolio value and either the top attention items or `All quiet`.
 
-## Attention Items
+## Attention items
 
-Attention items are facts that crossed a deterministic line. They are not recommendations.
+Attention items are facts that crossed a line set by deterministic rules. They are not recommendations.
 
-PDTBar can currently surface:
+PDTBar can currently show:
 
 - Holding concentration at or above 20%.
 - Sector concentration at or above 30%.
@@ -50,36 +50,36 @@ The `Allocation` section shows the shape of the portfolio without opening PDT.
 - Holding details can include recent move, next income event, average buy price, gain/loss, and a copyable identifier when PDT provides them.
 - Sector and asset-type summaries appear below the holding list when PDT provides that data.
 
-Allocation pressure can appear in `Pulse`, but the underlying allocation facts stay available even after the attention item is marked read.
+Allocation pressure can appear in `Pulse`, but the underlying allocation facts stay available even after you mark the attention item read.
 
 ## Income
 
-The `Income` section is a browsable calendar view, not just an alert list.
+The `Income` section is a calendar view you can browse. It also lists events that are not alerts.
 
 - `Income window` summarizes upcoming events.
 - `Next income` highlights the next dividend or cash-flow event.
-- Later events are grouped into short buckets such as `This week` and `Later`.
+- PDTBar groups later events into short buckets such as `This week` and `Later`.
 - Event rows show date, kind, confirmed/estimated state, amount, and change when that information is available.
 
 Only confirmed ex-dividend dates inside the current 30-day window become Pulse attention items. Other income events remain available in the Income section.
 
-## Big Movers
+## Big movers
 
 The `Big movers` section summarizes recent price movement.
 
-When a holding crosses the 10% move line, PDTBar can show it in Pulse with the before/after price, the move size, and the source window. If no holding crosses the line, the section still shows how many price rows were checked.
+When a holding crosses the 10% move line, PDTBar can show it in Pulse with the before/after price, the move size, and the source window. If no holding crosses the line, the section still shows how many price rows PDTBar checked.
 
 When a prior snapshot exists, PDTBar compares the current holding against that snapshot first. If prior data is missing, it falls back to PDT price history.
 
-## Data And Prices
+## Data and prices
 
-The `Data` section explains whether the numbers are current enough to trust for a quick glance.
+The `Data` section tells you whether the numbers are current enough for a quick look.
 
 - `Prices` shows whether price data is current, stale, partial, or unknown.
 - Stale data can show the oldest price date and affected holdings.
 - Partial data can show the latest completed detail fill.
 - `Data health` appears when source health is degraded.
-- Diagnostics can be copied when a refresh failure needs troubleshooting.
+- You can copy diagnostics when a refresh fails and you need to troubleshoot it.
 
 Cached data can keep the menu useful while PDTBar refreshes in the background, but the Data section tells you when that is happening.
 
@@ -87,25 +87,25 @@ Cached data can keep the menu useful while PDTBar refreshes in the background, b
 
 The `Actions` section keeps daily use short.
 
-- `Refresh now` asks PDTBar to fetch fresh PDT data and fill latest details.
+- `Refresh now` asks PDTBar to fetch fresh PDT data and fill in the latest details.
 - `Open PDT` opens the full Portfolio Dividend Tracker dashboard.
 - `Settings...` opens the native Settings window, where `Show portfolio values` can hide or restore displayed monetary portfolio values.
 - `Disconnect from PDT` deletes the stored PDT connection.
 - `Sign in with PDT` and `Use a PDT token…` appear when PDTBar is not connected or PDT asks you to reconnect.
 - `Check again` checks the PDT connection again, for example after you renew a paused PDT subscription.
 
-## Read State
+## Read state
 
 Unread attention items fill the status icon and appear in Pulse. After you mark an item read, it disappears from the Pulse count, but the underlying facts remain in Allocation, Income, Big movers, or Data.
 
-If the material fact changes later, it can surface again. For example, a concentration item that crosses the line again with new material values is treated as new.
+If the material fact changes later, it can show up again. For example, PDTBar treats a concentration item as new if it crosses the line again with materially changed values.
 
-## Privacy And Limits
+## Privacy and limits
 
 PDTBar reads PDT through its API over a read-only connection stored in this Mac's Keychain. It is local and read-only by default.
 
-The `Show portfolio values` setting hides monetary values in the menu, status copy, tooltips, accessibility labels, chart details, and submenus. It does not delete fetched snapshots or cached local portfolio data; turning it back on restores the displayed values from the current in-memory pulse.
+The `Show portfolio values` setting hides monetary values in the menu, status copy, tooltips, accessibility labels, chart details, and submenus. It does not delete fetched snapshots or cached local portfolio data. Turning it back on restores the displayed values from the current in-memory pulse.
 
-PDTBar does not place trades, move money, upload your portfolio to its own backend, or give financial advice. It ranks facts and changes; you decide what they mean.
+PDTBar does not place trades, move money, upload your portfolio to its own backend, or give financial advice. It ranks facts and changes. You decide what they mean.
 
-See the [install guide](install.en.md) for setup and first-use steps.
+The [install guide](install.en.md) covers setup and first-use steps.

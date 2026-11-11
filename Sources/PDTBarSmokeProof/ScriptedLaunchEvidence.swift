@@ -57,7 +57,7 @@ public struct ScriptedLaunchEvidence {
         }
         if let seed,
            let expected,
-           seed.openHoldings.map(\.quoteId) == expected.openHoldings.map(\.quoteId),
+           seed.openHoldings.map(\.quoteId).sorted() == expected.openHoldings.map(\.quoteId).sorted(),
            seed.totalValue == expected.totalValue {
             violations.append(.scriptedRepliesMatchSeed)
         }

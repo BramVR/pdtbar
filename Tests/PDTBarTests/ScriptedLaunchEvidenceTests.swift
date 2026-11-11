@@ -105,6 +105,18 @@ struct ScriptedLaunchEvidenceTests {
         #expect(evidence.violations == [.scriptedRepliesMatchSeed])
     }
 
+    @Test("Scripted replies that hold the seed's holdings in another order still cannot prove a refresh")
+    func reorderedRepliesIndistinguishableFromSeedFail() {
+        var reordered = seed
+        reordered.asOf = refreshed.asOf
+        reordered.openHoldings.reverse()
+        var evidence = completedRefresh()
+        evidence.expected = reordered
+        evidence.published = reordered
+
+        #expect(evidence.violations == [.scriptedRepliesMatchSeed])
+    }
+
     @Test("A first fetch has no seed to tell apart")
     func firstFetchWithoutSeedHasNoViolations() {
         var evidence = completedRefresh()

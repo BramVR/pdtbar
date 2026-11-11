@@ -63,6 +63,19 @@ maintainer explicitly allowlists them. The Pages workflow builds and
 smoke-tests the site on PRs and `main`, then deploys only from `main` when
 GitHub Pages is enabled for the repository.
 
+The generator is `Scripts/build-docs-site.mjs`. It renders each language's home
+page with the hero, and every other page as a doc page with a contents list.
+`Scripts/docs-site/` holds what the template reads. The build inlines
+`site.css`, `site.js`, and `theme-prepaint.js` into each page. `strings.mjs` has
+every template-owned string for `en` and `nl`, and a test fails when a key is
+missing from one language. `graphics.mjs` has the SVG helpers.
+
+The hero shows `docs/public/pdtbar-menu.png`, a 2x capture of the open menu with
+fixture data. To replace it, crop the new capture inside the menu window edge,
+because the page draws the window frame. Then update `width`, `height`, each
+callout's `y`, and `captionY` in `Scripts/docs-site/menu-capture.mjs`, and the
+`captureAlt` strings.
+
 ## Developer Commands
 
 ```bash
