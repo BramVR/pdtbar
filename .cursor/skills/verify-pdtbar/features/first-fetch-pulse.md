@@ -2,7 +2,7 @@
 
 The user is connected to PDT (browser sign-in or pasted token) and launches PDTBar. The app checks the connection, shows `Fetching portfolio`, reads holdings from the PDT REST API, writes a local snapshot, renders the pulse menu, and then fills details in the background.
 
-Proof that it works: `<app-support>/pdtbar/state/latest-portfolio-snapshot.json` is written in isolated state with open holdings and as-of `2026-06-22`. The app stays running and the fixture sentinel stays empty. With AX granted, the opened menu contains the pulse identifiers (`pdtbar.section.pulse`, `pdtbar.row.pulse.status`). A scenario whose required holdings request fails writes no snapshot and shows `Could not fetch portfolio` with `Try again`.
+Proof that it works: `<app-support>/pdtbar/state/latest-portfolio-snapshot.json` is written in isolated state with open holdings and as-of `2026-06-22`. The app stays running and the fixture sentinel stays empty. With AX granted, the opened menu contains the pulse identifiers (`pdtbar.section.pulse` and its first attention or `All quiet` row). A scenario whose required holdings request fails writes no snapshot and shows `Could not fetch portfolio` with `Try again`.
 
 ## Sub-features
 

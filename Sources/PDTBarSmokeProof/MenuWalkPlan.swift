@@ -30,7 +30,6 @@ public struct MenuWalkPlan: Equatable, Sendable {
         topLevel: [
             MenuSelector("Summary", "pdtbar.section.summary"),
             MenuSelector("Pulse", "pdtbar.section.pulse"),
-            MenuSelector("Pulse status", "pdtbar.row.pulse.status"),
             MenuSelector("Allocation", "pdtbar.section.allocation"),
             MenuSelector("Overview", "pdtbar.row.allocation.portfolio"),
             MenuSelector("Allocation overview", "pdtbar.row.allocation.portfolio.details"),

@@ -175,7 +175,6 @@ public enum MenuRowRole: String, Codable, Equatable {
     case connectionRevoke
     case fetchStatus
     case fetchRetry
-    case pulseSummary
     case pulseQuiet
     case pulseAttention
     case pulseAttentionExpansion

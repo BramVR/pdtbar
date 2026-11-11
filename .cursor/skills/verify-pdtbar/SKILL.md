@@ -5,7 +5,7 @@ description: "Drive and prove the PDTBar macOS menu bar app (status item + pulse
 
 # Verify PDTBar
 
-PDTBar is a menu-bar-only macOS app (`LSUIElement`, no Dock icon, no window at launch). The surface a user touches is the status item (`pdtbar.status`) and its menu. The Settings window is secondary. Engine logic lives in `PDTBarCore`; the app renders `MenuDescriptor`s. Every menu row carries a stable accessibility identifier: `pdtbar.section.<id>` for sections and `pdtbar.row.<id>` for rows (for example `pdtbar.row.pulse.status` or `pdtbar.row.actions.settings`).
+PDTBar is a menu-bar-only macOS app (`LSUIElement`, no Dock icon, no window at launch). The surface a user touches is the status item (`pdtbar.status`) and its menu. The Settings window is secondary. Engine logic lives in `PDTBarCore`; the app renders `MenuDescriptor`s. Every menu row carries a stable accessibility identifier: `pdtbar.section.<id>` for sections and `pdtbar.row.<id>` for rows (for example `pdtbar.row.summary.performance` or `pdtbar.row.actions.settings`).
 
 Feature journeys live in [features/README.md](features/README.md).
 

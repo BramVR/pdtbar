@@ -232,13 +232,7 @@ public enum MenuDescriptorRenderer {
                 MenuSection(
                     id: "pulse",
                     title: "Pulse",
-                    rows: [
-                        MenuRow(
-                            id: "pulse.status",
-                            role: .pulseSummary,
-                            title: statusTitle
-                        ),
-                    ] + pulseRows
+                    rows: pulseRows
                 ),
                 MenuSection(
                     id: "allocation",
