@@ -661,7 +661,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         accessibilityIdentifier: String
     ) -> NSView {
         let hasDetail = detail?.isEmpty == false
-        let rowHeight: CGFloat = hasDetail ? 152 : 138
+        let rowHeight: CGFloat = hasDetail ? 138 : 124
         let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: rowHeight))
         container.autoresizingMask = [.width]
         let chartSummary = barChart.bars.map { "\($0.label) \($0.percentageLabel)" }.joined(separator: ", ")
@@ -756,23 +756,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         selectedTitleField.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(selectedTitleField)
 
-        let selectedDetailField = NSTextField(labelWithString: "")
-        selectedDetailField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize - 1)
-        selectedDetailField.textColor = NSColor.tertiaryLabelColor
-        selectedDetailField.lineBreakMode = .byTruncatingTail
-        selectedDetailField.maximumNumberOfLines = 1
-        selectedDetailField.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(selectedDetailField)
-
         let applySelection: (MenuRowBarChart.Bar?) -> Void = { bar in
             guard let bar else {
                 selectedTitleField.stringValue = "Hover a bar for details"
-                selectedDetailField.stringValue = ""
                 selectedAccent.isHidden = true
                 return
             }
-            selectedTitleField.stringValue = "\(bar.label): \(bar.percentageLabel)"
-            selectedDetailField.stringValue = bar.detail
+            // bar.detail already names the holding and its weight; a fail-closed placeholder does not.
+            let detailNamesHolding = !bar.detail.isEmpty && bar.detail != PortfolioValueDisplaySettings.hiddenPlaceholder
+            selectedTitleField.stringValue = detailNamesHolding ? bar.detail : "\(bar.label): \(bar.percentageLabel)"
             selectedAccent.isHidden = false
         }
         chartView.onSelectionChanged = applySelection
@@ -790,16 +782,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             selectedAccent.leadingAnchor.constraint(equalTo: chartAxisView.leadingAnchor),
             selectedAccent.topAnchor.constraint(equalTo: chartHostView.bottomAnchor, constant: 8),
             selectedAccent.widthAnchor.constraint(equalToConstant: 2),
-            selectedAccent.heightAnchor.constraint(equalToConstant: 30),
+            selectedAccent.heightAnchor.constraint(equalToConstant: 16),
 
             selectedTitleField.leadingAnchor.constraint(equalTo: selectedAccent.trailingAnchor, constant: 8),
             selectedTitleField.trailingAnchor.constraint(equalTo: selectedTextTrailingAnchor),
-            selectedTitleField.topAnchor.constraint(equalTo: chartHostView.bottomAnchor, constant: 5),
-
-            selectedDetailField.leadingAnchor.constraint(equalTo: selectedTitleField.leadingAnchor),
-            selectedDetailField.trailingAnchor.constraint(equalTo: selectedTitleField.trailingAnchor),
-            selectedDetailField.topAnchor.constraint(equalTo: selectedTitleField.bottomAnchor, constant: 1),
-            selectedDetailField.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -8),
+            selectedTitleField.topAnchor.constraint(equalTo: chartHostView.bottomAnchor, constant: 7),
+            selectedTitleField.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -8),
         ]
 
         let chartTopAnchor = detailField?.bottomAnchor ?? container.topAnchor
