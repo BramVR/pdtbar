@@ -191,6 +191,7 @@ public enum MenuRowRole: String, Codable, Equatable {
     case portfolioOverviewCash
     case allocationHolding
     case allocationDrillDown
+    case allocationEmpty
     case incomeEmpty
     case incomeSummary
     case incomeNext

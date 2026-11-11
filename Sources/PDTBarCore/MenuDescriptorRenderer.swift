@@ -243,10 +243,12 @@ public enum MenuDescriptorRenderer {
                 MenuSection(
                     id: "allocation",
                     title: "Allocation",
-                    rows: [
-                        portfolioOverviewChartRow(for: allocation.portfolioOverview, settings: settings),
-                        portfolioOverviewDetailsRow(for: allocation, model: model, settings: settings),
-                    ] + allocationPressureRows(for: allocation, model: model, settings: settings)
+                    rows: (allocation.topHoldings.isEmpty
+                        ? [MenuRow(id: "allocation.empty", role: .allocationEmpty, title: "No holdings to show")]
+                        : [
+                            portfolioOverviewChartRow(for: allocation.portfolioOverview, settings: settings),
+                            portfolioOverviewDetailsRow(for: allocation, model: model, settings: settings),
+                        ]) + allocationPressureRows(for: allocation, model: model, settings: settings)
                 ),
                 MenuSection(
                     id: "income",

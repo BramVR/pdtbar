@@ -6,6 +6,17 @@ import PDTBarAppSupport
 
 @Suite("Portfolio overview")
 struct PortfolioOverviewTests {
+    @Test("Allocation without holdings says so in one row instead of an empty chart")
+    func allocationWithoutHoldingsSaysSo() throws {
+        let snapshot = try PDTFixtureDataSource.snapshot(
+            from: packageRoot.appending(path: "docs/pdt/fixtures/income-event.json")
+        )
+        let descriptor = MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: snapshot))
+        let rows = try #require(descriptor.sections.first { $0.id == "allocation" }?.rows)
+
+        #expect(rows.map(\.title) == ["No holdings to show"])
+    }
+
     @Test("Module builds whole-portfolio overview from normalized facts")
     func moduleBuildsWholePortfolioOverview() throws {
         let overview = PortfolioOverview.build(from: try quietSnapshot())
