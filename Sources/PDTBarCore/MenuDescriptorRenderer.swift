@@ -264,7 +264,7 @@ public enum MenuDescriptorRenderer {
                         MenuRow(
                             id: "bigMovers.summary",
                             role: .bigMoverSummary,
-                            title: bigMoverTitle(for: bigMovers.maxMove, allocation: allocation),
+                            title: bigMoverTitle(for: bigMovers, allocation: allocation),
                             detail: bigMoverDetail(for: bigMovers)
                         ),
                     ]
@@ -329,18 +329,16 @@ public enum MenuDescriptorRenderer {
         return percent(value)
     }
 
-    private static func bigMoverDetail(for bigMovers: BigMoversSnapshot) -> String {
+    private static func bigMoverDetail(for bigMovers: BigMoversSnapshot) -> String? {
         if let move = bigMovers.maxMove {
             return "\(percent(move.percentChange)) over recent window"
         }
-        return bigMovers.priceSeriesCount == 0
-            ? "No recent price history to compare"
-            : "\(bigMovers.priceSeriesCount) price rows checked"
+        return bigMovers.priceSeriesCount == 0 ? nil : "\(bigMovers.priceSeriesCount) price rows checked"
     }
 
-    private static func bigMoverTitle(for move: PriceMoveSummary?, allocation: AllocationSnapshot) -> String {
-        guard let move else {
-            return "No big movers"
+    private static func bigMoverTitle(for bigMovers: BigMoversSnapshot, allocation: AllocationSnapshot) -> String {
+        guard let move = bigMovers.maxMove else {
+            return bigMovers.priceSeriesCount == 0 ? "No price history to compare yet" : "No big movers"
         }
         return allocation.topHoldings
             .first { $0.quoteId == move.quoteId }?
@@ -1161,8 +1159,7 @@ public enum IncomeCalendarDescriptor {
                 MenuRow(
                     id: "income.empty",
                     role: .incomeEmpty,
-                    title: "No income events",
-                    detail: "No calendar events in the next window"
+                    title: "No income events in the next window"
                 ),
             ]
         }

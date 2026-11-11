@@ -272,8 +272,8 @@ struct IncomeCalendarTests {
         #expect(rows.count == 1)
         #expect(rows.first?.id == "income.empty")
         #expect(rows.first?.role == .incomeEmpty)
-        #expect(rows.first?.title == "No income events")
-        #expect(rows.first?.detail == "No calendar events in the next window")
+        #expect(rows.first?.title == "No income events in the next window")
+        #expect(rows.first?.detail == nil)
     }
 }
 

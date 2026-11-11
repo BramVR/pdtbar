@@ -39,7 +39,8 @@ struct BigMoverPressureTests {
             descriptor.sections.first { $0.id == "bigMovers" }?.rows.first { $0.id == "bigMovers.summary" }
         )
 
-        #expect(row.detail == "No recent price history to compare")
+        #expect(row.title == "No price history to compare yet")
+        #expect(row.detail == nil)
     }
 
     @Test("Cold-start price history thresholds on exact move before rounding")
