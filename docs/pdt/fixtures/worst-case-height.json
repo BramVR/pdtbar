@@ -2,11 +2,12 @@
   "_meta": {
     "scenario": "worst-case-height",
     "facet": "all (allocation, income, big movers firing at once)",
-    "describes": "Menu height stress case for #296, not a realistic portfolio. The concentration-pressure holdings and distributions (two allocation pressures), the income-event calendar and dividends (full Income list), and three price moves past the big-mover line (Orbit +25.0%, Vertex -22.0%, Caldera +21.0%). The big movers rank above the allocation pressures, so Pulse holds three tall rows and both pressures spill into Allocation. Pair with a seeded snapshot and failing refresh replies to add the refresh-failure rows.",
+    "describes": "Menu height stress case for #296, not a realistic portfolio. The concentration-pressure holdings and distributions (two allocation pressures), the income-event calendar and dividends (full Income list), the quiet-no-pressure performance and gains (both return figures, the taller Summary), and three price moves past the big-mover line (Orbit +25.0%, Vertex -22.0%, Caldera +21.0%). The big movers rank above the allocation pressures, so Pulse holds three tall rows and both pressures spill into Allocation. Pair with a seeded snapshot and failing refresh replies to add the refresh-failure rows.",
     "sourceFixtures": [
       "concentration-pressure.json",
       "income-event.json",
-      "big-mover.json"
+      "big-mover.json",
+      "quiet-no-pressure.json"
     ],
     "asOf": "2026-06-22",
     "redactions": "Synthetic only; inherits the redactions of its source fixtures.",
@@ -847,5 +848,16 @@
         "symbolQuoteId": 9005
       }
     ]
+  },
+  "getPortfolioPerformance": {
+    "oldestPortfolioDate": "2024-06-22",
+    "latestPortfolioDate": "2026-06-22"
+  },
+  "getPortfolioGains": {
+    "totalGains": {
+      "value": "10752.00",
+      "currency": "EUR"
+    },
+    "totalGainsPercentage": 0.21
   }
 }
