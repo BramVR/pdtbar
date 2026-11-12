@@ -225,7 +225,8 @@ menu_walk() {
 menu_smoke() {
   local run
   (cd "${ROOT_DIR}" && swift build --product pdtbar && swift build --product pdtbar-capture) >&2 || fail "build failed"
-  run="$(launch "${MENU_FIXTURE}" | sed -n 's/^ready: //p')"
+  # The walk proves the unfolded layout, so a small host display must not fold it (#296).
+  run="$(PDTBAR_MENU_SCREEN_HEIGHT=100000 launch "${MENU_FIXTURE}" | sed -n 's/^ready: //p')"
   [[ -n "${run}" ]] || fail "launch did not report ready"
   # Expanded now: the EXIT trap runs after this function's locals are gone.
   trap "stop '${run}' >&2 || true" EXIT
