@@ -14,6 +14,9 @@ import Foundation
 @MainActor
 public final class StatusMenuHost {
     public private(set) var menu: NSMenu?
+    /// Off-screen twin of the live menu for measuring candidate items (#296). It must be
+    /// configured like the live menu, or measuring could validate items the live menu never would.
+    let measuringMenu = StatusMenuHost.makeMenu()
 
     public init() {}
 
@@ -41,13 +44,25 @@ public final class StatusMenuHost {
         return menu
     }
 
+    /// Height `items` would take in the live menu. The items come back detached, ready to apply.
+    public func measuredHeight(of items: [NSMenuItem]) -> Double {
+        measuringMenu.items = items
+        defer { measuringMenu.removeAllItems() }
+        return measuringMenu.size.height
+    }
+
     private func ensureMenu() -> NSMenu {
         if let menu {
             return menu
         }
-        let created = NSMenu()
-        created.autoenablesItems = false
+        let created = StatusMenuHost.makeMenu()
         menu = created
         return created
+    }
+
+    private static func makeMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        return menu
     }
 }

@@ -40,7 +40,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     private var settingsWindow: NSWindow?
     private var currentRawDescriptor: MenuDescriptor?
     private var fittedMenuHeightBudget: Double?
-    private let menuMeasuringScratch = NSMenu()
     private let menuItemViewWidth: CGFloat = 400
 
     init(options: PDTBarLaunchOptions) {
@@ -408,7 +407,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         item.button?.setAccessibilityIdentifier(surface.status.accessibilityIdentifier)
         let budget = menuHeightBudget(for: item)
         fittedMenuHeightBudget = budget
-        let fitted = surface.fitted(within: budget, build: makeMenuItems(from:), height: measuredHeight(of:))
+        let fitted = surface.fitted(within: budget, build: makeMenuItems(from:), height: statusMenuHost.measuredHeight(of:))
         // Mutate the one live menu in place. Assigning a fresh NSMenu on every
         // update would leave an already-open menu tracking a detached
         // instance that later progress updates and cancelTracking() calls can
@@ -435,13 +434,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             return .infinity
         }
         return screen.visibleFrame.height - margin
-    }
-
-    private func measuredHeight(of items: [NSMenuItem]) -> Double {
-        menuMeasuringScratch.items = items
-        let height = menuMeasuringScratch.size.height
-        menuMeasuringScratch.removeAllItems()
-        return height
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
