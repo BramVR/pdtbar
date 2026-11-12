@@ -102,6 +102,21 @@ struct PDTAppConnectionTests {
         }
     }
 
+    @Test("A scripted unentitled Keychain reads as signed out and refuses to store a sign-in")
+    func scriptedUnentitledKeychain() throws {
+        let script = try JSONDecoder().decode(
+            ScriptedPDTConnection.self,
+            from: Data(#"{"connection":"notConnected","keychain":"unentitled","api":{"responses":[]}}"#.utf8)
+        )
+        let connection = try script.appConnection(lockDirectory: temporaryDirectory())
+
+        #expect(script.keychain == .unentitled)
+        #expect(connection.check().status == .notConnected)
+        #expect(connection.signIn(cancellation: PDTCancellation()).status == .keychainUnavailable(.missingEntitlement))
+        #expect(connection.connect(token: PDTAPIToken("pdt_pasted")).status == .keychainUnavailable(.missingEntitlement))
+        #expect(connection.check().status == .notConnected)
+    }
+
     @Test("Browser sign-in stores the session; a declined or blocked sign-in names why")
     func browserSignInOutcomes() throws {
         let cases: [(ScriptedPDTConnection.SignInOutcome, PDTConnectionOutcome)] = [

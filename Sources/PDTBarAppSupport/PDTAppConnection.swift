@@ -183,8 +183,8 @@ public final class PDTAppConnection: @unchecked Sendable {
 
 /// `--scripted-pdt <file>`: an offline connection for smokes. It never builds
 /// the production store, URLSession, or browser: the credential lives in
-/// memory (or in the Keychain store over a SecItem API that answers
-/// `keychainStatus` to every call, never the real Keychain), sign-in is
+/// memory (or in the Keychain store over a fake SecItem API, never the real
+/// Keychain: `keychain` or `keychainStatus` picks its answers), sign-in is
 /// scripted, and API replies come from `api` in request order.
 public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
     public enum StoredConnection: String, Codable, Sendable {
@@ -195,7 +195,13 @@ public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
         case succeeds, denied, portBusy, timedOut, waitsForCancel
     }
 
+    public enum Keychain: String, Codable, Sendable {
+        /// An ad-hoc signed build: reads find nothing, writes fail missing the entitlement.
+        case unentitled
+    }
+
     public var connection: StoredConnection
+    public var keychain: Keychain?
     public var keychainStatus: Int32?
     public var signIn: SignInOutcome?
     public var signInDelaySeconds: Double?
@@ -205,6 +211,7 @@ public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
 
     public init(
         connection: StoredConnection,
+        keychain: Keychain? = nil,
         keychainStatus: Int32? = nil,
         signIn: SignInOutcome? = nil,
         signInDelaySeconds: Double? = nil,
@@ -212,6 +219,7 @@ public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
         eventLog: String? = nil
     ) {
         self.connection = connection
+        self.keychain = keychain
         self.keychainStatus = keychainStatus
         self.signIn = signIn
         self.signInDelaySeconds = signInDelaySeconds
@@ -226,7 +234,9 @@ public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
     public func appConnection(lockDirectory: URL) throws -> PDTAppConnection {
         let log = eventLog.map(ScriptedEventLog.init(path:))
         let store: any PDTCredentialStore
-        if let keychainStatus {
+        if keychain == .unentitled {
+            store = KeychainPDTCredentialStore(lockDirectory: lockDirectory, secItem: .unentitled)
+        } else if let keychainStatus {
             store = KeychainPDTCredentialStore(lockDirectory: lockDirectory, secItem: .answering(keychainStatus))
         } else {
             store = InMemoryPDTCredentialStore(Self.storedState(connection))
@@ -324,4 +334,11 @@ private extension KeychainPDTCredentialStore.SecItemAPI {
     static func answering(_ status: OSStatus) -> Self {
         Self(copyMatching: { _, _ in status }, add: { _ in status }, update: { _, _ in status }, delete: { _ in status })
     }
+
+    static let unentitled = Self(
+        copyMatching: { _, _ in errSecItemNotFound },
+        add: { _ in errSecMissingEntitlement },
+        update: { _, _ in errSecMissingEntitlement },
+        delete: { _ in errSecMissingEntitlement }
+    )
 }

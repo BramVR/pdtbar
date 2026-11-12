@@ -444,8 +444,11 @@ func loadImage(_ url: URL) -> CGImage? {
 /// Proof image on a flat grey ground: the status item cropped from the screen, and each PDTBar menu
 /// captured by window id, so neither desktop content nor neighboring menu bar items reach the PNG.
 /// Raw captures stay in a private temp dir; only the composite is published to `out`.
-func shoot(pid: pid_t, status: CGRect, statusItem: CGRect, minMenus: Int, out: URL) -> String? {
+func shoot(
+    pid: pid_t, status: CGRect, statusItem: CGRect, minMenus: Int, out: URL, beforeCapture: (() -> Void)? = nil
+) -> String? {
     Thread.sleep(forTimeInterval: 0.3)
+    beforeCapture?()
     let menus = menuWindows(pid: pid)
     guard menus.count >= minMenus else { return "expected \(minMenus) open menu windows at capture, saw \(menus.count)" }
     let rect = captureRect(status: status, menus: menus)
@@ -618,6 +621,21 @@ func rowText(_ element: AXUIElement) -> String {
     return parts.joined(separator: " | ")
 }
 
+/// An AX-opened menu sometimes comes up with a row selected (seen on Quit), so two captures of one
+/// menu could differ by a highlight. Deselects every root row before the capture.
+func clearSelection(in root: AXUIElement) {
+    for item in axChildren(root) {
+        var selected: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(item, "AXSelected" as CFString, &selected) == .success,
+              (selected as? Bool) == true
+        else {
+            continue
+        }
+        AXUIElementSetAttributeValue(item, "AXSelected" as CFString, kCFBooleanFalse)
+        print("selection: cleared \(axString(item, "AXIdentifier") ?? "a row")")
+    }
+}
+
 func measure(pid: pid_t, fixture: String, outDir: URL, allowSensitiveText: Bool) {
     if let failure = runPreflight().firstFailure {
         fail("measure cannot capture the menu (\(failure.name): \(failure.detail))", code: 3)
@@ -655,7 +673,7 @@ func measure(pid: pid_t, fixture: String, outDir: URL, allowSensitiveText: Bool)
         )
     }
     let failure = shoot(pid: pid, status: status, statusItem: menu.statusFrame ?? status, minMenus: 1,
-                        out: outDir.appendingPathComponent("menu.png"))
+                        out: outDir.appendingPathComponent("menu.png")) { clearSelection(in: root) }
     closeMenu(menu)
     if let failure { fail("menu capture failed: \(failure)") }
     let report = MeasureReport(
@@ -673,6 +691,41 @@ func measure(pid: pid_t, fixture: String, outDir: URL, allowSensitiveText: Bool)
     print("measure: \(rows.count) rows, \(report.menuHeight)pt -> \(outDir.appendingPathComponent("measure.json").path)")
 }
 
+// MARK: Press
+
+/// Opens the status menu and presses `pdtbar.row.<row>`, found by identifier only. Exits 2 when this
+/// build's menu has no such enabled row, so a caller can record that instead of failing.
+func press(pid: pid_t, row: String) {
+    guard AXIsProcessTrusted() else {
+        fail("press cannot open the menu: Accessibility is not granted to this host process", code: 3)
+    }
+    guard let menu = StatusMenu(pid: pid) else { fail("status item pdtbar.status not found for pid \(pid)") }
+    guard menu.open() else { fail("status menu did not open") }
+    Thread.sleep(forTimeInterval: 0.3)
+    let identifier = "pdtbar.row.\(row)"
+    guard let item = element(identifier, under: menu.status) else {
+        closeMenu(menu)
+        print("pressed: false (\(identifier) not in this menu)")
+        exit(2)
+    }
+    var enabled: CFTypeRef?
+    AXUIElementCopyAttributeValue(item, kAXEnabledAttribute as CFString, &enabled)
+    guard (enabled as? Bool) ?? true else {
+        closeMenu(menu)
+        print("pressed: false (\(identifier) is disabled)")
+        exit(2)
+    }
+    let result = AXUIElementPerformAction(item, kAXPressAction as CFString)
+    // The item's action runs once the menu stops tracking, which can outlast the AX messaging timeout.
+    let closed = waitFor(timeout: 2) { menuWindows(pid: pid).isEmpty }
+    guard result == .success || closed else {
+        closeMenu(menu)
+        fail("AXPress on \(identifier) returned \(result.rawValue) and the menu stayed open")
+    }
+    if !closed { closeMenu(menu) }
+    print("pressed: true (\(identifier))")
+}
+
 // MARK: CLI
 
 let usage = """
@@ -682,6 +735,7 @@ usage:
   pdtbar-capture record --pid <pid> --seconds <1-30> --out <file.mov>
   pdtbar-capture walk --pid <pid> --plan <name> --fixture <file.json> --out-dir <dir>
   pdtbar-capture measure --pid <pid> --fixture <name> --out-dir <dir> [--allow-sensitive-text]
+  pdtbar-capture press --pid <pid> --row <id>    # presses pdtbar.row.<id>; exit 2 when absent or disabled
 """
 
 func option(_ name: String, in arguments: [String]) -> String? {
@@ -736,6 +790,11 @@ case "measure":
         pid: pid, fixture: fixture, outDir: URL(fileURLWithPath: outDir),
         allowSensitiveText: arguments.contains("--allow-sensitive-text")
     )
+case "press":
+    guard let pid = option("--pid", in: arguments).flatMap(pid_t.init), let row = option("--row", in: arguments) else {
+        fail(usage, code: 64)
+    }
+    press(pid: pid, row: row)
 default:
     fail(usage, code: 64)
 }
