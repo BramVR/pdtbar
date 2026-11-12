@@ -92,6 +92,28 @@ struct LaunchOptionTests {
         #expect(options.snapshotDirectory == URL(fileURLWithPath: "/tmp/pdtbar-tests-snapshot"))
     }
 
+    @Test("A pretend menu screen height applies to fixture and scripted runs only")
+    func menuScreenHeightOverrideIsTestOnly() throws {
+        let environment = ["PDTBAR_MENU_SCREEN_HEIGHT": "876", "PDTBAR_APP_SUPPORT_DIR": "/tmp/pdtbar-tests-support"]
+        let fixture = packageRoot.appending(path: "docs/pdt/fixtures/quiet-no-pressure.json")
+
+        let fixtureRun = try PDTBarLaunchOptionParser.parse(arguments: ["--fixture", fixture.path], environment: environment)
+        let scriptedRun = try PDTBarLaunchOptionParser.parse(
+            arguments: ["--scripted-pdt", "/tmp/pdtbar-tests-script.json"],
+            environment: environment
+        )
+        let realRun = try PDTBarLaunchOptionParser.parse(arguments: [], environment: environment)
+        let unusable = try PDTBarLaunchOptionParser.parse(
+            arguments: ["--fixture", fixture.path],
+            environment: ["PDTBAR_MENU_SCREEN_HEIGHT": "-1"]
+        )
+
+        #expect(fixtureRun.menuScreenHeight == 876)
+        #expect(scriptedRun.menuScreenHeight == 876)
+        #expect(realRun.menuScreenHeight == nil)
+        #expect(unusable.menuScreenHeight == nil)
+    }
+
     @Test("Snapshot directory without fixture is rejected")
     func snapshotDirectoryWithoutFixtureIsRejected() {
         #expect(throws: PDTBarLaunchOptionError.usage) {

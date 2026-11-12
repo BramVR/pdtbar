@@ -21,7 +21,7 @@ private struct CachedPulseLoadOutcome: @unchecked Sendable {
 }
 
 @MainActor
-private final class AppDelegate: NSObject, NSApplicationDelegate {
+private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let options: PDTBarLaunchOptions
     private let environment: [String: String]
     private lazy var launchRuntime = PDTLaunchRuntime { [unowned self] in
@@ -42,6 +42,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsCancellable: AnyCancellable?
     private var settingsWindow: NSWindow?
     private var currentRawDescriptor: MenuDescriptor?
+    private var fittedMenuHeightBudget: Double?
+    private let menuMeasuringScratch = NSMenu()
     private let menuItemViewWidth: CGFloat = 400
 
     init(options: PDTBarLaunchOptions) {
@@ -411,17 +413,50 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.toolTip = surface.status.toolTip
         item.button?.setAccessibilityLabel(surface.status.accessibilityLabel)
         item.button?.setAccessibilityIdentifier(surface.status.accessibilityIdentifier)
+        let budget = menuHeightBudget(for: item)
+        fittedMenuHeightBudget = budget
+        let fitted = surface.fitted(within: budget, build: makeMenuItems(from:), height: measuredHeight(of:))
         // Mutate the one live menu in place. Assigning a fresh NSMenu on every
         // update would leave an already-open menu tracking a detached
         // instance that later progress updates and cancelTracking() calls can
         // no longer reach, freezing stale fetch-progress rows on screen.
         let menu = statusMenuHost.apply(
-            items: makeMenuItems(from: surface),
+            items: fitted.built,
             cancelOpenMenu: cancelOpenMenu
         )
+        menu.delegate = self
         if item.menu !== menu {
             item.menu = menu
         }
+    }
+
+    /// Height the root menu may use before macOS clamps it and scrolls Actions off screen (#296).
+    private func menuHeightBudget(for item: NSStatusItem) -> Double {
+        // macOS stops a status menu about 7 pt short of the visible frame's height (measured:
+        // 1130 pt visible, menu clamped at 1123 pt), so leave 8 pt.
+        let margin = 8.0
+        if let override = options.menuScreenHeight {
+            return override - margin
+        }
+        guard let screen = item.button?.window?.screen ?? NSScreen.main else {
+            return .infinity
+        }
+        return screen.visibleFrame.height - margin
+    }
+
+    private func measuredHeight(of items: [NSMenuItem]) -> Double {
+        menuMeasuringScratch.items = items
+        let height = menuMeasuringScratch.size.height
+        menuMeasuringScratch.removeAllItems()
+        return height
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        // The menu opens on whichever display's menu bar was clicked; refit when that screen differs.
+        guard let statusItem, let currentRawDescriptor,
+              menuHeightBudget(for: statusItem) != fittedMenuHeightBudget
+        else { return }
+        installMenuBarItem(currentRawDescriptor, cancelOpenMenu: false)
     }
 
     private func makeMenuItems(from surface: MenuBarSurface) -> [NSMenuItem] {
