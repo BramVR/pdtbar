@@ -427,10 +427,10 @@ private final class AuthMeasureWorld: @unchecked Sendable {
             break
         case let .browserSession(accessExpiresAt, accessLive, refreshLive):
             let session = pdt.issueSession(accessExpiresAt: accessExpiresAt, accessLive: accessLive, refreshLive: refreshLive)
-            try makeStore().save(.connected(.browserSession(session)))
+            try makeStore().save(PDTStoredConnection(.connected(.browserSession(session))))
             everHadCredential = true
         case .revokedPersonalToken:
-            try makeStore().save(.connected(.personalToken(pdt.issueRevokedPersonalToken())))
+            try makeStore().save(PDTStoredConnection(.connected(.personalToken(pdt.issueRevokedPersonalToken()))))
             everHadCredential = true
         }
         guard scenario.cachedPulse else {

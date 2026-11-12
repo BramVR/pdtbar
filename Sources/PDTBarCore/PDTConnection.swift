@@ -11,9 +11,10 @@ import Foundation
 /// operation first tries to store it again. Until the store takes it, `status`,
 /// `state`, and every token hand-out answer from it, so a store that reads
 /// empty cannot sign the user out, and a credential the store refused works
-/// until this process ends (ADR-0003 decision 3). A refresh that got no answer
-/// sets `hold`, and callers inside it share that failure instead of each
-/// sending a refresh.
+/// until this process ends (ADR-0003 decision 3). Once another process
+/// replaces what the store holds, the refused change is dropped and the store
+/// answers again. A refresh that got no answer sets `hold`, and callers inside
+/// it share that failure instead of each sending a refresh.
 public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
     public static let refreshLeeway: TimeInterval = 300
     private static let refreshRetryBase: TimeInterval = 5
@@ -30,6 +31,18 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
     /// `state` is where that leaves this connection, and `applied(to:)` is
     /// what the store should hold once it takes a save again.
     ///
+    /// The change counts only for the store generation it was decided
+    /// against. A sign-in, pasted token, or disconnect another process stores
+    /// later starts a new generation, and the change then gives way to it:
+    /// replaying it would bring back a credential that process replaced,
+    /// disconnected, or saw PDT reject. That process can only have the
+    /// credential held here by entering it itself, which starts a generation,
+    /// so a refresh or rejection it records inside this generation is about
+    /// the credential stored before the change. Those keep the generation: a
+    /// sign-in held here still replaces a pair that process has only
+    /// refreshed, and a pair rotated here still revives one whose refresh
+    /// that process saw rejected.
+    ///
     /// A sign-in, pasted token, or disconnect replaces any stored state, so
     /// every refresh or rejection after it only moves `state`. Such a change
     /// stays the same size however long the store refuses it.
@@ -45,6 +58,16 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
         /// Nil once the change replaces whatever the store holds.
         private(set) var replay: [PDTConnectionEvent]?
         var state: PDTConnectionState
+        /// The store generation the change was decided against. Nil until
+        /// the store is read: a change made while the store could not be
+        /// locked or read is taken as decided against what the first read
+        /// finds. Nothing then shows whether another process decided in
+        /// between, and giving way would drop a sign-in whenever anything
+        /// at all was stored before it.
+        var generation: Int?
+        /// What the last save of this change wrote. A save can land and
+        /// still report an error, so the store may hold it.
+        var written: PDTStoredConnection?
 
         /// `known` is the state the caller just read. A sign-in, pasted token,
         /// or disconnect replaces any state, so those leave it out.
@@ -57,14 +80,34 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
         /// credential the store never took means nothing over the store alone,
         /// so it is applied behind the change that produced that credential.
         func followed(by event: PDTConnectionEvent) -> Change {
+            guard !event.replacesAnyState else {
+                return Change(event)
+            }
             var next = self
-            next.replay = event.replacesAnyState ? nil : replay.map { $0 + [event] }
+            next.replay = replay.map { $0 + [event] }
             next.state = state.applying(event)
             return next
         }
 
-        func applied(to stored: PDTConnectionState) -> PDTConnectionState {
-            replay?.reduce(stored) { $0.applying($1) } ?? state
+        /// What the store should hold once it takes this change. Nil when
+        /// the store has moved to another generation since the change was
+        /// decided, which leaves the store as it is.
+        func applied(to stored: PDTStoredConnection) -> PDTStoredConnection? {
+            if stored == written {
+                // The save landed, so the stored generation is this change's own
+                // and only what has happened since is left to store.
+                return PDTStoredConnection(state, generation: stored.generation)
+            }
+            guard generation ?? stored.generation == stored.generation else {
+                return nil
+            }
+            guard let replay else {
+                // A disconnect that finds no connection stored removes nothing,
+                // so it writes nothing and an empty store stays empty.
+                let removesNothing = state == .disconnected && stored.state == .disconnected
+                return removesNothing ? stored : PDTStoredConnection(state, generation: stored.generation + 1)
+            }
+            return PDTStoredConnection(replay.reduce(stored.state) { $0.applying($1) }, generation: stored.generation)
         }
     }
 
@@ -248,19 +291,25 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
     /// Nothing is left to save when the store already holds it, or when the
     /// event table says a newer credential has overtaken it. Returns where
     /// that leaves this connection. A change the store refuses is kept in
-    /// `refused` with the store's error.
+    /// `refused` with the store's error. A change another process has decided
+    /// past is dropped, and the stored state is returned.
     private func commit(_ change: Change) -> PDTConnectionState {
         var change = change
         do {
             let stored = try store.load()
-            change.state = change.applied(to: stored)
-            if change.state != stored {
-                try store.save(change.state)
+            guard let next = change.applied(to: stored) else {
+                refused = nil
+                return stored.state
+            }
+            change.state = next.state
+            change.generation = stored.generation
+            if next != stored {
+                change.written = next
+                try store.save(next)
             }
         } catch {
-            // A save can land and still report an error, and a build that
-            // cannot write refuses a delete even when nothing is stored.
-            guard (try? store.load()) == change.state else {
+            // A save can land and still report an error.
+            guard (try? store.load())?.state == change.state else {
                 refused = (change, error)
                 return change.state
             }
@@ -277,7 +326,7 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
     }
 
     private func current() throws -> PDTConnectionState {
-        try refused?.change.state ?? store.load()
+        try refused?.change.state ?? store.load().state
     }
 
     /// The credential the API may use: the one the store refused while this

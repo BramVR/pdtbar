@@ -75,7 +75,7 @@ public struct KeychainPDTCredentialStore: PDTCredentialStore {
         try lock.hold(body)
     }
 
-    public func load() throws -> PDTConnectionState {
+    public func load() throws -> PDTStoredConnection {
         var query = Self.itemQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -86,23 +86,23 @@ public struct KeychainPDTCredentialStore: PDTCredentialStore {
             guard let data = result as? Data else {
                 throw PDTCredentialStoreError.unreadable
             }
-            return try PDTConnectionState(storedData: data)
+            return try PDTStoredConnection(storedData: data)
         case errSecItemNotFound:
-            return .disconnected
+            return .empty
         default:
             throw Self.failure(status)
         }
     }
 
-    public func save(_ state: PDTConnectionState) throws {
-        guard state != .disconnected else {
+    public func save(_ connection: PDTStoredConnection) throws {
+        guard connection != .empty else {
             let status = secItem.delete(Self.itemQuery as CFDictionary)
             guard status == errSecSuccess || status == errSecItemNotFound else {
                 throw Self.failure(status)
             }
             return
         }
-        let data = try state.storedData()
+        let data = try connection.storedData()
         let update = secItem.update(Self.itemQuery as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         switch update {
         case errSecSuccess:

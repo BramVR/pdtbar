@@ -49,7 +49,7 @@ struct PDTAppConnectionTests {
         let run = try firstFetch(store: store, replies: [apiError(403, "API_ACCESS_PAUSED")])
 
         #expect(run.failure == .connection(.subscriptionPaused))
-        #expect(try store.load() == personalToken)
+        #expect(try store.load().state == personalToken)
         #expect(run.connection.check().status == .connected(.saved))
     }
 
@@ -164,7 +164,7 @@ struct PDTAppConnectionTests {
         )
 
         #expect(connection.signIn(cancellation: cancellation) == PDTConnectionOutcome(.notConnected(signInWouldBe: .saved)))
-        #expect(try store.load() == .disconnected)
+        #expect(try store.load().state == .disconnected)
     }
 
     @Test("Fetch errors log without PDT's free-text reason")
@@ -208,7 +208,7 @@ struct PDTAppConnectionTests {
             let connection = appConnection(store: store, replies: [])
 
             #expect(connection.disconnect() == PDTConnectionOutcome(.notConnected(signInWouldBe: .saved), notice: .disconnected(revokeAt: page)))
-            #expect(try store.load() == .disconnected)
+            #expect(try store.load().state == .disconnected)
         }
     }
 }

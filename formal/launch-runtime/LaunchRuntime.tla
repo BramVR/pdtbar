@@ -189,13 +189,19 @@ CacheLoadReturns ==
 \* What an operation can report, and what PDTConnection knows afterwards (c).
 \* PDTConnection.status: a credential held for the session answers before the store: connected
 \* for this session only, connected and saved once the retried save lands, or the reconnect
-\* state PDT's rejection of it left. Otherwise the store answers, and another process may
-\* have stored or deleted a credential since.
+\* state PDT's rejection of it left. It gives way only to a sign-in, token, or disconnect
+\* another process stored after it (PDTConnection.Change.applied: the store's generation
+\* moved): the held credential is dropped and the store answers, which after a disconnect
+\* there is not connected, and Keychain unavailable when the store stops reading right
+\* after. Otherwise the store answers, and another process may have stored or deleted a
+\* credential since.
 CheckAnswers(s, c) ==
     IF cred = "session" /\ "checkReadsStoreOnly" \notin Mutations
     THEN \/ s = "connected:session" /\ c = "session"
          \/ s = "connected:saved" /\ c = "saved"
          \/ s = "needsReconnect" /\ c \in {"session", "saved"}
+         \/ s = "notConnected" /\ c = "none"
+         \/ s = "keychainUnavailable" /\ c \in {"none", "saved"}
     ELSE \/ s = "notConnected" /\ c = (IF cred = "session" THEN "session" ELSE "none")
          \/ s \in {"connected:saved", "needsReconnect", "subscriptionPaused"} /\ c = "saved"
          \/ s = "keychainUnavailable" /\ c = cred
@@ -217,14 +223,16 @@ DisconnectAnswers(s, c) ==
 \* How a finished sync reports the connection (PDTAppConnection.failure(for:) and
 \* status(afterSyncEnding:), both over PDTConnection.status). r is the result, k how the
 \* credential is kept when the sync leaves it connected: a rotated pair the store refused
-\* during the sync is held, and a held credential the store took is saved. A sync cannot
-\* find the store empty or unreadable while PDTConnection holds the credential.
-SyncMayReport(r) ==
-    r \in {"notConnected", "keychainUnavailable"} => (cred # "session" \/ "checkReadsStoreOnly" \in Mutations)
-CredAfterSync(r, k) ==
-    CASE r \in {"ok", "unavailable"} -> k
-      [] r = "notConnected" -> IF cred = "session" THEN "session" ELSE "none"
-      [] OTHER -> cred
+\* during the sync is held, and a held credential the store took is saved. A sync finds
+\* the store not connected or unreadable past a held credential only after another process
+\* stored a sign-in, token, or disconnect, which drops the held credential: nothing is held
+\* afterwards, and an unreadable store holds what that process stored.
+CredsAfterSync(r, k) ==
+    CASE r \in {"ok", "unavailable"} -> {k}
+      [] cred = "session" /\ "checkReadsStoreOnly" \in Mutations -> {"session"}
+      [] r = "notConnected" -> {"none"}
+      [] r = "keychainUnavailable" /\ cred = "session" -> {"none", "saved"}
+      [] OTHER -> {cred}
 \* What the runtime shows as kept after a sync that leaves it connected.
 KeptAfterSync(k) ==
     IF "syncEndKeepsOldPersistence" \in Mutations THEN kept
@@ -321,8 +329,7 @@ FirstFetchReturns ==
     /\ ffWorkers' = ffWorkers - 1
     /\ ffInFlight' = ("keepFirstFetchFlag" \in Mutations)
     /\ \E r \in {"ok", "unavailable"} \cup ConnectionStates \cup LostResults, k \in Persistences :
-        /\ SyncMayReport(ReportedState(r))
-        /\ cred' = CredAfterSync(ReportedState(r), k)
+        /\ cred' \in CredsAfterSync(ReportedState(r), k)
         /\ CASE r = "ok" ->
                   /\ pulse' = "live" /\ kept' = KeptAfterSync(k) /\ UNCHANGED lostAccess
                   /\ IF "keepFirstFetchFlag" \in Mutations
@@ -360,8 +367,7 @@ BackgroundReturns ==
     /\ bgWorkers' = bgWorkers - 1
     /\ bgInFlight' = FALSE
     /\ \E r \in {"ok", "unavailable"} \cup ConnectionStates \cup LostResults, k \in Persistences :
-        /\ SyncMayReport(ReportedState(r))
-        /\ cred' = CredAfterSync(ReportedState(r), k)
+        /\ cred' \in CredsAfterSync(ReportedState(r), k)
         /\ CASE r = "ok" -> /\ pulse' = "live" /\ state' = "current" /\ kept' = KeptAfterSync(k)
                             /\ UNCHANGED <<record, uncommitted>> /\ lostAccess' = FALSE
              [] r \in LostResults ->

@@ -157,7 +157,7 @@ struct PDTConnectionTests {
         #expect(refresh["refresh_token"] == "refresh-1")
         #expect(refresh["client_id"] == "test-client")
         #expect(api.requests.only?.value(forHTTPHeaderField: "Authorization") == "Bearer access-2")
-        #expect(try store.load() == .connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600))))
+        #expect(try store.load().state == .connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600))))
     }
 
     @Test("A token with time left is used without a refresh")
@@ -199,7 +199,7 @@ struct PDTConnectionTests {
         let store: any PDTCredentialStore
         if onDisk {
             let file = FilePDTCredentialStore(url: directory.appending(path: "pdt.json"))
-            try file.save(initial)
+            try file.save(PDTStoredConnection(initial))
             store = file
         } else {
             store = InMemoryPDTCredentialStore(initial)
@@ -214,7 +214,7 @@ struct PDTConnectionTests {
 
         #expect(results.values.map { try? $0.get() } == [PDTAPIToken("access-2"), PDTAPIToken("access-2")])
         #expect(tokens.requests.count == 1)
-        #expect(try store.load() == .connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600))))
+        #expect(try store.load().state == .connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600))))
     }
 
     @Test("A refresh PDT accepted wins over a concurrent rejection of the pair it rotated, and a stale refresh or rejection never regresses the store")
@@ -244,7 +244,7 @@ struct PDTConnectionTests {
         }
 
         #expect(results.values.compactMap { try? $0.get() } == [PDTAPIToken("access-2")])
-        #expect(try store.load() == .connected(.browserSession(second)))
+        #expect(try store.load().state == .connected(.browserSession(second)))
         #expect(try connections[1].currentToken() == PDTAPIToken("access-2"))
     }
 
@@ -314,12 +314,12 @@ struct PDTConnectionTests {
         _ = try client.get(.me)
         #expect(api.requests.map { $0.value(forHTTPHeaderField: "Authorization") } == ["Bearer access-2", "Bearer access-2"])
         #expect(connection.status() == .connected(.thisSessionOnly(.failed)))
-        #expect(try store.load() == stale)
+        #expect(try store.load().state == stale)
 
         store.recover()
         #expect(try connection.currentToken() == PDTAPIToken("access-2"))
         #expect(connection.status() == .connected(.saved))
-        #expect(try store.load() == .connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600))))
+        #expect(try store.load().state == .connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600))))
         #expect(tokens.requests.count == 1)
     }
 
@@ -347,7 +347,7 @@ struct PDTConnectionTests {
 
         store.recover()
         #expect(connection.status() == .connected(.saved))
-        #expect(try store.load() == .connected(.browserSession(session("access-3", "refresh-3", expiresAt: testNow + 7200))))
+        #expect(try store.load().state == .connected(.browserSession(session("access-3", "refresh-3", expiresAt: testNow + 7200))))
         #expect(tokens.requests.count == 2)
     }
 
@@ -365,10 +365,10 @@ struct PDTConnectionTests {
 
         // A save can land and still report an error, so the first rotated pair may be what the store holds.
         store.recover()
-        try store.save(.connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600))))
+        try store.save(PDTStoredConnection(.connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600)))))
 
         #expect(try connection.currentToken() == PDTAPIToken("access-3"))
-        #expect(try store.load() == .connected(.browserSession(session("access-3", "refresh-3", expiresAt: testNow + 7200))))
+        #expect(try store.load().state == .connected(.browserSession(session("access-3", "refresh-3", expiresAt: testNow + 7200))))
         #expect(connection.status() == .connected(.saved))
         #expect(tokens.requests.count == 2)
     }
@@ -396,7 +396,7 @@ struct PDTConnectionTests {
 
         store.recover()
         #expect(connection.status() == .needsReconnect(.browserSession, .signInExpired))
-        #expect(try store.load() == .needsReconnect(.browserSession, .refreshRejected(PDTRefreshToken("refresh-2").fingerprint)))
+        #expect(try store.load().state == .needsReconnect(.browserSession, .refreshRejected(PDTRefreshToken("refresh-2").fingerprint)))
     }
 
     @Test("invalid_grant moves the connection to needs-reconnect and stops further refreshes")
@@ -430,7 +430,7 @@ struct PDTConnectionTests {
 
         store.recover()
         #expect(try connection.state() == replaced)
-        #expect(try store.load() == replaced)
+        #expect(try store.load().state == replaced)
         if signIn {
             #expect(try connection.currentToken() == PDTAPIToken("access-9"))
         } else {
@@ -451,10 +451,10 @@ struct PDTConnectionTests {
         #expect(pasted.status() == .needsReconnect(.personalToken, .tokenRevoked))
         #expect(throws: PDTAPIError.tokenInvalid(reason: "revoked")) { try pasted.currentToken() }
         #expect(api.requests.count == 1)
-        #expect(try personal.load() == .connected(.personalToken(PDTAPIToken("pdt_stored"))))
+        #expect(try personal.load().state == .connected(.personalToken(PDTAPIToken("pdt_stored"))))
         personal.recover()
         #expect(pasted.status() == .needsReconnect(.personalToken, .tokenRevoked))
-        #expect(try personal.load() == .needsReconnect(.personalToken, .tokenRejected(reason: "revoked")))
+        #expect(try personal.load().state == .needsReconnect(.personalToken, .tokenRejected(reason: "revoked")))
 
         let browser = FailingSaveStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1))), failures: .max)
         let tokens = ScriptedPDTHTTPTransport([oauthError(400, "invalid_grant")])
@@ -466,7 +466,7 @@ struct PDTConnectionTests {
         #expect(tokens.requests.count == 1)
         browser.recover()
         #expect(signedIn.status() == .needsReconnect(.browserSession, .signInExpired))
-        #expect(try browser.load() == .needsReconnect(.browserSession, .refreshRejected(PDTRefreshToken("refresh-1").fingerprint)))
+        #expect(try browser.load().state == .needsReconnect(.browserSession, .refreshRejected(PDTRefreshToken("refresh-1").fingerprint)))
     }
 
     @Test("A pending pair from a sign-in the user disconnected never reconnects it after a later sign-in is rejected")
@@ -481,10 +481,10 @@ struct PDTConnectionTests {
         try current.disconnect()
         try current.signedIn(session("access-y1", "refresh-y1", expiresAt: testNow - 1))
         #expect(throws: PDTAPIError.tokenInvalid(reason: nil)) { try current.currentToken() }
-        #expect(try store.load() == laterSignInRejected)
+        #expect(try store.load().state == laterSignInRejected)
 
         #expect(throws: PDTAPIError.tokenInvalid(reason: nil)) { try stale.currentToken() }
-        #expect(try store.load() == laterSignInRejected)
+        #expect(try store.load().state == laterSignInRejected)
         #expect(tokens.requests.count == 2)
     }
 
@@ -493,11 +493,11 @@ struct PDTConnectionTests {
         let store = InMemoryPDTCredentialStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1))))
         let rotated = session("access-2", "refresh-2", expiresAt: testNow + 3600)
         let tokens = HookTransport(reply: oauthError(400, "invalid_grant")) {
-            try? store.save(.connected(.browserSession(rotated)))
+            try? store.save(PDTStoredConnection(.connected(.browserSession(rotated))))
         }
 
         #expect(try connection(store, tokens).currentToken() == PDTAPIToken("access-2"))
-        #expect(try store.load() == .connected(.browserSession(rotated)))
+        #expect(try store.load().state == .connected(.browserSession(rotated)))
     }
 
     @Test("A 401 expired on a token that looked valid refreshes once and retries")
@@ -516,7 +516,7 @@ struct PDTConnectionTests {
     func revokedStaleTokenRetriesWithCurrent() throws {
         let store = InMemoryPDTCredentialStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow + 3000))))
         let api = HookTransport(replies: [tokenInvalid("revoked"), ok]) {
-            try? store.save(.connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600))))
+            try? store.save(PDTStoredConnection(.connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600)))))
         }
 
         _ = try PDTAPIClient(transport: api, tokenProvider: connection(store, ScriptedPDTHTTPTransport([]))).get(.me)
@@ -535,7 +535,7 @@ struct PDTConnectionTests {
         }
         #expect(formItems(try #require(tokens.requests.only))["refresh_token"] == "refresh-1")
         #expect(api.requests.count == 1)
-        #expect(try store.load() == .needsReconnect(.browserSession, .refreshRejected(PDTRefreshToken("refresh-1").fingerprint)))
+        #expect(try store.load().state == .needsReconnect(.browserSession, .refreshRejected(PDTRefreshToken("refresh-1").fingerprint)))
     }
 
     @Test("A transient refresh failure keeps using an access token that has not expired yet")
@@ -544,7 +544,7 @@ struct PDTConnectionTests {
         let tokens = ScriptedPDTHTTPTransport([.failure(.timedOut)])
 
         #expect(try connection(store, tokens).currentToken() == PDTAPIToken("access-1"))
-        #expect(try store.load() == .connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow + 60))))
+        #expect(try store.load().state == .connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow + 60))))
     }
 
     @Test("A pasted personal token is stored, sent as is, and needs a reconnect when PDT rejects it")
@@ -583,7 +583,7 @@ struct PDTConnectionTests {
         let revokeAt = try connection.disconnect()
 
         #expect(revokeAt.absoluteString == "https://app.portfoliodividendtracker.com/account/integrations/authorizations")
-        #expect(try store.load() == .disconnected)
+        #expect(try store.load().state == .disconnected)
         #expect(throws: PDTAPIError.missingToken) { try connection.currentToken() }
     }
 
@@ -608,23 +608,71 @@ struct PDTConnectionTests {
 
 @Suite("PDT credential storage and redaction")
 struct PDTCredentialStorageTests {
-    @Test("The dev file store round-trips with mode 0600 and deletes on disconnect")
+    @Test("The dev file store round-trips with mode 0600, keeps only the generation after a disconnect, and deletes the file when emptied")
     func fileStore() throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "pdtbar-credential-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = FilePDTCredentialStore(url: directory.appending(path: "nested/pdt.json"))
-        let stored = PDTConnectionState.connected(.browserSession(
-            session("access-1", "refresh-1", expiresAt: Date(timeIntervalSince1970: 1_800_000_000))
-        ))
+        let stored = PDTStoredConnection(
+            .connected(.browserSession(session("access-1", "refresh-1", expiresAt: Date(timeIntervalSince1970: 1_800_000_000)))),
+            generation: 1
+        )
 
-        #expect(try store.load() == .disconnected)
+        #expect(try store.load() == .empty)
         try store.save(stored)
         #expect(try store.load() == stored)
         let mode = try FileManager.default.attributesOfItem(atPath: store.url.path)[.posixPermissions] as? Int
         #expect(mode == 0o600)
-        try store.save(.disconnected)
+        try store.save(PDTStoredConnection(.disconnected, generation: 2))
+        #expect(try String(contentsOf: store.url, encoding: .utf8) == #"{"disconnected":{},"generation":2}"#)
+        #expect(try store.load() == PDTStoredConnection(.disconnected, generation: 2))
+        try store.save(.empty)
         #expect(!FileManager.default.fileExists(atPath: store.url.path))
-        try store.save(.disconnected)
+        try store.save(.empty)
+    }
+
+    @Test("Stored data from before generations reads as generation 0, and a build from before them reads what is stored now")
+    func storedFormatAcrossBuilds() throws {
+        let before = JSONDecoder()
+        before.dateDecodingStrategy = .iso8601
+        let beforeWriter = JSONEncoder()
+        beforeWriter.dateEncodingStrategy = .iso8601
+        beforeWriter.outputFormatting = [.sortedKeys]
+        let states: [(PDTConnectionState, writtenBefore: String)] = [
+            (.connected(.personalToken(PDTAPIToken("pdt_stored"))), #"{"connected":{"_0":{"personalToken":{"_0":"pdt_stored"}}}}"#),
+            (
+                .connected(.browserSession(session("access-1", "refresh-1", expiresAt: Date(timeIntervalSince1970: 1_800_000_000)))),
+                #"{"connected":{"_0":{"browserSession":{"_0":{"accessExpiresAt":"2027-01-15T08:00:00Z","accessToken":"access-1","refreshToken":"refresh-1"}}}}}"#
+            ),
+            (.needsReconnect(.personalToken, .tokenRejected(reason: "revoked")), #"{"needsReconnect":{"_0":"personalToken","_1":{"tokenRejected":{"reason":"revoked"}}}}"#),
+        ]
+        for (state, writtenBefore) in states {
+            #expect(try String(decoding: beforeWriter.encode(state), as: UTF8.self) == writtenBefore)
+            #expect(try PDTStoredConnection(storedData: Data(writtenBefore.utf8)) == PDTStoredConnection(state))
+
+            let now = try PDTStoredConnection(state, generation: 3).storedData()
+            #expect(try PDTStoredConnection(storedData: now) == PDTStoredConnection(state, generation: 3))
+            #expect(try before.decode(PDTConnectionState.self, from: now) == state)
+        }
+        #expect(try before.decode(PDTConnectionState.self, from: Data(#"{"disconnected":{},"generation":2}"#.utf8)) == .disconnected)
+    }
+
+    @Test("A disconnect leaves no secret behind: the file or Keychain item then holds the generation alone", arguments: [false, true])
+    func disconnectLeavesNoSecret(inKeychain: Bool) throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "pdtbar-disconnect-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let keychain = FakeSecItems()
+        let store: any PDTCredentialStore = inKeychain
+            ? KeychainPDTCredentialStore(lockDirectory: directory, secItem: keychain.api)
+            : FilePDTCredentialStore(url: directory.appending(path: "pdt.json"))
+        let connection = PDTConnection(store: store, tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([])))
+
+        try connection.signedIn(session("access-1", "refresh-1", expiresAt: .distantFuture))
+        try connection.disconnect()
+
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).map { try Data(contentsOf: $0) }
+        let left = (files + [keychain.item].compactMap { $0 }).map { String(decoding: $0, as: UTF8.self) }.filter { !$0.isEmpty }
+        #expect(left == [#"{"disconnected":{},"generation":2}"#])
     }
 
     @Test("The dev file store finishes short and interrupted writes and never reports a zero-byte write as success")
@@ -632,9 +680,9 @@ struct PDTCredentialStorageTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: "pdtbar-credential-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appending(path: "pdt.json")
-        let stored = PDTConnectionState.connected(.browserSession(
+        let stored = PDTStoredConnection(.connected(.browserSession(
             session("access-1", "refresh-1", expiresAt: Date(timeIntervalSince1970: 1_800_000_000))
-        ))
+        )))
         let calls = Counter()
         let choppy = FilePDTCredentialStore(url: url) { descriptor, bytes, count in
             calls.increment()
@@ -651,29 +699,32 @@ struct PDTCredentialStorageTests {
 
         let stalled = FilePDTCredentialStore(url: url) { _, _, _ in 0 }
         #expect(throws: PDTCredentialStoreError.writeFailed(code: EIO)) {
-            try stalled.save(.connected(.personalToken(PDTAPIToken("pdt_other"))))
+            try stalled.save(PDTStoredConnection(.connected(.personalToken(PDTAPIToken("pdt_other")))))
         }
         #expect(try FilePDTCredentialStore(url: url).load() == stored)
         #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0 != "pdt.json" }.isEmpty)
     }
 
-    @Test("The Keychain store keeps one device-only item in the data protection keychain")
+    @Test("The Keychain store keeps one device-only item in the data protection keychain, with only the generation in it after a disconnect")
     func keychainQueries() throws {
         let keychain = FakeSecItems()
         let directory = FileManager.default.temporaryDirectory.appending(path: "pdtbar-keychain-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = KeychainPDTCredentialStore(lockDirectory: directory, secItem: keychain.api)
-        let stored = PDTConnectionState.connected(.personalToken(PDTAPIToken("pdt_keychain")))
+        let stored = PDTStoredConnection(.connected(.personalToken(PDTAPIToken("pdt_keychain"))), generation: 1)
+        let disconnected = PDTStoredConnection(.disconnected, generation: 2)
 
-        #expect(try store.load() == .disconnected)
+        #expect(try store.load() == .empty)
         try store.save(stored)
         try store.save(stored)
         #expect(try store.load() == stored)
-        try store.save(.disconnected)
-        #expect(try store.load() == .disconnected)
+        try store.save(disconnected)
+        #expect(try store.load() == disconnected)
+        try store.save(.empty)
+        #expect(try store.load() == .empty)
 
         let queries = keychain.queries
-        #expect(queries.count == 7)
+        #expect(queries.count == 9)
         for query in queries {
             #expect(query[kSecUseDataProtectionKeychain as String] as? Bool == true)
             #expect(query[kSecAttrSynchronizable as String] as? Bool == false)
@@ -691,9 +742,9 @@ struct PDTCredentialStorageTests {
 
         #expect(throws: PDTCredentialStoreError.missingKeychainEntitlement) { try store.load() }
         #expect(throws: PDTCredentialStoreError.missingKeychainEntitlement) {
-            try store.save(.connected(.personalToken(PDTAPIToken("pdt_keychain"))))
+            try store.save(PDTStoredConnection(.connected(.personalToken(PDTAPIToken("pdt_keychain")))))
         }
-        #expect(throws: PDTCredentialStoreError.missingKeychainEntitlement) { try store.save(.disconnected) }
+        #expect(throws: PDTCredentialStoreError.missingKeychainEntitlement) { try store.save(.empty) }
         let connection = PDTConnection(store: store, tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([])))
         #expect(throws: PDTCredentialStoreError.missingKeychainEntitlement) { try connection.state() }
 
@@ -957,7 +1008,7 @@ private final class FailingSaveStore: PDTCredentialStore, @unchecked Sendable {
 
     var persistence: PDTCredentialPersistence { backing.persistence }
 
-    func load() throws -> PDTConnectionState {
+    func load() throws -> PDTStoredConnection {
         try backing.load()
     }
 
@@ -968,14 +1019,14 @@ private final class FailingSaveStore: PDTCredentialStore, @unchecked Sendable {
         lock.unlock()
     }
 
-    func save(_ state: PDTConnectionState) throws {
+    func save(_ connection: PDTStoredConnection) throws {
         lock.lock()
         defer { lock.unlock() }
         guard failures == 0 else {
             failures -= 1
             throw PDTCredentialStoreError.writeFailed(code: EIO)
         }
-        try backing.save(state)
+        try backing.save(connection)
     }
 
     func withExclusiveAccess<Value>(_ body: () throws -> Value) throws -> Value {
@@ -994,12 +1045,12 @@ private final class UnlockedStore: PDTCredentialStore, @unchecked Sendable {
 
     var persistence: PDTCredentialPersistence { backing.persistence }
 
-    func load() throws -> PDTConnectionState {
+    func load() throws -> PDTStoredConnection {
         try backing.load()
     }
 
-    func save(_ state: PDTConnectionState) throws {
-        try backing.save(state)
+    func save(_ connection: PDTStoredConnection) throws {
+        try backing.save(connection)
     }
 
     func withExclusiveAccess<Value>(_ body: () throws -> Value) throws -> Value {
@@ -1066,7 +1117,7 @@ private final class HookTransport: PDTHTTPTransport, @unchecked Sendable {
 private final class FakeSecItems: @unchecked Sendable {
     private let lock = NSLock()
     private let forcedStatus: OSStatus?
-    private var item: Data?
+    private(set) var item: Data?
     private(set) var queries: [[String: Any]] = []
     private(set) var added: [[String: Any]] = []
 

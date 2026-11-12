@@ -13,7 +13,7 @@ Run it when a change touches any covered function below, the order of main-queue
 
 ## Coverage
 
-Sync commit: `fix(auth): say on launch when this build can't keep a sign-in`. After you confirm the model still describes the covered code at a newer commit, move this line forward. Never move it without that check.
+Sync commit: `fix(auth): a held connection change yields to a newer one from another process`. After you confirm the model still describes the covered code at a newer commit, move this line forward. Never move it without that check.
 
 `Sources/PDTBarCore/LaunchRuntime.swift`:
 - `PDTLaunchState` 109 and its `offersSignIn` / `offersCheckAgain` / `offersDisconnect` 135-155.
@@ -49,7 +49,7 @@ Passing today:
 - `NeverStranded`: something is running, or the menu offers a way forward.
 - `AccessLossLeavesConnected` (#191): a committed first fetch or refresh that found access gone (an optional phase's 401, `INSUFFICIENT_SCOPE`, `API_ACCESS_PAUSED`, or the connection read after the sync) moves to that connection state; the menu never says connected until a connection result does (mutation `optionalAccessLossStaysConnected`).
 - `UncommittedRecordKept` (#191): the failure record of a sync that committed nothing stays in Data Health on connection screens and through connection operations until the next sync starts (mutations `connectionScreenDropsRecord`, `connectionOpDropsRecord`).
-- `SignedOutOnlyWithoutCredential` (#301): the menu says `Not connected` only when `PDTConnection` holds and stores nothing. While it holds a credential the store refused, no check, failed sign-in, or sync signs the user out (mutation `checkReadsStoreOnly`, the #301 bug: a check that reads the store past the held credential).
+- `SignedOutOnlyWithoutCredential` (#301): the menu says `Not connected` only when `PDTConnection` holds and stores nothing. While it holds a credential the store refused, no check, failed sign-in, or sync signs the user out (mutation `checkReadsStoreOnly`, the #301 bug: a check that reads the store past the held credential). A disconnect in another process drops the held credential first, so the menu then says `Not connected` with nothing held.
 - `NotSavedRowTellsTruth` (ADR-0003 decision 3): on every connected screen the `Connection not saved` row is shown exactly while the credential in use lives in this process only. Harm if broken: a user quits believing the sign-in is saved, or keeps reading a warning that no longer holds. Mutations: `fetchingHidesNotSaved` (the row only where Disconnect is offered), `syncEndReportsSaved` (a finished sync reports a hand-built saved connection), `syncEndKeepsOldPersistence` (a finished sync keeps what the state said before it), `retryForgetsNotSaved` (a retry starts as saved).
 
 The runtime also refuses connection actions while any work runs (`isIdle`). The state guard already covers that in every reachable state, so that guard is pinned by `LaunchFlowTests` rather than by a mutation here.
@@ -74,12 +74,12 @@ When TLC reports a violation, replay its steps against the Swift code before you
 
 ## Scope and bounds
 
-Bounds (`LaunchRuntime.cfg`): at most 4 connection operations started by clicks or the cache load (`MaxOps`) and 2 Try again / Refresh now clicks (`MaxRetries`). That covers 1063 distinct states. A pass covers these bounds only.
+Bounds (`LaunchRuntime.cfg`): at most 4 connection operations started by clicks or the cache load (`MaxOps`) and 2 Try again / Refresh now clicks (`MaxRetries`). That covers 1098 distinct states. A pass covers these bounds only.
 
 Modelled at this abstraction:
-- The ghost `cred` is what `PDTConnection` knows: `none`, `saved`, or `session` (a sign-in, token, or rotated pair the store refused, used from memory). A check answers from a session credential first (`connected:session`, `connected:saved` once the retried save lands, or the reconnect state a rejection left), otherwise from the store, which another process may have changed. A sign-in or token ends saved or session, or changes nothing. A disconnect reports `notConnected` or `keychainUnavailable`. A new process starts with nothing held.
+- The ghost `cred` is what `PDTConnection` knows: `none`, `saved`, or `session` (a sign-in, token, or rotated pair the store refused, used from memory). A check answers from a session credential first (`connected:session`, `connected:saved` once the retried save lands, or the reconnect state a rejection left). The session credential gives way only to a sign-in, token, or disconnect another process stored after it: it is dropped and the store answers, which after a disconnect there is `notConnected` with nothing held, and `keychainUnavailable` when the store stops reading right after. Otherwise a check answers from the store, which another process may have changed. A sign-in or token ends saved or session, or changes nothing. A disconnect reports `notConnected` or `keychainUnavailable`. A new process starts with nothing held.
 - `kept` is the persistence payload of `.connected`. Every connection result and every sync end that leaves the menu connected sets it from what `PDTConnection` says then; a retry carries it into the next sync.
-- Fetch and refresh outcomes are success, `unavailable`, one of the connection states (`PDTFetchFailure`), or committed with access gone. A sync that ends connected may have changed how the credential is kept: a rotated pair the store refused is held, and a held credential the store took is saved. The model puts that change at the sync's end, where the code reads it; a row shown while the sync still runs is as old as the sync's start. A sync never finds the store empty or unreadable while a credential is held. Degraded is the same as success for the launch menu.
+- Fetch and refresh outcomes are success, `unavailable`, one of the connection states (`PDTFetchFailure`), or committed with access gone. A sync that ends connected may have changed how the credential is kept: a rotated pair the store refused is held, and a held credential the store took is saved. The model puts that change at the sync's end, where the code reads it; a row shown while the sync still runs is as old as the sync's start. A sync finds the store not connected or unreadable past a held credential only after another process stored a sign-in, token, or disconnect, which drops the held credential. Degraded is the same as success for the launch menu.
 - The cached load either finds a pulse or does not.
 - Menus are reduced to their kind (setup or pulse), their state, and which connection and refresh rows are clickable.
 
@@ -89,5 +89,5 @@ Left out:
 - Sign-in notices and the revoke row (copy only).
 - What `notConnected` says about saving a sign-in (`signInWouldBe`): a fact about the build's signature that `PDTConnection.status` copies from the store into every not-connected status. The runtime only carries it to the status row's detail, so it changes no state, row, or guard the model tracks. `SignInPersistenceTests` covers it.
 - Quit-time refresh cancellation (`applicationWillTerminate`).
-- What the background refresh does inside (see `verify-background-detail-refresh`), credential refresh, storage, and the replay of a change the store refused (`PDTConnection`, covered by `PDTSignInTests` and `SignInPersistenceTests`), and read-state writes (see `verify-pulse-read-state`).
+- What the background refresh does inside (see `verify-background-detail-refresh`), credential refresh, storage, and the replay of a change the store refused (`PDTConnection`, covered by `PDTSignInTests`, `SignInPersistenceTests`, and `HeldConnectionChangeTests`, which also holds the stored generation rule), and read-state writes (see `verify-pulse-read-state`).
 - Timer cadence: a first-fetch progress tick is a re-render only.

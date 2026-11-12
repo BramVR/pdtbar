@@ -116,19 +116,27 @@ struct SignInPersistenceTests {
         #expect(driver.runtime.state == .connected(.fetching, .thisSessionOnly(.failed)))
         #expect(driver.rows.last?.detail == "PDTBar could not save it on this Mac. You stay connected until you quit")
         _ = try driver.connection.apiClient().get(.me)
-        #expect(try store.load() == .disconnected)
+        #expect(try store.load().state == .disconnected)
 
         store.refuse()
         _ = try driver.connection.apiClient().get(.me)
-        #expect(try store.load() == .connected(.browserSession(signedInSession)))
+        #expect(try store.load().state == .connected(.browserSession(signedInSession)))
         #expect(driver.connection.status(afterSyncEnding: nil) == .connected(.saved))
         #expect(driver.api.requests.map { $0.value(forHTTPHeaderField: "Authorization") } == ["Bearer access", "Bearer access"])
     }
 
-    @Test("A sign-in is held when the store lock cannot be taken, and saved once it can")
-    func signInSurvivesAStoreLockThatFails() throws {
+    @Test(
+        "A sign-in is held when the store lock cannot be taken, and saved once it can, also over the record an earlier disconnect left",
+        arguments: [false, true]
+    )
+    func signInSurvivesAStoreLockThatFails(afterADisconnect: Bool) throws {
         let store = SwitchableStore()
         let driver = try LaunchDriver(store: store)
+        if afterADisconnect {
+            _ = driver.connection.connect(token: PDTAPIToken("pdt_earlier"))
+            _ = driver.connection.disconnect()
+            #expect(try store.load() != .empty)
+        }
 
         store.refuse(lock: true)
         #expect(driver.connection.signIn(cancellation: PDTCancellation()).status == .connected(.thisSessionOnly(.failed)))
@@ -136,7 +144,7 @@ struct SignInPersistenceTests {
 
         store.refuse()
         #expect(driver.connection.check().status == .connected(.saved))
-        #expect(try store.load() == .connected(.browserSession(signedInSession)))
+        #expect(try store.load().state == .connected(.browserSession(signedInSession)))
     }
 
     @Test("Disconnect drops a credential the Keychain never saved and names the PDT page for its kind")
@@ -171,13 +179,13 @@ struct SignInPersistenceTests {
         store.refuse(saves: true)
         #expect(driver.connection.disconnect() == PDTConnectionOutcome(.keychainUnavailable(.failed)))
         #expect(driver.connection.check().status == .keychainUnavailable(.failed))
-        #expect(try store.load() == stored)
+        #expect(try store.load().state == stored)
         #expect(throws: PDTAPIError.missingToken) { try driver.connection.apiClient().get(.me) }
         #expect(driver.api.requests.isEmpty, "a credential the user disconnected reached PDT")
 
         store.refuse()
         #expect(driver.connection.check().status == .notConnected(signInWouldBe: .saved))
-        #expect(try store.load() == .disconnected)
+        #expect(try store.load().state == .disconnected)
     }
 
     @Test("A build that cannot save a sign-in says so at launch, before any sign-in, and still offers both ways in")
@@ -480,15 +488,15 @@ private final class SwitchableStore: PDTCredentialStore, @unchecked Sendable {
 
     var persistence: PDTCredentialPersistence { backing.persistence }
 
-    func load() throws -> PDTConnectionState {
+    func load() throws -> PDTStoredConnection {
         try backing.load()
     }
 
-    func save(_ state: PDTConnectionState) throws {
+    func save(_ connection: PDTStoredConnection) throws {
         if refuses(\.refusesSaves) {
             throw PDTCredentialStoreError.writeFailed(code: EIO)
         }
-        try backing.save(state)
+        try backing.save(connection)
     }
 
     func withExclusiveAccess<Value>(_ body: () throws -> Value) throws -> Value {
