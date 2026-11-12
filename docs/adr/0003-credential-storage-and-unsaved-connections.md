@@ -1,0 +1,50 @@
+---
+summary: "Accepted: keep the data protection Keychain as the only durable PDT credential store; hold a credential the store refuses in memory and use it until quit; durable local builds need the Developer ID provisioning profile."
+read_when:
+  - Changing where or how the PDT credential is stored
+  - Changing what happens when the Keychain refuses a write (unsigned or unprovisioned builds)
+  - Changing Check again, relaunch, refresh, or disconnect behaviour around storage failures
+---
+
+# ADR-0003: Credential storage and unsaved connections
+
+- **Status:** Accepted. Bram signed off decisions 3 and 4 and the disconnect record (decision 2) on #303, 2026-11-12.
+- **Date:** 2026-11-12
+- **Deciders:** Bram
+
+## Context
+
+A local `make start` build is ad-hoc signed with no provisioning profile, so it has no keychain access group. Bram signed in with PDT on such a build, then clicked Check again and was signed out (#301).
+
+Measured on an ad-hoc signed probe against the data protection keychain: a read of a missing item answers `errSecItemNotFound` (-25300); add, update, and delete answer `errSecMissingEntitlement` (-34018). No prompt appears. An unentitled build therefore launches as *Not connected*, not as *Keychain unavailable* as the docs said, and offers Sign in. The session PDT granted is then dropped when the save fails, the menu shows *Keychain unavailable*, and Check again re-reads "nothing stored". The scripted SecItem fake answered one status to every call, so the split was never tested.
+
+A second defect sits behind it. A refreshed pair the store refuses is held (`unpersisted`), but every later token request first tries to store it and throws. Even a fix that kept the sign-in would fail all requests after the first refresh, about an hour later.
+
+`gh release list` is empty: no packaged build has shipped, so no installed user holds a Keychain item. The Developer ID provisioning profile that release signing requires (ADR-0002, "Keychain entitlement") does not exist yet.
+
+## Options considered
+
+Labels: **M** measured this session, **D** documented (Apple or this repo), **I** inferred, not probed.
+
+- **Data protection Keychain (today).** Security: item bound to PDTBar's access group, this device only, never synced or restored to another Mac (D). Prompts: none (D, M). Unsigned dev builds cannot write at all (M). Release and Homebrew need the Developer ID provisioning profile embedded; `package_app.sh` already does it and refuses a notarized build without it (M); a cask ships that signed bundle unchanged (I). Migration: none, nothing shipped (M).
+- **Legacy login keychain, no access group.** Security: per-item ACL bound to the signing identity's designated requirement; ignores `ThisDeviceOnly`, so the item moves with `login.keychain-db` backups and Migration Assistant (D, I). No profile needed (D). Prompts: none for a stable Developer ID identity across updates (D). An ad-hoc build's designated requirement is its cdhash, so every rebuild prompts on its first read, which is at launch (I, not probed because it prompts). Breaks "launch never prompts" for the dev loop and gains nothing for releases once a profile exists.
+- **File in Application Support.** Plain 0600: no prompts, works on any signing, already the dev store behind `--pdt-credential-file` (M). Every process running as the user reads it silently, and Time Machine copies it unless excluded (D). Encrypted: the key needs a home, which is the Keychain again or a key in the binary (obfuscation) (I). Contradicts ADR-0002 decision 6.
+- **In memory only.** Nothing at rest; works on any build (I). A sign-in per launch fails plug-and-play for a menu bar app that relaunches at every login (I). Acceptable only as a fallback inside one session.
+
+## Decision
+
+1. **Keep the data protection Keychain as the only durable store.** It is the only option that is both silent and private. The Keychain was not the defect; treating "could not save" as "not connected" was.
+2. **Hold, never drop (bug fix, merge by default).** `PDTConnection` keeps the latest change the store refused (sign-in, pasted token, refreshed pair, server rejection, disconnect) in one private slot and retries the save at the start of every operation. A check reads that slot before the store, so Check again, relaunch-free retries, refresh, and 401 handling never turn a held connection into *Not connected*. Only PDT signs a user out. A held change gives way to a newer decision from another PDTBar process. The stored connection carries a generation that every stored sign-in, pasted token, or disconnect advances, and a refresh or a rejection from PDT keeps. A token entered again advances it although the stored state stays the same, and a disconnect that finds nothing stored writes nothing. The held change records the generation it was decided against, and a retry that finds another generation drops the held change and answers from the store. A rejection keeps the generation because another process can only hold the credential held here by entering it itself, which advances the generation; a rejection it records inside one generation is about the credential stored before the held change. A generation started by the held change's own save is not another process's: a save can land and still report an error, and the retry then finds exactly what it wrote and stores what has happened since. A change made while the store could not be locked or read is taken as decided against what the first read finds, because nothing shows whether another process decided in between and giving way would drop the sign-in whenever anything was stored before it. Under this decision alone an unsaved credential is not handed to the API, which extends ADR-0002 decision 3's then rule for refused rotated pairs to every change, and the menu says so right after sign-in. Decision 3 changes both. A `-34018` on a read stays an access error, never "nothing stored".
+3. **Use a held credential for the session.** When the store refuses a sign-in or pasted token, PDTBar stays connected until it quits and says *Connection not saved* from the moment sign-in returns. A refreshed pair the store refused is used from memory and retried. This changes ADR-0002 decision 3 ("the rotated pair is stored before it is used") to "stored before use when the store accepts it; otherwise used from memory, retried on every later operation, and lost on quit". Nothing is written anywhere new. Done by the commit `feat(auth): stay connected for the session when the Keychain refuses the sign-in`, which also rewords ADR-0002 decision 3. Bram signed it off on #303. As built: `connected` carries `saved` or `thisSessionOnly`, a refresh or rejection of a held credential is held behind it, a rejected or disconnected credential is never used again, every sync end reports how the credential is kept, and Data health reads `Connected, not saved` without raising a cause.
+4. **Durable local builds come from signing, not a new store.** Create the Developer ID provisioning profile (already an ADR-0002 open item). With `PDTBAR_APP_IDENTITY` and `PDTBAR_PROVISIONING_PROFILE` set, `make start` keeps the sign-in across rebuilds with no prompts; access goes by access group, not cdhash (D; not yet proved on this Mac). Without a profile a local build is session-only (after 3) and `--pdt-credential-file` stays the durable dev path.
+
+The login keychain and an Application Support file stay rejected for shipped builds.
+
+## Consequences
+
+- #301 is fixed by 2 alone: Check again never signs out, and an unsaved sign-in is named at sign-in. Without 3, an unentitled build shows *Sign-in not saved* and cannot fetch.
+- With 3, an unsigned `make start` build is a working app that asks for one browser sign-in per launch. It says so on `Not connected`, before the sign-in and after every relaunch: the Keychain store reads its own signature for the `keychain-access-groups` entitlement (no Keychain call, no prompt) and `notConnected` carries the answer. The answer is copy only. It never blocks a sign-in or selects a store.
+- One mechanism replaces `unpersisted`: a single owner for "what the store refused", replayed over the stored state through the existing event table, so a newer sign-in stored by another process still wins. A held sign-in, pasted token, or disconnect replaces the stored state without the table, so the stored generation decides for it: it lands only while no other process has stored a sign-in, pasted token, or disconnect since, and is dropped otherwise. It never brings back a credential another process replaced, disconnected, or saw PDT reject.
+- A disconnect no longer deletes the Keychain item. It leaves the item holding `{"disconnected":{},"generation":N}`, with no credential in it, because a deleted item would read as generation 0 again and hide the disconnect from a process holding an older change.
+- The scripted SecItem fake gains the measured read/write split, and `formal/launch-runtime` distinguishes a held credential from an empty store.
+- Revisit if PDT adds a revoke API (disconnect could then revoke an unsaved session server-side).

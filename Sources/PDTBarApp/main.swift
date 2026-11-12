@@ -6,14 +6,11 @@ import PDTBarAppSupport
 import PDTBarCore
 import SwiftUI
 
-private struct PortfolioFetchOutcome: @unchecked Sendable {
-    var pulse: PulseLifecycleResult?
-    var failure: PDTFetchFailure = .unavailable
-    var errorDescription: String?
-    var detailRefreshOutcome: PDTBackgroundDetailRefreshOutcome?
-    var syncFailure: PDTSyncFailure?
-    /// After a committed refresh: not `.connected` when an optional phase lost access.
-    var connectionAfterSync: PDTConnectionStatus = .connected
+/// How a portfolio sync ended, as its worker hands it to the main queue.
+private enum PortfolioFetchOutcome: @unchecked Sendable {
+    /// The snapshot was committed. `connection` is what the connection says after the sync.
+    case committed(PulseLifecycleResult, detail: PDTBackgroundDetailRefreshOutcome, connection: PDTConnectionStatus)
+    case failed(PDTFetchFailure, errorDescription: String, syncFailure: PDTSyncFailure?)
 }
 
 private struct CachedPulseLoadOutcome: @unchecked Sendable {
@@ -162,10 +159,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
                     asOf: connection.asOf,
                     pulseReadStore: pulseReadStore
                 ).fetch()
-                outcome = PortfolioFetchOutcome(pulse: pulse)
+                outcome = .committed(pulse, detail: .completed, connection: connection.status(afterSyncEnding: nil))
             } catch {
-                outcome = PortfolioFetchOutcome(
-                    failure: connection.failure(for: error),
+                outcome = .failed(
+                    connection.failure(for: error),
                     errorDescription: PDTAppConnection.logLabel(for: error),
                     syncFailure: snapshotStore.lastSyncFailure()
                 )
@@ -178,15 +175,16 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     private func finishFirstPortfolioFetch(_ outcome: PortfolioFetchOutcome) {
         stopPortfolioFetchProgressTimer()
-        if let pulse = outcome.pulse {
-            handleLaunchUpdate(launchRuntime.completeFirstFetch(.succeeded(pulse)))
+        switch outcome {
+        case let .committed(pulse, _, connection):
+            handleLaunchUpdate(launchRuntime.completeFirstFetch(.succeeded(pulse, connection: connection)))
             if let update = launchRuntime.beginBackgroundDetailRefresh() {
                 handleLaunchUpdate(update)
             }
-            return
+        case let .failed(failure, errorDescription, syncFailure):
+            FileHandle.standardError.write(Data("pdtbar: first fetch failed: \(errorDescription)\n".utf8))
+            handleLaunchUpdate(launchRuntime.completeFirstFetch(.failed(failure, failure: syncFailure)))
         }
-        FileHandle.standardError.write(Data("pdtbar: first fetch failed: \(outcome.errorDescription ?? "unknown error")\n".utf8))
-        handleLaunchUpdate(launchRuntime.completeFirstFetch(.failed(outcome.failure, failure: outcome.syncFailure)))
     }
 
     private func startPortfolioFetchProgressTimer() {
@@ -258,18 +256,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
                         self.installMenuBarItem(update.descriptor, cancelOpenMenu: false)
                     }
                 }
-                var connectionAfterSync = PDTConnectionStatus.connected
-                if let ending = result.failures.last, case let .connection(status) = connection.failure(for: ending.kind) {
-                    connectionAfterSync = status
-                }
-                outcome = PortfolioFetchOutcome(
-                    pulse: result.pulse,
-                    detailRefreshOutcome: result.outcome,
-                    connectionAfterSync: connectionAfterSync
+                outcome = .committed(
+                    result.pulse,
+                    detail: result.outcome,
+                    connection: connection.status(afterSyncEnding: result.failures.last?.kind)
                 )
             } catch {
-                outcome = PortfolioFetchOutcome(
-                    failure: connection.failure(for: error),
+                outcome = .failed(
+                    connection.failure(for: error),
                     errorDescription: PDTAppConnection.logLabel(for: error),
                     syncFailure: snapshotStore.lastSyncFailure()
                 )
@@ -283,16 +277,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     private func finishBackgroundPortfolioRefresh(_ outcome: PortfolioFetchOutcome) {
         activeRefreshCancellation = nil
         activeRefreshCompletion = nil
-        if let pulse = outcome.pulse {
+        switch outcome {
+        case let .committed(pulse, detail, connection):
             handleLaunchUpdate(launchRuntime.completeBackgroundDetailRefresh(
-                .succeeded(pulse, outcome: outcome.detailRefreshOutcome ?? .completed, connection: outcome.connectionAfterSync)
+                .succeeded(pulse, outcome: detail, connection: connection)
             ))
-            return
+        case let .failed(failure, errorDescription, syncFailure):
+            FileHandle.standardError.write(Data("pdtbar: background refresh failed: \(errorDescription)\n".utf8))
+            handleLaunchUpdate(launchRuntime.completeBackgroundDetailRefresh(.failed(failure, failure: syncFailure)))
         }
-        FileHandle.standardError.write(Data("pdtbar: background refresh failed: \(outcome.errorDescription ?? "unknown error")\n".utf8))
-        handleLaunchUpdate(launchRuntime.completeBackgroundDetailRefresh(
-            .failed(outcome.failure, failure: outcome.syncFailure)
-        ))
     }
 
     @objc private func retryPortfolioFetch(_ sender: NSMenuItem) {

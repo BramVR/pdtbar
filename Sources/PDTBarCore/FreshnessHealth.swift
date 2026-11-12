@@ -370,6 +370,8 @@ public enum DataHealthAccess: Codable, Equatable, Sendable {
     /// Checking, signing in, or disconnecting.
     case checking
     case connected
+    /// Connected with a credential the store refused: it works until PDTBar quits.
+    case connectedNotSaved
     case notConnected
     /// The `401` causes and `403 INSUFFICIENT_SCOPE`.
     case reconnect(PDTReconnectCause)
@@ -400,8 +402,10 @@ public enum DataHealthAccess: Codable, Equatable, Sendable {
             self = .subscriptionPaused
         case .keychainUnavailable:
             self = .keychainUnavailable
-        case .connected:
+        case .connected(_, .saved):
             self = .connected
+        case .connected(_, .thisSessionOnly):
+            self = .connectedNotSaved
         }
     }
 }
@@ -621,7 +625,7 @@ public enum DataHealth {
         case .reconnect: return .attention(.reconnectNeeded)
         case .subscriptionPaused: return .attention(.subscriptionPaused)
         case .keychainUnavailable: return .attention(.keychainUnavailable)
-        case .unverified, .connected: break
+        case .unverified, .connected, .connectedNotSaved: break
         }
         switch health.detailFill.outcome {
         case .inProgress: return .refreshing
@@ -670,6 +674,8 @@ public enum DataHealth {
             "Checking"
         case .connected:
             "Connected"
+        case .connectedNotSaved:
+            "Connected, not saved"
         case .notConnected:
             "Not connected"
         case let .reconnect(cause):
@@ -763,6 +769,7 @@ public enum DataHealth {
         case .unverified: "not checked"
         case .checking: "checking"
         case .connected: "connected"
+        case .connectedNotSaved: "connected, not saved"
         case .notConnected: "not connected"
         case .reconnect(.signInExpired): "reconnect needed (sign-in expired)"
         case .reconnect(.tokenExpired): "reconnect needed (token expired)"

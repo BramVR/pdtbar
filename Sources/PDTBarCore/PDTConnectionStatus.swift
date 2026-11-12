@@ -1,14 +1,30 @@
 import Foundation
 
-/// What the menu may say about PDT access. A projection of the stored
-/// `PDTConnectionState` plus what PDT answered; it holds no secret.
+/// What the menu may say about PDT access. A projection of the
+/// `PDTConnectionState` this process knows plus what PDT answered; it holds no
+/// secret.
 public enum PDTConnectionStatus: Equatable, Sendable {
-    case notConnected
-    case connected
+    /// Carries how the credential store says it would keep a sign-in made
+    /// now, so the menu can say before the sign-in that it will not outlive
+    /// PDTBar.
+    case notConnected(signInWouldBe: PDTCredentialPersistence)
+    case connected(PDTCredentialPersistence)
     case needsReconnect(PDTCredentialKind, PDTReconnectCause)
     /// `403 API_ACCESS_PAUSED`: the subscription ended. The token stays valid and stored.
     case subscriptionPaused
+    /// The store could not be read, or it refused a disconnect and still
+    /// holds the credential.
     case keychainUnavailable(PDTKeychainProblem)
+}
+
+/// Whether a credential outlives the process: the one this process is
+/// connected with, or the one a sign-in now would give it.
+public enum PDTCredentialPersistence: Equatable, Sendable {
+    case saved
+    /// The credential store refused it, or says beforehand that it will
+    /// (ADR-0003 decision 3). PDTBar uses it from memory until it quits and
+    /// tries the save again on every operation.
+    case thisSessionOnly(PDTKeychainProblem)
 }
 
 public enum PDTReconnectCause: String, Codable, Equatable, Sendable {
@@ -55,28 +71,43 @@ public struct PDTConnectionOutcome: Equatable, Sendable {
 
 /// Why a fetch failed: a connection problem moves the menu to that connection
 /// state; anything else (network, 5xx, 429, decode) is retryable with the
-/// credential still connected.
+/// credential still connected, kept the way the connection says after the
+/// fetch.
 public enum PDTFetchFailure: Equatable, Sendable {
     case connection(PDTConnectionStatus)
-    case unavailable
+    case unavailable(PDTCredentialPersistence)
 }
 
-public extension PDTConnectionStatus {
-    init(stored state: PDTConnectionState) {
+extension PDTConnectionStatus {
+    /// `persistence` is the store's own answer, read only when nothing is stored.
+    init(stored state: PDTConnectionState, signInWouldBe persistence: PDTCredentialPersistence) {
         switch state {
         case .disconnected:
-            self = .notConnected
+            self = .notConnected(signInWouldBe: persistence)
         case .connected:
-            self = .connected
-        case let .needsReconnect(kind, .refreshRejected):
-            self = .needsReconnect(kind, .signInExpired)
-        case let .needsReconnect(kind, .tokenRejected(reason)):
-            self = .needsReconnect(kind, PDTReconnectCause(tokenInvalidReason: reason))
+            self = .connected(.saved)
+        case let .needsReconnect(kind, reason):
+            self = .needsReconnect(kind, PDTReconnectCause(reason))
         }
     }
 
     init(storeError error: Error) {
-        self = .keychainUnavailable(error as? PDTCredentialStoreError == .missingKeychainEntitlement ? .missingEntitlement : .failed)
+        self = .keychainUnavailable(PDTKeychainProblem(storeError: error))
+    }
+}
+
+extension PDTKeychainProblem {
+    init(storeError error: Error) {
+        self = error as? PDTCredentialStoreError == .missingKeychainEntitlement ? .missingEntitlement : .failed
+    }
+}
+
+extension PDTReconnectCause {
+    init(_ reason: PDTReconnectReason) {
+        switch reason {
+        case .refreshRejected: self = .signInExpired
+        case let .tokenRejected(reason): self.init(tokenInvalidReason: reason)
+        }
     }
 }
 

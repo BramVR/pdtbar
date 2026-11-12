@@ -96,6 +96,28 @@ public enum PDTConnectionState: Sendable, Equatable, Codable {
     case needsReconnect(PDTCredentialKind, PDTReconnectReason)
 }
 
+/// What a credential store holds: the connection, and how many sign-ins,
+/// pasted tokens, and disconnects have been stored over it. A token entered
+/// again counts although `state` stays the same. A disconnect that finds no
+/// connection stored writes nothing and does not count. A refresh or a
+/// rejection from PDT moves `state` inside one generation.
+///
+/// A `PDTConnection` holding a change the store refused reads the generation
+/// to see that another process has replaced the stored connection since, so
+/// the count has to outlive a disconnect: after one the store keeps a record
+/// with no credential in it. Only a store with no record reads as `empty`.
+public struct PDTStoredConnection: Sendable, Equatable {
+    public var state: PDTConnectionState
+    public var generation: Int
+
+    public static let empty = PDTStoredConnection(.disconnected)
+
+    public init(_ state: PDTConnectionState, generation: Int = 0) {
+        self.state = state
+        self.generation = generation
+    }
+}
+
 public enum PDTConnectionEvent: Sendable {
     case signedIn(PDTBrowserSession)
     case personalTokenEntered(PDTAPIToken)
@@ -133,6 +155,17 @@ public extension PDTConnectionState {
             return .needsReconnect(credential.kind, .tokenRejected(reason: reason))
         case (_, .refreshed), (_, .refreshRejected), (_, .tokenRejected):
             return self
+        }
+    }
+}
+
+extension PDTConnectionEvent {
+    /// A sign-in, pasted token, or disconnect: `applying` gives the same
+    /// state whatever it is applied to.
+    var replacesAnyState: Bool {
+        switch self {
+        case .signedIn, .personalTokenEntered, .disconnected: true
+        case .refreshed, .refreshRejected, .tokenRejected: false
         }
     }
 }

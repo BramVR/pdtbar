@@ -4,11 +4,17 @@ import Foundation
 /// API client reads. Every operation holds the store's exclusive access from
 /// load through the token endpoint to save, so a refresh is single-flight
 /// across connections and processes: callers that arrive while it runs wait,
-/// then read the rotated pair from the store. A rotated pair the store
-/// refused stays in `unpersisted` until it is stored or a sign-in, token, or
-/// disconnect replaces it in the store, because PDT has already killed the old
-/// one. A refresh that got no answer sets `hold`, and callers inside it share
-/// that failure instead of each sending a refresh.
+/// then read the rotated pair from the store.
+///
+/// A change the store refuses (a sign-in, a pasted token, a rotated pair, a
+/// rejection from PDT, a disconnect) stays in `refused`, and every later
+/// operation first tries to store it again. Until the store takes it, `status`,
+/// `state`, and every token hand-out answer from it, so a store that reads
+/// empty cannot sign the user out, and a credential the store refused works
+/// until this process ends (ADR-0003 decision 3). Once another process
+/// replaces what the store holds, the refused change is dropped and the store
+/// answers again. A refresh that got no answer sets `hold`, and callers inside
+/// it share that failure instead of each sending a refresh.
 public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
     public static let refreshLeeway: TimeInterval = 300
     private static let refreshRetryBase: TimeInterval = 5
@@ -18,8 +24,92 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
     private let tokenEndpoint: PDTTokenEndpoint
     private let now: @Sendable () -> Date
     private let lock = NSLock()
-    private var unpersisted: (session: PDTBrowserSession, from: PDTRefreshToken)?
+    private var refused: (change: Change, error: Error)?
     private var hold: RefreshHold?
+
+    /// What happened to the connection since the store last agreed with it.
+    /// `state` is where that leaves this connection, and `applied(to:)` is
+    /// what the store should hold once it takes a save again.
+    ///
+    /// The change counts only for the store generation it was decided
+    /// against. A sign-in, pasted token, or disconnect another process stores
+    /// later starts a new generation, and the change then gives way to it:
+    /// replaying it would bring back a credential that process replaced,
+    /// disconnected, or saw PDT reject. That process can only have the
+    /// credential held here by entering it itself, which starts a generation,
+    /// so a refresh or rejection it records inside this generation is about
+    /// the credential stored before the change. Those keep the generation: a
+    /// sign-in held here still replaces a pair that process has only
+    /// refreshed, and a pair rotated here still revives one whose refresh
+    /// that process saw rejected.
+    ///
+    /// A sign-in, pasted token, or disconnect replaces any stored state, so
+    /// every refresh or rejection after it only moves `state`. Such a change
+    /// stays the same size however long the store refuses it.
+    ///
+    /// Refreshes and rejections of a credential the store holds are kept in
+    /// `replay`, oldest first, and go through the event table, which lets a
+    /// newer credential from another process win. They are not collapsed
+    /// into one refresh from the oldest pair: the store can hold a pair in
+    /// the middle of the chain when a save landed and still reported an
+    /// error, and only the refresh that names that pair moves it on. Such a
+    /// change gains one event per refresh, about one an hour.
+    struct Change {
+        /// Nil once the change replaces whatever the store holds.
+        private(set) var replay: [PDTConnectionEvent]?
+        var state: PDTConnectionState
+        /// The store generation the change was decided against. Nil until
+        /// the store is read: a change made while the store could not be
+        /// locked or read is taken as decided against what the first read
+        /// finds. Nothing then shows whether another process decided in
+        /// between, and giving way would drop a sign-in whenever anything
+        /// at all was stored before it.
+        var generation: Int?
+        /// What the last save of this change wrote. A save can land and
+        /// still report an error, so the store may hold it.
+        var written: PDTStoredConnection?
+
+        /// `known` is the state the caller just read. A sign-in, pasted token,
+        /// or disconnect replaces any state, so those leave it out.
+        init(_ event: PDTConnectionEvent, after known: PDTConnectionState = .disconnected) {
+            replay = event.replacesAnyState ? nil : [event]
+            state = known.applying(event)
+        }
+
+        /// This change with `event` after it. A refresh or rejection of a
+        /// credential the store never took means nothing over the store alone,
+        /// so it is applied behind the change that produced that credential.
+        func followed(by event: PDTConnectionEvent) -> Change {
+            guard !event.replacesAnyState else {
+                return Change(event)
+            }
+            var next = self
+            next.replay = replay.map { $0 + [event] }
+            next.state = state.applying(event)
+            return next
+        }
+
+        /// What the store should hold once it takes this change. Nil when
+        /// the store has moved to another generation since the change was
+        /// decided, which leaves the store as it is.
+        func applied(to stored: PDTStoredConnection) -> PDTStoredConnection? {
+            if stored == written {
+                // The save landed, so the stored generation is this change's own
+                // and only what has happened since is left to store.
+                return PDTStoredConnection(state, generation: stored.generation)
+            }
+            guard generation ?? stored.generation == stored.generation else {
+                return nil
+            }
+            guard let replay else {
+                // A disconnect that finds no connection stored removes nothing,
+                // so it writes nothing and an empty store stays empty.
+                let removesNothing = state == .disconnected && stored.state == .disconnected
+                return removesNothing ? stored : PDTStoredConnection(state, generation: stored.generation + 1)
+            }
+            return PDTStoredConnection(replay.reduce(stored.state) { $0.applying($1) }, generation: stored.generation)
+        }
+    }
 
     private struct RefreshHold {
         var until: Date
@@ -33,40 +123,62 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
         self.now = now
     }
 
+    /// The connection as this process knows it: the change the store refused,
+    /// else what the store holds.
     public func state() throws -> PDTConnectionState {
-        try locked { try store.load() }
+        try locked { try current() }
+    }
+
+    /// What the menu may say. A change the store refused answers before the
+    /// store does, also when the store cannot be locked or read, so a
+    /// credential held here is never reported as not connected.
+    public func status() -> PDTConnectionStatus {
+        lock.lock()
+        defer { lock.unlock() }
+        let stored = Result {
+            try store.withExclusiveAccess {
+                settle()
+                return try current()
+            }
+        }
+        if let refused {
+            return PDTConnectionStatus(refused: refused.change.state, PDTKeychainProblem(storeError: refused.error))
+        }
+        do {
+            return PDTConnectionStatus(stored: try stored.get(), signInWouldBe: store.persistence)
+        } catch {
+            return PDTConnectionStatus(storeError: error)
+        }
     }
 
     /// Stores the session unless `cancellation` fired first. The check runs
     /// inside the store lock, so a cancel that wins the race stores nothing.
+    /// Throws the store's error when it refused the session, which this
+    /// connection then holds and uses until the store takes it or the process
+    /// ends.
     @discardableResult
     public func signedIn(_ session: PDTBrowserSession, unless cancellation: PDTCancellation? = nil) throws -> Bool {
-        try locked {
-            if cancellation?.isCancelled == true {
-                return false
-            }
-            try replace(with: .signedIn(session))
-            return true
-        }
+        try replace(with: .signedIn(session), unless: cancellation)
     }
 
     public func connect(personalToken: PDTAPIToken) throws {
-        try locked { try replace(with: .personalTokenEntered(personalToken)) }
+        _ = try replace(with: .personalTokenEntered(personalToken))
     }
 
-    /// Deletes the stored credential. PDT has no API revoke for app tokens,
-    /// so this returns the page where the user revokes PDTBar's access.
+    /// Deletes the stored credential, and drops one this connection holds at
+    /// once. PDT has no API revoke for app tokens, so this returns the page
+    /// where the user revokes PDTBar's access. Throws while the credential is
+    /// still stored.
     @discardableResult
     public func disconnect() throws -> URL {
-        try locked { try replace(with: .disconnected) }
+        _ = try replace(with: .disconnected)
         return PDTOAuthEndpoints.connectedApps
     }
 
     /// Refreshes the browser session now, whatever its expiry.
     public func refresh() throws -> PDTBrowserSession {
         try locked {
-            try persistUnpersisted()
-            guard case let .browserSession(session) = try connectedCredential() else {
+            guard case let .browserSession(session) = try credential() else {
                 throw PDTAPIError.invalidRequest
             }
             return try refreshLocked(session)
@@ -75,8 +187,7 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
 
     public func currentToken() throws -> PDTAPIToken {
         try locked {
-            try persistUnpersisted()
-            let credential = try connectedCredential()
+            let credential = try credential()
             guard case let .browserSession(session) = credential,
                   now() >= session.accessExpiresAt.addingTimeInterval(-Self.refreshLeeway)
             else {
@@ -92,8 +203,7 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
 
     public func shouldRetry(afterRejecting token: PDTAPIToken, reason: String?) throws -> Bool {
         try locked {
-            try persistUnpersisted()
-            let credential = try connectedCredential()
+            let credential = try credential()
             if credential.accessToken != token {
                 return true
             }
@@ -102,7 +212,8 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
                 _ = try refreshLocked(session)
                 return true
             }
-            _ = try transition(.tokenRejected(token, reason: reason))
+            // A rejection the store refuses is held, so the rejected token is not read back and sent again.
+            _ = record(.tokenRejected(token, reason: reason), after: .connected(credential))
             return false
         }
     }
@@ -111,12 +222,13 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
         if let hold, now() < hold.until {
             throw hold.failure
         }
+        let known = PDTConnectionState.connected(.browserSession(session))
         let rotated: PDTBrowserSession
         do {
             rotated = try tokenEndpoint.refresh(session.refreshToken)
         } catch PDTTokenEndpointError.invalidGrant {
             // The table ignores a rejection of a pair another process has already rotated past.
-            let state = try transition(.refreshRejected(session.refreshToken))
+            let state = record(.refreshRejected(session.refreshToken), after: known)
             if case let .connected(.browserSession(rotated)) = state {
                 return rotated
             }
@@ -132,34 +244,102 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
             throw PDTAPIError.invalidResponse
         }
         hold = nil
-        unpersisted = (rotated, session.refreshToken)
-        return try persist(rotated, from: session.refreshToken)
-    }
-
-    private func persistUnpersisted() throws {
-        if let unpersisted {
-            _ = try persist(unpersisted.session, from: unpersisted.from)
-        }
-    }
-
-    private func persist(_ rotated: PDTBrowserSession, from: PDTRefreshToken) throws -> PDTBrowserSession {
-        let state = try transition(.refreshed(rotated, from: from))
-        unpersisted = nil
+        // PDT has already killed the old pair, so the rotated pair is used
+        // whether or not the store takes it: it is the only live one.
+        let state = record(.refreshed(rotated, from: session.refreshToken), after: known)
         guard case let .connected(.browserSession(fresh)) = state else {
             throw connectionError(state)
         }
         return fresh
     }
 
-    private func replace(with event: PDTConnectionEvent) throws {
-        // Cleared only once the replacement is stored: until then the pending pair is the only live one.
-        _ = try transition(event)
-        unpersisted = nil
-        hold = nil
+    /// A sign-in, pasted token, or disconnect. It takes the place of whatever
+    /// this connection holds, and a store lock that cannot be taken refuses it
+    /// like a failed save.
+    private func replace(with event: PDTConnectionEvent, unless cancellation: PDTCancellation? = nil) throws -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        var storeLocked = false
+        do {
+            return try store.withExclusiveAccess {
+                storeLocked = true
+                if cancellation?.isCancelled == true {
+                    return false
+                }
+                hold = nil
+                _ = commit(Change(event))
+                if let refused {
+                    throw refused.error
+                }
+                return true
+            }
+        } catch where !storeLocked && cancellation?.isCancelled != true {
+            hold = nil
+            refused = (Change(event), error)
+            throw error
+        }
     }
 
-    private func connectedCredential() throws -> PDTCredential {
-        let state = try store.load()
+    /// What `event` did to the state `current()` just returned: stored, or
+    /// held behind whatever the store already refused. Returns where that
+    /// leaves this connection.
+    private func record(_ event: PDTConnectionEvent, after known: PDTConnectionState) -> PDTConnectionState {
+        commit(refused?.change.followed(by: event) ?? Change(event, after: known))
+    }
+
+    /// Replays `change` over what the store holds now and saves the result.
+    /// Nothing is left to save when the store already holds it, or when the
+    /// event table says a newer credential has overtaken it. Returns where
+    /// that leaves this connection. A change the store refuses is kept in
+    /// `refused` with the store's error. A change another process has decided
+    /// past is dropped, and the stored state is returned.
+    private func commit(_ change: Change) -> PDTConnectionState {
+        var change = change
+        var attempted: PDTStoredConnection?
+        do {
+            let stored = try store.load()
+            guard let next = change.applied(to: stored) else {
+                refused = nil
+                return stored.state
+            }
+            change.state = next.state
+            change.generation = stored.generation
+            if next != stored {
+                change.written = next
+                attempted = next
+                try store.save(next)
+            }
+        } catch {
+            // A save can land and still report an error. Only this attempt's
+            // whole record proves it: a token entered again writes the same
+            // state with a new generation, and an earlier attempt's write is
+            // older than the change now held.
+            guard let attempted, (try? store.load()) == attempted else {
+                refused = (change, error)
+                return change.state
+            }
+        }
+        refused = nil
+        return change.state
+    }
+
+    /// Runs first in every operation: one more try at storing the refused change.
+    private func settle() {
+        if let refused {
+            _ = commit(refused.change)
+        }
+    }
+
+    private func current() throws -> PDTConnectionState {
+        try refused?.change.state ?? store.load().state
+    }
+
+    /// The credential the API may use: the one the store refused while this
+    /// connection holds it, else the stored one. A held rejection or
+    /// disconnect answers like a stored one, so a credential PDT rejected or
+    /// the user disconnected is never sent again.
+    private func credential() throws -> PDTCredential {
+        let state = try current()
         guard case let .connected(credential) = state else {
             throw connectionError(state)
         }
@@ -177,15 +357,27 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
         }
     }
 
-    private func transition(_ event: PDTConnectionEvent) throws -> PDTConnectionState {
-        let next = try store.load().applying(event)
-        try store.save(next)
-        return next
-    }
-
     private func locked<Value>(_ body: () throws -> Value) throws -> Value {
         lock.lock()
         defer { lock.unlock() }
-        return try store.withExclusiveAccess(body)
+        return try store.withExclusiveAccess {
+            settle()
+            return try body()
+        }
+    }
+}
+
+private extension PDTConnectionStatus {
+    /// What a change the store refused means for the menu.
+    init(refused state: PDTConnectionState, _ problem: PDTKeychainProblem) {
+        switch state {
+        case .connected:
+            self = .connected(.thisSessionOnly(problem))
+        case let .needsReconnect(kind, reason):
+            self = .needsReconnect(kind, PDTReconnectCause(reason))
+        case .disconnected:
+            // The delete was refused and the credential is still stored.
+            self = .keychainUnavailable(problem)
+        }
     }
 }

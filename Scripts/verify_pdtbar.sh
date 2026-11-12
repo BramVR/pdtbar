@@ -29,6 +29,7 @@ usage:
   Scripts/verify_pdtbar.sh menu-smoke               # build, launch the plan fixture, menu-walk, stop
   Scripts/verify_pdtbar.sh menu-measure <fixture.json>   # build, launch, root menu rows + menu.png, stop
   Scripts/verify_pdtbar.sh menu-measure --scripted <script.json> <seed-snapshot.json>   # same over launch-scripted
+  Scripts/verify_pdtbar.sh auth-states [out-dir]    # build, then each auth state's root menu: <out>/<state>.png + .json
 EOF
   exit 64
 }
@@ -253,6 +254,122 @@ menu_measure() {
   printf 'evidence: %s/evidence/measure\n' "${run}"
 }
 
+# name connection keychain replies seeded-pulse presses. Presses run in order, comma-separated;
+# a|b presses the first row id this build's menu has.
+AUTH_STATES=(
+  "fresh notConnected - none no -"
+  "unentitled-signin notConnected unentitled ok no pdtConnection.signIn"
+  "unentitled-checkagain notConnected unentitled ok no pdtConnection.signIn,pdtConnection.check"
+  "unentitled-signin-pulse notConnected unentitled ok yes pdtConnection.signIn"
+  "reconnect-expired signInExpired - none yes -"
+  "reconnect-revoked tokenRevoked - none yes -"
+  "disconnected browserSession - ok yes actions.disconnect|pdtConnection.disconnect"
+  "fetch-failed browserSession - 503 no -"
+)
+
+# Settled once the event log and app log have not grown for 2s.
+settle() {
+  local run="$1" last="" now quiet=0
+  for _ in {1..100}; do
+    now="$(wc -c < "${run}/events.log" 2>/dev/null || echo 0) $(wc -c < "${run}/app.log")"
+    if [[ "${now}" == "${last}" ]]; then
+      (( ++quiet >= 10 )) && return 0
+    else
+      quiet=0
+      last="${now}"
+    fi
+    sleep 0.2
+  done
+}
+
+auth_states() {
+  local out="${1:-${RUNS_DIR}/auth-states-$(date +%Y%m%d-%H%M%S)}" spec state connection keychain replies seeded presses
+  local step alt run seed code line results attempt
+  (cd "${ROOT_DIR}" && swift build --product pdtbar && swift build --product pdtbar-capture \
+    && swift build --product pdtbar-dev) >&2 || fail "build failed"
+  require_capture_tool
+  line="$("${CAPTURE}" preflight)" || fail "auth-states needs can-capture: yes; got $(grep '^can-capture:' <<<"${line}")"
+  grep -q '^accessibility: granted' <<<"${line}" || fail "auth-states needs Accessibility already granted to press menu rows"
+  mkdir -p "${out}/scripts" "${out}/seed"
+  out="$(cd "${out}" && pwd -P)"
+  # The seed is the snapshot the fixture-mode pipeline writes, so the app loads it as a cached pulse.
+  "${ROOT_DIR}/.build/debug/pdtbar-dev" run --fixture "${ROOT_DIR}/docs/pdt/fixtures/quiet-no-pressure.json" \
+    --snapshot-dir "${out}/seed" > /dev/null || fail "could not build the seed snapshot"
+  for spec in "${AUTH_STATES[@]}"; do
+    read -r state connection keychain replies seeded presses <<<"${spec}"
+    python3 -I - "${ROOT_DIR}" "${out}/scripts/${state}.json" "${connection}" "${keychain}" "${replies}" <<'PY'
+import json, sys
+root, path, connection, keychain, replies = sys.argv[1:]
+holdings = open(f"{root}/docs/pdt/fixtures/api/full/01-holdings.json").read()
+unavailable = {"status": 503, "headers": {"Retry-After": "0"},
+               "body": '{"error":{"code":"SERVICE_UNAVAILABLE","message":"m","details":{},"traceId":"t"}}'}
+responses = {"none": [], "ok": [{"status": 200, "body": holdings}], "503": [unavailable] * 3}[replies]
+script = {"connection": connection, "signIn": "succeeds", "api": {"responses": responses, "asOf": "2026-06-22"}}
+if keychain != "-":
+    script["keychain"] = keychain
+json.dump(script, open(path, "w"), indent=2)
+PY
+    seed=""
+    [[ "${seeded}" == no ]] || seed="${out}/seed/latest-portfolio-snapshot.json"
+    run="$(launch_scripted "${out}/scripts/${state}.json" ${seed:+"${seed}"} | sed -n 's/^ready: //p')"
+    [[ -n "${run}" ]] || fail "${state}: launch did not report ready"
+    trap "stop '${run}' >&2 || true" EXIT
+    settle "${run}"
+    results=()
+    if [[ "${presses}" != - ]]; then
+      for step in ${presses//,/ }; do
+        line="pressed: false (${step} not in this menu)"
+        for alt in ${step//|/ }; do
+          code=0
+          line="$("${CAPTURE}" press --pid "$(cat "${run}/pid")" --row "${alt}")" || code=$?
+          [[ "${code}" == 0 || "${code}" == 2 ]] || fail "${state}: press ${alt} failed (exit ${code}): ${line}"
+          [[ "${code}" == 2 ]] || { settle "${run}"; break; }
+        done
+        printf '%s %s\n' "${state}" "${line}" >&2
+        results+=("${step}=${line}")
+      done
+    fi
+    # The menu can close under the capture while the menu bar re-lays out after the previous state's app quit.
+    for attempt in 1 2 3; do
+      "${CAPTURE}" measure --pid "$(cat "${run}/pid")" --fixture "${state}" --out-dir "${run}/evidence/measure" \
+        --allow-sensitive-text >&2 && break
+      (( attempt < 3 )) || fail "${state}: menu capture failed 3 times (reason above)"
+      sleep 1
+    done
+    cp "${run}/evidence/measure/menu.png" "${out}/${state}.png"
+    python3 -I - "${out}/${state}.json" "${state}" "${spec}" "${run}" ${results[@]+"${results[@]}"} <<'PY'
+import json, re, sys
+path, state, spec, run, *presses = sys.argv[1:]
+_, connection, keychain, replies, seeded, _ = spec.split()
+measure = json.load(open(f"{run}/evidence/measure/measure.json"))
+try:
+    events = open(f"{run}/events.log").read().split("\n")[:-1]
+except FileNotFoundError:
+    events = []
+def press(entry):
+    step, line = entry.split("=", 1)
+    hit = re.match(r"pressed: (true|false) \((?:pdtbar\.row\.)?(\S+)", line)
+    return {"step": step, "pressed": hit.group(1) == "true", "row": hit.group(2) if hit.group(1) == "true" else None,
+            "detail": line}
+report = {
+    "state": state,
+    "script": {"connection": connection, "keychain": None if keychain == "-" else keychain,
+               "replies": replies, "seededPulse": seeded == "yes"},
+    "presses": [press(entry) for entry in presses],
+    "events": events,
+    "menuWidth": measure["menuWidth"], "menuHeight": measure["menuHeight"],
+    "rows": [{"id": row.get("kind"), "role": row["role"], "text": row["text"].get("text"),
+              "enabled": row["enabled"], "hasSubmenu": row["hasSubmenu"]} for row in measure["rows"]],
+}
+json.dump(report, open(path, "w"), indent=2)
+PY
+    stop "${run}" >&2
+    trap - EXIT
+    printf '%s: %s/%s.png\n' "${state}" "${out}" "${state}"
+  done
+  printf 'auth-states: %s\n' "${out}"
+}
+
 case "${1:-}" in
   launch) shift; launch "$@" ;;
   launch-scripted) [[ $# -ge 2 && $# -le 3 ]] || usage; shift; launch_scripted "$@" ;;
@@ -262,6 +379,7 @@ case "${1:-}" in
   capture) shift; capture "$@" ;;
   menu-walk) [[ $# -eq 2 ]] || usage; menu_walk "${2%/}" ;;
   menu-smoke) [[ $# -eq 1 ]] || usage; menu_smoke ;;
+  auth-states) [[ $# -le 2 ]] || usage; shift; auth_states "$@" ;;
   menu-measure) [[ $# -eq 2 || ( $# -eq 4 && "$2" == --scripted ) ]] || usage; shift; menu_measure "$@" ;;
   *) usage ;;
 esac

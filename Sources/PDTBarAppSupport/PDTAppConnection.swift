@@ -56,7 +56,7 @@ public final class PDTAppConnection: @unchecked Sendable {
 
     public func check() -> PDTConnectionOutcome {
         log?("check")
-        return PDTConnectionOutcome(status())
+        return PDTConnectionOutcome(connection.status())
     }
 
     public func signIn(cancellation: PDTCancellation) -> PDTConnectionOutcome {
@@ -65,42 +65,36 @@ public final class PDTAppConnection: @unchecked Sendable {
         do {
             session = try runSignIn(cancellation)
         } catch PDTSignInError.cancelled {
-            return PDTConnectionOutcome(status())
+            return PDTConnectionOutcome(connection.status())
         } catch let error as PDTSignInError {
-            return PDTConnectionOutcome(status(), notice: .signInFailed(PDTSignInFailure(error)))
+            return PDTConnectionOutcome(connection.status(), notice: .signInFailed(PDTSignInFailure(error)))
         } catch {
-            return PDTConnectionOutcome(status(), notice: .signInFailed(.failed))
+            return PDTConnectionOutcome(connection.status(), notice: .signInFailed(.failed))
         }
-        do {
-            // A cancel during the code exchange or the wait for the store lock still wins.
-            try connection.signedIn(session, unless: cancellation)
-        } catch {
-            return PDTConnectionOutcome(PDTConnectionStatus(storeError: error))
-        }
-        return PDTConnectionOutcome(status())
+        // A cancel during the code exchange or the wait for the store lock still wins.
+        // The connection uses a session the store refuses, and its status says it is not saved.
+        _ = try? connection.signedIn(session, unless: cancellation)
+        return PDTConnectionOutcome(connection.status())
     }
 
     public func connect(token: PDTAPIToken) -> PDTConnectionOutcome {
         log?("token")
-        do {
-            try connection.connect(personalToken: token)
-        } catch {
-            return PDTConnectionOutcome(PDTConnectionStatus(storeError: error))
-        }
-        return PDTConnectionOutcome(status())
+        try? connection.connect(personalToken: token)
+        return PDTConnectionOutcome(connection.status())
     }
 
     /// Deletes the credential and names the PDT page where the user removes
     /// PDTBar's access: connected apps for a sign-in, Integrations for a token.
     public func disconnect() -> PDTConnectionOutcome {
         log?("disconnect")
-        do {
-            let revokeAt = storedKind() == .personalToken ? PDTOAuthEndpoints.integrations : PDTOAuthEndpoints.connectedApps
-            try connection.disconnect()
-            return PDTConnectionOutcome(status(), notice: .disconnected(revokeAt: revokeAt))
-        } catch {
-            return PDTConnectionOutcome(PDTConnectionStatus(storeError: error))
+        let revokeAt = storedKind() == .personalToken ? PDTOAuthEndpoints.integrations : PDTOAuthEndpoints.connectedApps
+        _ = try? connection.disconnect()
+        let status = connection.status()
+        // The notice says the credential is gone, so it waits for a delete the store took.
+        guard case .notConnected = status else {
+            return PDTConnectionOutcome(status)
         }
+        return PDTConnectionOutcome(status, notice: .disconnected(revokeAt: revokeAt))
     }
 
     /// A log line for a fetch error that carries no server text: PDT's
@@ -123,13 +117,10 @@ public final class PDTAppConnection: @unchecked Sendable {
         PDTAPIClient(transport: apiTransport, tokenProvider: connection)
     }
 
-    /// Sorts a thrown fetch error. Only the two facts a `PDTSyncFailure.Kind`
-    /// drops are read here: PDT's token-invalid reason and the Keychain problem.
+    /// Sorts a thrown fetch error. Only the fact a `PDTSyncFailure.Kind` drops
+    /// is read here: PDT's token-invalid reason.
     public func failure(for error: Error) -> PDTFetchFailure {
         let error = (error as? PDTAPIRequestFailure)?.underlyingError ?? error
-        if error is PDTCredentialStoreError {
-            return .connection(PDTConnectionStatus(storeError: error))
-        }
         if case let .tokenInvalid(reason)? = error as? PDTAPIError {
             return rejected(PDTReconnectCause(tokenInvalidReason: reason))
         }
@@ -137,9 +128,10 @@ public final class PDTAppConnection: @unchecked Sendable {
     }
 
     /// What a failed request means for the connection, whichever phase it ran
-    /// in. `PDTConnection` has already stored `needsReconnect` for a rejected
-    /// refresh or token, so the stored state decides those. A plain `403` has no
-    /// connection state of its own and stays retryable.
+    /// in. `PDTConnection` has already stored or held `needsReconnect` for a
+    /// rejected refresh or token, so its status decides those. Every other
+    /// failure, a plain `403` included, is retryable while the connection
+    /// still says connected, and reports how the credential is kept.
     public func failure(for kind: PDTSyncFailure.Kind) -> PDTFetchFailure {
         switch kind {
         case .accessPaused:
@@ -148,28 +140,33 @@ public final class PDTAppConnection: @unchecked Sendable {
             return .connection(.needsReconnect(storedKind() ?? .personalToken, .readAccessMissing))
         case .reconnect:
             return rejected(.tokenInvalid)
-        case .credentialStore:
-            let status = status()
-            return status == .connected ? .unavailable : .connection(status)
-        case .forbidden, .rateLimited, .network, .server, .unreadableResponse, .unexpected, .cancelled:
-            return .unavailable
+        case .credentialStore, .forbidden, .rateLimited, .network, .server, .unreadableResponse, .unexpected, .cancelled:
+            let status = connection.status()
+            guard case let .connected(persistence) = status else {
+                return .connection(status)
+            }
+            return .unavailable(persistence)
         }
     }
 
     private func rejected(_ cause: PDTReconnectCause) -> PDTFetchFailure {
-        let status = status()
-        guard status == .connected else {
+        let status = connection.status()
+        guard case .connected = status else {
             return .connection(status)
         }
         return .connection(.needsReconnect(storedKind() ?? .personalToken, cause))
     }
 
-    private func status() -> PDTConnectionStatus {
-        do {
-            return PDTConnectionStatus(stored: try connection.state())
-        } catch {
-            return PDTConnectionStatus(storeError: error)
+    /// What the connection is after a sync that committed a snapshot: the
+    /// state its ending failure names when an optional phase lost access,
+    /// else what `PDTConnection` says now. With `failure(for:)` this is where
+    /// every finished sync reports the connection, so a credential that is
+    /// not saved is never reported as saved.
+    public func status(afterSyncEnding failure: PDTSyncFailure.Kind?) -> PDTConnectionStatus {
+        if let failure, case let .connection(status) = self.failure(for: failure) {
+            return status
         }
+        return connection.status()
     }
 
     private func storedKind() -> PDTCredentialKind? {
@@ -183,9 +180,9 @@ public final class PDTAppConnection: @unchecked Sendable {
 
 /// `--scripted-pdt <file>`: an offline connection for smokes. It never builds
 /// the production store, URLSession, or browser: the credential lives in
-/// memory (or in the Keychain store over a SecItem API that answers
-/// `keychainStatus` to every call, never the real Keychain), sign-in is
-/// scripted, and API replies come from `api` in request order.
+/// memory, or in the Keychain store over a fake SecItem API (`keychain`, or
+/// `keychainStatus` answered to every call), never the real Keychain. Sign-in
+/// is scripted, and API replies come from `api` in request order.
 public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
     public enum StoredConnection: String, Codable, Sendable {
         case notConnected, browserSession, personalToken, signInExpired, tokenRevoked
@@ -195,8 +192,17 @@ public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
         case succeeds, denied, portBusy, timedOut, waitsForCancel
     }
 
+    /// The Keychain as a kind of build sees it. It starts empty, whatever `connection` says.
+    public enum Keychain: String, Codable, Sendable {
+        /// Measured on an ad-hoc signed build: a read finds nothing (-25300),
+        /// every write is refused (-34018), and the signature has no
+        /// `keychain-access-groups`.
+        case unentitled
+    }
+
     public var connection: StoredConnection
     public var keychainStatus: Int32?
+    public var keychain: Keychain?
     public var signIn: SignInOutcome?
     public var signInDelaySeconds: Double?
     public var api: ScriptedPDTAPIConfiguration
@@ -206,6 +212,7 @@ public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
     public init(
         connection: StoredConnection,
         keychainStatus: Int32? = nil,
+        keychain: Keychain? = nil,
         signIn: SignInOutcome? = nil,
         signInDelaySeconds: Double? = nil,
         api: ScriptedPDTAPIConfiguration = ScriptedPDTAPIConfiguration(responses: []),
@@ -213,6 +220,7 @@ public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
     ) {
         self.connection = connection
         self.keychainStatus = keychainStatus
+        self.keychain = keychain
         self.signIn = signIn
         self.signInDelaySeconds = signInDelaySeconds
         self.api = api
@@ -226,7 +234,9 @@ public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
     public func appConnection(lockDirectory: URL) throws -> PDTAppConnection {
         let log = eventLog.map(ScriptedEventLog.init(path:))
         let store: any PDTCredentialStore
-        if let keychainStatus {
+        if keychain == .unentitled {
+            store = KeychainPDTCredentialStore(lockDirectory: lockDirectory, secItem: .unentitled)
+        } else if let keychainStatus {
             store = KeychainPDTCredentialStore(lockDirectory: lockDirectory, secItem: .answering(keychainStatus))
         } else {
             store = InMemoryPDTCredentialStore(Self.storedState(connection))
@@ -322,6 +332,17 @@ private struct LoggingPDTHTTPTransport: PDTHTTPTransport {
 
 private extension KeychainPDTCredentialStore.SecItemAPI {
     static func answering(_ status: OSStatus) -> Self {
-        Self(copyMatching: { _, _ in status }, add: { _ in status }, update: { _, _ in status }, delete: { _ in status })
+        Self(
+            copyMatching: { _, _ in status }, add: { _ in status }, update: { _, _ in status }, delete: { _ in status },
+            isEntitled: status != errSecMissingEntitlement
+        )
     }
+
+    static let unentitled = Self(
+        copyMatching: { _, _ in errSecItemNotFound },
+        add: { _ in errSecMissingEntitlement },
+        update: { _, _ in errSecMissingEntitlement },
+        delete: { _ in errSecMissingEntitlement },
+        isEntitled: false
+    )
 }

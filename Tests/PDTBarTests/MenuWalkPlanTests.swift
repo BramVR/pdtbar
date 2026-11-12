@@ -90,7 +90,7 @@ private func reconnectAfterBaseFailure() throws -> MenuDescriptor {
     let runtime = PDTLaunchRuntime()
     _ = runtime.launch()
     _ = runtime.completeCachedPulseLoad(cached)
-    _ = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+    _ = runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: runtime.connectionAttempt)
     return runtime.completeBackgroundDetailRefresh(.failed(
         .connection(.needsReconnect(.personalToken, .tokenExpired)),
         failure: PDTSyncFailure(phase: .baseHoldings, endpoint: .holdings, kind: .reconnect, requestCount: 1)

@@ -13,16 +13,18 @@ Run it when a change touches any covered function below, the order of main-queue
 
 ## Coverage
 
-Sync commit: the #248 PR head (`feat/248-pdt-api-onboarding`). After you confirm the model still describes the covered code at a newer commit, move this line forward. Never move it without that check.
+Sync commit: `fix(auth): a held connection change yields to a newer one from another process`. After you confirm the model still describes the covered code at a newer commit, move this line forward. Never move it without that check.
 
 `Sources/PDTBarCore/LaunchRuntime.swift`:
-- `PDTLaunchState` 94 and its `offersSignIn` / `offersCheckAgain` / `offersDisconnect` 115-150.
-- `PDTLaunchMenu.descriptor(for:cachedPulse:notice:fetchingElapsedSeconds:)` 207, `withDisconnectAction` 770.
-- `PDTConnectionAttempt` 823. `PDTLaunchRuntime` 848: `launch` 878, `completeCachedPulseLoad` 883, `completeConnection` 894, `signIn` 903, `connect(token:)` 910, `cancelSignIn` 918, `checkAgain` 925, `disconnect` 932, `retryFirstFetch` 940, `firstFetchProgress` 951, `completeFirstFetch` 958, `beginBackgroundDetailRefresh` 976, `backgroundDetailRefreshProgress` 983, `completeBackgroundDetailRefresh` 992, `pulseReadStateDidChange` 1023, `apply` 1037, `beginConnectionOperation` 1049, `startBackgroundDetailRefresh` 1062, `descriptor` 1083.
+- `PDTLaunchState` 109 and its `offersSignIn` / `offersCheckAgain` / `offersDisconnect` 135-155.
+- `PDTLaunchMenu.descriptor(for:cachedPulse:notice:fetchingElapsedSeconds:syncFailure:)` 228, `notSavedRows` 392, `withConnectionActions` 625.
+- `PDTConnectionAttempt` 690. `PDTLaunchRuntime` 715: `launch` 752, `completeCachedPulseLoad` 757, `completeConnection` 768, `signIn` 777, `connect(token:)` 784, `cancelSignIn` 792, `checkAgain` 799, `disconnect` 806, `retryFirstFetch` 814, `firstFetchProgress` 824, `completeFirstFetch` 831, `beginBackgroundDetailRefresh` 845, `backgroundDetailRefreshProgress` 852, `completeBackgroundDetailRefresh` 860, `pulseReadStateDidChange` 882, `apply` 896, `endCommitted` 911, `endUncommitted` 922, `beginConnectionOperation` 938, `startBackgroundDetailRefresh` 951, `descriptor` 976.
 
-`Sources/PDTBarCore/MenuDescriptorRenderer.swift`: default pulse "Refresh now" row 277, `refreshActionRow` 468 (`waitingForSetup` is shown but not clickable).
+`Sources/PDTBarCore/MenuDescriptorRenderer.swift`: `refreshActionRow` 486 with its "Refresh now" rows (`waitingForSetup` is shown but not clickable).
 
-`Sources/PDTBarApp/main.swift` (`AppDelegate`): `launch` 60, `startCachedPulseLoad` 93, `runConnectionOperation` 111, `startSignIn` 128, `startFirstPortfolioFetch` 134, `finishFirstPortfolioFetch` 169, `startBackgroundPortfolioRefresh` 219, `finishBackgroundPortfolioRefresh` 265, connection selectors 280-327, `handleLaunchUpdate` 329, `connectionAction(for:)` role-to-selector wiring.
+`Sources/PDTBarApp/main.swift` (`AppDelegate`): `launch` 59, `startCachedPulseLoad` 92, `runConnectionOperation` 110, `startSignIn` 127, `startFirstPortfolioFetch` 133, `finishFirstPortfolioFetch` 174, `startBackgroundPortfolioRefresh` 225, `finishBackgroundPortfolioRefresh` 275, connection selectors 289-336, `handleLaunchUpdate` 338, `connectionAction(for:)` 960 role-to-selector wiring.
+
+`Sources/PDTBarCore/PDTConnection.swift` and `Sources/PDTBarAppSupport/PDTAppConnection.swift`, only as the `cred` ghost: what `status`, `replace`, `record`, and `commit` let `check`, `signIn`, `connect(token:)`, `disconnect`, `failure(for:)`, and `status(afterSyncEnding:)` report while a credential the store refused is held and used (#301, ADR-0003 decision 3). Run the model when that changes.
 
 ## Run
 
@@ -45,8 +47,10 @@ Passing today:
 - `NotConnectedShowsSetup`: after a disconnect, or with no credential, the menu shows setup only.
 - `OfferedActionsAreLive`: every clickable Sign in / Use a token / Check again / Disconnect / Try again / Refresh now row is accepted by the runtime.
 - `NeverStranded`: something is running, or the menu offers a way forward.
-- `AccessLossLeavesConnected` (#191): a committed refresh whose optional phase lost access (401, `INSUFFICIENT_SCOPE`, `API_ACCESS_PAUSED`, Keychain) moves to that connection state; the menu never says connected until a connection result does (mutation `optionalAccessLossStaysConnected`).
+- `AccessLossLeavesConnected` (#191): a committed first fetch or refresh that found access gone (an optional phase's 401, `INSUFFICIENT_SCOPE`, `API_ACCESS_PAUSED`, or the connection read after the sync) moves to that connection state; the menu never says connected until a connection result does (mutation `optionalAccessLossStaysConnected`).
 - `UncommittedRecordKept` (#191): the failure record of a sync that committed nothing stays in Data Health on connection screens and through connection operations until the next sync starts (mutations `connectionScreenDropsRecord`, `connectionOpDropsRecord`).
+- `SignedOutOnlyWithoutCredential` (#301): the menu says `Not connected` only when `PDTConnection` holds and stores nothing. While it holds a credential the store refused, no check, failed sign-in, or sync signs the user out (mutation `checkReadsStoreOnly`, the #301 bug: a check that reads the store past the held credential). A disconnect in another process drops the held credential first, so the menu then says `Not connected` with nothing held.
+- `NotSavedRowTellsTruth` (ADR-0003 decision 3): on every connected screen the `Connection not saved` row is shown exactly while the credential in use lives in this process only. Harm if broken: a user quits believing the sign-in is saved, or keeps reading a warning that no longer holds. Mutations: `fetchingHidesNotSaved` (the row only where Disconnect is offered), `syncEndReportsSaved` (a finished sync reports a hand-built saved connection), `syncEndKeepsOldPersistence` (a finished sync keeps what the state said before it), `retryForgetsNotSaved` (a retry starts as saved).
 
 The runtime also refuses connection actions while any work runs (`isIdle`). The state guard already covers that in every reachable state, so that guard is pinned by `LaunchFlowTests` rather than by a mutation here.
 
@@ -70,11 +74,12 @@ When TLC reports a violation, replay its steps against the Swift code before you
 
 ## Scope and bounds
 
-Bounds (`LaunchRuntime.cfg`): at most 4 connection operations started by clicks or the cache load (`MaxOps`) and 2 Try again / Refresh now clicks (`MaxRetries`). That covers 339 distinct states. A pass covers these bounds only.
+Bounds (`LaunchRuntime.cfg`): at most 4 connection operations started by clicks or the cache load (`MaxOps`) and 2 Try again / Refresh now clicks (`MaxRetries`). That covers 1098 distinct states. A pass covers these bounds only.
 
 Modelled at this abstraction:
-- A connection operation reports any `PDTConnectionStatus`; a disconnect reports `notConnected` or `keychainUnavailable`.
-- Fetch and refresh outcomes are success, `unavailable`, or one of the connection states (`PDTFetchFailure`). Degraded is the same as success for the launch menu.
+- The ghost `cred` is what `PDTConnection` knows: `none`, `saved`, or `session` (a sign-in, token, or rotated pair the store refused, used from memory). A check answers from a session credential first (`connected:session`, `connected:saved` once the retried save lands, or the reconnect state a rejection left). The session credential gives way only to a sign-in, token, or disconnect another process stored after it: it is dropped and the store answers, which after a disconnect there is `notConnected` with nothing held, and `keychainUnavailable` when the store stops reading right after. Otherwise a check answers from the store, which another process may have changed. A sign-in or token ends saved or session, or changes nothing. A disconnect reports `notConnected` or `keychainUnavailable`. A new process starts with nothing held.
+- `kept` is the persistence payload of `.connected`. Every connection result and every sync end that leaves the menu connected sets it from what `PDTConnection` says then; a retry carries it into the next sync.
+- Fetch and refresh outcomes are success, `unavailable`, one of the connection states (`PDTFetchFailure`), or committed with access gone. A sync that ends connected may have changed how the credential is kept: a rotated pair the store refused is held, and a held credential the store took is saved. The model puts that change at the sync's end, where the code reads it; a row shown while the sync still runs is as old as the sync's start. A sync finds the store not connected or unreadable past a held credential only after another process stored a sign-in, token, or disconnect, which drops the held credential. Degraded is the same as success for the launch menu.
 - The cached load either finds a pulse or does not.
 - Menus are reduced to their kind (setup or pulse), their state, and which connection and refresh rows are clickable.
 
@@ -82,6 +87,7 @@ Left out:
 - Fixture mode.
 - Cancel sign-in: the worker keeps the operation slot until it reports, so cancel changes nothing the model tracks.
 - Sign-in notices and the revoke row (copy only).
+- What `notConnected` says about saving a sign-in (`signInWouldBe`): a fact about the build's signature that `PDTConnection.status` copies from the store into every not-connected status. The runtime only carries it to the status row's detail, so it changes no state, row, or guard the model tracks. `SignInPersistenceTests` covers it.
 - Quit-time refresh cancellation (`applicationWillTerminate`).
-- What the background refresh does inside (see `verify-background-detail-refresh`), credential refresh and storage (`PDTConnection`, covered by `PDTSignInTests`), and read-state writes (see `verify-pulse-read-state`).
+- What the background refresh does inside (see `verify-background-detail-refresh`), credential refresh, storage, and the replay of a change the store refused (`PDTConnection`, covered by `PDTSignInTests`, `SignInPersistenceTests`, and `HeldConnectionChangeTests`, which also holds the stored generation rule), and read-state writes (see `verify-pulse-read-state`).
 - Timer cadence: a first-fetch progress tick is a re-render only.
