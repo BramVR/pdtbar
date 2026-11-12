@@ -119,6 +119,20 @@ struct AllocationPressureTests {
         #expect(detailsRow.children.contains { $0.id == "allocation.portfolio.sectors" })
         #expect(detailsRow.children.contains { $0.id == "allocation.9001" })
     }
+
+    @Test("Worst-case height fixture fills Pulse with movers and spills both pressures into Allocation")
+    func worstCaseFixtureSpillsPressuresIntoAllocation() throws {
+        let model = PressureEngine.buildModel(from: try fixtureSnapshot("worst-case-height.json"))
+        let sections = MenuDescriptorRenderer.render(model: model).sections
+        let rowIDs = { (id: String) in sections.first { $0.id == id }?.rows.map(\.id) ?? [] }
+
+        #expect(rowIDs("pulse") == ["bigMovers.move.9002.glance", "bigMovers.move.9005.glance", "bigMovers.move.9008.glance"])
+        #expect(rowIDs("allocation").filter { $0.hasSuffix(".allocation") } == [
+            "allocation.concentration.9001.allocation",
+            "allocation.sector.information-technology.allocation",
+        ])
+        #expect(rowIDs("income").count == 5)
+    }
 }
 
 private func fixtureSnapshot(_ name: String) throws -> PortfolioSnapshot {

@@ -177,8 +177,8 @@ The PDT REST API is the only data path. What it does not cover yet:
 
 - **Performance and gains.** `PDTAPIResource.performance` and `.gains` exist,
   but the refresh does not map them (#246 scope). With neither figure, the
-  menu summary shows the total alone, and a prior period's performance is
-  never carried forward.
+  menu summary shows the total alone; with one, that figure fills the row by
+  itself. A prior period's performance is never carried forward.
   Scenario fixtures still carry performance for engine tests.
 - **Token expiry in Data health.** ADR-0002 §8 asks for the expiry date and an
   `expiring_soon` warning. Nothing reads `expiresAt` yet (left by #287).

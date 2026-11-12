@@ -1,0 +1,20 @@
+{
+  "connection": "browserSession",
+  "api": {
+    "responses": [
+      {
+        "status": 503,
+        "body": "{\"error\":{\"code\":\"SERVICE_UNAVAILABLE\",\"message\":\"m\",\"details\":{},\"traceId\":\"t\"}}"
+      },
+      {
+        "status": 503,
+        "body": "{\"error\":{\"code\":\"SERVICE_UNAVAILABLE\",\"message\":\"m\",\"details\":{},\"traceId\":\"t\"}}"
+      },
+      {
+        "status": 503,
+        "body": "{\"error\":{\"code\":\"SERVICE_UNAVAILABLE\",\"message\":\"m\",\"details\":{},\"traceId\":\"t\"}}"
+      }
+    ],
+    "asOf": "2026-06-22"
+  }
+}

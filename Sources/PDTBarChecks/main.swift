@@ -7,6 +7,7 @@ let fixtureNames = [
     "income-event.json",
     "big-mover.json",
     "quiet-no-pressure.json",
+    "worst-case-height.json",
 ]
 let fixtures = fixtureNames.map { packageRoot.appending(path: "docs/pdt/fixtures/\($0)") }
 

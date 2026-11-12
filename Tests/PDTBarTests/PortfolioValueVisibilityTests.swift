@@ -209,8 +209,8 @@ struct PortfolioValueVisibilityTests {
                             title: "Legacy summary",
                             portfolioSummary: MenuRowPortfolioSummary(
                                 totalValue: "GBp 54,321.09",
-                                cagr: "Unavailable",
-                                totalIncrease: "Unavailable"
+                                cagr: nil,
+                                totalIncrease: nil
                             )
                         ),
                     ]

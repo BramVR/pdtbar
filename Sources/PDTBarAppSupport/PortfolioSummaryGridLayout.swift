@@ -8,19 +8,22 @@ public struct PortfolioSummaryGridLayout: Equatable, Sendable {
     public var width: CGFloat
     public var systemFontSize: CGFloat
 
-    public var showsPerformance: Bool
+    /// Return figures PDT supplied: 0 shows the total alone, 1 lets the lone figure span the row.
+    public var performanceColumns: Int
 
-    public init(width: CGFloat, systemFontSize: CGFloat = Self.baseSystemFontSize, showsPerformance: Bool = true) {
+    public init(width: CGFloat, systemFontSize: CGFloat = Self.baseSystemFontSize, performanceColumns: Int = 2) {
         self.width = width
         self.systemFontSize = max(Self.baseSystemFontSize, systemFontSize)
-        self.showsPerformance = showsPerformance
+        self.performanceColumns = performanceColumns
     }
 
     public var columnWidth: CGFloat {
-        max(0, (width - Self.horizontalPadding * 2 - Self.columnGap) / 2)
+        let content = width - Self.horizontalPadding * 2
+        guard performanceColumns > 1 else { return max(0, content) }
+        return max(0, (content - Self.columnGap) / 2)
     }
 
     public var rowHeight: CGFloat {
-        (showsPerformance ? 86 : 46) * systemFontSize / Self.baseSystemFontSize
+        (performanceColumns > 0 ? 86 : 46) * systemFontSize / Self.baseSystemFontSize
     }
 }

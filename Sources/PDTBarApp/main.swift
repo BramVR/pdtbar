@@ -553,7 +553,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let layout = PortfolioSummaryGridLayout(
             width: menuItemViewWidth,
             systemFontSize: NSFont.systemFontSize,
-            showsPerformance: summary.showsPerformance
+            performanceColumns: summary.performanceMetrics.count
         )
         let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: layout.rowHeight))
         container.autoresizingMask = [.width]
@@ -567,9 +567,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             label: "Total portfolio value",
             value: summary.totalValue
         )
-        let cagr = makeSummaryMetric(label: "CAGR", value: summary.cagr)
-        let increase = makeSummaryMetric(label: "Total increase", value: summary.totalIncrease)
-        let performance = NSStackView(views: [cagr, increase])
+        let metrics = summary.performanceMetrics.map { makeSummaryMetric(label: $0.label, value: $0.value) }
+        let performance = NSStackView(views: metrics)
         performance.orientation = .horizontal
         performance.alignment = .top
         performance.distribution = .fill
@@ -591,9 +590,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             grid.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -4),
             total.widthAnchor.constraint(equalTo: grid.widthAnchor),
             performance.widthAnchor.constraint(equalTo: grid.widthAnchor),
-            cagr.widthAnchor.constraint(equalToConstant: layout.columnWidth),
-            increase.widthAnchor.constraint(equalToConstant: layout.columnWidth),
-        ])
+        ] + metrics.map { $0.widthAnchor.constraint(equalToConstant: layout.columnWidth) })
         return container
     }
 
