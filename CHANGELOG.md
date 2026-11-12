@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `menu-measure` now warns when macOS clamped the captured menu to the screen, and its report adds `contentHeight` and `clampedToScreen`; before, a clamped menu reported the clamp (1123 pt on a 1130 pt screen) as the menu height (#296).
 - Big movers now signs the move the way Pulse does (`+12.4% over recent window`), so a rise no longer reads like an unsigned change.
 - The portfolio summary no longer shows `Unavailable` when PDT returns only one of CAGR and Total increase: the figure PDT has fills the row by itself (#294).
 - PDT sync failures now name themselves outside Data health too: a failed first fetch says which failure stopped it and what to do (`PDT rate limit; try again in 2 min`, `Could not reach PDT; check your connection`, `PDT server problem; try again later`) instead of a fixed message; a token that stops working, missing read access, or a paused subscription during a background refresh's later steps now moves the menu to `Reconnect to PDT` or `PDT access paused` over the freshly saved pulse instead of `Details partially filled` with PDT still shown as connected; and a refresh whose holdings request PDT rejected keeps its failure on the reconnect and paused screens and through `Check again`, so `Copy diagnostics` still copies the trace id there (#191).

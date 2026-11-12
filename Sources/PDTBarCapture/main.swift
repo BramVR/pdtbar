@@ -671,6 +671,9 @@ func measure(pid: pid_t, fixture: String, outDir: URL, allowSensitiveText: Bool)
         fail("cannot write report: \(error)")
     }
     print("measure: \(rows.count) rows, \(report.menuHeight)pt -> \(outDir.appendingPathComponent("measure.json").path)")
+    if report.clampedToScreen {
+        print("warning: macOS clamped the menu to the screen and scrolls it; menuHeight \(report.menuHeight)pt is the clamp, the rows need \(report.contentHeight)pt")
+    }
 }
 
 // MARK: CLI

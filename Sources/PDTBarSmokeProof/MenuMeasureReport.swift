@@ -76,7 +76,12 @@ public struct MeasuredRow: Codable, Equatable, Sendable {
 public struct MeasureReport: Codable, Equatable, Sendable {
     public var fixture: String
     public var menuWidth: Int
+    /// Height of the menu window on screen. When macOS clamps a tall menu to the screen and
+    /// scrolls it, this is the clamp, not the menu (#296).
     public var menuHeight: Int
+    /// Height the rows need: their extent plus the same padding above and below.
+    public var contentHeight: Int
+    public var clampedToScreen: Bool
     public var sensitiveText: Bool
     public var rows: [MeasuredRow]
 
@@ -84,6 +89,9 @@ public struct MeasureReport: Codable, Equatable, Sendable {
         self.fixture = fixture
         self.menuWidth = menuWidth
         self.menuHeight = menuHeight
+        let top = rows.map(\.y).min() ?? 0
+        contentHeight = (rows.map { $0.y + $0.height }.max() ?? 0) + top
+        clampedToScreen = contentHeight > menuHeight
         self.sensitiveText = sensitiveText
         self.rows = rows
     }
