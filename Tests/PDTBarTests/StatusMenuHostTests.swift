@@ -62,4 +62,22 @@ struct StatusMenuHostTests {
 
         #expect(menu.didCancelTrackingWithoutAnimation)
     }
+
+    @MainActor
+    @Test("Measuring uses a menu configured like the live one and hands the items back unchanged")
+    func measuringMatchesLiveMenu() {
+        let host = StatusMenuHost()
+        let disabled = NSMenuItem(title: "Prices", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
+        disabled.isEnabled = false
+        let items = [disabled, NSMenuItem(title: "Quit PDTBar", action: nil, keyEquivalent: "q")]
+
+        let height = host.measuredHeight(of: items)
+        let live = host.apply(items: items, cancelOpenMenu: false)
+
+        #expect(height > 0)
+        #expect(host.measuringMenu.autoenablesItems == live.autoenablesItems)
+        #expect(!disabled.isEnabled)
+        #expect(live.items == items)
+        #expect(Double(live.size.height).rounded() == height.rounded())
+    }
 }

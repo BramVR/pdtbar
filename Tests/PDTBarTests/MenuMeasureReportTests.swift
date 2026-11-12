@@ -28,6 +28,29 @@ struct MenuMeasureReportTests {
         )
     }
 
+    @Test("A menu macOS clamped to the screen is flagged with the height its rows need")
+    func clampedMenuIsFlagged() {
+        func measured(menuHeight: Int, rowHeights: [Int]) -> MeasureReport {
+            var y = 5
+            let rows = rowHeights.map { height in
+                defer { y += height }
+                return MeasuredRow(
+                    role: "AXMenuItem", identifier: nil, rawText: "", salt: Data(), includeText: false,
+                    y: y, height: height, hasSubmenu: false, enabled: true
+                )
+            }
+            return MeasureReport(fixture: "f.json", menuWidth: 400, menuHeight: menuHeight, sensitiveText: false, rows: rows)
+        }
+
+        let fits = measured(menuHeight: 1071, rowHeights: [1000, 61])
+        let clamped = measured(menuHeight: 1123, rowHeights: [1000, 174])
+
+        #expect(!fits.clampedToScreen)
+        #expect(fits.contentHeight == 1071)
+        #expect(clamped.clampedToScreen)
+        #expect(clamped.contentHeight == 1184)
+    }
+
     @Test("Default report writes no amounts, holding names, quote ids, or dates")
     func defaultReportHasNoRawValues() throws {
         let json = String(decoding: try JSONEncoder().encode(report(includeText: false)), as: UTF8.self)

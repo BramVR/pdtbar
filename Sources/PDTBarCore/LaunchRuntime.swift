@@ -18,19 +18,24 @@ public struct PDTBarLaunchOptions: Equatable {
     /// `pdtbar-dev pdt-*` uses, instead of the Keychain (an ad-hoc dev build has no
     /// keychain entitlement). Live PDT; accepted only with an isolated app support directory.
     public var credentialFile: URL?
+    /// `PDTBAR_MENU_SCREEN_HEIGHT`: pretend the status item's screen has this visible height in
+    /// pt, so smokes can prove the menu fits a small display (#296). Fixture and scripted runs only.
+    public var menuScreenHeight: Double?
 
     public init(
         mode: PDTBarLaunchMode,
         snapshotDirectory: URL? = nil,
         appSupportDirectory: URL? = nil,
         scriptedConnection: URL? = nil,
-        credentialFile: URL? = nil
+        credentialFile: URL? = nil,
+        menuScreenHeight: Double? = nil
     ) {
         self.mode = mode
         self.snapshotDirectory = snapshotDirectory
         self.appSupportDirectory = appSupportDirectory
         self.scriptedConnection = scriptedConnection
         self.credentialFile = credentialFile
+        self.menuScreenHeight = menuScreenHeight
     }
 }
 
@@ -73,6 +78,9 @@ public enum PDTBarLaunchOptionParser {
 
         appSupportDirectory = appSupportDirectory
             ?? environment["PDTBAR_APP_SUPPORT_DIR"].map { URL(fileURLWithPath: $0) }
+        let menuScreenHeight = environment["PDTBAR_MENU_SCREEN_HEIGHT"]
+            .flatMap(Double.init)
+            .flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
 
         if let fixture {
             guard scriptedConnection == nil, credentialFile == nil else {
@@ -83,7 +91,8 @@ public enum PDTBarLaunchOptionParser {
             return PDTBarLaunchOptions(
                 mode: .fixture(fixture),
                 snapshotDirectory: configuredSnapshotDirectory,
-                appSupportDirectory: appSupportDirectory
+                appSupportDirectory: appSupportDirectory,
+                menuScreenHeight: menuScreenHeight
             )
         }
 
@@ -99,7 +108,8 @@ public enum PDTBarLaunchOptionParser {
             mode: .pdtAPI,
             appSupportDirectory: appSupportDirectory,
             scriptedConnection: scriptedConnection,
-            credentialFile: credentialFile
+            credentialFile: credentialFile,
+            menuScreenHeight: scriptedConnection == nil ? nil : menuScreenHeight
         )
     }
 }
