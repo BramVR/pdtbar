@@ -137,14 +137,14 @@ struct PortfolioSummaryTests {
         let summary = try #require(row.portfolioSummary)
 
         #expect(summary.totalValue == "EUR 51,200.00")
-        #expect(summary.cagr == "Unavailable")
-        #expect(summary.totalIncrease == "Unavailable")
+        #expect(summary.cagr == nil)
+        #expect(summary.totalIncrease == nil)
         #expect(!summary.showsPerformance)
         #expect(summary.accessibilityLabel == "Total portfolio value, EUR 51,200.00")
         #expect(!row.accessibilityIdentifier.isEmpty)
     }
 
-    @Test("One return figure is enough to show the performance row")
+    @Test("One return figure takes the performance row alone, with no Unavailable cell")
     func oneReturnFigureShowsPerformance() throws {
         var snapshot = try quietSnapshotForSummary()
         snapshot.performance = PortfolioPerformanceSummary.build(
@@ -157,10 +157,10 @@ struct PortfolioSummaryTests {
                 .sections.first?.rows.first?.portfolioSummary
         )
 
-        #expect(summary.cagr == "Unavailable")
+        #expect(summary.cagr == nil)
         #expect(summary.totalIncrease == "+5.0%")
         #expect(summary.showsPerformance)
-        #expect(summary.accessibilityLabel.contains("Total increase, +5.0%"))
+        #expect(summary.accessibilityLabel == "Total portfolio value, EUR 51,200.00; Total increase, +5.0%")
     }
 
     @Test("Short performance periods explain unavailable CAGR with values shown or hidden")
@@ -204,6 +204,15 @@ struct PortfolioSummaryTests {
         #expect(production.columnWidth * 2 + PortfolioSummaryGridLayout.columnGap + PortfolioSummaryGridLayout.horizontalPadding * 2 == production.width)
         #expect(largerText.columnWidth == compact.columnWidth)
         #expect(production.rowHeight < largerText.rowHeight)
+    }
+
+    @Test("A lone return figure spans the full row width")
+    func loneFigureSpansRow() {
+        let lone = PortfolioSummaryGridLayout(width: 400, performanceColumns: 1)
+
+        #expect(lone.columnWidth == 400 - PortfolioSummaryGridLayout.horizontalPadding * 2)
+        #expect(lone.rowHeight == PortfolioSummaryGridLayout(width: 400).rowHeight)
+        #expect(PortfolioSummaryGridLayout(width: 400, performanceColumns: 0).rowHeight < lone.rowHeight)
     }
 }
 

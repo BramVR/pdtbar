@@ -329,21 +329,29 @@ public struct MenuRowBarChart: Codable, Equatable {
 
 public struct MenuRowPortfolioSummary: Codable, Equatable {
     public var totalValue: String
-    public var cagr: String
-    public var totalIncrease: String
-    /// False when PDT returned neither return figure, so the card shows the total alone.
-    public var showsPerformance: Bool
+    /// Nil when PDT has no figure, so the card leaves the cell out instead of saying Unavailable.
+    public var cagr: String?
+    public var totalIncrease: String?
 
-    public init(totalValue: String, cagr: String, totalIncrease: String, showsPerformance: Bool = true) {
+    public init(totalValue: String, cagr: String?, totalIncrease: String?) {
         self.totalValue = totalValue
         self.cagr = cagr
         self.totalIncrease = totalIncrease
-        self.showsPerformance = showsPerformance
+    }
+
+    public var performanceMetrics: [(label: String, value: String)] {
+        [("CAGR", cagr), ("Total increase", totalIncrease)].compactMap { label, value in
+            value.map { (label, $0) }
+        }
+    }
+
+    public var showsPerformance: Bool {
+        !performanceMetrics.isEmpty
     }
 
     public var accessibilityLabel: String {
-        guard showsPerformance else { return "Total portfolio value, \(totalValue)" }
-        return "Total portfolio value, \(totalValue); CAGR, \(cagr); Total increase, \(totalIncrease)"
+        (["Total portfolio value, \(totalValue)"] + performanceMetrics.map { "\($0.label), \($0.value)" })
+            .joined(separator: "; ")
     }
 }
 
