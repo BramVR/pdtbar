@@ -108,7 +108,7 @@ struct PDTLaunchMenuTests {
             (.checkingConnection, "Checking PDT connection", []),
             (.connecting, "Signing in with PDT", ["pdtConnection.cancel"]),
             (.disconnecting, "Disconnecting from PDT", []),
-            (.notConnected, "Not connected", ["pdtConnection.signIn", "pdtConnection.token"]),
+            (.notConnected(signInWouldBe: .saved), "Not connected", ["pdtConnection.signIn", "pdtConnection.token"]),
             (
                 .needsReconnect(.browserSession, .signInExpired),
                 "Reconnect to PDT",
@@ -167,14 +167,14 @@ struct PDTLaunchMenuTests {
             #expect(actionRow("actions.refreshNow", in: descriptor)?.role == .fetchStatus, "\(state)")
         }
 
-        let notConnected = PDTLaunchMenu.descriptor(for: .notConnected, cachedPulse: cachedPulse)
+        let notConnected = PDTLaunchMenu.descriptor(for: .notConnected(signInWouldBe: .saved), cachedPulse: cachedPulse)
         #expect(notConnected.sections.map(\.id) == ["pdtConnection"])
         #expect(notConnected.statusTitle == "Not connected")
     }
 
     @Test("A failed sign-in shows its reason above the sign-in actions")
     func signInFailureNotice() {
-        let descriptor = PDTLaunchMenu.descriptor(for: .notConnected, notice: .signInFailed(.denied))
+        let descriptor = PDTLaunchMenu.descriptor(for: .notConnected(signInWouldBe: .saved), notice: .signInFailed(.denied))
         let rows = descriptor.sections.flatMap(\.rows)
 
         #expect(rows.map(\.id) == ["pdtConnection.status", "pdtConnection.signInFailed", "pdtConnection.signIn", "pdtConnection.token"])
@@ -184,7 +184,7 @@ struct PDTLaunchMenuTests {
 
     @Test("After a disconnect the menu links to the PDT page where access is removed")
     func disconnectNoticeLinksRevokePage() {
-        let descriptor = PDTLaunchMenu.descriptor(for: .notConnected, notice: .disconnected(revokeAt: PDTOAuthEndpoints.integrations))
+        let descriptor = PDTLaunchMenu.descriptor(for: .notConnected(signInWouldBe: .saved), notice: .disconnected(revokeAt: PDTOAuthEndpoints.integrations))
         let revoke = descriptor.sections.flatMap(\.rows).first { $0.id == "pdtConnection.revoke" }
 
         #expect(revoke?.role == .connectionRevoke)
@@ -349,8 +349,8 @@ struct PDTLaunchRuntimeTests {
         let pulse = try quietFixturePulse()
         let runtime = PDTLaunchRuntime()
 
-        let notConnected = launched(runtime, cachedPulse: nil, status: .notConnected)
-        #expect(notConnected.state == .notConnected)
+        let notConnected = launched(runtime, cachedPulse: nil, status: .notConnected(signInWouldBe: .saved))
+        #expect(notConnected.state == .notConnected(signInWouldBe: .saved))
         #expect(notConnected.effect == .none)
 
         let signingIn = try #require(runtime.signIn())
@@ -374,7 +374,7 @@ struct PDTLaunchRuntimeTests {
     @Test("A pasted token connects like a sign-in")
     func pastedTokenConnects() throws {
         let runtime = PDTLaunchRuntime()
-        _ = launched(runtime, cachedPulse: nil, status: .notConnected)
+        _ = launched(runtime, cachedPulse: nil, status: .notConnected(signInWouldBe: .saved))
 
         let connecting = try #require(runtime.connect(token: PDTAPIToken("pdt_pasted")))
         #expect(connecting.effect == .connectToken(PDTAPIToken("pdt_pasted")))
@@ -413,7 +413,7 @@ struct PDTLaunchRuntimeTests {
         _ = runtime.launch()
         _ = try #require(runtime.completeCachedPulseLoad(nil))
         let launchCheck = runtime.connectionAttempt
-        _ = runtime.completeConnection(PDTConnectionOutcome(.notConnected), for: launchCheck)
+        _ = runtime.completeConnection(PDTConnectionOutcome(.notConnected(signInWouldBe: .saved)), for: launchCheck)
         _ = try #require(runtime.signIn())
 
         let stale = runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: launchCheck)
@@ -583,13 +583,13 @@ struct PDTLaunchRuntimeTests {
     @Test("A fetch result with no fetch running changes nothing")
     func strayFetchResultsAreIgnored() throws {
         let runtime = PDTLaunchRuntime()
-        let notConnected = launched(runtime, cachedPulse: nil, status: .notConnected)
+        let notConnected = launched(runtime, cachedPulse: nil, status: .notConnected(signInWouldBe: .saved))
 
         let firstFetch = runtime.completeFirstFetch(.succeeded(try quietFixturePulse(), connection: .connected(.saved)))
         let refresh = runtime.completeBackgroundDetailRefresh(.failed(.connection(.subscriptionPaused)))
 
-        #expect(firstFetch.state == .notConnected)
-        #expect(refresh.state == .notConnected)
+        #expect(firstFetch.state == .notConnected(signInWouldBe: .saved))
+        #expect(refresh.state == .notConnected(signInWouldBe: .saved))
         #expect(runtime.currentPulse == nil)
         #expect(refresh.descriptor == notConnected.descriptor)
     }
@@ -615,7 +615,7 @@ struct PDTLaunchRuntimeTests {
         }
 
         let runtime = PDTLaunchRuntime()
-        let notConnected = launched(runtime, cachedPulse: cachedPulse, status: .notConnected)
+        let notConnected = launched(runtime, cachedPulse: cachedPulse, status: .notConnected(signInWouldBe: .saved))
         #expect(notConnected.descriptor.sections.map(\.id) == ["pdtConnection"])
     }
 
@@ -637,7 +637,7 @@ struct PDTLaunchRuntimeTests {
     @Test("Cancel is offered only while signing in, and the sign-in outcome still ends the operation")
     func cancelSignIn() throws {
         let runtime = PDTLaunchRuntime()
-        _ = launched(runtime, cachedPulse: nil, status: .notConnected)
+        _ = launched(runtime, cachedPulse: nil, status: .notConnected(signInWouldBe: .saved))
         #expect(runtime.cancelSignIn() == nil)
 
         _ = try #require(runtime.signIn())
@@ -645,8 +645,8 @@ struct PDTLaunchRuntimeTests {
         #expect(cancel.effect == .cancelSignIn)
         #expect(cancel.state == .connecting)
 
-        let ended = runtime.completeConnection(PDTConnectionOutcome(.notConnected), for: runtime.connectionAttempt)
-        #expect(ended.state == .notConnected)
+        let ended = runtime.completeConnection(PDTConnectionOutcome(.notConnected(signInWouldBe: .saved)), for: runtime.connectionAttempt)
+        #expect(ended.state == .notConnected(signInWouldBe: .saved))
         #expect(rowTitles(in: ended.descriptor).contains("Sign in with PDT"))
         #expect(!rowTitles(in: ended.descriptor).contains("Sign-in failed"))
     }
@@ -654,11 +654,11 @@ struct PDTLaunchRuntimeTests {
     @Test("A failed sign-in shows its notice until the next connection operation")
     func signInFailureNoticeClearsOnNextOperation() throws {
         let runtime = PDTLaunchRuntime()
-        _ = launched(runtime, cachedPulse: nil, status: .notConnected)
+        _ = launched(runtime, cachedPulse: nil, status: .notConnected(signInWouldBe: .saved))
         _ = try #require(runtime.signIn())
 
         let failed = runtime.completeConnection(
-            PDTConnectionOutcome(.notConnected, notice: .signInFailed(.portBusy)),
+            PDTConnectionOutcome(.notConnected(signInWouldBe: .saved), notice: .signInFailed(.portBusy)),
             for: runtime.connectionAttempt
         )
         #expect(rowTitles(in: failed.descriptor).contains("Sign-in failed"))
@@ -680,11 +680,11 @@ struct PDTLaunchRuntimeTests {
         #expect(runtime.disconnect() == nil)
 
         let done = runtime.completeConnection(
-            PDTConnectionOutcome(.notConnected, notice: .disconnected(revokeAt: PDTOAuthEndpoints.connectedApps)),
+            PDTConnectionOutcome(.notConnected(signInWouldBe: .saved), notice: .disconnected(revokeAt: PDTOAuthEndpoints.connectedApps)),
             for: runtime.connectionAttempt
         )
 
-        #expect(done.state == .notConnected)
+        #expect(done.state == .notConnected(signInWouldBe: .saved))
         #expect(done.descriptor.sections.map(\.id) == ["pdtConnection"])
         #expect(done.descriptor.sections.flatMap(\.rows).first { $0.id == "pdtConnection.revoke" }?.actionPayload
             == PDTOAuthEndpoints.connectedApps.absoluteString)

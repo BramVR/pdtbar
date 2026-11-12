@@ -10,9 +10,9 @@
   step, so TLC explores every completion order.
 
   Code anchors (Sources/PDTBarCore/LaunchRuntime.swift = Core, Sources/PDTBarApp/main.swift = App):
-    PDTLaunchState offers* ......... Core:109-153 (which connection buttons a state shows)
-    PDTLaunchMenu.descriptor ....... Core:226-349, notSavedRows Core:388, withConnectionActions Core:621
-    PDTLaunchRuntime ............... Core:711-1030
+    PDTLaunchState offers* ......... Core:109-155 (which connection buttons a state shows)
+    PDTLaunchMenu.descriptor ....... Core:228-353, notSavedRows Core:392, withConnectionActions Core:625
+    PDTLaunchRuntime ............... Core:715-1034
     AppDelegate effect wiring ...... App:59-363
     PDTConnection (the cred ghost) . Sources/PDTBarCore/PDTConnection.swift: status, replace, record, commit;
                                      PDTAppConnection.check / signIn / connect / disconnect /
@@ -26,6 +26,7 @@ CONSTANTS
     Mutations     \* {} for the real code; names replay one-line code breaks (see mutations.sh)
 
 \* The connected states are flattened: fetching, fetchFailed, current = .connected(.fetching/.failed/.current, kept).
+\* notConnected drops its signInWouldBe payload: a fact about the build that only changes the status row's detail.
 ConnectionStates == {"notConnected", "needsReconnect", "subscriptionPaused", "keychainUnavailable"}
 States == {"checkingConnection", "connecting", "disconnecting", "fetching", "fetchFailed", "current"} \cup ConnectionStates
 \* How a connected credential is kept (PDTCredentialPersistence .saved / .thisSessionOnly).

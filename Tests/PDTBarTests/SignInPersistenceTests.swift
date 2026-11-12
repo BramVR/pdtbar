@@ -16,7 +16,7 @@ struct SignInPersistenceTests {
             let persistence = keychain == .entitled ? PDTCredentialPersistence.saved : .thisSessionOnly(.missingEntitlement)
             let driver = try LaunchDriver(keychain: keychain)
             driver.launch()
-            #expect(driver.runtime.state == .notConnected, "\(keychain)")
+            #expect(driver.runtime.state == .notConnected(signInWouldBe: persistence), "\(keychain)")
 
             try #require(driver.signIn(), "\(keychain): sign-in is offered at launch")
             #expect(driver.runtime.state == .connected(.fetching, persistence), "\(keychain)")
@@ -154,9 +154,9 @@ struct SignInPersistenceTests {
             #expect(driver.rows.map(\.id).suffix(2) == ["pdtConnection.notSaved", "pdtConnection.disconnect"])
             try #require(driver.disconnect())
 
-            #expect(driver.runtime.state == .notConnected)
+            #expect(driver.runtime.state == .notConnected(signInWouldBe: .thisSessionOnly(.missingEntitlement)))
             #expect(driver.rows.first { $0.id == "pdtConnection.revoke" }?.actionPayload == page.absoluteString)
-            #expect(driver.connection.check() == PDTConnectionOutcome(.notConnected))
+            #expect(driver.connection.check() == PDTConnectionOutcome(.notConnected(signInWouldBe: .thisSessionOnly(.missingEntitlement))))
             #expect(throws: PDTAPIError.missingToken) { try driver.connection.apiClient().get(.me) }
             #expect(driver.api.requests.isEmpty)
         }
@@ -176,12 +176,23 @@ struct SignInPersistenceTests {
         #expect(driver.api.requests.isEmpty, "a credential the user disconnected reached PDT")
 
         store.refuse()
-        #expect(driver.connection.check().status == .notConnected)
+        #expect(driver.connection.check().status == .notConnected(signInWouldBe: .saved))
         #expect(try store.load() == .disconnected)
     }
 
-    @Test("A relaunch on a build that cannot save starts not connected and offers sign-in again")
-    func relaunchWithoutASavedSignInStartsNotConnected() throws {
+    @Test("A build that cannot save a sign-in says so at launch, before any sign-in, and still offers both ways in")
+    func unentitledLaunchSaysTheSignInWillNotBeSaved() throws {
+        let driver = try LaunchDriver(keychain: .unentitled)
+        driver.launch()
+
+        #expect(driver.last?.descriptor.statusTitle == "Not connected")
+        #expect(driver.rows.map(\.id) == ["pdtConnection.status", "pdtConnection.signIn", "pdtConnection.token"])
+        #expect(driver.rows.first?.title == "Not connected")
+        #expect(driver.rows.first?.detail == cannotSaveDetail)
+    }
+
+    @Test("A relaunch on a build that cannot save names why the sign-in is gone and offers sign-in again")
+    func relaunchWithoutASavedSignInSaysWhy() throws {
         let first = try LaunchDriver(keychain: .unentitled)
         first.launch()
         try #require(first.signIn())
@@ -190,8 +201,26 @@ struct SignInPersistenceTests {
         let relaunched = try LaunchDriver(keychain: .unentitled)
         relaunched.launch()
 
-        #expect(relaunched.runtime.state == .notConnected)
-        #expect(relaunched.rows.contains { $0.id == "pdtConnection.signIn" })
+        #expect(relaunched.rows.map(\.id) == ["pdtConnection.status", "pdtConnection.signIn", "pdtConnection.token"])
+        #expect(relaunched.rows.first?.detail == cannotSaveDetail)
+        try #require(relaunched.signIn(), "the build that cannot save still signs in")
+        #expect(relaunched.runtime.state == .connected(.fetching, .thisSessionOnly(.missingEntitlement)))
+    }
+
+    @Test("A store that keeps a sign-in across launches does not warn: entitled Keychain, dev credential file, in-memory")
+    func storesThatSaveDoNotWarnAtLaunch() throws {
+        let stores: [(String, any PDTCredentialStore)] = [
+            ("entitled Keychain", KeychainPDTCredentialStore(lockDirectory: try temporaryDirectory(), secItem: FakeKeychain.entitled.api)),
+            ("credential file", FilePDTCredentialStore(url: try temporaryDirectory().appending(path: "pdt-credential.json"))),
+            ("in-memory", InMemoryPDTCredentialStore()),
+        ]
+        for (name, store) in stores {
+            let driver = try LaunchDriver(store: store)
+            driver.launch()
+
+            #expect(driver.runtime.state == .notConnected(signInWouldBe: .saved), "\(name)")
+            #expect(driver.rows.first?.detail == "PDTBar reads your PDT portfolio read-only", "\(name)")
+        }
     }
 
     @Test("A Keychain that refuses the read is an access error, not an empty store")
@@ -202,7 +231,8 @@ struct SignInPersistenceTests {
                 copyMatching: { _, _ in errSecMissingEntitlement },
                 add: { _ in errSecMissingEntitlement },
                 update: { _, _ in errSecMissingEntitlement },
-                delete: { _ in errSecMissingEntitlement }
+                delete: { _ in errSecMissingEntitlement },
+                isEntitled: false
             )
         ))
         driver.launch()
@@ -211,7 +241,7 @@ struct SignInPersistenceTests {
         #expect(driver.rows.map(\.id) == ["pdtConnection.status", "pdtConnection.check"])
     }
 
-    @Test("A script can model the unentitled Keychain: reads find nothing, writes are refused")
+    @Test("A script can model the unentitled Keychain: reads find nothing, writes are refused, and it says a sign-in will not be saved")
     func scriptedUnentitledKeychain() throws {
         let script = try JSONDecoder().decode(
             ScriptedPDTConnection.self,
@@ -220,13 +250,15 @@ struct SignInPersistenceTests {
         #expect(script == ScriptedPDTConnection(connection: .notConnected, keychain: .unentitled))
         let connection = try script.appConnection(lockDirectory: temporaryDirectory())
 
-        #expect(connection.check().status == .notConnected)
+        #expect(connection.check().status == .notConnected(signInWouldBe: .thisSessionOnly(.missingEntitlement)))
         #expect(connection.signIn(cancellation: PDTCancellation()).status == .connected(.thisSessionOnly(.missingEntitlement)))
         #expect(connection.check().status == .connected(.thisSessionOnly(.missingEntitlement)))
-        #expect(connection.disconnect().status == .notConnected)
-        #expect(try script.appConnection(lockDirectory: temporaryDirectory()).check().status == .notConnected)
+        #expect(connection.disconnect().status == .notConnected(signInWouldBe: .thisSessionOnly(.missingEntitlement)))
+        #expect(try script.appConnection(lockDirectory: temporaryDirectory()).check().status == .notConnected(signInWouldBe: .thisSessionOnly(.missingEntitlement)))
     }
 }
+
+private let cannotSaveDetail = "This PDTBar build can't save your sign-in. You'll sign in each time PDTBar starts"
 
 private let signedInSession = PDTBrowserSession(
     accessToken: PDTAPIToken("access"),
@@ -361,7 +393,8 @@ private final class LaunchDriver {
 }
 
 /// The Keychain as an unentitled build sees it (measured with an ad-hoc signed
-/// probe: reads -25300, writes -34018), or as an entitled one.
+/// probe: reads -25300, writes -34018, no `keychain-access-groups` in the
+/// signature), or as an entitled one.
 private enum FakeKeychain: CustomStringConvertible {
     case unentitled
     case entitled
@@ -377,7 +410,8 @@ private enum FakeKeychain: CustomStringConvertible {
                 copyMatching: { _, _ in errSecItemNotFound },
                 add: { _ in errSecMissingEntitlement },
                 update: { _, _ in errSecMissingEntitlement },
-                delete: { _ in errSecMissingEntitlement }
+                delete: { _ in errSecMissingEntitlement },
+                isEntitled: false
             )
         case .entitled:
             let item = KeychainItem()
@@ -385,7 +419,8 @@ private enum FakeKeychain: CustomStringConvertible {
                 copyMatching: { _, result in item.copy(into: result) },
                 add: { query in item.set((query as NSDictionary)[kSecValueData as String] as? Data) },
                 update: { _, attributes in item.update((attributes as NSDictionary)[kSecValueData as String] as? Data) },
-                delete: { _ in item.set(nil) == errSecSuccess ? errSecSuccess : errSecItemNotFound }
+                delete: { _ in item.set(nil) == errSecSuccess ? errSecSuccess : errSecItemNotFound },
+                isEntitled: true
             )
         }
     }
@@ -442,6 +477,8 @@ private final class SwitchableStore: PDTCredentialStore, @unchecked Sendable {
         self.refusesLock = refusesLock
         lock.unlock()
     }
+
+    var persistence: PDTCredentialPersistence { backing.persistence }
 
     func load() throws -> PDTConnectionState {
         try backing.load()

@@ -91,7 +91,10 @@ public final class PDTAppConnection: @unchecked Sendable {
         _ = try? connection.disconnect()
         let status = connection.status()
         // The notice says the credential is gone, so it waits for a delete the store took.
-        return PDTConnectionOutcome(status, notice: status == .notConnected ? .disconnected(revokeAt: revokeAt) : nil)
+        guard case .notConnected = status else {
+            return PDTConnectionOutcome(status)
+        }
+        return PDTConnectionOutcome(status, notice: .disconnected(revokeAt: revokeAt))
     }
 
     /// A log line for a fetch error that carries no server text: PDT's
@@ -191,8 +194,9 @@ public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
 
     /// The Keychain as a kind of build sees it. It starts empty, whatever `connection` says.
     public enum Keychain: String, Codable, Sendable {
-        /// Measured on an ad-hoc signed build: a read finds nothing (-25300)
-        /// and every write is refused (-34018).
+        /// Measured on an ad-hoc signed build: a read finds nothing (-25300),
+        /// every write is refused (-34018), and the signature has no
+        /// `keychain-access-groups`.
         case unentitled
     }
 
@@ -328,13 +332,17 @@ private struct LoggingPDTHTTPTransport: PDTHTTPTransport {
 
 private extension KeychainPDTCredentialStore.SecItemAPI {
     static func answering(_ status: OSStatus) -> Self {
-        Self(copyMatching: { _, _ in status }, add: { _ in status }, update: { _, _ in status }, delete: { _ in status })
+        Self(
+            copyMatching: { _, _ in status }, add: { _ in status }, update: { _, _ in status }, delete: { _ in status },
+            isEntitled: status != errSecMissingEntitlement
+        )
     }
 
     static let unentitled = Self(
         copyMatching: { _, _ in errSecItemNotFound },
         add: { _ in errSecMissingEntitlement },
         update: { _, _ in errSecMissingEntitlement },
-        delete: { _ in errSecMissingEntitlement }
+        delete: { _ in errSecMissingEntitlement },
+        isEntitled: false
     )
 }

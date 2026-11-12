@@ -13,12 +13,12 @@ Run it when a change touches any covered function below, the order of main-queue
 
 ## Coverage
 
-Sync commit: `feat(auth): stay connected for the session when the Keychain refuses the sign-in`. After you confirm the model still describes the covered code at a newer commit, move this line forward. Never move it without that check.
+Sync commit: `fix(auth): say on launch when this build can't keep a sign-in`. After you confirm the model still describes the covered code at a newer commit, move this line forward. Never move it without that check.
 
 `Sources/PDTBarCore/LaunchRuntime.swift`:
-- `PDTLaunchState` 109 and its `offersSignIn` / `offersCheckAgain` / `offersDisconnect` 133-153.
-- `PDTLaunchMenu.descriptor(for:cachedPulse:notice:fetchingElapsedSeconds:syncFailure:)` 226, `notSavedRows` 388, `withConnectionActions` 621.
-- `PDTConnectionAttempt` 686. `PDTLaunchRuntime` 711: `launch` 748, `completeCachedPulseLoad` 753, `completeConnection` 764, `signIn` 773, `connect(token:)` 780, `cancelSignIn` 788, `checkAgain` 795, `disconnect` 802, `retryFirstFetch` 810, `firstFetchProgress` 820, `completeFirstFetch` 827, `beginBackgroundDetailRefresh` 841, `backgroundDetailRefreshProgress` 848, `completeBackgroundDetailRefresh` 856, `pulseReadStateDidChange` 878, `apply` 892, `endCommitted` 907, `endUncommitted` 918, `beginConnectionOperation` 934, `startBackgroundDetailRefresh` 947, `descriptor` 972.
+- `PDTLaunchState` 109 and its `offersSignIn` / `offersCheckAgain` / `offersDisconnect` 135-155.
+- `PDTLaunchMenu.descriptor(for:cachedPulse:notice:fetchingElapsedSeconds:syncFailure:)` 228, `notSavedRows` 392, `withConnectionActions` 625.
+- `PDTConnectionAttempt` 690. `PDTLaunchRuntime` 715: `launch` 752, `completeCachedPulseLoad` 757, `completeConnection` 768, `signIn` 777, `connect(token:)` 784, `cancelSignIn` 792, `checkAgain` 799, `disconnect` 806, `retryFirstFetch` 814, `firstFetchProgress` 824, `completeFirstFetch` 831, `beginBackgroundDetailRefresh` 845, `backgroundDetailRefreshProgress` 852, `completeBackgroundDetailRefresh` 860, `pulseReadStateDidChange` 882, `apply` 896, `endCommitted` 911, `endUncommitted` 922, `beginConnectionOperation` 938, `startBackgroundDetailRefresh` 951, `descriptor` 976.
 
 `Sources/PDTBarCore/MenuDescriptorRenderer.swift`: `refreshActionRow` 486 with its "Refresh now" rows (`waitingForSetup` is shown but not clickable).
 
@@ -87,6 +87,7 @@ Left out:
 - Fixture mode.
 - Cancel sign-in: the worker keeps the operation slot until it reports, so cancel changes nothing the model tracks.
 - Sign-in notices and the revoke row (copy only).
+- What `notConnected` says about saving a sign-in (`signInWouldBe`): a fact about the build's signature that `PDTConnection.status` copies from the store into every not-connected status. The runtime only carries it to the status row's detail, so it changes no state, row, or guard the model tracks. `SignInPersistenceTests` covers it.
 - Quit-time refresh cancellation (`applicationWillTerminate`).
 - What the background refresh does inside (see `verify-background-detail-refresh`), credential refresh, storage, and the replay of a change the store refused (`PDTConnection`, covered by `PDTSignInTests` and `SignInPersistenceTests`), and read-state writes (see `verify-pulse-read-state`).
 - Timer cadence: a first-fetch progress tick is a re-render only.

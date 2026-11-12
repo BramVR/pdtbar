@@ -92,7 +92,7 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
             return PDTConnectionStatus(refused: refused.change.state, PDTKeychainProblem(storeError: refused.error))
         }
         do {
-            return PDTConnectionStatus(stored: try stored.get())
+            return PDTConnectionStatus(stored: try stored.get(), signInWouldBe: store.persistence)
         } catch {
             return PDTConnectionStatus(storeError: error)
         }
@@ -309,8 +309,8 @@ private extension PDTConnectionStatus {
         switch state {
         case .connected:
             self = .connected(.thisSessionOnly(problem))
-        case .needsReconnect:
-            self.init(stored: state)
+        case let .needsReconnect(kind, reason):
+            self = .needsReconnect(kind, PDTReconnectCause(reason))
         case .disconnected:
             // The delete was refused and the credential is still stored.
             self = .keychainUnavailable(problem)

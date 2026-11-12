@@ -933,6 +933,8 @@ private final class FailingSaveStore: PDTCredentialStore, @unchecked Sendable {
         self.failures = failures
     }
 
+    var persistence: PDTCredentialPersistence { backing.persistence }
+
     func load() throws -> PDTConnectionState {
         try backing.load()
     }
@@ -967,6 +969,8 @@ private final class UnlockedStore: PDTCredentialStore, @unchecked Sendable {
     init(_ state: PDTConnectionState) {
         backing = InMemoryPDTCredentialStore(state)
     }
+
+    var persistence: PDTCredentialPersistence { backing.persistence }
 
     func load() throws -> PDTConnectionState {
         try backing.load()
@@ -1074,7 +1078,8 @@ private final class FakeSecItems: @unchecked Sendable {
                     self.item = nil
                     return errSecSuccess
                 }
-            }
+            },
+            isEntitled: forcedStatus != errSecMissingEntitlement
         )
     }
 

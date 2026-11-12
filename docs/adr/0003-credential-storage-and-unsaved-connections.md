@@ -43,7 +43,7 @@ The login keychain and an Application Support file stay rejected for shipped bui
 ## Consequences
 
 - #301 is fixed by 2 alone: Check again never signs out, and an unsaved sign-in is named at sign-in. Without 3, an unentitled build shows *Sign-in not saved* and cannot fetch.
-- With 3, an unsigned `make start` build is a working app that asks for one browser sign-in per launch.
+- With 3, an unsigned `make start` build is a working app that asks for one browser sign-in per launch. It says so on `Not connected`, before the sign-in and after every relaunch: the Keychain store reads its own signature for the `keychain-access-groups` entitlement (no Keychain call, no prompt) and `notConnected` carries the answer. The answer is copy only. It never blocks a sign-in or selects a store.
 - One mechanism replaces `unpersisted`: a single owner for "what the store refused", replayed over the stored state through the existing event table, so a newer sign-in stored by another process still wins.
 - The scripted SecItem fake gains the measured read/write split, and `formal/launch-runtime` distinguishes a held credential from an empty store.
 - Revisit if PDT adds a revoke API (disconnect could then revoke an unsaved session server-side).

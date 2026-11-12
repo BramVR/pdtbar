@@ -110,7 +110,9 @@ public enum PDTLaunchState: Equatable, Sendable {
     case checkingConnection
     case connecting
     case disconnecting
-    case notConnected
+    /// What the connection said a sign-in now would be, so the screen can say
+    /// before the sign-in that this build will not keep it.
+    case notConnected(signInWouldBe: PDTCredentialPersistence)
     case needsReconnect(PDTCredentialKind, PDTReconnectCause)
     case subscriptionPaused
     case keychainUnavailable(PDTKeychainProblem)
@@ -121,7 +123,7 @@ public enum PDTLaunchState: Equatable, Sendable {
 
     init(_ status: PDTConnectionStatus) {
         switch status {
-        case .notConnected: self = .notConnected
+        case let .notConnected(signInWouldBe): self = .notConnected(signInWouldBe: signInWouldBe)
         case let .connected(persistence): self = .connected(.current, persistence)
         case let .needsReconnect(kind, cause): self = .needsReconnect(kind, cause)
         case .subscriptionPaused: self = .subscriptionPaused
@@ -279,8 +281,10 @@ public enum PDTLaunchMenu {
             ("Signing in with PDT", "Approve PDTBar in your browser")
         case .disconnecting:
             ("Disconnecting from PDT", "Removing the stored connection")
-        case .notConnected:
+        case .notConnected(.saved):
             ("Not connected", "PDTBar reads your PDT portfolio read-only")
+        case .notConnected(.thisSessionOnly):
+            ("Not connected", "This PDTBar build can't save your sign-in. You'll sign in each time PDTBar starts")
         case let .needsReconnect(_, cause):
             ("Reconnect to PDT", sentenceCased(reconnectReason(cause)))
         case .subscriptionPaused:

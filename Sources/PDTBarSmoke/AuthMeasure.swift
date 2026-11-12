@@ -29,7 +29,8 @@ func authMeasure(arguments: [String]) throws -> AuthMeasureRun {
     let fixtures = try AuthMeasureFixtures(directory: root.appending(path: "docs/pdt/fixtures/api/full"))
     let scratch = FileManager.default.temporaryDirectory.appending(path: "pdtbar-auth-measure-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: scratch) }
-    let neverConnected = authMeasureScreen(PDTLaunchMenu.descriptor(for: .notConnected), state: .notConnected, idle: true)
+    let neverSignedIn = PDTLaunchState.notConnected(signInWouldBe: .saved)
+    let neverConnected = authMeasureScreen(PDTLaunchMenu.descriptor(for: neverSignedIn), state: neverSignedIn, idle: true)
     guard let silentDetail = neverConnected.statusRow?.detail else {
         throw AuthMeasureError("the not-connected menu has no status detail")
     }
@@ -330,7 +331,8 @@ private final class FakeSecItems: @unchecked Sendable {
             },
             delete: { query in
                 self.locked { $0.delete(Self.domain(query)) }
-            }
+            },
+            isEntitled: locked { $0.build == .entitled }
         )
     }
 

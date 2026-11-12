@@ -10,6 +10,10 @@ import Foundation
 /// refreshes of one stored pair leave the loser with a dead token. The lock
 /// is not reentrant.
 public protocol PDTCredentialStore: Sendable {
+    /// How this store would keep a credential saved now, answered without
+    /// reading or writing it. `.thisSessionOnly` when the store already knows
+    /// it will refuse every save.
+    var persistence: PDTCredentialPersistence { get }
     func load() throws -> PDTConnectionState
     func save(_ state: PDTConnectionState) throws
     func withExclusiveAccess<Value>(_ body: () throws -> Value) throws -> Value
@@ -34,6 +38,8 @@ public final class InMemoryPDTCredentialStore: PDTCredentialStore, @unchecked Se
     public init(_ state: PDTConnectionState = .disconnected) {
         self.state = state
     }
+
+    public var persistence: PDTCredentialPersistence { .saved }
 
     public func withExclusiveAccess<Value>(_ body: () throws -> Value) throws -> Value {
         exclusive.lock()
@@ -68,6 +74,8 @@ public struct FilePDTCredentialStore: PDTCredentialStore {
         self.url = url
         self.writeBytes = write
     }
+
+    public var persistence: PDTCredentialPersistence { .saved }
 
     public func withExclusiveAccess<Value>(_ body: () throws -> Value) throws -> Value {
         try PDTCredentialFileLock(url: url.appendingPathExtension("lock")).hold(body)

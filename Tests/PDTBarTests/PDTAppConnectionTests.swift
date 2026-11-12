@@ -9,7 +9,7 @@ struct PDTAppConnectionTests {
     @Test("Each stored connection reports its status")
     func storedConnectionStatus() throws {
         let cases: [(ScriptedPDTConnection.StoredConnection, PDTConnectionStatus)] = [
-            (.notConnected, .notConnected),
+            (.notConnected, .notConnected(signInWouldBe: .saved)),
             (.browserSession, .connected(.saved)),
             (.personalToken, .connected(.saved)),
             (.signInExpired, .needsReconnect(.browserSession, .signInExpired)),
@@ -112,7 +112,7 @@ struct PDTAppConnectionTests {
             api: ScriptedPDTAPIConfiguration(responses: [.init(body: String(decoding: holdings, as: UTF8.self))], asOf: asOf)
         ).appConnection(lockDirectory: temporaryDirectory())
 
-        #expect(connection.check().status == .notConnected)
+        #expect(connection.check().status == .notConnected(signInWouldBe: .thisSessionOnly(.missingEntitlement)))
         #expect(connection.signIn(cancellation: PDTCancellation()).status == .connected(.thisSessionOnly(.missingEntitlement)))
         _ = try PDTAPIDataSource(client: connection.apiClient(), options: .firstFetch).snapshot(asOf: asOf)
         #expect(connection.status(afterSyncEnding: nil) == .connected(.thisSessionOnly(.missingEntitlement)))
@@ -122,9 +122,9 @@ struct PDTAppConnectionTests {
     func browserSignInOutcomes() throws {
         let cases: [(ScriptedPDTConnection.SignInOutcome, PDTConnectionOutcome)] = [
             (.succeeds, PDTConnectionOutcome(.connected(.saved))),
-            (.denied, PDTConnectionOutcome(.notConnected, notice: .signInFailed(.denied))),
-            (.portBusy, PDTConnectionOutcome(.notConnected, notice: .signInFailed(.portBusy))),
-            (.timedOut, PDTConnectionOutcome(.notConnected, notice: .signInFailed(.timedOut))),
+            (.denied, PDTConnectionOutcome(.notConnected(signInWouldBe: .saved), notice: .signInFailed(.denied))),
+            (.portBusy, PDTConnectionOutcome(.notConnected(signInWouldBe: .saved), notice: .signInFailed(.portBusy))),
+            (.timedOut, PDTConnectionOutcome(.notConnected(signInWouldBe: .saved), notice: .signInFailed(.timedOut))),
         ]
         for (scripted, outcome) in cases {
             let connection = try ScriptedPDTConnection(connection: .notConnected, signIn: scripted)
@@ -145,7 +145,7 @@ struct PDTAppConnectionTests {
         let started = Date()
         let outcome = connection.signIn(cancellation: cancellation)
 
-        #expect(outcome == PDTConnectionOutcome(.notConnected))
+        #expect(outcome == PDTConnectionOutcome(.notConnected(signInWouldBe: .saved)))
         #expect(Date().timeIntervalSince(started) < 5)
     }
 
@@ -163,7 +163,7 @@ struct PDTAppConnectionTests {
             }
         )
 
-        #expect(connection.signIn(cancellation: cancellation) == PDTConnectionOutcome(.notConnected))
+        #expect(connection.signIn(cancellation: cancellation) == PDTConnectionOutcome(.notConnected(signInWouldBe: .saved)))
         #expect(try store.load() == .disconnected)
     }
 
@@ -207,7 +207,7 @@ struct PDTAppConnectionTests {
             let store = InMemoryPDTCredentialStore(stored)
             let connection = appConnection(store: store, replies: [])
 
-            #expect(connection.disconnect() == PDTConnectionOutcome(.notConnected, notice: .disconnected(revokeAt: page)))
+            #expect(connection.disconnect() == PDTConnectionOutcome(.notConnected(signInWouldBe: .saved), notice: .disconnected(revokeAt: page)))
             #expect(try store.load() == .disconnected)
         }
     }
@@ -370,7 +370,8 @@ private final class RecordingSecItems: @unchecked Sendable {
             copyMatching: { query, _ in self.record(query) },
             add: { query in self.record(query) },
             update: { query, _ in self.record(query) },
-            delete: { query in self.record(query) }
+            delete: { query in self.record(query) },
+            isEntitled: status != errSecMissingEntitlement
         )
     }
 

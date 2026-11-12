@@ -936,7 +936,7 @@ private func scriptedSignInSmoke(arguments: [String]) throws -> SmokeReport {
     let artifacts = try smokeArtifacts(options)
     let proof = artifacts.appending(path: "pdtbar-scripted-sign-in-proof.json")
     let api = ScriptedPDTAPIConfiguration(responses: [try scriptedHoldingsResponse()], asOf: scriptedPDTAsOf)
-    let notConnected = PDTLaunchMenu.descriptor(for: .notConnected)
+    let notConnected = PDTLaunchMenu.descriptor(for: .notConnected(signInWouldBe: .saved))
 
     let success = try launchScriptedPDTApp(
         app,
@@ -1008,7 +1008,7 @@ private func scriptedSignInSmoke(arguments: [String]) throws -> SmokeReport {
     _ = denied.waitForEventCount("sign-in", atLeast: 1, timeout: options.timeout)
     let deniedMenu = try checkMenu(
         "\(name)-denied",
-        descriptor: PDTLaunchMenu.descriptor(for: .notConnected, notice: .signInFailed(.denied)),
+        descriptor: PDTLaunchMenu.descriptor(for: .notConnected(signInWouldBe: .saved), notice: .signInFailed(.denied)),
         texts: ["Sign-in failed", "PDT sign-in was declined", "Sign in with PDT"],
         process: denied.process,
         timeout: options.timeout,
@@ -1100,7 +1100,7 @@ private func loggedOutLaunchSmoke(arguments: [String]) throws -> SmokeReport {
     }
     let menu = try checkMenu(
         name,
-        descriptor: PDTLaunchMenu.descriptor(for: .notConnected),
+        descriptor: PDTLaunchMenu.descriptor(for: .notConnected(signInWouldBe: .saved)),
         texts: ["Not connected", "Sign in with PDT", "Use a PDT token", "Quit PDTBar"],
         process: launch.process,
         timeout: options.timeout,
@@ -1241,7 +1241,7 @@ private func packagedOnboardingSmoke(arguments: [String]) throws -> SmokeReport 
         )
     }
 
-    let notConnected = PDTLaunchMenu.descriptor(for: .notConnected)
+    let notConnected = PDTLaunchMenu.descriptor(for: .notConnected(signInWouldBe: .saved))
     proofPayload.setupMenu = try checkMenu(
         name,
         descriptor: notConnected,
@@ -1404,7 +1404,7 @@ private func appBundlePackagingSmoke(arguments: [String]) throws -> SmokeReport 
         )
     }
 
-    let loginSurface = MenuBarSurfaceRenderer.render(descriptor: PDTLaunchMenu.descriptor(for: .notConnected))
+    let loginSurface = MenuBarSurfaceRenderer.render(descriptor: PDTLaunchMenu.descriptor(for: .notConnected(signInWouldBe: .saved)))
     let expectedTargets = requiredSetupMenuTargets(in: loginSurface)
     let expectedMenuIdentifiers = Set(expectedTargets.map(\.accessibilityIdentifier))
     proofPayload.statusIdentifier = loginSurface.status.accessibilityIdentifier
@@ -3152,7 +3152,7 @@ private func menuPolishProof(arguments: [String]) throws -> SmokeReport {
         snapshotDirectory: pressureStore.directory
     ).descriptor
     let cards = [
-        MenuProofCard(title: "Setup", descriptor: PDTLaunchMenu.descriptor(for: .notConnected)),
+        MenuProofCard(title: "Setup", descriptor: PDTLaunchMenu.descriptor(for: .notConnected(signInWouldBe: .saved))),
         MenuProofCard(title: "Fetching", descriptor: PDTLaunchMenu.descriptor(for: .connected(.fetching, .saved))),
         MenuProofCard(title: "All quiet", descriptor: quietDescriptor),
         MenuProofCard(title: "Pressure", descriptor: pressureDescriptor),
