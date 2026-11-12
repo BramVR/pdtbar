@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- A menu taller than the screen no longer scrolls Settings, Disconnect, and Quit out of reach: only when it would overflow, PDTBar folds rows into submenus in a fixed order (Big movers, then the income list, then the allocation chart, then attention items spilled into Allocation) until it fits, and every folded row stays one click away. Menus that fit render exactly as before; the tallest fixture menu now measures 777 pt on a 876 pt screen and 901 pt on a 919 pt screen instead of 1071 pt, and 842 pt and 890 pt instead of 1184 pt after a failed refresh (#296).
+- A menu taller than the screen no longer scrolls Settings, Disconnect, and Quit out of reach: only when it would overflow, PDTBar folds rows into submenus in a fixed order (Big movers, then the income list, then the allocation chart, then attention items spilled into Allocation, and as a last resort one row per section) until it fits, and every folded row stays one click away. Menus that fit render exactly as before; the tallest fixture menu now measures 777 pt on a 876 pt screen and 901 pt on a 919 pt screen instead of 1071 pt, and 842 pt and 890 pt instead of 1184 pt after a failed refresh (#296).
 - `menu-measure` now warns when macOS clamped the captured menu to the screen, and its report adds `contentHeight` and `clampedToScreen`; before, a clamped menu reported the clamp (1123 pt on a 1130 pt screen) as the menu height (#296).
 - Big movers now signs the move the way Pulse does (`+12.4% over recent window`), so a rise no longer reads like an unsigned change.
 - The portfolio summary no longer shows `Unavailable` when PDT returns only one of CAGR and Total increase: the figure PDT has fills the row by itself (#294).

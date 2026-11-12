@@ -66,7 +66,9 @@ struct MenuOverflowFitTests {
     @Test("Folded rows open the rows they replaced")
     func foldedRowsOpenWhatTheyReplaced() throws {
         let original = try surface("worst-case-height.json")
-        let compacted = MenuOverflowStep.allCases.reduce(original) { $0.compacted(by: $1) }
+        let compacted = MenuOverflowStep.allCases
+            .prefix { $0 != .foldSectionTails }
+            .reduce(original) { $0.compacted(by: $1) }
         let allocation = try #require(compacted.sections.first { $0.id == "allocation" })
         let income = try #require(compacted.sections.first { $0.id == "income" })
         let bigMovers = try #require(compacted.sections.first { $0.id == "bigMovers" })
@@ -80,6 +82,20 @@ struct MenuOverflowFitTests {
         #expect(bigMovers.title.isEmpty)
         #expect(bigMovers.rows.map(\.title) == ["Big movers"])
         #expect(bigMovers.rows[0].children.map(\.role) == [.bigMoverSummary])
+    }
+
+    @Test("The last resort leaves one row per section and keeps Actions, so a 640 pt Larger Text screen still shows Quit")
+    func lastResortKeepsActions() throws {
+        let original = try refreshFailureSurface("worst-case-height.json")
+        let collapsed = MenuOverflowStep.allCases.reduce(original) { $0.compacted(by: $1) }
+        let pulse = try #require(collapsed.sections.first { $0.id == "pulse" })
+
+        #expect(pulse.title.isEmpty)
+        #expect(pulse.rows.map(\.title) == ["Pulse"])
+        #expect(pulse.rows[0].detail == "Orbit Communications moved +25.0%")
+        #expect(collapsed.sections.filter { $0.id != "actions" }.allSatisfy { $0.title.isEmpty })
+        #expect(estimatedHeight(collapsed) <= 640 - 8)
+        #expect(collapsed.sections.first { $0.id == "actions" } == original.sections.first { $0.id == "actions" })
     }
 
     private func surface(_ fixture: String) throws -> MenuBarSurface {
@@ -120,7 +136,7 @@ private func estimatedHeight(_ surface: MenuBarSurface) -> Double {
 
 private func estimatedHeight(_ row: MenuBarRowSurface) -> Double {
     if let summary = row.portfolioSummary { return summary.showsPerformance ? 86 : 46 }
-    if row.barChart != nil { return 124 }
+    if row.barChart != nil { return row.detail?.isEmpty == false ? 138 : 124 }
     let actionable: Set<MenuRowRole> = [.fetchRetry, .openPDT, .settings, .connectionDisconnect]
     if row.children.isEmpty, !actionable.contains(row.role) {
         return row.detail == nil ? 30 : 42

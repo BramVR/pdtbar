@@ -15,8 +15,11 @@ public enum MenuOverflowStep: Int, CaseIterable, Sendable {
     case foldAllocationChart
     /// Attention items that spilled out of Pulse into Allocation move into one submenu row.
     case foldSpilledPressures
-    /// Last resort: every titled section except Actions keeps its first row and folds the rest.
+    /// Every titled section except Actions keeps its first row and folds the rest.
     case foldSectionTails
+    /// Last resort, so Actions and Quit stay on screen: every titled section except Actions
+    /// becomes one row named after it, hinting at its first row, with all its rows in the submenu.
+    case collapseSections
 }
 
 public extension MenuBarSurface {
@@ -53,6 +56,7 @@ public extension MenuBarSurface {
             case .foldBigMovers: section.foldingBigMovers()
             case .foldSpilledPressures: section.foldingSpilledPressures()
             case .foldSectionTails: section.foldingTail()
+            case .collapseSections: section.collapsing()
             }
         }
         return surface
@@ -124,6 +128,16 @@ private extension MenuBarSectionSurface {
                 detail: nil,
                 children: Array(rows.dropFirst())
             ),
+        ]
+        return section
+    }
+
+    func collapsing() -> MenuBarSectionSurface {
+        guard id != "actions", !title.isEmpty, !rows.isEmpty else { return self }
+        var section = self
+        section.title = ""
+        section.rows = [
+            MenuBarSectionSurface.foldRow(id: "\(id).collapsed", title: title, detail: rows[0].title, children: rows),
         ]
         return section
     }
