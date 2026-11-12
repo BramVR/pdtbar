@@ -1,6 +1,6 @@
 import Foundation
 
-/// Holds the one PDT connection. Saving `.disconnected` deletes the item.
+/// Holds the one PDT connection. Saving `.empty` deletes the item.
 /// Production uses the Keychain store in PDTBarAppSupport; tests and smokes
 /// use `InMemoryPDTCredentialStore`, and dev proof uses `FilePDTCredentialStore`.
 ///
@@ -10,8 +10,12 @@ import Foundation
 /// refreshes of one stored pair leave the loser with a dead token. The lock
 /// is not reentrant.
 public protocol PDTCredentialStore: Sendable {
-    func load() throws -> PDTConnectionState
-    func save(_ state: PDTConnectionState) throws
+    /// How this store would keep a credential saved now, answered without
+    /// reading or writing it. `.thisSessionOnly` when the store already knows
+    /// it will refuse every save.
+    var persistence: PDTCredentialPersistence { get }
+    func load() throws -> PDTStoredConnection
+    func save(_ connection: PDTStoredConnection) throws
     func withExclusiveAccess<Value>(_ body: () throws -> Value) throws -> Value
 }
 
@@ -29,11 +33,13 @@ public enum PDTCredentialStoreError: Error, Equatable, Sendable {
 public final class InMemoryPDTCredentialStore: PDTCredentialStore, @unchecked Sendable {
     private let lock = NSLock()
     private let exclusive = NSLock()
-    private var state: PDTConnectionState
+    private var connection: PDTStoredConnection
 
     public init(_ state: PDTConnectionState = .disconnected) {
-        self.state = state
+        connection = PDTStoredConnection(state)
     }
+
+    public var persistence: PDTCredentialPersistence { .saved }
 
     public func withExclusiveAccess<Value>(_ body: () throws -> Value) throws -> Value {
         exclusive.lock()
@@ -41,16 +47,16 @@ public final class InMemoryPDTCredentialStore: PDTCredentialStore, @unchecked Se
         return try body()
     }
 
-    public func load() throws -> PDTConnectionState {
+    public func load() throws -> PDTStoredConnection {
         lock.lock()
         defer { lock.unlock() }
-        return state
+        return connection
     }
 
-    public func save(_ state: PDTConnectionState) throws {
+    public func save(_ connection: PDTStoredConnection) throws {
         lock.lock()
         defer { lock.unlock() }
-        self.state = state
+        self.connection = connection
     }
 }
 
@@ -69,22 +75,24 @@ public struct FilePDTCredentialStore: PDTCredentialStore {
         self.writeBytes = write
     }
 
+    public var persistence: PDTCredentialPersistence { .saved }
+
     public func withExclusiveAccess<Value>(_ body: () throws -> Value) throws -> Value {
         try PDTCredentialFileLock(url: url.appendingPathExtension("lock")).hold(body)
     }
 
-    public func load() throws -> PDTConnectionState {
+    public func load() throws -> PDTStoredConnection {
         let data: Data
         do {
             data = try Data(contentsOf: url)
         } catch CocoaError.fileReadNoSuchFile {
-            return .disconnected
+            return .empty
         }
-        return try PDTConnectionState(storedData: data)
+        return try PDTStoredConnection(storedData: data)
     }
 
-    public func save(_ state: PDTConnectionState) throws {
-        guard state != .disconnected else {
+    public func save(_ connection: PDTStoredConnection) throws {
+        guard connection != .empty else {
             if unlink(url.path) != 0 {
                 guard errno == ENOENT else {
                     throw PDTCredentialStoreError.writeFailed(code: errno)
@@ -99,7 +107,7 @@ public struct FilePDTCredentialStore: PDTCredentialStore {
         let directory = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let temporary = directory.appending(path: ".\(url.lastPathComponent).\(UUID().uuidString)")
-        let data = try state.storedData()
+        let data = try connection.storedData()
         // Created 0600 from the first byte, then renamed over the old file.
         let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
         guard descriptor >= 0 else {
@@ -178,7 +186,7 @@ public struct PDTCredentialFileLock: Sendable {
     }
 }
 
-public extension PDTConnectionState {
+public extension PDTStoredConnection {
     /// The serialized form a store writes. It holds secrets; only stores see it.
     func storedData() throws -> Data {
         let encoder = JSONEncoder()
@@ -191,9 +199,29 @@ public extension PDTConnectionState {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         do {
-            self = try decoder.decode(PDTConnectionState.self, from: storedData)
+            self = try decoder.decode(PDTStoredConnection.self, from: storedData)
         } catch {
             throw PDTCredentialStoreError.unreadable
         }
+    }
+}
+
+/// The state's own JSON object with `generation` beside its one key. Data
+/// from before generations has no such key and reads as generation 0, and a
+/// build from before them reads the state and skips the key.
+extension PDTStoredConnection: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case generation
+    }
+
+    public init(from decoder: Decoder) throws {
+        state = try PDTConnectionState(from: decoder)
+        generation = try decoder.container(keyedBy: CodingKeys.self).decodeIfPresent(Int.self, forKey: .generation) ?? 0
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try state.encode(to: encoder)
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(generation, forKey: .generation)
     }
 }

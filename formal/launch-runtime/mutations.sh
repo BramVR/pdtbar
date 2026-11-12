@@ -34,5 +34,10 @@ done <<'LIST'
 "optionalAccessLossStaysConnected"               AccessLossLeavesConnected
 "connectionScreenDropsRecord"                    UncommittedRecordKept
 "connectionOpDropsRecord"                        UncommittedRecordKept
+"checkReadsStoreOnly"                            SignedOutOnlyWithoutCredential
+"fetchingHidesNotSaved"                          NotSavedRowTellsTruth
+"syncEndReportsSaved"                            NotSavedRowTellsTruth
+"syncEndKeepsOldPersistence"                     NotSavedRowTellsTruth
+"retryForgetsNotSaved"                           NotSavedRowTellsTruth
 LIST
 rm -f .mutation.cfg .mutation.cfg.bak

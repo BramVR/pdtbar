@@ -12,7 +12,7 @@ read_when:
 
 - Product launch is no-argument `pdtbar`; fixture mode is explicit `--fixture`.
 - The PDT REST API connection is the only setup path: Sign in with PDT (browser) or a pasted PDT token, stored in the Keychain. Product code starts no process; `pdtbar-checks` fails on a process start, or a mention of a local CLI or MCP tool, in `Sources/PDTBarCore`, `Sources/PDTBarAppSupport`, or `Sources/PDTBarApp`.
-- Scripted app smokes launch `pdtbar --app-support-dir <isolated> --scripted-pdt <file>`. The file is a `ScriptedPDTConnection` JSON: stored connection (`notConnected`, `browserSession`, `personalToken`, `signInExpired`, `tokenRevoked`), an optional `keychainStatus` that drives the real Keychain store over a fake `SecItem` API, a scripted sign-in outcome, PDT API replies in request order, and an `eventLog` that records `check`, `sign-in`, `token`, `disconnect`, and `request <path>`. The app refuses `--scripted-pdt` without `--app-support-dir`.
+- Scripted app smokes launch `pdtbar --app-support-dir <isolated> --scripted-pdt <file>`. The file is a `ScriptedPDTConnection` JSON: stored connection (`notConnected`, `browserSession`, `personalToken`, `signInExpired`, `tokenRevoked`), an optional `keychain` (`unentitled`: reads find nothing, writes answer `-34018`, and the signature has no keychain entitlement, as measured on an ad-hoc build, so the `Not connected` screen says the build can't save a sign-in and a scripted sign-in connects for the session only) or `keychainStatus` (one status for every call), each driving the real Keychain store over a fake `SecItem` API, a scripted sign-in outcome, PDT API replies in request order, and an `eventLog` that records `check`, `sign-in`, `token`, `disconnect`, and `request <path>`. The app refuses `--scripted-pdt` without `--app-support-dir`.
 - Scripted smokes inject fixture env vars only as sentinels; they fail if the fixture sentinel is written.
 - Missing macOS Accessibility/Screen Recording permission should skip with a setup-required detail unless the smoke is specifically testing that failure.
 
@@ -28,6 +28,16 @@ read_when:
 `Scripts/verify_pdtbar.sh menu-measure <fixture.json>` (or `menu-measure --scripted <script.json> <seed-snapshot.json>`) builds, launches any fixture or scripted connection, opens only the root menu, and writes `menu.png` plus `measure.json` to `<run>/evidence/measure/`. The report holds menu width and height in pt and, per top-level row, its role, its identifier with digit runs masked (`kind`), height, submenu and enabled flags, and the row text's length, error flags, and a primary-label digest salted per run (for duplicate detection). It writes no row text by default, so no amounts or holding names reach disk; `pdtbar-capture measure ... --allow-sensitive-text` adds the raw text for fixture debugging. Same preflight and redaction rules as the walk. Use it to compare menu layouts across fixtures.
 
 Tallest menu (#296): measure `docs/pdt/fixtures/worst-case-height.json`, then rerun `menu-measure --scripted docs/pdt/fixtures/scripted/refresh-failure-503.json <seed>`, where `<seed>` is `snapshots/latest-portfolio-snapshot.json` from a `launch` of that fixture. That adds the refresh-failure rows on top.
+
+## Auth lifecycle measure
+
+`swift run pdtbar-smoke auth-measure [--artifacts <dir>]` scores sign-in, credential storage, and connection recovery. It is a measurement, not a gate: it exits 0 with `status: passed` unless a scenario's driver threw, and the score is in the report. It is not in the API matrix.
+
+- It drives the real `PDTLaunchRuntime` and `PDTAppConnection` and runs every effect inline. PDT, the Keychain, and the browser are fakes; it launches no app and touches no real Keychain, network, or `~/.pdtbar-dev`.
+- Stores: `KeychainPDTCredentialStore` over a fake entitled keychain, the same over a fake ad-hoc build (reads find nothing, writes answer `-34018`, as measured on an ad-hoc binary), and `FilePDTCredentialStore` in a temp directory.
+- The fake PDT answers by request path from `docs/pdt/fixtures/api/full` and knows which tokens are live, so a dead token gets `401 TOKEN_INVALID` and a dead refresh token gets `invalid_grant`.
+- Report: `<artifacts>/pdtbar-auth-measure.json`. Per scenario: `clicks`, `silentSignOuts`, `deadEnds`, `osPrompts`, `unnamedStates`, `penalty`, a `findings` line per counted item, and every step with its menus (connection and fetch rows only). `penalty = clicks + 10*silentSignOuts + 5*deadEnds + 5*osPrompts + 3*unnamedStates`; lower is better. Two runs write the same bytes; stdout carries the report's SHA-256.
+- Scenarios are the table in `Sources/PDTBarSmoke/AuthMeasure.swift`; the scoring rules are `AuthMeasureScenario` in `Sources/PDTBarSmokeProof`, covered by `AuthMeasureReportTests`.
 
 ## Redaction rules
 

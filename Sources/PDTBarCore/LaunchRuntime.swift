@@ -110,16 +110,21 @@ public enum PDTLaunchState: Equatable, Sendable {
     case checkingConnection
     case connecting
     case disconnecting
-    case notConnected
+    /// What the connection said a sign-in now would be, so the screen can say
+    /// before the sign-in that this build will not keep it.
+    case notConnected(signInWouldBe: PDTCredentialPersistence)
     case needsReconnect(PDTCredentialKind, PDTReconnectCause)
     case subscriptionPaused
     case keychainUnavailable(PDTKeychainProblem)
-    case connected(PDTPortfolioSync)
+    /// How the credential is kept is what the connection said when the last
+    /// connection operation or sync ended, so a connection that is not saved
+    /// says so on every connected screen.
+    case connected(PDTPortfolioSync, PDTCredentialPersistence)
 
     init(_ status: PDTConnectionStatus) {
         switch status {
-        case .notConnected: self = .notConnected
-        case .connected: self = .connected(.current)
+        case let .notConnected(signInWouldBe): self = .notConnected(signInWouldBe: signInWouldBe)
+        case let .connected(persistence): self = .connected(.current, persistence)
         case let .needsReconnect(kind, cause): self = .needsReconnect(kind, cause)
         case .subscriptionPaused: self = .subscriptionPaused
         case let .keychainUnavailable(problem): self = .keychainUnavailable(problem)
@@ -143,7 +148,7 @@ public enum PDTLaunchState: Equatable, Sendable {
 
     var offersDisconnect: Bool {
         switch self {
-        case .needsReconnect, .subscriptionPaused, .connected(.failed), .connected(.current): true
+        case .needsReconnect, .subscriptionPaused, .connected(.failed, _), .connected(.current, _): true
         default: false
         }
     }
@@ -228,9 +233,9 @@ public enum PDTLaunchMenu {
         syncFailure: PDTSyncFailure? = nil
     ) -> MenuDescriptor {
         switch state {
-        case .connected(.fetching):
+        case .connected(.fetching, _):
             guard let cachedPulse else {
-                return fetchingDescriptor(elapsedSeconds: fetchingElapsedSeconds)
+                return fetchingDescriptor(elapsedSeconds: fetchingElapsedSeconds, connectionRows: notSavedRows(state))
             }
             return cachedPulseDescriptor(
                 cachedPulse.withRefreshAction(.inProgress),
@@ -244,21 +249,21 @@ public enum PDTLaunchMenu {
                     ),
                 ]
             )
-        case .connected(.failed):
+        case .connected(.failed, _):
             guard let cachedPulse else {
                 return MenuDescriptor(
                     statusTitle: "Could not fetch portfolio",
                     statusVisual: StatusVisualState(isDimmed: true),
                     sections: [
                         MenuSection(id: "portfolioFetch", title: "Portfolio", rows: portfolioFetchFailureRows(syncFailure)),
-                        connectionSection(rows: [disconnectRow()]),
+                        connectionSection(rows: notSavedRows(state) + [disconnectRow()]),
                     ]
                 ).trustingPortfolioValueMetadata()
             }
             return descriptorForBackgroundRefreshFailure(cachedPulse: cachedPulse)
-        case .connected(.current):
+        case .connected(.current, _):
             guard let cachedPulse else {
-                return fetchingDescriptor(elapsedSeconds: nil)
+                return fetchingDescriptor(elapsedSeconds: nil, connectionRows: notSavedRows(state))
             }
             return descriptorWithRefreshDetailsAction(cachedPulse: cachedPulse)
         case .notConnected:
@@ -276,8 +281,10 @@ public enum PDTLaunchMenu {
             ("Signing in with PDT", "Approve PDTBar in your browser")
         case .disconnecting:
             ("Disconnecting from PDT", "Removing the stored connection")
-        case .notConnected:
+        case .notConnected(.saved):
             ("Not connected", "PDTBar reads your PDT portfolio read-only")
+        case .notConnected(.thisSessionOnly):
+            ("Not connected", "This PDTBar build can't save your sign-in. You'll sign in each time PDTBar starts")
         case let .needsReconnect(_, cause):
             ("Reconnect to PDT", sentenceCased(reconnectReason(cause)))
         case .subscriptionPaused:
@@ -379,25 +386,43 @@ public enum PDTLaunchMenu {
         MenuRow(id: "pdtConnection.disconnect", role: .connectionDisconnect, title: "Disconnect from PDT")
     }
 
-    private static func fetchingDescriptor(elapsedSeconds: Int?) -> MenuDescriptor {
+    /// The one row that names a connection kept for this session only. Every
+    /// connected screen shows it where its Disconnect row lives: the PDT
+    /// section without a pulse, Actions with one.
+    fileprivate static func notSavedRows(_ state: PDTLaunchState) -> [MenuRow] {
+        guard case let .connected(_, .thisSessionOnly(problem)) = state else {
+            return []
+        }
+        return [
+            MenuRow(
+                id: "pdtConnection.notSaved",
+                role: .setupStatus,
+                title: "Connection not saved",
+                detail: problem == .missingEntitlement
+                    ? "This PDTBar build can't save to the Keychain. You stay connected until you quit"
+                    : "PDTBar could not save it on this Mac. You stay connected until you quit"
+            ),
+        ]
+    }
+
+    private static func fetchingDescriptor(elapsedSeconds: Int?, connectionRows: [MenuRow]) -> MenuDescriptor {
         let statusTitle = elapsedSeconds.map { "Fetching portfolio \(formatElapsedSeconds($0))" } ?? "Fetching portfolio"
+        let fetchSection = MenuSection(
+            id: "portfolioFetch",
+            title: "Portfolio",
+            rows: [
+                MenuRow(
+                    id: "portfolioFetch.status",
+                    role: .fetchStatus,
+                    title: "Fetching portfolio",
+                    detail: fetchingDetail(elapsedSeconds: elapsedSeconds, fallback: "Read-only from PDT")
+                ),
+            ]
+        )
         return MenuDescriptor(
             statusTitle: statusTitle,
             statusVisual: StatusVisualState(isDimmed: true, statusCopy: statusTitle),
-            sections: [
-                MenuSection(
-                    id: "portfolioFetch",
-                    title: "Portfolio",
-                    rows: [
-                        MenuRow(
-                            id: "portfolioFetch.status",
-                            role: .fetchStatus,
-                            title: "Fetching portfolio",
-                            detail: fetchingDetail(elapsedSeconds: elapsedSeconds, fallback: "Read-only from PDT")
-                        ),
-                    ]
-                ),
-            ]
+            sections: [fetchSection] + (connectionRows.isEmpty ? [] : [connectionSection(rows: connectionRows)])
         ).trustingPortfolioValueMetadata()
     }
 
@@ -595,17 +620,20 @@ private extension MenuDescriptor {
         MenuDescriptorRenderer.descriptorWithTopLevelActions(self, refreshState: state)
     }
 
-    func withDisconnectAction() -> MenuDescriptor {
+    /// What a connected pulse screen adds to Actions: the connection that is
+    /// not saved, and Disconnect where the state offers it.
+    func withConnectionActions(for state: PDTLaunchState) -> MenuDescriptor {
+        var rows = PDTLaunchMenu.notSavedRows(state)
+        if state.offersDisconnect {
+            rows.append(MenuRow(id: "actions.disconnect", role: .connectionDisconnect, title: "Disconnect from PDT"))
+        }
         var descriptor = self
         let portfolioValueProtectionState = descriptor.portfolioValueProtectionState
-        guard let index = descriptor.sections.firstIndex(where: { $0.id == "actions" }),
-              !descriptor.sections[index].rows.contains(where: { $0.role == .connectionDisconnect })
-        else {
+        guard let index = descriptor.sections.firstIndex(where: { $0.id == "actions" }) else {
             return self
         }
-        descriptor.sections[index].rows.append(
-            MenuRow(id: "actions.disconnect", role: .connectionDisconnect, title: "Disconnect from PDT")
-        )
+        let present = Set(descriptor.sections[index].rows.map(\.id))
+        descriptor.sections[index].rows += rows.filter { !present.contains($0.id) }
         descriptor.portfolioValueProtectionState = portfolioValueProtectionState
         return descriptor
     }
@@ -636,19 +664,22 @@ public struct PDTOnboardingUpdate: Equatable {
 }
 
 public enum PDTLaunchFetchResult: Equatable {
-    case succeeded(PulseLifecycleResult)
+    /// `connection`: as for a committed background refresh.
+    case succeeded(PulseLifecycleResult, connection: PDTConnectionStatus)
     /// `failure`: the typed record of the holdings request, which the menu names.
     case failed(PDTFetchFailure, failure: PDTSyncFailure? = nil)
 }
 
 public enum PDTLaunchBackgroundDetailRefreshResult: Equatable {
-    /// The snapshot was committed. `connection` is what the sync learned about
-    /// access: an optional phase that lost access after the base holdings
-    /// succeeded leaves a committed pulse and a connection that is gone.
+    /// The snapshot was committed. `connection` is what the connection says
+    /// after the sync (`PDTAppConnection.status(afterSyncEnding:)`), and it has
+    /// no default: an optional phase that lost access after the base holdings
+    /// succeeded leaves a committed pulse and a connection that is gone, and a
+    /// connection that is not saved must not read as saved.
     case succeeded(
         PulseLifecycleResult,
         outcome: PDTBackgroundDetailRefreshOutcome,
-        connection: PDTConnectionStatus = .connected
+        connection: PDTConnectionStatus
     )
     case failed(PDTFetchFailure, failure: PDTSyncFailure? = nil)
 }
@@ -781,20 +812,20 @@ public final class PDTLaunchRuntime {
 
     /// Accepted only while connected, so no fetch runs behind a connection screen.
     public func retryFirstFetch() -> PDTOnboardingUpdate? {
-        guard case .connected = state, isIdle else {
+        guard case let .connected(_, persistence) = state, isIdle else {
             return nil
         }
         if let currentPulse {
-            return startBackgroundDetailRefresh(with: currentPulse)
+            return startBackgroundDetailRefresh(with: currentPulse, persistence)
         }
-        return startFirstFetch()
+        return startFirstFetch(persistence)
     }
 
     public func firstFetchProgress(fetchingElapsedSeconds: Int) -> PDTOnboardingUpdate? {
         guard firstFetchInFlight else {
             return nil
         }
-        return update(state: .connected(.fetching), fetchingElapsedSeconds: fetchingElapsedSeconds)
+        return update(state: state, fetchingElapsedSeconds: fetchingElapsedSeconds)
     }
 
     public func completeFirstFetch(_ result: PDTLaunchFetchResult) -> PDTOnboardingUpdate {
@@ -803,28 +834,25 @@ public final class PDTLaunchRuntime {
         }
         firstFetchInFlight = false
         switch result {
-        case .succeeded(let pulse):
+        case let .succeeded(pulse, connection):
             show(pulse)
-            state = .connected(.current)
-            screen = .refreshed
-            return currentUpdate()
+            return endCommitted(connection, screen: .refreshed)
         case .failed(let fetchFailure, let failure):
             return endUncommitted(fetchFailure, failure: failure)
         }
     }
 
     public func beginBackgroundDetailRefresh() -> PDTOnboardingUpdate? {
-        guard let currentPulse, case .connected = state, isIdle else {
+        guard let currentPulse, case let .connected(_, persistence) = state, isIdle else {
             return nil
         }
-        return startBackgroundDetailRefresh(with: currentPulse)
+        return startBackgroundDetailRefresh(with: currentPulse, persistence)
     }
 
     public func backgroundDetailRefreshProgress(_ progress: BackgroundDetailRefreshProgress) -> PDTOnboardingUpdate? {
         guard backgroundDetailRefreshInFlight, currentPulse != nil else {
             return nil
         }
-        state = .connected(.fetching)
         screen = .detailProgress(progress)
         return currentUpdate()
     }
@@ -837,13 +865,7 @@ public final class PDTLaunchRuntime {
         switch result {
         case let .succeeded(pulse, outcome, connection):
             show(pulse)
-            guard connection == .connected else {
-                // The committed pulse carries the failure; the connection screen says why.
-                return update(state: PDTLaunchState(connection))
-            }
-            state = .connected(.current)
-            screen = outcome == .degraded ? .detailDegraded : .refreshed
-            return currentUpdate()
+            return endCommitted(connection, screen: outcome == .degraded ? .detailDegraded : .refreshed)
         case let .failed(fetchFailure, failure):
             return endUncommitted(fetchFailure, failure: failure)
         }
@@ -872,14 +894,27 @@ public final class PDTLaunchRuntime {
     /// A connected result starts the one fetch that fits: a background refresh
     /// over a pulse on screen, or a first fetch when there is none.
     private func apply(_ status: PDTConnectionStatus) -> PDTOnboardingUpdate {
-        guard status == .connected else {
+        guard case let .connected(persistence) = status else {
             return update(state: PDTLaunchState(status))
         }
         notice = nil
         if let currentPulse {
-            return startBackgroundDetailRefresh(with: currentPulse)
+            return startBackgroundDetailRefresh(with: currentPulse, persistence)
         }
-        return startFirstFetch()
+        return startFirstFetch(persistence)
+    }
+
+    /// A sync that committed a snapshot, with its pulse already shown: stay
+    /// connected the way the connection now says, or show the connection
+    /// screen that says why access is gone. The committed pulse carries the
+    /// failure that lost it.
+    private func endCommitted(_ connection: PDTConnectionStatus, screen: Screen) -> PDTOnboardingUpdate {
+        guard case let .connected(persistence) = connection else {
+            return update(state: PDTLaunchState(connection))
+        }
+        state = .connected(.current, persistence)
+        self.screen = screen
+        return currentUpdate()
     }
 
     /// A sync that committed nothing: keep its record, then show the connection
@@ -889,15 +924,15 @@ public final class PDTLaunchRuntime {
         switch fetchFailure {
         case .connection(let status):
             return apply(status)
-        case .unavailable:
-            return update(state: .connected(.failed))
+        case .unavailable(let persistence):
+            return update(state: .connected(.failed, persistence))
         }
     }
 
-    private func startFirstFetch() -> PDTOnboardingUpdate {
+    private func startFirstFetch(_ persistence: PDTCredentialPersistence) -> PDTOnboardingUpdate {
         uncommittedSync = nil
         firstFetchInFlight = true
-        return update(state: .connected(.fetching), effect: .startFirstFetch)
+        return update(state: .connected(.fetching, persistence), effect: .startFirstFetch)
     }
 
     private func beginConnectionOperation(_ state: PDTLaunchState, effect: PDTOnboardingEffect) -> PDTOnboardingUpdate {
@@ -913,10 +948,13 @@ public final class PDTLaunchRuntime {
         displayed.show(pulse)
     }
 
-    private func startBackgroundDetailRefresh(with pulse: PulseLifecycleResult) -> PDTOnboardingUpdate {
+    private func startBackgroundDetailRefresh(
+        with pulse: PulseLifecycleResult,
+        _ persistence: PDTCredentialPersistence
+    ) -> PDTOnboardingUpdate {
         uncommittedSync = nil
         backgroundDetailRefreshInFlight = true
-        state = .connected(.fetching)
+        state = .connected(.fetching, persistence)
         screen = .detailProgress(BackgroundDetailRefreshProgress(phase: .baseHoldings))
         return currentUpdate(effect: .startBackgroundDetailRefresh)
     }
@@ -965,7 +1003,7 @@ public final class PDTLaunchRuntime {
         case .refreshed:
             descriptor = PDTLaunchMenu.descriptorWithRefreshDetailsAction(cachedPulse: pulseMenu)
         }
-        return state.offersDisconnect ? descriptor.withDisconnectAction() : descriptor
+        return descriptor.withConnectionActions(for: state)
     }
 
     private var screenElapsedSeconds: Int? {
@@ -975,6 +1013,13 @@ public final class PDTLaunchRuntime {
         return nil
     }
 
+    private var isFetching: Bool {
+        if case .connected(.fetching, _) = state {
+            return true
+        }
+        return false
+    }
+
     private func healthRuntime() -> DataHealthRuntime {
         let sync: DataHealthSync = switch (screen, uncommittedSync) {
         case (.detailProgress(let progress), _):
@@ -982,7 +1027,7 @@ public final class PDTLaunchRuntime {
         case (_, let uncommitted?):
             .failed(uncommitted.failure)
         case (_, nil):
-            state == .connected(.fetching) ? .running(BackgroundDetailRefreshProgress(phase: .baseHoldings)) : .idle
+            isFetching ? .running(BackgroundDetailRefreshProgress(phase: .baseHoldings)) : .idle
         }
         return DataHealthRuntime(access: DataHealthAccess(state), sync: sync)
     }
