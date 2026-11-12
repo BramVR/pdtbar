@@ -34,6 +34,7 @@ PDT MCP (#250).
   - `income-event.json` — ex-dividend in window + payment landed + derivable raise.
   - `big-mover.json` — +12.4% move via price history and prior-vs-current snapshot.
   - `quiet-no-pressure.json` — the explicit all-quiet state.
+  - `worst-case-height.json` — composed from the frozen fixtures above, not captured: every facet firing at once (three big movers fill Pulse, both allocation pressures spill into Allocation, full Income list). Menu height stress case (#296).
 - [`fixtures/api/`](fixtures/api/) — synthetic PDT REST response bodies, one file
   per request, numbered in the order `PDTAPIDataSource` sends them. Replay a
   directory's files sorted by name through `ScriptedPDTHTTPTransport`. Same fake
