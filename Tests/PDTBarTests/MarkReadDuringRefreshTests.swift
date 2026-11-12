@@ -30,7 +30,7 @@ struct MarkReadDuringRefreshTests {
 
         _ = try app.markRead(item)
         let finished = app.runtime.completeBackgroundDetailRefresh(
-            .succeeded(refreshedBeforeMark, outcome: .completed)
+            .succeeded(refreshedBeforeMark, outcome: .completed, connection: .connected(.saved))
         )
 
         #expect(!markReadPayloads(in: finished.descriptor).contains(item.id))
@@ -44,7 +44,7 @@ struct MarkReadDuringRefreshTests {
 
         _ = try app.markRead(item)
         let finished = app.runtime.completeBackgroundDetailRefresh(
-            .succeeded(app.cachedPulse, outcome: .degraded)
+            .succeeded(app.cachedPulse, outcome: .degraded, connection: .connected(.saved))
         )
         let markedAfter = try app.markRead(item)
 
@@ -119,7 +119,7 @@ private struct ReturningLaunch {
         runtime = PDTLaunchRuntime(loadReadState: { try? readStore.load() })
         _ = runtime.launch()
         _ = try #require(runtime.completeCachedPulseLoad(cachedPulse))
-        let connected = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+        let connected = runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: runtime.connectionAttempt)
         try #require(connected.effect == .startBackgroundDetailRefresh)
     }
 

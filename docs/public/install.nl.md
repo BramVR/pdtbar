@@ -41,7 +41,7 @@ Na het openen staat er een klein stapelicoon in de macOS-menubalk.
 - Gebruik je liever een token, kies dan `Use a PDT token…` en plak een token met alleen leesrechten van de pagina Integrations > API in PDT.
 - Zie je `Reconnect to PDT`, dan accepteert PDT de verbinding niet meer. Log opnieuw in of plak een nieuw token. Je laatste overzicht blijft zichtbaar.
 - Zie je `PDT access paused`, dan is je PDT-abonnement afgelopen. Verleng het en klik daarna op `Check again`.
-- Zie je `Sign-in not saved` of `PDT token not saved`, dan kon PDTBar de verbinding niet in de Sleutelhanger bewaren en leest het niets uit PDT tot dat lukt. `Check again` probeert het opnieuw. Een kopie van PDTBar die niet is ondertekend voor de Sleutelhanger kan de verbinding nooit bewaren: installeer dan de ondertekende release.
+- Zie je `Connection not saved`, dan kon PDTBar de verbinding niet in de Sleutelhanger bewaren. PDTBar blijft werken tot je het afsluit. Daarna log je opnieuw in. Een kopie van PDTBar die niet is ondertekend voor de Sleutelhanger kan de verbinding nooit bewaren. Installeer de ondertekende release om ingelogd te blijven.
 - Zie je `Keychain unavailable`, dan is deze kopie van PDTBar niet ondertekend voor de Sleutelhanger. Installeer dan de ondertekende release.
 
 ## Dagelijks gebruik

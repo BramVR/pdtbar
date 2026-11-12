@@ -72,7 +72,7 @@ public final class PDTAppConnection: @unchecked Sendable {
             return PDTConnectionOutcome(connection.status(), notice: .signInFailed(.failed))
         }
         // A cancel during the code exchange or the wait for the store lock still wins.
-        // The connection holds a session the store refuses, and its status says so.
+        // The connection uses a session the store refuses, and its status says it is not saved.
         _ = try? connection.signedIn(session, unless: cancellation)
         return PDTConnectionOutcome(connection.status())
     }
@@ -126,9 +126,9 @@ public final class PDTAppConnection: @unchecked Sendable {
 
     /// What a failed request means for the connection, whichever phase it ran
     /// in. `PDTConnection` has already stored or held `needsReconnect` for a
-    /// rejected refresh or token, and holds a credential the store refused, so
-    /// its status decides those. A plain `403` has no connection state of its
-    /// own and stays retryable.
+    /// rejected refresh or token, so its status decides those. Every other
+    /// failure, a plain `403` included, is retryable while the connection
+    /// still says connected, and reports how the credential is kept.
     public func failure(for kind: PDTSyncFailure.Kind) -> PDTFetchFailure {
         switch kind {
         case .accessPaused:
@@ -137,20 +137,33 @@ public final class PDTAppConnection: @unchecked Sendable {
             return .connection(.needsReconnect(storedKind() ?? .personalToken, .readAccessMissing))
         case .reconnect:
             return rejected(.tokenInvalid)
-        case .credentialStore:
+        case .credentialStore, .forbidden, .rateLimited, .network, .server, .unreadableResponse, .unexpected, .cancelled:
             let status = connection.status()
-            return status == .connected ? .unavailable : .connection(status)
-        case .forbidden, .rateLimited, .network, .server, .unreadableResponse, .unexpected, .cancelled:
-            return .unavailable
+            guard case let .connected(persistence) = status else {
+                return .connection(status)
+            }
+            return .unavailable(persistence)
         }
     }
 
     private func rejected(_ cause: PDTReconnectCause) -> PDTFetchFailure {
         let status = connection.status()
-        guard status == .connected else {
+        guard case .connected = status else {
             return .connection(status)
         }
         return .connection(.needsReconnect(storedKind() ?? .personalToken, cause))
+    }
+
+    /// What the connection is after a sync that committed a snapshot: the
+    /// state its ending failure names when an optional phase lost access,
+    /// else what `PDTConnection` says now. With `failure(for:)` this is where
+    /// every finished sync reports the connection, so a credential that is
+    /// not saved is never reported as saved.
+    public func status(afterSyncEnding failure: PDTSyncFailure.Kind?) -> PDTConnectionStatus {
+        if let failure, case let .connection(status) = self.failure(for: failure) {
+            return status
+        }
+        return connection.status()
     }
 
     private func storedKind() -> PDTCredentialKind? {

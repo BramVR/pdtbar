@@ -125,7 +125,7 @@ if [[ -n "${PROFILE}" ]]; then
 elif [[ "${PDTBAR_REQUIRE_KEYCHAIN_ENTITLEMENT:-0}" == "1" ]]; then
   fail "PDTBAR_PROVISIONING_PROFILE is required: without it the app cannot store the PDT connection."
 else
-  log "WARN: No PDTBAR_PROVISIONING_PROFILE; this build cannot save to the Keychain. A sign-in shows 'Sign-in not saved' and is lost on quit."
+  log "WARN: No PDTBAR_PROVISIONING_PROFILE; this build cannot save to the Keychain. A sign-in works until quit, shows 'Connection not saved', and is not kept."
 fi
 
 if command -v codesign >/dev/null 2>&1; then

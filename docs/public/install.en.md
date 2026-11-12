@@ -41,7 +41,7 @@ After PDTBar opens, look for the small stack icon in the macOS menu bar.
 - To use a token instead, choose `Use a PDT token…` and paste a read-only token from PDT's Integrations > API page.
 - If you see `Reconnect to PDT`, PDT stopped accepting the connection. Sign in again or paste a new token. Your last pulse stays visible.
 - If you see `PDT access paused`, your PDT subscription has ended. Renew it, then click `Check again`.
-- If you see `Sign-in not saved` or `PDT token not saved`, PDTBar could not save the connection to the Keychain and reads nothing from PDT until it can. `Check again` tries again. A copy of PDTBar that was not signed for the Keychain can never save it: install the signed release instead.
+- If you see `Connection not saved`, PDTBar could not save the connection to the Keychain. It keeps working until you quit PDTBar. After that you sign in again. A copy of PDTBar that was not signed for the Keychain can never save it. Install the signed release to stay signed in.
 - If you see `Keychain unavailable`, this copy of PDTBar was not signed for the Keychain. Install the signed release instead.
 
 ## Daily use

@@ -24,9 +24,6 @@ public enum PDTCredentialStoreError: Error, Equatable, Sendable {
     /// keychain access entitlement the data protection keychain requires.
     /// Never answered by falling back to the login keychain (ADR-0002).
     case missingKeychainEntitlement
-    /// The store refused the credential `PDTConnection` holds, so there is no
-    /// stored credential to hand to the API (ADR-0002 decision 3).
-    case notSaved
 }
 
 public final class InMemoryPDTCredentialStore: PDTCredentialStore, @unchecked Sendable {

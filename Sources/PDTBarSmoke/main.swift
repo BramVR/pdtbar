@@ -680,7 +680,7 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
     let failureMenu = accessibilityChecked
         ? try checkMenu(
             "\(name)-failure",
-            descriptor: PDTLaunchMenu.descriptor(for: .connected(.failed)),
+            descriptor: PDTLaunchMenu.descriptor(for: .connected(.failed, .saved)),
             texts: ["Could not fetch portfolio", "Try again"],
             process: failure.process,
             timeout: options.timeout,
@@ -3153,10 +3153,10 @@ private func menuPolishProof(arguments: [String]) throws -> SmokeReport {
     ).descriptor
     let cards = [
         MenuProofCard(title: "Setup", descriptor: PDTLaunchMenu.descriptor(for: .notConnected)),
-        MenuProofCard(title: "Fetching", descriptor: PDTLaunchMenu.descriptor(for: .connected(.fetching))),
+        MenuProofCard(title: "Fetching", descriptor: PDTLaunchMenu.descriptor(for: .connected(.fetching, .saved))),
         MenuProofCard(title: "All quiet", descriptor: quietDescriptor),
         MenuProofCard(title: "Pressure", descriptor: pressureDescriptor),
-        MenuProofCard(title: "Error", descriptor: PDTLaunchMenu.descriptor(for: .connected(.failed))),
+        MenuProofCard(title: "Error", descriptor: PDTLaunchMenu.descriptor(for: .connected(.failed, .saved))),
     ]
     try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
     try menuProofSVG(cards: cards).write(to: output, atomically: true, encoding: .utf8)

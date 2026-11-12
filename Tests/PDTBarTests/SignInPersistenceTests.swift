@@ -4,86 +4,125 @@ import Testing
 import PDTBarAppSupport
 import PDTBarCore
 
-/// #301: on a build without the keychain access entitlement the data protection
-/// keychain reads as empty (-25300) and refuses every write (-34018). A sign-in
-/// there must not look connected and then vanish on the next Check again.
+/// #301 and ADR-0003 decision 3: on a build without the keychain access
+/// entitlement the data protection keychain reads as empty (-25300) and refuses
+/// every write (-34018). A sign-in there works until PDTBar quits, says it is
+/// not saved, and is never signed out by a check.
 @Suite("Sign-in persistence")
 struct SignInPersistenceTests {
     @Test("Check again after sign-in never signs out, whether or not the Keychain can store the session")
     func checkAgainAfterSignInKeepsTheConnection() throws {
         for keychain in [FakeKeychain.unentitled, .entitled] {
+            let persistence = keychain == .entitled ? PDTCredentialPersistence.saved : .thisSessionOnly(.missingEntitlement)
             let driver = try LaunchDriver(keychain: keychain)
             driver.launch()
-            #expect(driver.runtime.state != .checkingConnection, "\(keychain)")
+            #expect(driver.runtime.state == .notConnected, "\(keychain)")
 
             try #require(driver.signIn(), "\(keychain): sign-in is offered at launch")
-            #expect(driver.runtime.state != .notConnected, "\(keychain): the sign-in finished")
+            #expect(driver.runtime.state == .connected(.fetching, persistence), "\(keychain)")
 
-            if driver.checkAgain() {
-                #expect(driver.runtime.state != .notConnected, "\(keychain): Check again signed the user out")
-            }
-            #expect(driver.connection.check().status != .notConnected, "\(keychain): a later check lost the session")
+            // The first fetch finds the subscription paused, which is a screen that offers Check again.
+            driver.endFirstFetch(driver.connection.failure(for: PDTSyncFailure.Kind.accessPaused))
+            #expect(driver.runtime.state == .subscriptionPaused, "\(keychain)")
+            try #require(driver.checkAgain(), "\(keychain)")
+            #expect(driver.runtime.state == .connected(.fetching, persistence), "\(keychain): Check again signed the user out")
+            #expect(driver.connection.check().status == .connected(persistence), "\(keychain): a later check lost the session")
         }
     }
 
-    @Test("A sign-in the Keychain cannot store says so on the menu that follows it")
-    func unstorableSignInIsNamed() throws {
-        let driver = try LaunchDriver(keychain: .unentitled)
-        driver.launch()
-        try #require(driver.signIn())
-
-        let titles = driver.visibleRowText
-        #expect(titles.contains { $0.localizedCaseInsensitiveContains("keychain") }, "rows: \(titles)")
-    }
-
-    @Test("A sign-in or token the Keychain refuses is named, offers Check again and Disconnect, and sends nothing to PDT")
-    func unsavedCredentialIsNamedAndNotUsed() throws {
-        let signedIn = try LaunchDriver(keychain: .unentitled)
+    @Test("A sign-in or token the Keychain refuses connects for the session: the fetch starts, the menu says it is not saved, and requests carry it")
+    func unsavedCredentialConnectsForTheSession() throws {
+        let ok = ScriptedPDTHTTPTransport.Reply.response(status: 200, body: Data("{}".utf8))
+        let signedIn = try LaunchDriver(keychain: .unentitled, api: [ok])
         signedIn.launch()
         try #require(signedIn.signIn())
-        let pasted = try LaunchDriver(keychain: .unentitled)
+        let pasted = try LaunchDriver(keychain: .unentitled, api: [ok])
         pasted.launch()
         try #require(pasted.connect(token: PDTAPIToken("pdt_pasted")))
 
-        let cases: [(LaunchDriver, PDTCredentialKind, String)] = [
-            (signedIn, .browserSession, "Sign-in not saved"), (pasted, .personalToken, "PDT token not saved"),
-        ]
-        for (driver, kind, title) in cases {
-            #expect(driver.runtime.state == .notSaved(kind, .missingEntitlement))
-            #expect(driver.last?.effect == PDTOnboardingEffect.none, "\(kind): a fetch started behind an unsaved credential")
-            #expect(driver.last?.descriptor.statusTitle == title)
-            #expect(driver.rows.map(\.id) == ["pdtConnection.status", "pdtConnection.check", "pdtConnection.disconnect"])
-            #expect(driver.rows.first?.detail == "This PDTBar build can't save to the Keychain. Quitting PDTBar drops it")
-            #expect(driver.runtime.retryFirstFetch() == nil)
-            #expect(driver.runtime.beginBackgroundDetailRefresh() == nil)
+        for (driver, authorization) in [(signedIn, "Bearer access"), (pasted, "Bearer pdt_pasted")] {
+            #expect(driver.runtime.state == .connected(.fetching, .thisSessionOnly(.missingEntitlement)), "\(authorization)")
+            #expect(driver.last?.effect == .startFirstFetch, "\(authorization)")
+            #expect(driver.last?.descriptor.statusTitle == "Fetching portfolio", "\(authorization)")
+            #expect(driver.rows.map(\.id) == ["portfolioFetch.status", "pdtConnection.notSaved"], "\(authorization)")
+            #expect(driver.rows.last?.title == "Connection not saved", "\(authorization)")
+            #expect(
+                driver.rows.last?.detail == "This PDTBar build can't save to the Keychain. You stay connected until you quit",
+                "\(authorization)"
+            )
 
-            #expect(throws: PDTCredentialStoreError.notSaved) { try driver.connection.apiClient().get(.me) }
-            #expect(driver.api.requests.isEmpty, "\(kind): an unsaved credential reached PDT")
-            #expect(driver.connection.failure(for: PDTCredentialStoreError.notSaved) == .connection(.notSaved(kind, .missingEntitlement)))
+            _ = try driver.connection.apiClient().get(.me)
+            #expect(driver.api.requests.map { $0.value(forHTTPHeaderField: "Authorization") } == [authorization])
+            #expect(driver.connection.status(afterSyncEnding: nil) == .connected(.thisSessionOnly(.missingEntitlement)), "\(authorization)")
         }
     }
 
-    @Test("A store that takes writes again saves the held sign-in on the next check, and the fetch starts")
+    @Test("A session the Keychain cannot store survives a token PDT stops accepting: it refreshes, retries, and stays connected")
+    func unsavedSessionRefreshesAfterA401() throws {
+        let driver = try LaunchDriver(
+            keychain: .unentitled,
+            api: [tokenInvalid("expired"), .response(status: 200, body: Data("{}".utf8)), .response(status: 200, body: Data("{}".utf8))],
+            tokens: [tokenReply(access: "access-2", refresh: "refresh-2")]
+        )
+        driver.launch()
+        try #require(driver.signIn())
+
+        _ = try driver.connection.apiClient().get(.me)
+        _ = try driver.connection.apiClient().get(.me)
+
+        #expect(driver.api.requests.map { $0.value(forHTTPHeaderField: "Authorization") } == ["Bearer access", "Bearer access-2", "Bearer access-2"])
+        #expect(driver.tokens.requests.count == 1)
+        #expect(driver.connection.check().status == .connected(.thisSessionOnly(.missingEntitlement)))
+    }
+
+    @Test("PDT rejecting a credential the Keychain never saved asks for a reconnect and never sends it again")
+    func rejectedUnsavedCredentialNeedsReconnect() throws {
+        let signedIn = try LaunchDriver(keychain: .unentitled, api: [tokenInvalid("revoked")], tokens: [oauthError("invalid_grant")])
+        signedIn.launch()
+        try #require(signedIn.signIn())
+        let pasted = try LaunchDriver(keychain: .unentitled, api: [tokenInvalid("revoked")])
+        pasted.launch()
+        try #require(pasted.connect(token: PDTAPIToken("pdt_pasted")))
+
+        let cases: [(LaunchDriver, PDTConnectionStatus, PDTLaunchState)] = [
+            (signedIn, .needsReconnect(.browserSession, .signInExpired), .needsReconnect(.browserSession, .signInExpired)),
+            (pasted, .needsReconnect(.personalToken, .tokenRevoked), .needsReconnect(.personalToken, .tokenRevoked)),
+        ]
+        for (driver, reconnect, screen) in cases {
+            do {
+                _ = try driver.connection.apiClient().get(.me)
+                Issue.record("\(reconnect): PDT rejected the credential and the request still succeeded")
+            } catch {
+                driver.endFirstFetch(driver.connection.failure(for: error))
+            }
+
+            #expect(driver.runtime.state == screen)
+            #expect(driver.rows.map(\.id).contains("pdtConnection.signIn"), "\(reconnect)")
+            #expect(driver.connection.check().status == reconnect)
+            #expect(throws: PDTAPIError.self) { try driver.connection.apiClient().get(.me) }
+            #expect(driver.api.requests.count == 1, "\(reconnect): a rejected credential reached PDT again")
+        }
+    }
+
+    @Test("A store that takes writes again saves the held sign-in on the next request, and the connection reads as saved")
     func recoveredStoreSavesTheHeldSignIn() throws {
+        let ok = ScriptedPDTHTTPTransport.Reply.response(status: 200, body: Data("{}".utf8))
         let store = SwitchableStore()
-        let driver = try LaunchDriver(store: store, api: [.response(status: 200, body: Data("{}".utf8))])
+        let driver = try LaunchDriver(store: store, api: [ok, ok])
         driver.launch()
 
         store.refuse(saves: true)
         try #require(driver.signIn())
-        #expect(driver.runtime.state == .notSaved(.browserSession, .failed))
-        #expect(driver.rows.first?.detail == "PDTBar could not save it on this Mac. Check again tries again")
-        try #require(driver.checkAgain())
-        #expect(driver.runtime.state == .notSaved(.browserSession, .failed))
+        #expect(driver.runtime.state == .connected(.fetching, .thisSessionOnly(.failed)))
+        #expect(driver.rows.last?.detail == "PDTBar could not save it on this Mac. You stay connected until you quit")
+        _ = try driver.connection.apiClient().get(.me)
         #expect(try store.load() == .disconnected)
 
         store.refuse()
-        try #require(driver.checkAgain())
-        #expect(driver.runtime.state == .connected(.fetching))
-        #expect(driver.last?.effect == .startFirstFetch)
-        #expect(try store.load() == .connected(.browserSession(signedInSession)))
         _ = try driver.connection.apiClient().get(.me)
-        #expect(driver.api.requests.map { $0.value(forHTTPHeaderField: "Authorization") } == ["Bearer access"])
+        #expect(try store.load() == .connected(.browserSession(signedInSession)))
+        #expect(driver.connection.status(afterSyncEnding: nil) == .connected(.saved))
+        #expect(driver.api.requests.map { $0.value(forHTTPHeaderField: "Authorization") } == ["Bearer access", "Bearer access"])
     }
 
     @Test("A sign-in is held when the store lock cannot be taken, and saved once it can")
@@ -92,11 +131,11 @@ struct SignInPersistenceTests {
         let driver = try LaunchDriver(store: store)
 
         store.refuse(lock: true)
-        #expect(driver.connection.signIn(cancellation: PDTCancellation()).status == .notSaved(.browserSession, .failed))
-        #expect(driver.connection.check().status == .notSaved(.browserSession, .failed))
+        #expect(driver.connection.signIn(cancellation: PDTCancellation()).status == .connected(.thisSessionOnly(.failed)))
+        #expect(driver.connection.check().status == .connected(.thisSessionOnly(.failed)))
 
         store.refuse()
-        #expect(driver.connection.check().status == .connected)
+        #expect(driver.connection.check().status == .connected(.saved))
         #expect(try store.load() == .connected(.browserSession(signedInSession)))
     }
 
@@ -110,6 +149,9 @@ struct SignInPersistenceTests {
         try #require(pasted.connect(token: PDTAPIToken("pdt_pasted")))
 
         for (driver, page) in [(signedIn, PDTOAuthEndpoints.connectedApps), (pasted, PDTOAuthEndpoints.integrations)] {
+            // Disconnect is offered once the fetch is over; a failed one keeps the not-saved row beside it.
+            driver.endFirstFetch(driver.connection.failure(for: PDTAPIError.transport(code: URLError.timedOut.rawValue)))
+            #expect(driver.rows.map(\.id).suffix(2) == ["pdtConnection.notSaved", "pdtConnection.disconnect"])
             try #require(driver.disconnect())
 
             #expect(driver.runtime.state == .notConnected)
@@ -143,7 +185,7 @@ struct SignInPersistenceTests {
         let first = try LaunchDriver(keychain: .unentitled)
         first.launch()
         try #require(first.signIn())
-        #expect(first.runtime.state == .notSaved(.browserSession, .missingEntitlement))
+        #expect(first.runtime.state == .connected(.fetching, .thisSessionOnly(.missingEntitlement)))
 
         let relaunched = try LaunchDriver(keychain: .unentitled)
         relaunched.launch()
@@ -179,8 +221,8 @@ struct SignInPersistenceTests {
         let connection = try script.appConnection(lockDirectory: temporaryDirectory())
 
         #expect(connection.check().status == .notConnected)
-        #expect(connection.signIn(cancellation: PDTCancellation()).status == .notSaved(.browserSession, .missingEntitlement))
-        #expect(connection.check().status == .notSaved(.browserSession, .missingEntitlement))
+        #expect(connection.signIn(cancellation: PDTCancellation()).status == .connected(.thisSessionOnly(.missingEntitlement)))
+        #expect(connection.check().status == .connected(.thisSessionOnly(.missingEntitlement)))
         #expect(connection.disconnect().status == .notConnected)
         #expect(try script.appConnection(lockDirectory: temporaryDirectory()).check().status == .notConnected)
     }
@@ -192,6 +234,24 @@ private let signedInSession = PDTBrowserSession(
     accessExpiresAt: .distantFuture
 )
 
+private func tokenReply(access: String, refresh: String) -> ScriptedPDTHTTPTransport.Reply {
+    .response(
+        status: 200,
+        body: Data(#"{"access_token":"\#(access)","expires_in":3600,"refresh_token":"\#(refresh)","token_type":"Bearer"}"#.utf8)
+    )
+}
+
+private func oauthError(_ error: String) -> ScriptedPDTHTTPTransport.Reply {
+    .response(status: 400, body: Data(#"{"error":"\#(error)","error_description":"d"}"#.utf8))
+}
+
+private func tokenInvalid(_ reason: String) -> ScriptedPDTHTTPTransport.Reply {
+    .response(
+        status: 401,
+        body: Data(#"{"error":{"code":"TOKEN_INVALID","message":"m","details":{"reason":"\#(reason)"},"traceId":"t"}}"#.utf8)
+    )
+}
+
 private func temporaryDirectory() throws -> URL {
     let directory = FileManager.default.temporaryDirectory.appending(path: "pdtbar-sign-in-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -200,22 +260,37 @@ private func temporaryDirectory() throws -> URL {
 
 /// Runs `PDTLaunchRuntime` effects synchronously against a real `PDTAppConnection`
 /// over the Keychain store and a fake SecItem API, or over another store. Fetch
-/// effects are left unstarted: these tests stop at the connection.
+/// effects are left unstarted: a test sends its own requests through the
+/// connection and ends the first fetch with `endFirstFetch`.
 private final class LaunchDriver {
     let runtime = PDTLaunchRuntime()
     let connection: PDTAppConnection
     let api: ScriptedPDTHTTPTransport
+    let tokens: ScriptedPDTHTTPTransport
     private(set) var last: PDTOnboardingUpdate?
 
-    convenience init(keychain: FakeKeychain) throws {
-        try self.init(store: KeychainPDTCredentialStore(lockDirectory: try temporaryDirectory(), secItem: keychain.api))
+    convenience init(
+        keychain: FakeKeychain,
+        api: [ScriptedPDTHTTPTransport.Reply] = [],
+        tokens: [ScriptedPDTHTTPTransport.Reply] = []
+    ) throws {
+        try self.init(
+            store: KeychainPDTCredentialStore(lockDirectory: try temporaryDirectory(), secItem: keychain.api),
+            api: api,
+            tokens: tokens
+        )
     }
 
-    init(store: any PDTCredentialStore, api replies: [ScriptedPDTHTTPTransport.Reply] = []) throws {
+    init(
+        store: any PDTCredentialStore,
+        api replies: [ScriptedPDTHTTPTransport.Reply] = [],
+        tokens tokenReplies: [ScriptedPDTHTTPTransport.Reply] = []
+    ) throws {
         api = ScriptedPDTHTTPTransport(replies)
+        tokens = ScriptedPDTHTTPTransport(tokenReplies)
         connection = PDTAppConnection(
             store: store,
-            tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([])),
+            tokenEndpoint: PDTTokenEndpoint(transport: tokens),
             apiTransport: api,
             signIn: { _ in signedInSession }
         )
@@ -245,12 +320,13 @@ private final class LaunchDriver {
         run(runtime.disconnect())
     }
 
-    var rows: [MenuRow] {
-        (last?.descriptor.sections ?? []).flatMap(\.rows)
+    /// The first fetch the last sign-in, token, or check started ends this way.
+    func endFirstFetch(_ failure: PDTFetchFailure) {
+        run(runtime.completeFirstFetch(.failed(failure)))
     }
 
-    var visibleRowText: [String] {
-        rows.flatMap { [$0.title, $0.detail ?? ""] }
+    var rows: [MenuRow] {
+        (last?.descriptor.sections ?? []).flatMap(\.rows)
     }
 
     @discardableResult

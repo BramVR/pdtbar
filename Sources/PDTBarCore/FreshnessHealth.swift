@@ -256,7 +256,6 @@ enum DataHealthAttentionCause: CaseIterable, Equatable, Sendable {
     case notConnected
     case reconnectNeeded
     case subscriptionPaused
-    case connectionNotSaved
     case keychainUnavailable
     case detailFillFailed
     case savedCopy
@@ -270,7 +269,7 @@ enum DataHealthAttentionCause: CaseIterable, Equatable, Sendable {
     /// The Data health child row that names this cause.
     var rowID: String {
         switch self {
-        case .notConnected, .reconnectNeeded, .subscriptionPaused, .connectionNotSaved, .keychainUnavailable, .accessNotChecked:
+        case .notConnected, .reconnectNeeded, .subscriptionPaused, .keychainUnavailable, .accessNotChecked:
             "dataHealth.access"
         case .savedCopy, .notFetched:
             "dataHealth.source"
@@ -288,7 +287,6 @@ enum DataHealthAttentionCause: CaseIterable, Equatable, Sendable {
         case .notConnected: "Not connected"
         case .reconnectNeeded: "Reconnect needed"
         case .subscriptionPaused: "Subscription paused"
-        case .connectionNotSaved: "Connection not saved"
         case .keychainUnavailable: "Keychain unavailable"
         case .detailFillFailed: "Detail fill failed"
         case .savedCopy: "Showing a saved copy"
@@ -372,13 +370,13 @@ public enum DataHealthAccess: Codable, Equatable, Sendable {
     /// Checking, signing in, or disconnecting.
     case checking
     case connected
+    /// Connected with a credential the store refused: it works until PDTBar quits.
+    case connectedNotSaved
     case notConnected
     /// The `401` causes and `403 INSUFFICIENT_SCOPE`.
     case reconnect(PDTReconnectCause)
     /// `403 API_ACCESS_PAUSED`.
     case subscriptionPaused
-    /// The credential store refused the sign-in or token; PDTBar holds it unsaved.
-    case notSaved
     case keychainUnavailable
 
     /// A pulse fetched in this run just read PDT with the credential; a saved
@@ -402,12 +400,12 @@ public enum DataHealthAccess: Codable, Equatable, Sendable {
             self = .reconnect(cause)
         case .subscriptionPaused:
             self = .subscriptionPaused
-        case .notSaved:
-            self = .notSaved
         case .keychainUnavailable:
             self = .keychainUnavailable
-        case .connected:
+        case .connected(_, .saved):
             self = .connected
+        case .connected(_, .thisSessionOnly):
+            self = .connectedNotSaved
         }
     }
 }
@@ -626,9 +624,8 @@ public enum DataHealth {
         case .notConnected: return .attention(.notConnected)
         case .reconnect: return .attention(.reconnectNeeded)
         case .subscriptionPaused: return .attention(.subscriptionPaused)
-        case .notSaved: return .attention(.connectionNotSaved)
         case .keychainUnavailable: return .attention(.keychainUnavailable)
-        case .unverified, .connected: break
+        case .unverified, .connected, .connectedNotSaved: break
         }
         switch health.detailFill.outcome {
         case .inProgress: return .refreshing
@@ -677,14 +674,14 @@ public enum DataHealth {
             "Checking"
         case .connected:
             "Connected"
+        case .connectedNotSaved:
+            "Connected, not saved"
         case .notConnected:
             "Not connected"
         case let .reconnect(cause):
             "Reconnect needed: \(PDTLaunchMenu.reconnectReason(cause))"
         case .subscriptionPaused:
             "Paused: your PDT subscription has ended"
-        case .notSaved:
-            "Not saved on this Mac"
         case .keychainUnavailable:
             "Keychain unavailable"
         }
@@ -772,6 +769,7 @@ public enum DataHealth {
         case .unverified: "not checked"
         case .checking: "checking"
         case .connected: "connected"
+        case .connectedNotSaved: "connected, not saved"
         case .notConnected: "not connected"
         case .reconnect(.signInExpired): "reconnect needed (sign-in expired)"
         case .reconnect(.tokenExpired): "reconnect needed (token expired)"
@@ -779,7 +777,6 @@ public enum DataHealth {
         case .reconnect(.tokenInvalid): "reconnect needed (token rejected)"
         case .reconnect(.readAccessMissing): "reconnect needed (read access missing)"
         case .subscriptionPaused: "paused"
-        case .notSaved: "not saved"
         case .keychainUnavailable: "keychain unavailable"
         }
     }

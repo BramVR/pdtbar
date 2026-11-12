@@ -22,5 +22,5 @@ Copy `0000-template.md`, number it sequentially, and keep it short. Statuses: `P
 
 - `0001-core-architecture-and-stack.md` — engine/bar separation + native-Swift-vs-TS-core. **Status: Accepted** (native Swift; mcporter is research/dev only).
 - `0002-pdt-public-rest-api.md` — PDT public REST API replaces the Claude CLI + PDT MCP path; browser sign-in (main) or pasted read-only token (fallback); Keychain this-device-only storage. **Status: Accepted**.
-- `0003-credential-storage-and-unsaved-connections.md` — keep the data protection Keychain as the only durable store; hold a credential the store refuses instead of dropping it (#301); session-only use and dev signing wait for sign-off. **Status: Proposed**.
+- `0003-credential-storage-and-unsaved-connections.md` — keep the data protection Keychain as the only durable store; hold a credential the store refuses instead of dropping it (#301); session-only use (built) and dev signing wait for sign-off. **Status: Proposed**.
 - _(grilling will add: pressure-thresholds, bar-information-architecture, history-store, PDT-integration, …)_

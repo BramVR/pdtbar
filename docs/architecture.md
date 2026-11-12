@@ -41,8 +41,9 @@ the two writes cannot record a crossing whose old read mark is still stored.
 then the PDT connection check, sign-in, pasted token, disconnect, first-fetch
 success/failure, returning-launch background detail refresh, retry gating, and
 descriptor updates. Its state is `PDTLaunchState` (checking, not connected,
-connecting, connected with a sync phase, needs reconnect with a cause,
-subscription paused, not saved, Keychain unavailable, disconnecting). Work never overlaps.
+connecting, connected with a sync phase and whether the credential is saved or
+kept for this session only, needs reconnect with a cause, subscription paused,
+Keychain unavailable, disconnecting). Work never overlaps.
 `PDTAppConnection` is the app's one PDT connection (Keychain store, browser
 sign-in, URLSession, or an offline `--scripted-pdt` script for smokes) and the
 one place store and API errors become connection states. See
@@ -75,8 +76,9 @@ the store on each call, refreshes the browser session shortly before expiry or
 on `401 TOKEN_INVALID` while holding the store's exclusive access (an in-process
 lock, or `flock` on a lock file for the file and Keychain stores) from load
 through the token endpoint to save, writes the rotated pair before returning
-it, keeps a pair the store refused until it is stored or a sign-in, pasted
-token, or disconnect is stored in its place, backs off after a refresh that
+it when the store accepts it, uses a sign-in, token, or pair the store refused
+from memory and tries the save again on every later operation (ADR-0003
+decision 3), backs off after a refresh that
 got no answer, and moves to `needsReconnect` on `invalid_grant`. That state
 names the rejected refresh token by SHA-256, so only a refresh of that pair
 reconnects it.

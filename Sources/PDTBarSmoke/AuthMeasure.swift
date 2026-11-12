@@ -385,7 +385,10 @@ private final class AuthMeasureWorld: @unchecked Sendable {
     }
 
     var goalReached: Bool {
-        runtime.state == .connected(.current) && runtime.currentPulse != nil && isIdle
+        guard case .connected(.current, _) = runtime.state else {
+            return false
+        }
+        return runtime.currentPulse != nil && isIdle
     }
 
     var measuredOSPrompts: Int {
@@ -603,7 +606,7 @@ private final class AuthMeasureWorld: @unchecked Sendable {
                 asOf: connection.asOf,
                 pulseReadStore: PulseReadStore(directory: stateDirectory)
             ).fetch()
-            record(runtime.completeFirstFetch(.succeeded(pulse)))
+            record(runtime.completeFirstFetch(.succeeded(pulse, connection: connection.status(afterSyncEnding: nil))))
             return runtime.beginBackgroundDetailRefresh()
         } catch {
             return runtime.completeFirstFetch(.failed(connection.failure(for: error), failure: snapshotStore.lastSyncFailure()))
@@ -624,13 +627,11 @@ private final class AuthMeasureWorld: @unchecked Sendable {
                     self.record(update)
                 }
             }
-            var connectionAfterSync = PDTConnectionStatus.connected
-            if let ending = result.failures.last, case let .connection(status) = connection.failure(for: ending.kind) {
-                connectionAfterSync = status
-            }
-            return runtime.completeBackgroundDetailRefresh(
-                .succeeded(result.pulse, outcome: result.outcome, connection: connectionAfterSync)
-            )
+            return runtime.completeBackgroundDetailRefresh(.succeeded(
+                result.pulse,
+                outcome: result.outcome,
+                connection: connection.status(afterSyncEnding: result.failures.last?.kind)
+            ))
         } catch {
             return runtime.completeBackgroundDetailRefresh(
                 .failed(connection.failure(for: error), failure: snapshotStore.lastSyncFailure())
@@ -651,13 +652,11 @@ private func authMeasureScreen(_ descriptor: MenuDescriptor, state: PDTLaunchSta
     case .notConnected: ("notConnected", .waiting)
     case let .needsReconnect(credential, cause): ("needsReconnect(\(credential.rawValue),\(cause.rawValue))", .waiting)
     case .subscriptionPaused: ("subscriptionPaused", .waiting)
-    case let .notSaved(credential, .missingEntitlement): ("notSaved(\(credential.rawValue),missingEntitlement)", .waiting)
-    case let .notSaved(credential, .failed): ("notSaved(\(credential.rawValue),failed)", .waiting)
     case .keychainUnavailable(.missingEntitlement): ("keychainUnavailable(missingEntitlement)", .waiting)
     case .keychainUnavailable(.failed): ("keychainUnavailable(failed)", .waiting)
-    case .connected(.fetching): ("connected(fetching)", .transient)
-    case .connected(.failed): ("connected(failed)", .waiting)
-    case .connected(.current): ("connected(current)", .connectedCurrent)
+    case .connected(.fetching, _): ("connected(fetching)", .transient)
+    case .connected(.failed, _): ("connected(failed)", .waiting)
+    case .connected(.current, _): ("connected(current)", .connectedCurrent)
     }
     // Roles the app wires to a click, in `makeMenuItem(from:)`.
     let clickable: Set<MenuRowRole> = [

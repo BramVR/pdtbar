@@ -119,8 +119,6 @@ struct PDTLaunchMenuTests {
                 "PDT access paused",
                 ["pdtConnection.signIn", "pdtConnection.token", "pdtConnection.check", "pdtConnection.disconnect"]
             ),
-            (.notSaved(.browserSession, .missingEntitlement), "Sign-in not saved", ["pdtConnection.check", "pdtConnection.disconnect"]),
-            (.notSaved(.personalToken, .failed), "PDT token not saved", ["pdtConnection.check", "pdtConnection.disconnect"]),
             (.keychainUnavailable(.missingEntitlement), "Keychain unavailable", ["pdtConnection.check"]),
             (.keychainUnavailable(.failed), "Could not read the Keychain", ["pdtConnection.check"]),
         ]
@@ -152,7 +150,7 @@ struct PDTLaunchMenuTests {
         }
     }
 
-    @Test("Reconnect, paused, not-saved, and Keychain screens keep a cached pulse visible; not connected hides it")
+    @Test("Reconnect, paused, and Keychain screens keep a cached pulse visible; not connected hides it")
     func connectionScreensAndCachedPulse() throws {
         let cachedPulse = try quietFixtureDescriptor()
 
@@ -160,7 +158,6 @@ struct PDTLaunchMenuTests {
             PDTLaunchState.checkingConnection,
             .needsReconnect(.personalToken, .tokenRevoked),
             .subscriptionPaused,
-            .notSaved(.browserSession, .missingEntitlement),
             .keychainUnavailable(.missingEntitlement),
         ] {
             let descriptor = PDTLaunchMenu.descriptor(for: state, cachedPulse: cachedPulse)
@@ -196,9 +193,9 @@ struct PDTLaunchMenuTests {
 
     @Test("First fetch descriptors show progress and a retryable failure without a pulse")
     func firstFetchDescriptors() {
-        let fetching = PDTLaunchMenu.descriptor(for: .connected(.fetching))
-        let elapsed = PDTLaunchMenu.descriptor(for: .connected(.fetching), fetchingElapsedSeconds: 12)
-        let failed = PDTLaunchMenu.descriptor(for: .connected(.failed))
+        let fetching = PDTLaunchMenu.descriptor(for: .connected(.fetching, .saved))
+        let elapsed = PDTLaunchMenu.descriptor(for: .connected(.fetching, .saved), fetchingElapsedSeconds: 12)
+        let failed = PDTLaunchMenu.descriptor(for: .connected(.failed, .saved))
 
         #expect(rowTitles(in: fetching) == ["Fetching portfolio"])
         #expect(elapsed.statusTitle == "Fetching portfolio 0:12")
@@ -213,8 +210,8 @@ struct PDTLaunchMenuTests {
     @Test("Refresh descriptors over a cached pulse keep the pulse and its actions")
     func cachedRefreshDescriptors() throws {
         let cachedPulse = try quietFixtureDescriptor()
-        let cachedRefresh = PDTLaunchMenu.descriptor(for: .connected(.fetching), cachedPulse: cachedPulse)
-        let cachedFailure = PDTLaunchMenu.descriptor(for: .connected(.failed), cachedPulse: cachedPulse)
+        let cachedRefresh = PDTLaunchMenu.descriptor(for: .connected(.fetching, .saved), cachedPulse: cachedPulse)
+        let cachedFailure = PDTLaunchMenu.descriptor(for: .connected(.failed, .saved), cachedPulse: cachedPulse)
         let cachedRefreshAction = PDTLaunchMenu.descriptorWithRefreshDetailsAction(cachedPulse: cachedPulse)
 
         #expect(cachedRefresh.statusTitle == cachedPulse.statusTitle)
@@ -361,13 +358,13 @@ struct PDTLaunchRuntimeTests {
         #expect(signingIn.state == .connecting)
         #expect(rowTitles(in: signingIn.descriptor).contains("Cancel sign-in"))
 
-        let connected = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+        let connected = runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: runtime.connectionAttempt)
         #expect(connected.effect == .startFirstFetch)
         #expect(connected.descriptor.statusTitle == "Fetching portfolio")
 
-        let complete = runtime.completeFirstFetch(.succeeded(pulse))
+        let complete = runtime.completeFirstFetch(.succeeded(pulse, connection: .connected(.saved)))
         #expect(complete.effect == .none)
-        #expect(complete.state == .connected(.current))
+        #expect(complete.state == .connected(.current, .saved))
         #expect(complete.descriptor.statusTitle == pulse.descriptor.statusTitle)
         #expect(freshnessRefreshDetailsAction(in: complete.descriptor)?.role == .fetchRetry)
         #expect(actionRow("actions.disconnect", in: complete.descriptor)?.role == .connectionDisconnect)
@@ -383,7 +380,7 @@ struct PDTLaunchRuntimeTests {
         #expect(connecting.effect == .connectToken(PDTAPIToken("pdt_pasted")))
         #expect(runtime.signIn() == nil)
 
-        let connected = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+        let connected = runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: runtime.connectionAttempt)
         #expect(connected.effect == .startFirstFetch)
     }
 
@@ -399,7 +396,7 @@ struct PDTLaunchRuntimeTests {
         #expect(actionRow("actions.refreshNow", in: checking.descriptor)?.role == .fetchStatus)
         #expect(runtime.retryFirstFetch() == nil)
 
-        let connected = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+        let connected = runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: runtime.connectionAttempt)
 
         #expect(connected.effect == .startBackgroundDetailRefresh)
         #expect(!runtime.firstFetchInFlight)
@@ -419,8 +416,8 @@ struct PDTLaunchRuntimeTests {
         _ = runtime.completeConnection(PDTConnectionOutcome(.notConnected), for: launchCheck)
         _ = try #require(runtime.signIn())
 
-        let stale = runtime.completeConnection(PDTConnectionOutcome(.connected), for: launchCheck)
-        let foreign = runtime.completeConnection(PDTConnectionOutcome(.connected), for: other.connectionAttempt)
+        let stale = runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: launchCheck)
+        let foreign = runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: other.connectionAttempt)
 
         #expect(stale.effect == .none)
         #expect(stale.state == .connecting)
@@ -428,8 +425,8 @@ struct PDTLaunchRuntimeTests {
         #expect(foreign.state == .connecting)
         #expect(!runtime.firstFetchInFlight)
 
-        let current = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
-        let duplicate = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+        let current = runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: runtime.connectionAttempt)
+        let duplicate = runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: runtime.connectionAttempt)
         #expect(current.effect == .startFirstFetch)
         #expect(duplicate.effect == .none)
     }
@@ -437,7 +434,7 @@ struct PDTLaunchRuntimeTests {
     @Test("Connection actions are refused while a fetch runs, and the menu does not offer them")
     func connectionActionsRefusedWhileFetching() throws {
         let runtime = PDTLaunchRuntime()
-        let fetching = launched(runtime, cachedPulse: nil, status: .connected)
+        let fetching = launched(runtime, cachedPulse: nil, status: .connected(.saved))
         #expect(fetching.effect == .startFirstFetch)
 
         #expect(runtime.signIn() == nil)
@@ -447,7 +444,7 @@ struct PDTLaunchRuntimeTests {
         #expect(!rowRoles(in: fetching.descriptor).contains(.connectionDisconnect))
 
         let cachedRuntime = PDTLaunchRuntime()
-        let refreshing = launched(cachedRuntime, cachedPulse: try cachedQuietFixturePulse(), status: .connected)
+        let refreshing = launched(cachedRuntime, cachedPulse: try cachedQuietFixturePulse(), status: .connected(.saved))
         #expect(refreshing.effect == .startBackgroundDetailRefresh)
         #expect(cachedRuntime.disconnect() == nil)
         #expect(!rowRoles(in: refreshing.descriptor).contains(.connectionDisconnect))
@@ -457,17 +454,17 @@ struct PDTLaunchRuntimeTests {
     func firstFetchRetryStartsOneFetch() throws {
         let pulse = try quietFixturePulse()
         let runtime = PDTLaunchRuntime()
-        _ = launched(runtime, cachedPulse: nil, status: .connected)
+        _ = launched(runtime, cachedPulse: nil, status: .connected(.saved))
         #expect(runtime.retryFirstFetch() == nil)
 
-        let failed = runtime.completeFirstFetch(.failed(.unavailable))
-        #expect(failed.state == .connected(.failed))
+        let failed = runtime.completeFirstFetch(.failed(.unavailable(.saved)))
+        #expect(failed.state == .connected(.failed, .saved))
         #expect(runtime.currentPulse == nil)
 
         let retry = try #require(runtime.retryFirstFetch())
         let duplicateRetry = runtime.retryFirstFetch()
         let progress = try #require(runtime.firstFetchProgress(fetchingElapsedSeconds: 12))
-        let complete = runtime.completeFirstFetch(.succeeded(pulse))
+        let complete = runtime.completeFirstFetch(.succeeded(pulse, connection: .connected(.saved)))
 
         #expect(retry.effect == .startFirstFetch)
         #expect(duplicateRetry == nil)
@@ -480,12 +477,11 @@ struct PDTLaunchRuntimeTests {
         let cases: [(PDTConnectionStatus, PDTLaunchState)] = [
             (.needsReconnect(.personalToken, .tokenRevoked), .needsReconnect(.personalToken, .tokenRevoked)),
             (.subscriptionPaused, .subscriptionPaused),
-            (.notSaved(.browserSession, .failed), .notSaved(.browserSession, .failed)),
             (.keychainUnavailable(.missingEntitlement), .keychainUnavailable(.missingEntitlement)),
         ]
         for (status, state) in cases {
             let runtime = PDTLaunchRuntime()
-            _ = launched(runtime, cachedPulse: nil, status: .connected)
+            _ = launched(runtime, cachedPulse: nil, status: .connected(.saved))
 
             let failed = runtime.completeFirstFetch(.failed(.connection(status)))
 
@@ -496,12 +492,100 @@ struct PDTLaunchRuntimeTests {
         }
     }
 
+    @Test("A connection kept for this session only says so on every connected screen, beside Disconnect, as each sync end reports it")
+    func unsavedConnectionIsNamedOnEveryConnectedScreen() throws {
+        let unsaved = PDTCredentialPersistence.thisSessionOnly(.missingEntitlement)
+        let pulse = try quietFixturePulse()
+        let rowIDs = { (update: PDTOnboardingUpdate) in update.descriptor.sections.flatMap(\.rows).map(\.id) }
+        let actionIDs = { (update: PDTOnboardingUpdate) in
+            update.descriptor.sections.first { $0.id == "actions" }?.rows.map(\.id) ?? []
+        }
+        let runtime = PDTLaunchRuntime()
+
+        let fetching = launched(runtime, cachedPulse: nil, status: .connected(unsaved))
+        #expect(fetching.state == .connected(.fetching, unsaved))
+        #expect(fetching.effect == .startFirstFetch)
+        #expect(rowIDs(fetching) == ["portfolioFetch.status", "pdtConnection.notSaved"])
+        #expect(rowIDs(try #require(runtime.firstFetchProgress(fetchingElapsedSeconds: 3))) == rowIDs(fetching))
+
+        let failed = runtime.completeFirstFetch(.failed(.unavailable(unsaved)))
+        #expect(failed.state == .connected(.failed, unsaved))
+        #expect(rowIDs(failed) == ["portfolioFetch.failed", "portfolioFetch.retry", "pdtConnection.notSaved", "pdtConnection.disconnect"])
+
+        #expect(try #require(runtime.retryFirstFetch()).state == .connected(.fetching, unsaved))
+        let fetched = runtime.completeFirstFetch(.succeeded(pulse, connection: .connected(unsaved)))
+        #expect(fetched.state == .connected(.current, unsaved))
+        #expect(actionIDs(fetched).suffix(2) == ["pdtConnection.notSaved", "actions.disconnect"])
+
+        let refreshing = try #require(runtime.beginBackgroundDetailRefresh())
+        #expect(refreshing.state == .connected(.fetching, unsaved))
+        #expect(actionIDs(refreshing).last == "pdtConnection.notSaved")
+        #expect(healthDetail("access", in: refreshing.descriptor) == "Connected, not saved")
+        let progress = try #require(runtime.backgroundDetailRefreshProgress(BackgroundDetailRefreshProgress(phase: .income)))
+        #expect(actionIDs(progress).last == "pdtConnection.notSaved")
+
+        let refreshFailed = runtime.completeBackgroundDetailRefresh(.failed(.unavailable(unsaved)))
+        #expect(refreshFailed.state == .connected(.failed, unsaved))
+        #expect(actionIDs(refreshFailed).suffix(2) == ["pdtConnection.notSaved", "actions.disconnect"])
+
+        _ = try #require(runtime.retryFirstFetch())
+        let stillUnsaved = runtime.completeBackgroundDetailRefresh(.succeeded(pulse, outcome: .completed, connection: .connected(unsaved)))
+        #expect(stillUnsaved.state == .connected(.current, unsaved))
+        #expect(actionRow("pdtConnection.notSaved", in: stillUnsaved.descriptor)?.title == "Connection not saved")
+        #expect(healthRow(in: stillUnsaved.descriptor) == nil, "a connection that is not saved is not a Data health problem")
+    }
+
+    @Test("Each sync end says how the credential is kept now: the not-saved row goes once the store took it and comes when the store refused a new pair")
+    func syncEndsUpdateTheNotSavedRow() throws {
+        let refused = PDTCredentialPersistence.thisSessionOnly(.failed)
+        let pulse = try quietFixturePulse()
+        let notSaved = { (update: PDTOnboardingUpdate) in
+            update.descriptor.sections.flatMap(\.rows).first { $0.id == "pdtConnection.notSaved" }
+        }
+        let ends: [(PDTCredentialPersistence) -> PDTLaunchBackgroundDetailRefreshResult] = [
+            { .succeeded(pulse, outcome: .completed, connection: .connected($0)) },
+            { .succeeded(pulse, outcome: .degraded, connection: .connected($0)) },
+            { .failed(.unavailable($0)) },
+        ]
+
+        for end in ends {
+            let runtime = PDTLaunchRuntime()
+            _ = launched(runtime, cachedPulse: try cachedQuietFixturePulse(), status: .connected(refused))
+            #expect(notSaved(runtime.completeBackgroundDetailRefresh(end(.saved))) == nil)
+
+            _ = try #require(runtime.retryFirstFetch())
+            #expect(
+                notSaved(runtime.completeBackgroundDetailRefresh(end(refused)))?.detail
+                    == "PDTBar could not save it on this Mac. You stay connected until you quit"
+            )
+        }
+
+        let first = PDTLaunchRuntime()
+        _ = launched(first, cachedPulse: nil, status: .connected(.saved))
+        #expect(notSaved(first.completeFirstFetch(.failed(.unavailable(refused)))) != nil)
+        _ = try #require(first.retryFirstFetch())
+        #expect(notSaved(first.completeFirstFetch(.succeeded(pulse, connection: .connected(.saved)))) == nil)
+    }
+
+    @Test("A first fetch that committed and then found access gone shows its pulse behind that connection screen")
+    func firstFetchThatLostAccessShowsTheConnectionScreen() throws {
+        let runtime = PDTLaunchRuntime()
+        _ = launched(runtime, cachedPulse: nil, status: .connected(.saved))
+
+        let lost = runtime.completeFirstFetch(.succeeded(try quietFixturePulse(), connection: .keychainUnavailable(.failed)))
+
+        #expect(lost.state == .keychainUnavailable(.failed))
+        #expect(lost.descriptor.sections.first?.id == "pdtConnection")
+        #expect(lost.descriptor.sections.map(\.id).contains("pulse"))
+        #expect(runtime.beginBackgroundDetailRefresh() == nil)
+    }
+
     @Test("A fetch result with no fetch running changes nothing")
     func strayFetchResultsAreIgnored() throws {
         let runtime = PDTLaunchRuntime()
         let notConnected = launched(runtime, cachedPulse: nil, status: .notConnected)
 
-        let firstFetch = runtime.completeFirstFetch(.succeeded(try quietFixturePulse()))
+        let firstFetch = runtime.completeFirstFetch(.succeeded(try quietFixturePulse(), connection: .connected(.saved)))
         let refresh = runtime.completeBackgroundDetailRefresh(.failed(.connection(.subscriptionPaused)))
 
         #expect(firstFetch.state == .notConnected)
@@ -520,7 +604,7 @@ struct PDTLaunchRuntimeTests {
         ]
         for (status, state) in cases {
             let runtime = PDTLaunchRuntime()
-            _ = launched(runtime, cachedPulse: cachedPulse, status: .connected)
+            _ = launched(runtime, cachedPulse: cachedPulse, status: .connected(.saved))
 
             let failed = runtime.completeBackgroundDetailRefresh(.failed(.connection(status)))
 
@@ -546,7 +630,7 @@ struct PDTLaunchRuntimeTests {
         #expect(runtime.checkAgain() == nil)
         #expect(runtime.signIn() == nil)
 
-        let connected = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+        let connected = runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: runtime.connectionAttempt)
         #expect(connected.effect == .startFirstFetch)
     }
 
@@ -587,8 +671,8 @@ struct PDTLaunchRuntimeTests {
     func disconnectHidesPulseAndLinksRevokePage() throws {
         let pulse = try quietFixturePulse()
         let runtime = PDTLaunchRuntime()
-        _ = launched(runtime, cachedPulse: nil, status: .connected)
-        _ = runtime.completeFirstFetch(.succeeded(pulse))
+        _ = launched(runtime, cachedPulse: nil, status: .connected(.saved))
+        _ = runtime.completeFirstFetch(.succeeded(pulse, connection: .connected(.saved)))
 
         let disconnecting = try #require(runtime.disconnect())
         #expect(disconnecting.effect == .disconnect)
@@ -625,7 +709,7 @@ struct PDTLaunchRuntimeTests {
     func backgroundRefreshReportsProgress() throws {
         let cachedPulse = try cachedQuietFixturePulse()
         let runtime = PDTLaunchRuntime()
-        _ = launched(runtime, cachedPulse: cachedPulse, status: .connected)
+        _ = launched(runtime, cachedPulse: cachedPulse, status: .connected(.saved))
 
         let progress = try #require(runtime.backgroundDetailRefreshProgress(
             BackgroundDetailRefreshProgress(phase: .priceHistory, completedUnitCount: 12, totalUnitCount: 19)
@@ -641,9 +725,9 @@ struct PDTLaunchRuntimeTests {
     func completedBackgroundRefreshPublishes() throws {
         let refreshedPulse = try quietFixturePulse()
         let runtime = PDTLaunchRuntime()
-        _ = launched(runtime, cachedPulse: try cachedQuietFixturePulse(), status: .connected)
+        _ = launched(runtime, cachedPulse: try cachedQuietFixturePulse(), status: .connected(.saved))
 
-        let completed = runtime.completeBackgroundDetailRefresh(.succeeded(refreshedPulse, outcome: .completed))
+        let completed = runtime.completeBackgroundDetailRefresh(.succeeded(refreshedPulse, outcome: .completed, connection: .connected(.saved)))
 
         #expect(!runtime.backgroundDetailRefreshInFlight)
         #expect(runtime.currentPulse?.source == .fetchedSnapshot)
@@ -656,9 +740,9 @@ struct PDTLaunchRuntimeTests {
     func degradedBackgroundRefresh() throws {
         let refreshedPulse = try quietFixturePulse()
         let runtime = PDTLaunchRuntime()
-        _ = launched(runtime, cachedPulse: try cachedQuietFixturePulse(), status: .connected)
+        _ = launched(runtime, cachedPulse: try cachedQuietFixturePulse(), status: .connected(.saved))
 
-        let degraded = runtime.completeBackgroundDetailRefresh(.succeeded(refreshedPulse, outcome: .degraded))
+        let degraded = runtime.completeBackgroundDetailRefresh(.succeeded(refreshedPulse, outcome: .degraded, connection: .connected(.saved)))
 
         #expect(runtime.currentPulse?.source == .fetchedSnapshot)
         #expect(rowTitles(in: degraded.descriptor).contains("Details partially filled"))
@@ -668,12 +752,12 @@ struct PDTLaunchRuntimeTests {
     @Test("A failed or partly filled refresh offers its retry once, beside the notice, and that retry starts a refresh")
     func failedOrDegradedRefreshOffersRetryOnce() throws {
         let failedRuntime = PDTLaunchRuntime()
-        _ = launched(failedRuntime, cachedPulse: try cachedQuietFixturePulse(), status: .connected)
-        let failed = failedRuntime.completeBackgroundDetailRefresh(.failed(.unavailable))
+        _ = launched(failedRuntime, cachedPulse: try cachedQuietFixturePulse(), status: .connected(.saved))
+        let failed = failedRuntime.completeBackgroundDetailRefresh(.failed(.unavailable(.saved)))
 
         let degradedRuntime = PDTLaunchRuntime()
-        _ = launched(degradedRuntime, cachedPulse: try cachedQuietFixturePulse(), status: .connected)
-        let degraded = degradedRuntime.completeBackgroundDetailRefresh(.succeeded(try quietFixturePulse(), outcome: .degraded))
+        _ = launched(degradedRuntime, cachedPulse: try cachedQuietFixturePulse(), status: .connected(.saved))
+        let degraded = degradedRuntime.completeBackgroundDetailRefresh(.succeeded(try quietFixturePulse(), outcome: .degraded, connection: .connected(.saved)))
 
         for (runtime, update, notice) in [
             (failedRuntime, failed, "Details fill failed"),
@@ -692,8 +776,8 @@ struct PDTLaunchRuntimeTests {
         }
 
         let completedRuntime = PDTLaunchRuntime()
-        _ = launched(completedRuntime, cachedPulse: try cachedQuietFixturePulse(), status: .connected)
-        let completed = completedRuntime.completeBackgroundDetailRefresh(.succeeded(try quietFixturePulse(), outcome: .completed))
+        _ = launched(completedRuntime, cachedPulse: try cachedQuietFixturePulse(), status: .connected(.saved))
+        let completed = completedRuntime.completeBackgroundDetailRefresh(.succeeded(try quietFixturePulse(), outcome: .completed, connection: .connected(.saved)))
         #expect(actionRow("actions.refreshNow", in: completed.descriptor)?.role == .fetchRetry)
         #expect(actionRow("actions.refreshNow", in: completed.descriptor)?.title == "Refresh now")
     }
@@ -708,9 +792,9 @@ struct PDTLaunchRuntimeTests {
             kind: .rateLimited(retryAfterSeconds: 120),
             requestCount: 3
         )
-        let refreshing = launched(runtime, cachedPulse: cachedPulse, status: .connected)
+        let refreshing = launched(runtime, cachedPulse: cachedPulse, status: .connected(.saved))
 
-        let failed = runtime.completeBackgroundDetailRefresh(.failed(.unavailable, failure: failure))
+        let failed = runtime.completeBackgroundDetailRefresh(.failed(.unavailable(.saved), failure: failure))
 
         #expect(runtime.currentPulse?.source == .cachedSnapshot)
         #expect(failed.descriptor.statusTitle == cachedPulse.descriptor.statusTitle)
@@ -742,12 +826,12 @@ struct PDTLaunchRuntimeTests {
         #expect(healthDetail("access", in: checking.descriptor) == "Checking")
         #expect(healthDetail("source", in: checking.descriptor)?.contains("saved copy") == true)
 
-        let refreshing = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+        let refreshing = runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: runtime.connectionAttempt)
         #expect(healthRow(in: refreshing.descriptor)?.detail == "Refreshing")
         #expect(healthDetail("access", in: refreshing.descriptor) == "Connected")
         #expect(healthDetail("source", in: refreshing.descriptor)?.contains("saved copy") == true)
 
-        let refreshed = runtime.completeBackgroundDetailRefresh(.succeeded(try quietFixturePulse(), outcome: .completed))
+        let refreshed = runtime.completeBackgroundDetailRefresh(.succeeded(try quietFixturePulse(), outcome: .completed, connection: .connected(.saved)))
         #expect(healthRow(in: refreshed.descriptor) == nil)
     }
 
@@ -758,7 +842,6 @@ struct PDTLaunchRuntimeTests {
             (.needsReconnect(.personalToken, .tokenRevoked), "Reconnect needed", "Reconnect needed: PDTBar's access was revoked in PDT"),
             (.needsReconnect(.personalToken, .readAccessMissing), "Reconnect needed", "Reconnect needed: this connection can't read your portfolio"),
             (.subscriptionPaused, "Subscription paused", "Paused: your PDT subscription has ended"),
-            (.notSaved(.browserSession, .missingEntitlement), "Connection not saved", "Not saved on this Mac"),
             (.keychainUnavailable(.failed), "Keychain unavailable", "Keychain unavailable"),
         ]
     )
@@ -777,8 +860,8 @@ struct PDTLaunchRuntimeTests {
     func republishedFetchedPulseKeepsLiveVerifiedSourceFacts() throws {
         let fetchedPulse = try quietFixturePulse()
         let runtime = PDTLaunchRuntime()
-        _ = launched(runtime, cachedPulse: nil, status: .connected)
-        _ = runtime.completeFirstFetch(.succeeded(fetchedPulse))
+        _ = launched(runtime, cachedPulse: nil, status: .connected(.saved))
+        _ = runtime.completeFirstFetch(.succeeded(fetchedPulse, connection: .connected(.saved)))
 
         let republished = try #require(runtime.pulseReadStateDidChange())
 

@@ -10,8 +10,8 @@ struct PDTAppConnectionTests {
     func storedConnectionStatus() throws {
         let cases: [(ScriptedPDTConnection.StoredConnection, PDTConnectionStatus)] = [
             (.notConnected, .notConnected),
-            (.browserSession, .connected),
-            (.personalToken, .connected),
+            (.browserSession, .connected(.saved)),
+            (.personalToken, .connected(.saved)),
             (.signInExpired, .needsReconnect(.browserSession, .signInExpired)),
             (.tokenRevoked, .needsReconnect(.personalToken, .tokenRevoked)),
         ]
@@ -50,7 +50,7 @@ struct PDTAppConnectionTests {
 
         #expect(run.failure == .connection(.subscriptionPaused))
         #expect(try store.load() == personalToken)
-        #expect(run.connection.check().status == .connected)
+        #expect(run.connection.check().status == .connected(.saved))
     }
 
     @Test("403 INSUFFICIENT_SCOPE asks to reconnect with read access")
@@ -66,12 +66,12 @@ struct PDTAppConnectionTests {
         for replies in [[serverError, serverError, serverError], [.failure(.notConnectedToInternet)]] {
             let run = try firstFetch(stored: personalToken, replies: replies)
 
-            #expect(run.failure == .unavailable)
-            #expect(run.connection.check().status == .connected)
+            #expect(run.failure == .unavailable(.saved))
+            #expect(run.connection.check().status == .connected(.saved))
         }
     }
 
-    @Test("A Keychain that refuses every call reports it, holds a token or sign-in it could not save, and never falls back to the login keychain")
+    @Test("A Keychain that refuses every call reports it, connects a token or sign-in for the session, and never falls back to the login keychain")
     func missingKeychainEntitlement() throws {
         let keychain = RecordingSecItems(status: errSecMissingEntitlement)
         let connection = PDTAppConnection(
@@ -82,9 +82,9 @@ struct PDTAppConnectionTests {
         )
 
         #expect(connection.check().status == .keychainUnavailable(.missingEntitlement))
-        #expect(connection.connect(token: PDTAPIToken("pdt_pasted")).status == .notSaved(.personalToken, .missingEntitlement))
-        #expect(connection.signIn(cancellation: PDTCancellation()).status == .notSaved(.browserSession, .missingEntitlement))
-        #expect(connection.check().status == .notSaved(.browserSession, .missingEntitlement))
+        #expect(connection.connect(token: PDTAPIToken("pdt_pasted")).status == .connected(.thisSessionOnly(.missingEntitlement)))
+        #expect(connection.signIn(cancellation: PDTCancellation()).status == .connected(.thisSessionOnly(.missingEntitlement)))
+        #expect(connection.check().status == .connected(.thisSessionOnly(.missingEntitlement)))
         #expect(!keychain.queries.isEmpty)
         #expect(keychain.queries.allSatisfy { $0[kSecUseDataProtectionKeychain as String] as? Bool == true })
     }
@@ -103,24 +103,25 @@ struct PDTAppConnectionTests {
         }
     }
 
-    @Test("A scripted unentitled Keychain reads as signed out and holds a sign-in it cannot store")
+    @Test("A scripted unentitled Keychain reads as signed out, then fetches the portfolio with a sign-in it cannot store")
     func scriptedUnentitledKeychain() throws {
-        let script = try JSONDecoder().decode(
-            ScriptedPDTConnection.self,
-            from: Data(#"{"connection":"notConnected","keychain":"unentitled","api":{"responses":[]}}"#.utf8)
-        )
-        let connection = try script.appConnection(lockDirectory: temporaryDirectory())
+        let holdings = try Data(contentsOf: packageRoot.appending(path: "docs/pdt/fixtures/api/full/01-holdings.json"))
+        let connection = try ScriptedPDTConnection(
+            connection: .notConnected,
+            keychain: .unentitled,
+            api: ScriptedPDTAPIConfiguration(responses: [.init(body: String(decoding: holdings, as: UTF8.self))], asOf: asOf)
+        ).appConnection(lockDirectory: temporaryDirectory())
 
-        #expect(script.keychain == .unentitled)
         #expect(connection.check().status == .notConnected)
-        #expect(connection.signIn(cancellation: PDTCancellation()).status == .notSaved(.browserSession, .missingEntitlement))
-        #expect(connection.check().status == .notSaved(.browserSession, .missingEntitlement))
+        #expect(connection.signIn(cancellation: PDTCancellation()).status == .connected(.thisSessionOnly(.missingEntitlement)))
+        _ = try PDTAPIDataSource(client: connection.apiClient(), options: .firstFetch).snapshot(asOf: asOf)
+        #expect(connection.status(afterSyncEnding: nil) == .connected(.thisSessionOnly(.missingEntitlement)))
     }
 
     @Test("Browser sign-in stores the session; a declined or blocked sign-in names why")
     func browserSignInOutcomes() throws {
         let cases: [(ScriptedPDTConnection.SignInOutcome, PDTConnectionOutcome)] = [
-            (.succeeds, PDTConnectionOutcome(.connected)),
+            (.succeeds, PDTConnectionOutcome(.connected(.saved))),
             (.denied, PDTConnectionOutcome(.notConnected, notice: .signInFailed(.denied))),
             (.portBusy, PDTConnectionOutcome(.notConnected, notice: .signInFailed(.portBusy))),
             (.timedOut, PDTConnectionOutcome(.notConnected, notice: .signInFailed(.timedOut))),
@@ -189,7 +190,7 @@ struct PDTAppConnectionTests {
             signIn: { _ in throw PDTSignInError.accessDenied }
         )
 
-        #expect(connection.connect(token: PDTAPIToken("pdt_pasted")) == PDTConnectionOutcome(.connected))
+        #expect(connection.connect(token: PDTAPIToken("pdt_pasted")) == PDTConnectionOutcome(.connected(.saved)))
         _ = try PDTAPIDataSource(client: connection.apiClient(), options: .firstFetch).snapshot(asOf: asOf)
 
         #expect(transport.requests.first?.value(forHTTPHeaderField: "Authorization") == "Bearer pdt_pasted")
@@ -218,7 +219,7 @@ struct PDTFirstFetchRuntimeTests {
     func failedHoldingsFetchPublishesNothing() throws {
         let serverError = ScriptedPDTHTTPTransport.Reply.response(status: 503, body: Data("{}".utf8), headers: ["retry-after": "0"])
         let cases: [([ScriptedPDTHTTPTransport.Reply], PDTLaunchState)] = [
-            ([serverError, serverError, serverError], .connected(.failed)),
+            ([serverError, serverError, serverError], .connected(.failed, .saved)),
             ([apiError(401, "TOKEN_INVALID", details: #"{"reason":"revoked"}"#)], .needsReconnect(.personalToken, .tokenRevoked)),
             ([apiError(403, "API_ACCESS_PAUSED")], .subscriptionPaused),
         ]
@@ -235,7 +236,7 @@ struct PDTFirstFetchRuntimeTests {
             #expect(finished.state == state)
             #expect(runtime.currentPulse == nil)
             #expect(!FileManager.default.fileExists(atPath: snapshots.currentSnapshotPath.path))
-            if state == .connected(.failed) {
+            if state == .connected(.failed, .saved) {
                 #expect(finished.descriptor.statusTitle == "Could not fetch portfolio")
             }
         }
@@ -254,7 +255,7 @@ struct PDTFirstFetchRuntimeTests {
         #expect(FileManager.default.fileExists(atPath: snapshots.currentSnapshotPath.path))
         #expect(runtime.currentPulse == nil)
         let published = runtime.completeFirstFetch(result)
-        #expect(published.state == .connected(.current))
+        #expect(published.state == .connected(.current, .saved))
         #expect(runtime.currentPulse?.source == .fetchedSnapshot)
         #expect(published.descriptor.sections.map(\.id).contains("pulse"))
     }
@@ -322,7 +323,7 @@ private func runFirstFetch(_ connection: PDTAppConnection, snapshots: SnapshotSt
             asOf: asOf,
             pulseReadStore: PulseReadStore(directory: snapshots.directory)
         ).fetch()
-        return .succeeded(pulse)
+        return .succeeded(pulse, connection: connection.status(afterSyncEnding: nil))
     } catch {
         return .failed(connection.failure(for: error))
     }
@@ -331,7 +332,7 @@ private func runFirstFetch(_ connection: PDTAppConnection, snapshots: SnapshotSt
 private func connectedLaunch(_ runtime: PDTLaunchRuntime) -> PDTOnboardingUpdate {
     _ = runtime.launch()
     _ = runtime.completeCachedPulseLoad(nil)
-    return runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+    return runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: runtime.connectionAttempt)
 }
 
 private func holdingsReply() throws -> ScriptedPDTHTTPTransport.Reply {

@@ -19,11 +19,11 @@ struct SyncFailureStatesTests {
         _ = connectedLaunch(runtime)
 
         let failed = runtime.completeFirstFetch(.failed(
-            .unavailable,
+            .unavailable(.saved),
             failure: PDTSyncFailure(error, resource: .holdings(), phase: .baseHoldings)
         ))
 
-        #expect(failed.state == .connected(.failed))
+        #expect(failed.state == .connected(.failed, .saved))
         #expect(failed.descriptor.statusTitle == "Could not fetch portfolio")
         let row = failed.descriptor.sections.flatMap(\.rows).first { $0.id == "portfolioFetch.failed" }
         #expect(row?.title == "Could not fetch portfolio")
@@ -41,7 +41,7 @@ struct SyncFailureStatesTests {
 
         let failed = runtime.completeFirstFetch(runFirstFetch(connection, snapshots: snapshots))
 
-        #expect(failed.state == .connected(.failed))
+        #expect(failed.state == .connected(.failed, .saved))
         #expect(failed.descriptor.sections.flatMap(\.rows).first { $0.id == "portfolioFetch.failed" }?.detail
             == "PDT rate limit; try again in 2 min")
         #expect(!FileManager.default.fileExists(atPath: snapshots.currentSnapshotPath.path))
@@ -53,12 +53,12 @@ struct SyncFailureStatesTests {
     func firstFetchRetryDropsOldFailure() throws {
         let runtime = PDTLaunchRuntime()
         _ = connectedLaunch(runtime)
-        _ = runtime.completeFirstFetch(.failed(.unavailable, failure: PDTSyncFailure(
+        _ = runtime.completeFirstFetch(.failed(.unavailable(.saved), failure: PDTSyncFailure(
             PDTAPIError.server(status: 503, retryAfter: nil), resource: .holdings(), phase: .baseHoldings
         )))
 
         let retry = try #require(runtime.retryFirstFetch())
-        let failedWithoutRecord = runtime.completeFirstFetch(.failed(.unavailable))
+        let failedWithoutRecord = runtime.completeFirstFetch(.failed(.unavailable(.saved)))
 
         #expect(rowTitles(in: retry.descriptor) == ["Fetching portfolio"])
         #expect(failedWithoutRecord.descriptor.sections.flatMap(\.rows).first { $0.id == "portfolioFetch.failed" }?.detail
@@ -99,7 +99,7 @@ struct SyncFailureStatesTests {
         let run = try backgroundRefresh(replies: [try holdingsReply(), reply])
         defer { try? FileManager.default.removeItem(at: run.snapshots.directory) }
 
-        #expect(run.update.state == .connected(.current))
+        #expect(run.update.state == .connected(.current, .saved))
         #expect(rowTitles(in: run.update.descriptor).contains("Details partially filled"))
     }
 
@@ -124,7 +124,7 @@ struct SyncFailureStatesTests {
         #expect(try copiedDiagnostics(stillBroken.descriptor).contains("trace: \(traceID)"))
 
         _ = try #require(run.runtime.checkAgain())
-        let refreshing = run.runtime.completeConnection(PDTConnectionOutcome(.connected), for: run.runtime.connectionAttempt)
+        let refreshing = run.runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: run.runtime.connectionAttempt)
         #expect(refreshing.effect == .startBackgroundDetailRefresh)
         #expect(diagnosticsRow(in: refreshing.descriptor)?.children.isEmpty != false)
     }
@@ -167,7 +167,7 @@ private func backgroundRefresh(replies: [ScriptedPDTHTTPTransport.Reply]) throws
     let runtime = PDTLaunchRuntime()
     _ = runtime.launch()
     _ = runtime.completeCachedPulseLoad(cached)
-    let start = runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+    let start = runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: runtime.connectionAttempt)
     #expect(start.effect == .startBackgroundDetailRefresh)
 
     let connection = appConnection(replies: replies)
@@ -175,7 +175,7 @@ private func backgroundRefresh(replies: [ScriptedPDTHTTPTransport.Reply]) throws
     let result: PDTLaunchBackgroundDetailRefreshResult
     do {
         let refreshed = try refresh.refresh()
-        var status = PDTConnectionStatus.connected
+        var status = PDTConnectionStatus.connected(.saved)
         if let ending = refreshed.failures.last, case let .connection(lost) = connection.failure(for: ending.kind) {
             status = lost
         }
@@ -208,7 +208,7 @@ private func runFirstFetch(_ connection: PDTAppConnection, snapshots: SnapshotSt
             snapshotStore: snapshots,
             asOf: "2026-06-22"
         ).fetch()
-        return .succeeded(pulse)
+        return .succeeded(pulse, connection: connection.status(afterSyncEnding: nil))
     } catch {
         return .failed(connection.failure(for: error), failure: snapshots.lastSyncFailure())
     }
@@ -217,7 +217,7 @@ private func runFirstFetch(_ connection: PDTAppConnection, snapshots: SnapshotSt
 private func connectedLaunch(_ runtime: PDTLaunchRuntime) -> PDTOnboardingUpdate {
     _ = runtime.launch()
     _ = runtime.completeCachedPulseLoad(nil)
-    return runtime.completeConnection(PDTConnectionOutcome(.connected), for: runtime.connectionAttempt)
+    return runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: runtime.connectionAttempt)
 }
 
 private func fullBackgroundReplies() throws -> [ScriptedPDTHTTPTransport.Reply] {

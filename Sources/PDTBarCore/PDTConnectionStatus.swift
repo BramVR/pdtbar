@@ -5,17 +5,21 @@ import Foundation
 /// secret.
 public enum PDTConnectionStatus: Equatable, Sendable {
     case notConnected
-    case connected
+    case connected(PDTCredentialPersistence)
     case needsReconnect(PDTCredentialKind, PDTReconnectCause)
     /// `403 API_ACCESS_PAUSED`: the subscription ended. The token stays valid and stored.
     case subscriptionPaused
-    /// PDT gave PDTBar this credential and the credential store refused to
-    /// save it. PDTBar holds it until it quits, tries the save again on every
-    /// check, and sends no request with it before it is saved.
-    case notSaved(PDTCredentialKind, PDTKeychainProblem)
     /// The store could not be read, or it refused a disconnect and still
     /// holds the credential.
     case keychainUnavailable(PDTKeychainProblem)
+}
+
+/// Whether the credential this process is connected with outlives the process.
+public enum PDTCredentialPersistence: Equatable, Sendable {
+    case saved
+    /// The credential store refused it (ADR-0003 decision 3). PDTBar uses it
+    /// from memory until it quits and tries the save again on every operation.
+    case thisSessionOnly(PDTKeychainProblem)
 }
 
 public enum PDTReconnectCause: String, Codable, Equatable, Sendable {
@@ -62,10 +66,11 @@ public struct PDTConnectionOutcome: Equatable, Sendable {
 
 /// Why a fetch failed: a connection problem moves the menu to that connection
 /// state; anything else (network, 5xx, 429, decode) is retryable with the
-/// credential still connected.
+/// credential still connected, kept the way the connection says after the
+/// fetch.
 public enum PDTFetchFailure: Equatable, Sendable {
     case connection(PDTConnectionStatus)
-    case unavailable
+    case unavailable(PDTCredentialPersistence)
 }
 
 extension PDTConnectionStatus {
@@ -74,7 +79,7 @@ extension PDTConnectionStatus {
         case .disconnected:
             self = .notConnected
         case .connected:
-            self = .connected
+            self = .connected(.saved)
         case let .needsReconnect(kind, .refreshRejected):
             self = .needsReconnect(kind, .signInExpired)
         case let .needsReconnect(kind, .tokenRejected(reason)):

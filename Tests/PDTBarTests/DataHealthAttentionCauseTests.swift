@@ -99,6 +99,19 @@ struct DataHealthAttentionCauseTests {
         #expect(section.rows.map(\.id) == ["freshness.summary"])
     }
 
+    @Test("A connection that is not saved is named in the Access row and raises no cause by itself")
+    func unsavedConnectionIsNamedButHealthy() {
+        var input = healthyInput()
+        input.access = .connectedNotSaved
+        let health = DataHealth.build(input)
+
+        #expect(health.status == .healthy)
+        #expect(health.access.detail == "Connected, not saved")
+
+        input.lastFailure = PDTSyncFailure(phase: .priceHistory, endpoint: .pricesBatch, kind: .server(status: 503), requestCount: 1)
+        #expect(DataHealth.diagnosticsText(for: DataHealth.build(input))?.contains("access: connected, not saved") == true)
+    }
+
     @Test("A blocked connection is named before a saved copy or stale prices")
     func blockedAccessIsNamedFirst() {
         var input = healthyInput()
@@ -137,9 +150,6 @@ private func example(of cause: DataHealthAttentionCause) -> CauseExample {
             summary: "Subscription paused",
             rowDetail: "Paused: your PDT subscription has ended"
         )
-    case .connectionNotSaved:
-        input.access = .notSaved
-        return CauseExample(input: input, summary: "Connection not saved", rowDetail: "Not saved on this Mac")
     case .keychainUnavailable:
         input.access = .keychainUnavailable
         return CauseExample(input: input, summary: "Keychain unavailable", rowDetail: "Keychain unavailable")
