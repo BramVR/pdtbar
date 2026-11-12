@@ -43,6 +43,27 @@ struct BigMoverPressureTests {
         #expect(row.detail == nil)
     }
 
+    @Test(
+        "Big movers section signs the move the way Pulse does",
+        arguments: [("612.40", "+12.4%"), ("490.50", "-10.0%")]
+    )
+    func bigMoverSummarySignsMoveLikePulse(close: String, signed: String) throws {
+        var snapshot = try snapshot("big-mover")
+        snapshot.priceSeries = try priceSeries("""
+        [
+          { "quoteId": 9001, "date": "2026-06-15", "closeAdjusted": "545.00" },
+          { "quoteId": 9001, "date": "2026-06-19", "closeAdjusted": "\(close)" }
+        ]
+        """)
+        let descriptor = MenuDescriptorRenderer.render(model: PressureEngine.buildModel(from: snapshot))
+        let rows = descriptor.sections.flatMap(\.rows)
+        let pulse = try #require(rows.first { $0.id == "bigMovers.move.9001.glance" })
+        let summary = try #require(rows.first { $0.id == "bigMovers.summary" })
+
+        #expect(pulse.title == "Nova Lithography moved \(signed)")
+        #expect(summary.detail == "\(signed) over recent window")
+    }
+
     @Test("Cold-start price history thresholds on exact move before rounding")
     func coldStartPriceHistoryThresholdsOnExactMoveBeforeRounding() throws {
         var snapshot = try snapshot("big-mover")

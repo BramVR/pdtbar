@@ -326,7 +326,7 @@ public enum MenuDescriptorRenderer {
 
     private static func bigMoverDetail(for bigMovers: BigMoversSnapshot) -> String? {
         if let move = bigMovers.maxMove {
-            return "\(percent(move.percentChange)) over recent window"
+            return "\(signedPercent(move.percentChange)) over recent window"
         }
         return bigMovers.priceSeriesCount == 0 ? nil : "\(bigMovers.priceSeriesCount) price rows checked"
     }
