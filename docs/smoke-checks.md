@@ -27,6 +27,16 @@ read_when:
 
 `Scripts/verify_pdtbar.sh menu-measure <fixture.json>` (or `menu-measure --scripted <script.json> <seed-snapshot.json>`) builds, launches any fixture or scripted connection, opens only the root menu, and writes `menu.png` plus `measure.json` to `<run>/evidence/measure/`. The report holds menu width and height in pt and, per top-level row, its role, its identifier with digit runs masked (`kind`), height, submenu and enabled flags, and the row text's length, error flags, and a primary-label digest salted per run (for duplicate detection). It writes no row text by default, so no amounts or holding names reach disk; `pdtbar-capture measure ... --allow-sensitive-text` adds the raw text for fixture debugging. Same preflight and redaction rules as the walk. Use it to compare menu layouts across fixtures.
 
+## Auth lifecycle measure
+
+`swift run pdtbar-smoke auth-measure [--artifacts <dir>]` scores sign-in, credential storage, and connection recovery. It is a measurement, not a gate: it exits 0 with `status: passed` unless a scenario's driver threw, and the score is in the report. It is not in the API matrix.
+
+- It drives the real `PDTLaunchRuntime` and `PDTAppConnection` and runs every effect inline. PDT, the Keychain, and the browser are fakes; it launches no app and touches no real Keychain, network, or `~/.pdtbar-dev`.
+- Stores: `KeychainPDTCredentialStore` over a fake entitled keychain, the same over a fake ad-hoc build (reads find nothing, writes answer `-34018`, as measured on an ad-hoc binary), and `FilePDTCredentialStore` in a temp directory.
+- The fake PDT answers by request path from `docs/pdt/fixtures/api/full` and knows which tokens are live, so a dead token gets `401 TOKEN_INVALID` and a dead refresh token gets `invalid_grant`.
+- Report: `<artifacts>/pdtbar-auth-measure.json`. Per scenario: `clicks`, `silentSignOuts`, `deadEnds`, `osPrompts`, `unnamedStates`, `penalty`, a `findings` line per counted item, and every step with its menus (connection and fetch rows only). `penalty = clicks + 10*silentSignOuts + 5*deadEnds + 5*osPrompts + 3*unnamedStates`; lower is better. Two runs write the same bytes; stdout carries the report's SHA-256.
+- Scenarios are the table in `Sources/PDTBarSmoke/AuthMeasure.swift`; the scoring rules are `AuthMeasureScenario` in `Sources/PDTBarSmokeProof`, covered by `AuthMeasureReportTests`.
+
 ## Redaction rules
 
 Public proof may report command names, selectors, row text, scenario status,

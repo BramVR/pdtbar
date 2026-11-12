@@ -41,6 +41,7 @@ private let smokeCommands: [SmokeCommand] = [
     SmokeCommand(name: "scripted-api-client", usage: "[--artifacts <dir>]", inAPIMatrix: true, run: scriptedAPIClientSmoke(arguments:)),
     SmokeCommand(name: "scripted-api-snapshot", usage: "[--artifacts <dir>]", inAPIMatrix: true, run: scriptedAPISnapshotSmoke(arguments:)),
     SmokeCommand(name: "scripted-api-auth", usage: "[--artifacts <dir>]", inAPIMatrix: true, run: scriptedAPIAuthSmoke(arguments:)),
+    SmokeCommand(name: "auth-measure", usage: "[--artifacts <dir>]", run: { let run = try authMeasure(arguments: $0); return SmokeReport(name: "auth-measure", status: run.status, detail: run.detail, artifacts: run.artifacts) }),
     SmokeCommand(name: "copy-holding-identifier-action", usage: "", run: { _ in copyHoldingIdentifierActionSmoke() }),
     SmokeCommand(name: "scripted-first-fetch", usage: "[--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]", inAPIMatrix: true, run: scriptedFirstFetchSmoke(arguments:)),
     SmokeCommand(name: "scripted-returning-launch", usage: "[--app <path>] [--app-support-dir <path>] [--artifacts <dir>] [--timeout <seconds>]", inAPIMatrix: true, run: scriptedReturningLaunchSmoke(arguments:)),
