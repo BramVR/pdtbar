@@ -119,7 +119,7 @@ struct IncomeCalendarTests {
         let nextRow = rows.first { $0.id == "income.next" }
         #expect(nextRow?.role == .incomeNext)
         #expect(nextRow?.title == "Next income: Helix Pharma A/S")
-        #expect(nextRow?.detail == "Ex-dividend date on 2026-06-24; confirmed; EUR 78.00; +18.2% from EUR 66.00")
+        #expect(nextRow?.detail == "Ex-dividend 2026-06-24; confirmed; EUR 78.00; +18.2% from EUR 66.00")
         #expect(nextRow?.children.map(\.id) == [
             "income.quote.9003.ex-dividend.2026-06-24.date",
             "income.quote.9003.ex-dividend.2026-06-24.kind",
@@ -132,7 +132,7 @@ struct IncomeCalendarTests {
         let previewRow = rows.first { $0.id == "income.quote.9003.payment-dividend.2026-07-10" }
         #expect(previewRow?.role == .incomeEvent)
         #expect(previewRow?.title == "Helix Pharma A/S")
-        #expect(previewRow?.detail == "Dividend payment date on 2026-07-10; estimated")
+        #expect(previewRow?.detail == "Payment 2026-07-10; estimated")
         #expect(previewRow?.children.first { $0.id.hasSuffix(".kind") }?.detail == "Dividend payment date")
     }
 
@@ -195,7 +195,7 @@ struct IncomeCalendarTests {
         let nextRow = IncomeCalendarDescriptor.rows(for: intent)
             .first { $0.id == "income.next" }
 
-        #expect(nextRow?.detail == "Ex-dividend date on 2026-06-24; confirmed; EUR 10.00")
+        #expect(nextRow?.detail == "Ex-dividend 2026-06-24; confirmed; EUR 10.00")
         #expect(nextRow?.children.map(\.id).contains("income.quote.9220.ex-dividend.2026-06-24.change") == false)
     }
 
@@ -272,8 +272,8 @@ struct IncomeCalendarTests {
         #expect(rows.count == 1)
         #expect(rows.first?.id == "income.empty")
         #expect(rows.first?.role == .incomeEmpty)
-        #expect(rows.first?.title == "No income events")
-        #expect(rows.first?.detail == "No calendar events in the next window")
+        #expect(rows.first?.title == "No income events in the next window")
+        #expect(rows.first?.detail == nil)
     }
 }
 

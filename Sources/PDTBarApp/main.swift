@@ -677,7 +677,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         accessibilityIdentifier: String
     ) -> NSView {
         let hasDetail = detail?.isEmpty == false
-        let rowHeight: CGFloat = hasDetail ? 181 : 167
+        let rowHeight: CGFloat = hasDetail ? 138 : 124
         let container = NSView(frame: NSRect(x: 0, y: 0, width: menuItemViewWidth, height: rowHeight))
         container.autoresizingMask = [.width]
         let chartSummary = barChart.bars.map { "\($0.label) \($0.percentageLabel)" }.joined(separator: ", ")
@@ -690,14 +690,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             }).joined(separator: " - ")
         )
 
-        let titleField = NSTextField(labelWithString: title)
-        titleField.font = NSFont.menuFont(ofSize: NSFont.systemFontSize)
-        titleField.textColor = NSColor.labelColor
-        titleField.lineBreakMode = .byTruncatingTail
-        titleField.maximumNumberOfLines = 1
-        titleField.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(titleField)
-
+        // The section heading above names the chart; the title stays in the accessibility label only.
         let detailField: NSTextField?
         if let detail, !detail.isEmpty {
             let field = NSTextField(labelWithString: detail)
@@ -774,38 +767,27 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let selectedTitleField = NSTextField(labelWithString: "")
         selectedTitleField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize)
         selectedTitleField.textColor = NSColor.secondaryLabelColor
-        selectedTitleField.lineBreakMode = .byTruncatingTail
+        // Middle truncation: a long holding name gives way before the weight and value at the end.
+        selectedTitleField.lineBreakMode = .byTruncatingMiddle
         selectedTitleField.maximumNumberOfLines = 1
         selectedTitleField.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(selectedTitleField)
 
-        let selectedDetailField = NSTextField(labelWithString: "")
-        selectedDetailField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize - 1)
-        selectedDetailField.textColor = NSColor.tertiaryLabelColor
-        selectedDetailField.lineBreakMode = .byTruncatingTail
-        selectedDetailField.maximumNumberOfLines = 1
-        selectedDetailField.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(selectedDetailField)
-
         let applySelection: (MenuRowBarChart.Bar?) -> Void = { bar in
             guard let bar else {
                 selectedTitleField.stringValue = "Hover a bar for details"
-                selectedDetailField.stringValue = ""
                 selectedAccent.isHidden = true
                 return
             }
-            selectedTitleField.stringValue = "\(bar.label): \(bar.percentageLabel)"
-            selectedDetailField.stringValue = bar.detail
+            // bar.detail already names the holding and its weight; a fail-closed placeholder does not.
+            let detailNamesHolding = !bar.detail.isEmpty && bar.detail != PortfolioValueDisplaySettings.hiddenPlaceholder
+            selectedTitleField.stringValue = detailNamesHolding ? bar.detail : "\(bar.label): \(bar.percentageLabel)"
             selectedAccent.isHidden = false
         }
         chartView.onSelectionChanged = applySelection
         applySelection(chartView.selectedBar)
 
         var constraints = [
-            titleField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
-            titleField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -28),
-            titleField.topAnchor.constraint(equalTo: container.topAnchor, constant: 7),
-
             chartAxisView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
             chartAxisView.widthAnchor.constraint(equalToConstant: chartAxisWidth),
             chartAxisView.heightAnchor.constraint(equalToConstant: PortfolioAllocationChartLayout.chartHeight),
@@ -817,29 +799,26 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             selectedAccent.leadingAnchor.constraint(equalTo: chartAxisView.leadingAnchor),
             selectedAccent.topAnchor.constraint(equalTo: chartHostView.bottomAnchor, constant: 8),
             selectedAccent.widthAnchor.constraint(equalToConstant: 2),
-            selectedAccent.heightAnchor.constraint(equalToConstant: 30),
+            selectedAccent.heightAnchor.constraint(equalToConstant: 16),
 
             selectedTitleField.leadingAnchor.constraint(equalTo: selectedAccent.trailingAnchor, constant: 8),
             selectedTitleField.trailingAnchor.constraint(equalTo: selectedTextTrailingAnchor),
-            selectedTitleField.topAnchor.constraint(equalTo: chartHostView.bottomAnchor, constant: 5),
-
-            selectedDetailField.leadingAnchor.constraint(equalTo: selectedTitleField.leadingAnchor),
-            selectedDetailField.trailingAnchor.constraint(equalTo: selectedTitleField.trailingAnchor),
-            selectedDetailField.topAnchor.constraint(equalTo: selectedTitleField.bottomAnchor, constant: 1),
-            selectedDetailField.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -8),
+            selectedTitleField.topAnchor.constraint(equalTo: chartHostView.bottomAnchor, constant: 7),
+            selectedTitleField.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -8),
         ]
 
-        let chartTopAnchor = detailField?.bottomAnchor ?? titleField.bottomAnchor
+        let chartTopAnchor = detailField?.bottomAnchor ?? container.topAnchor
+        let chartTopGap: CGFloat = detailField == nil ? 4 : 9
         constraints += [
-            chartAxisView.topAnchor.constraint(equalTo: chartTopAnchor, constant: 9),
-            chartHostView.topAnchor.constraint(equalTo: chartTopAnchor, constant: 9),
+            chartAxisView.topAnchor.constraint(equalTo: chartTopAnchor, constant: chartTopGap),
+            chartHostView.topAnchor.constraint(equalTo: chartTopAnchor, constant: chartTopGap),
         ]
         constraints += chartHostConstraints
         if let detailField {
             constraints += [
-                detailField.leadingAnchor.constraint(equalTo: titleField.leadingAnchor),
-                detailField.trailingAnchor.constraint(equalTo: titleField.trailingAnchor),
-                detailField.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 1),
+                detailField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+                detailField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -28),
+                detailField.topAnchor.constraint(equalTo: container.topAnchor, constant: 7),
             ]
         }
 
@@ -1231,7 +1210,11 @@ private final class PortfolioAllocationYAxisView: NSView {
         ]
 
         for tick in PortfolioAllocationVerticalBarChartView.tickValues(for: self.bars) {
-            let y = plotRect.maxY - plotRect.height * tick / scaleMax
+            let y = plotRect.maxY - PortfolioAllocationChartLayout.barHeight(
+                for: tick,
+                plotHeight: plotRect.height,
+                scaleMaxWeight: scaleMax
+            )
             let tickPath = NSBezierPath()
             tickPath.move(to: NSPoint(x: axisX - 5, y: y))
             tickPath.line(to: NSPoint(x: axisX, y: y))

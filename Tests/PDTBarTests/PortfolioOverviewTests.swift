@@ -332,6 +332,27 @@ struct PortfolioOverviewTests {
             #expect(barRect.width >= 6)
             #expect(barRect.width < 10)
         }
+        let heights = weights.indices.map { layout.barRect(at: $0).height }
+        #expect(zip(heights, heights.dropFirst()).allSatisfy { $0 > $1 }, "a smaller weight draws a shorter bar")
+        #expect(heights.first == layout.plotRect.height)
+    }
+
+    @Test("Allocation axis ticks line up with bars of the same weight")
+    func allocationAxisTicksLineUpWithBars() {
+        let weights = [0.20, 0.10]
+        let layout = PortfolioAllocationChartLayout(
+            bounds: NSRect(x: 0, y: 0, width: 280, height: PortfolioAllocationChartLayout.chartHeight),
+            weights: weights
+        )
+        for (index, weight) in weights.enumerated() {
+            let tickHeight = PortfolioAllocationChartLayout.barHeight(
+                for: CGFloat(weight),
+                plotHeight: layout.plotRect.height,
+                scaleMaxWeight: layout.scaleMaxWeight
+            )
+            #expect(abs(tickHeight - layout.barRect(at: index).height) < 0.001)
+        }
+        #expect(PortfolioAllocationChartLayout.barHeight(for: 0, plotHeight: 100, scaleMaxWeight: 0.2) == 0)
     }
 
     @Test("Portfolio allocation layout centers sparse charts and scrolls dense charts")

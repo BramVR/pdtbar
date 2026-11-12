@@ -177,7 +177,9 @@ public enum MenuDescriptorRenderer {
                     id: "pulse.quiet",
                     role: .pulseQuiet,
                     title: model.allQuietSignal.title,
-                    detail: model.allQuietSignal.detail,
+                    detail: dataHealth.source.pulse == .cachedSnapshot
+                        ? "No attention items in the saved copy."
+                        : model.allQuietSignal.detail,
                     children: [
                         MenuRow(
                             id: "pulse.quiet.holdings",
@@ -264,7 +266,7 @@ public enum MenuDescriptorRenderer {
                         MenuRow(
                             id: "bigMovers.summary",
                             role: .bigMoverSummary,
-                            title: bigMoverTitle(for: bigMovers.maxMove, allocation: allocation),
+                            title: bigMoverTitle(for: bigMovers, allocation: allocation),
                             detail: bigMoverDetail(for: bigMovers)
                         ),
                     ]
@@ -292,13 +294,15 @@ public enum MenuDescriptorRenderer {
             role: .portfolioSummary,
             title: "Portfolio summary",
             portfolioSummary: MenuRowPortfolioSummary(
-                totalValue: display(model.portfolioGlance.totalValue, settings: settings),
+                totalValue: model.portfolioGlance.openHoldingCount == 0
+                    ? "No open holdings"
+                    : display(model.portfolioGlance.totalValue, settings: settings),
                 cagr: portfolioSummaryCAGR(model.portfolioPerformance),
                 totalIncrease: portfolioSummaryPercent(model.portfolioPerformance.totalPercentageIncrease),
                 showsPerformance: hasReturnFigures(model.portfolioPerformance)
             )
         )
-        row.portfolioValueSummaryTotal = settings.showPortfolioValues
+        row.portfolioValueSummaryTotal = settings.showPortfolioValues && model.portfolioGlance.openHoldingCount > 0
             ? model.portfolioGlance.totalValue
             : nil
         return row
@@ -327,18 +331,16 @@ public enum MenuDescriptorRenderer {
         return percent(value)
     }
 
-    private static func bigMoverDetail(for bigMovers: BigMoversSnapshot) -> String {
+    private static func bigMoverDetail(for bigMovers: BigMoversSnapshot) -> String? {
         if let move = bigMovers.maxMove {
             return "\(percent(move.percentChange)) over recent window"
         }
-        return bigMovers.priceSeriesCount == 0
-            ? "No recent price history to compare"
-            : "\(bigMovers.priceSeriesCount) price rows checked"
+        return bigMovers.priceSeriesCount == 0 ? nil : "\(bigMovers.priceSeriesCount) price rows checked"
     }
 
-    private static func bigMoverTitle(for move: PriceMoveSummary?, allocation: AllocationSnapshot) -> String {
-        guard let move else {
-            return "No big movers"
+    private static func bigMoverTitle(for bigMovers: BigMoversSnapshot, allocation: AllocationSnapshot) -> String {
+        guard let move = bigMovers.maxMove else {
+            return bigMovers.priceSeriesCount == 0 ? "No price history to compare yet" : "No big movers"
         }
         return allocation.topHoldings
             .first { $0.quoteId == move.quoteId }?
@@ -700,10 +702,16 @@ public enum MenuDescriptorRenderer {
 
     private static func dataRows(freshness: FreshnessSnapshot, health: DataHealthSnapshot) -> [MenuRow] {
         var rows = [freshnessSummaryRow(for: freshness)]
-        if health.status != .healthy {
+        if showsDataHealthRow(for: health) {
             rows.append(dataHealthRow(for: health))
         }
         return rows
+    }
+
+    /// The Prices row above already shows stale and unknown price dates, so
+    /// Data health is listed only when it has something else to report.
+    private static func showsDataHealthRow(for health: DataHealthSnapshot) -> Bool {
+        DataHealth.verdictBeyondPriceFreshness(of: health) != .healthy
     }
 
     static func dataHealthRow(for health: DataHealthSnapshot) -> MenuRow {
@@ -722,7 +730,7 @@ public enum MenuDescriptorRenderer {
     ) -> MenuDescriptor {
         var descriptor = descriptor
         let portfolioValueProtectionState = descriptor.portfolioValueProtectionState
-        if health.status == .healthy {
+        guard showsDataHealthRow(for: health) else {
             descriptor.sections = descriptor.sections.map { section in
                 guard section.id == "freshness" else {
                     return section
@@ -824,7 +832,10 @@ public enum MenuDescriptorRenderer {
                 )
             )
         }
-        if freshness.status != .fresh {
+        switch freshness.status {
+        case .fresh, .noHoldings:
+            break
+        case .stale, .partial, .unknown:
             rows.append(
                 MenuRow(
                     id: "freshness.oldestPrice",
@@ -857,6 +868,8 @@ public enum MenuDescriptorRenderer {
             return "Partial"
         case .unknown:
             return "Unknown"
+        case .noHoldings:
+            return FreshnessLedger.noHoldingsDetail
         }
     }
 
@@ -871,6 +884,8 @@ public enum MenuDescriptorRenderer {
             return freshness.oldestPriceAsOf.map { "Partial; oldest \($0)" } ?? "Partial"
         case .unknown:
             return "Unknown price dates"
+        case .noHoldings:
+            return FreshnessLedger.noHoldingsDetail
         }
     }
 
@@ -1159,8 +1174,7 @@ public enum IncomeCalendarDescriptor {
                 MenuRow(
                     id: "income.empty",
                     role: .incomeEmpty,
-                    title: "No income events",
-                    detail: "No calendar events in the next window"
+                    title: "No income events in the next window"
                 ),
             ]
         }
@@ -1342,7 +1356,7 @@ private func incomeEventActionTarget(for event: IncomeEventSummary, rowID: Strin
 private func incomeEventDetail(for event: IncomeEventSummary) -> PortfolioValueText {
     var components: [PortfolioValueText.Component] = [
         .literal(
-            "\(incomeEventKindLabel(for: event.kind)) on \(event.date); "
+            "\(incomeEventDatePhrase(for: event)); "
                 + (event.estimated ? "estimated" : "confirmed")
         ),
     ]
@@ -1354,6 +1368,15 @@ private func incomeEventDetail(for event: IncomeEventSummary) -> PortfolioValueT
         components.append(contentsOf: change.components)
     }
     return PortfolioValueText(components)
+}
+
+/// Short enough that a detail with an amount fits the native subtitle on one line.
+private func incomeEventDatePhrase(for event: IncomeEventSummary) -> String {
+    switch event.kind {
+    case "ex-dividend": "Ex-dividend \(event.date)"
+    case "payment-dividend": "Payment \(event.date)"
+    default: "\(event.kind) on \(event.date)"
+    }
 }
 
 private func incomeEventKindLabel(for kind: String) -> String {

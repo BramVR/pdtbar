@@ -224,6 +224,8 @@ struct PDTLaunchMenuTests {
         #expect(cachedFailure.statusVisual.isDimmed)
         #expect(cachedFailure.statusVisual.barHeights == cachedPulse.statusVisual.barHeights)
         #expect(rowTitles(in: cachedFailure).contains("Details fill failed"))
+        #expect(cachedFailure.sections.first?.id == "portfolioFetch")
+        #expect(cachedFailure.sections.first?.title == "")
         #expect(rowTitles(in: cachedFailure).contains("Fill details again"))
         #expect(actionRow("actions.refreshNow", in: cachedFailure) == nil)
         #expect(actionRow("actions.openPDT", in: cachedFailure)?.role == .openPDT)

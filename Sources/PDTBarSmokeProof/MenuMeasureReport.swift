@@ -6,7 +6,7 @@ import Foundation
 /// which can carry portfolio values and holding names, is kept only when the caller opts in.
 public struct MeasuredRowText: Codable, Equatable, Sendable {
     public enum Flag: String, Codable, Sendable, CaseIterable {
-        case unavailable, failed, error, zeroChecked
+        case unavailable, failed, error, zeroChecked, unknown, zeroAmount, zeroCount
     }
 
     public var length: Int
@@ -37,6 +37,9 @@ public struct MeasuredRowText: Codable, Equatable, Sendable {
             case .failed: lower.contains("failed")
             case .error: lower.contains("error")
             case .zeroChecked: lower.range(of: #"\b0 [a-z ]*checked"#, options: .regularExpression) != nil
+            case .unknown: lower.contains("unknown")
+            case .zeroAmount: raw.range(of: #"\b[A-Z]{3} -?0[.,]00\b"#, options: .regularExpression) != nil
+            case .zeroCount: lower.range(of: #"\b0 [a-z]"#, options: .regularExpression) != nil
             }
         }
     }

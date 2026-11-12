@@ -28,8 +28,8 @@ struct FreshnessLedgerTests {
         #expect(ledger.sourceCaveats.contains("Distribution dates are not reported by PDT"))
     }
 
-    @Test("Ledger can represent partial and unknown freshness")
-    func ledgerCanRepresentPartialAndUnknownFreshness() {
+    @Test("Ledger can represent partial freshness and an empty portfolio")
+    func ledgerCanRepresentPartialFreshnessAndAnEmptyPortfolio() {
         let partial = FreshnessLedger.build(
             from: freshnessSnapshot(
                 asOf: "2026-06-25",
@@ -39,7 +39,7 @@ struct FreshnessLedgerTests {
             ),
             detailRefreshOutcome: .degraded
         )
-        let unknown = FreshnessLedger.build(
+        let empty = FreshnessLedger.build(
             from: freshnessSnapshot(asOf: "2026-06-25", holdings: []),
             detailRefreshOutcome: nil
         )
@@ -48,10 +48,10 @@ struct FreshnessLedgerTests {
         #expect(!partial.stale)
         #expect(partial.latestCompleteDetailFillAsOf == nil)
         #expect(partial.sourceCaveats.contains("Optional detail fill incomplete; some detail rows may use prior data"))
-        #expect(unknown.status == .unknown)
-        #expect(!unknown.stale)
-        #expect(unknown.worstPriceAsOf == nil)
-        #expect(unknown.sourceCaveats.contains("No open holdings with dated prices"))
+        #expect(empty.status == .noHoldings)
+        #expect(!empty.stale)
+        #expect(empty.worstPriceAsOf == nil)
+        #expect(empty.sourceCaveats.contains("No open holdings with dated prices"))
     }
 
     @Test("Ledger goes stale when evaluated days after the snapshot asOf")
@@ -314,6 +314,43 @@ struct FreshnessLedgerTests {
         #expect(model.facetSnapshots.freshness.oldestRows.map(\.name) == ["Stale B", "Fresh A"])
         #expect(summary.children.contains { $0.id == "freshness.oldestRows" } == false)
     }
+
+    @Test("An empty portfolio says it has no holdings to price and shows no Unknown")
+    func emptyPortfolioNamesNoHoldingsToPrice() throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "docs/pdt/fixtures/income-event.json")
+        let model = PressureEngine.buildModel(from: try PDTFixtureDataSource.snapshot(from: fixture))
+        let rows = visibleRows(in: MenuDescriptorRenderer.render(model: model))
+        let unknownRows = rows.filter { "\($0.title) \($0.detail ?? "")".lowercased().contains("unknown") }
+
+        #expect(model.portfolioGlance.openHoldingCount == 0)
+        #expect(rows.first { $0.id == "freshness.summary" }?.detail == "No holdings to price")
+        #expect(unknownRows.map(\.id) == [])
+    }
+
+    @Test("Holdings without price dates still read Unknown price dates")
+    func undatedHoldingsStillReadUnknownPriceDates() {
+        let model = PressureEngine.buildModel(
+            from: freshnessSnapshot(
+                asOf: "2026-06-25",
+                holdings: [
+                    datedHolding("Undated A", quoteId: 1, priceAsOf: ""),
+                ]
+            ),
+            detailRefreshOutcome: .completed
+        )
+        let rows = visibleRows(in: MenuDescriptorRenderer.render(model: model))
+
+        #expect(rows.first { $0.id == "freshness.summary" }?.detail == "Unknown price dates")
+    }
+}
+
+private func visibleRows(in descriptor: MenuDescriptor) -> [MenuRow] {
+    func flattened(_ row: MenuRow) -> [MenuRow] {
+        [row] + row.children.flatMap(flattened)
+    }
+    return descriptor.sections.flatMap(\.rows).flatMap(flattened)
 }
 
 private func freshnessSnapshot(asOf: String, holdings: [NormalizedHolding]) -> PortfolioSnapshot {
