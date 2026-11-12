@@ -112,6 +112,25 @@ struct HeldConnectionChangeTests {
         #expect(try item.load().state == .connected(.personalToken(pasted)))
     }
 
+    @Test("A token entered again whose save was refused is held until its new generation is stored, so an older disconnect held elsewhere cannot erase it")
+    func refusedReentryOfTheStoredTokenIsHeldUntilItsGenerationLands() throws {
+        let item = InMemoryPDTCredentialStore(.connected(.personalToken(pasted)))
+        let disconnecting = ProcessStore(item, saves: .refused)
+        let disconnector = connection(disconnecting)
+        let reentering = ProcessStore(item, saves: .refused)
+        let reenterer = connection(reentering)
+
+        #expect(throws: PDTCredentialStoreError.writeFailed(code: EIO)) { try disconnector.disconnect() }
+        #expect(throws: PDTCredentialStoreError.writeFailed(code: EIO)) { try reenterer.connect(personalToken: pasted) }
+        #expect(reenterer.status() == .connected(.thisSessionOnly(.failed)))
+
+        reentering.takeSaves()
+        #expect(reenterer.status() == .connected(.saved))
+        disconnecting.takeSaves()
+        #expect(disconnector.status() == .connected(.saved))
+        #expect(try item.load().state == .connected(.personalToken(pasted)))
+    }
+
     @Test("A sign-in whose save landed without an answer is not taken for another process's: the pair it has since rotated to is stored")
     func ownSaveThatLandedUnansweredIsMovedOn() throws {
         let item = InMemoryPDTCredentialStore()

@@ -308,8 +308,11 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
                 try store.save(next)
             }
         } catch {
-            // A save can land and still report an error.
-            guard (try? store.load())?.state == change.state else {
+            // A save can land and still report an error. Only the whole record
+            // proves it: a token entered again writes the same state with a new generation.
+            let reread = try? store.load()
+            let landed = change.written.map { reread == $0 } ?? (reread?.state == change.state)
+            guard landed else {
                 refused = (change, error)
                 return change.state
             }
