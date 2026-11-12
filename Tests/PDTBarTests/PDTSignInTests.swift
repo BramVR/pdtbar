@@ -351,6 +351,28 @@ struct PDTConnectionTests {
         #expect(tokens.requests.count == 2)
     }
 
+    @Test("A store found holding a pair this connection has since rotated again is moved on to the newest pair, which stays in use")
+    func storeHoldingAMiddlePairIsMovedOn() throws {
+        let store = FailingSaveStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1))), failures: .max)
+        let tokens = ScriptedPDTHTTPTransport([
+            tokenReply(access: "access-2", refresh: "refresh-2"), tokenReply(access: "access-3", refresh: "refresh-3"),
+        ])
+        let clock = TestClock()
+        let connection = connection(store, tokens, clock: clock)
+        #expect(try connection.currentToken() == PDTAPIToken("access-2"))
+        clock.advance(by: 3600)
+        #expect(try connection.currentToken() == PDTAPIToken("access-3"))
+
+        // A save can land and still report an error, so the first rotated pair may be what the store holds.
+        store.recover()
+        try store.save(.connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600))))
+
+        #expect(try connection.currentToken() == PDTAPIToken("access-3"))
+        #expect(try store.load() == .connected(.browserSession(session("access-3", "refresh-3", expiresAt: testNow + 7200))))
+        #expect(connection.status() == .connected(.saved))
+        #expect(tokens.requests.count == 2)
+    }
+
     @Test(
         "PDT rejecting a session the store never took ends it: later checks need a reconnect, not a sign-in from scratch, and the pair is not sent again",
         arguments: [false, true]

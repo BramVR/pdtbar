@@ -26,35 +26,45 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
     private var refused: (change: Change, error: Error)?
     private var hold: RefreshHold?
 
-    /// What happened to the connection since the store last agreed with it,
-    /// oldest first. The events are replayed over whatever the store holds
-    /// when the save is tried again, so the event table still lets a newer
-    /// credential from another process win over a rotation or a rejection.
-    /// `state` is where they leave this connection until then. A store that
-    /// keeps refusing adds one event per refresh, about one an hour.
-    private struct Change {
-        private(set) var events: [PDTConnectionEvent]
+    /// What happened to the connection since the store last agreed with it.
+    /// `state` is where that leaves this connection, and `applied(to:)` is
+    /// what the store should hold once it takes a save again.
+    ///
+    /// A sign-in, pasted token, or disconnect replaces any stored state, so
+    /// every refresh or rejection after it only moves `state`. Such a change
+    /// stays the same size however long the store refuses it.
+    ///
+    /// Refreshes and rejections of a credential the store holds are kept in
+    /// `replay`, oldest first, and go through the event table, which lets a
+    /// newer credential from another process win. They are not collapsed
+    /// into one refresh from the oldest pair: the store can hold a pair in
+    /// the middle of the chain when a save landed and still reported an
+    /// error, and only the refresh that names that pair moves it on. Such a
+    /// change gains one event per refresh, about one an hour.
+    struct Change {
+        /// Nil once the change replaces whatever the store holds.
+        private(set) var replay: [PDTConnectionEvent]?
         var state: PDTConnectionState
 
         /// `known` is the state the caller just read. A sign-in, pasted token,
         /// or disconnect replaces any state, so those leave it out.
         init(_ event: PDTConnectionEvent, after known: PDTConnectionState = .disconnected) {
-            events = [event]
+            replay = event.replacesAnyState ? nil : [event]
             state = known.applying(event)
         }
 
         /// This change with `event` after it. A refresh or rejection of a
         /// credential the store never took means nothing over the store alone,
-        /// so it is replayed behind the change that produced that credential.
+        /// so it is applied behind the change that produced that credential.
         func followed(by event: PDTConnectionEvent) -> Change {
             var next = self
-            next.events.append(event)
+            next.replay = event.replacesAnyState ? nil : replay.map { $0 + [event] }
             next.state = state.applying(event)
             return next
         }
 
         func applied(to stored: PDTConnectionState) -> PDTConnectionState {
-            events.reduce(stored) { $0.applying($1) }
+            replay?.reduce(stored) { $0.applying($1) } ?? state
         }
     }
 

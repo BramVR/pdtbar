@@ -137,6 +137,17 @@ public extension PDTConnectionState {
     }
 }
 
+extension PDTConnectionEvent {
+    /// A sign-in, pasted token, or disconnect: `applying` gives the same
+    /// state whatever it is applied to.
+    var replacesAnyState: Bool {
+        switch self {
+        case .signedIn, .personalTokenEntered, .disconnected: true
+        case .refreshed, .refreshRejected, .tokenRejected: false
+        }
+    }
+}
+
 public enum PDTPersonalTokenError: Error, Equatable, Sendable {
     case empty
     case malformed
