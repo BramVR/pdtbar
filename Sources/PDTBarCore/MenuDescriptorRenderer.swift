@@ -298,8 +298,7 @@ public enum MenuDescriptorRenderer {
                     ? "No open holdings"
                     : display(model.portfolioGlance.totalValue, settings: settings),
                 cagr: portfolioSummaryCAGR(model.portfolioPerformance),
-                totalIncrease: portfolioSummaryPercent(model.portfolioPerformance.totalPercentageIncrease),
-                showsPerformance: hasReturnFigures(model.portfolioPerformance)
+                totalIncrease: portfolioSummaryPercent(model.portfolioPerformance.totalPercentageIncrease)
             )
         )
         row.portfolioValueSummaryTotal = settings.showPortfolioValues && model.portfolioGlance.openHoldingCount > 0
@@ -308,22 +307,16 @@ public enum MenuDescriptorRenderer {
         return row
     }
 
-    private static func hasReturnFigures(_ performance: PortfolioPerformanceSummary) -> Bool {
-        finite(performance.cagr) != nil
-            || finite(performance.totalPercentageIncrease) != nil
-            || performance.hasInsufficientCAGRPeriod
-    }
-
-    private static func portfolioSummaryCAGR(_ performance: PortfolioPerformanceSummary) -> String {
+    private static func portfolioSummaryCAGR(_ performance: PortfolioPerformanceSummary) -> String? {
         guard performance.cagr == nil, performance.hasInsufficientCAGRPeriod else {
             return portfolioSummaryPercent(performance.cagr)
         }
         return "Too short to annualize"
     }
 
-    private static func portfolioSummaryPercent(_ value: Double?) -> String {
+    private static func portfolioSummaryPercent(_ value: Double?) -> String? {
         guard let value = finite(value) else {
-            return "Unavailable"
+            return nil
         }
         if value > 0 {
             return "+\(percent(value))"
