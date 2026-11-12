@@ -137,6 +137,9 @@ private func example(of cause: DataHealthAttentionCause) -> CauseExample {
             summary: "Subscription paused",
             rowDetail: "Paused: your PDT subscription has ended"
         )
+    case .connectionNotSaved:
+        input.access = .notSaved
+        return CauseExample(input: input, summary: "Connection not saved", rowDetail: "Not saved on this Mac")
     case .keychainUnavailable:
         input.access = .keychainUnavailable
         return CauseExample(input: input, summary: "Keychain unavailable", rowDetail: "Keychain unavailable")

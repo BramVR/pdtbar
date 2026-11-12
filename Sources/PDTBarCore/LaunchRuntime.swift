@@ -113,6 +113,9 @@ public enum PDTLaunchState: Equatable, Sendable {
     case notConnected
     case needsReconnect(PDTCredentialKind, PDTReconnectCause)
     case subscriptionPaused
+    /// PDT accepted the sign-in or token and the store refused to save it.
+    /// Nothing is fetched until a later check saves it.
+    case notSaved(PDTCredentialKind, PDTKeychainProblem)
     case keychainUnavailable(PDTKeychainProblem)
     case connected(PDTPortfolioSync)
 
@@ -122,6 +125,7 @@ public enum PDTLaunchState: Equatable, Sendable {
         case .connected: self = .connected(.current)
         case let .needsReconnect(kind, cause): self = .needsReconnect(kind, cause)
         case .subscriptionPaused: self = .subscriptionPaused
+        case let .notSaved(kind, problem): self = .notSaved(kind, problem)
         case let .keychainUnavailable(problem): self = .keychainUnavailable(problem)
         }
     }
@@ -136,14 +140,14 @@ public enum PDTLaunchState: Equatable, Sendable {
 
     var offersCheckAgain: Bool {
         switch self {
-        case .needsReconnect, .subscriptionPaused, .keychainUnavailable: true
+        case .needsReconnect, .subscriptionPaused, .notSaved, .keychainUnavailable: true
         default: false
         }
     }
 
     var offersDisconnect: Bool {
         switch self {
-        case .needsReconnect, .subscriptionPaused, .connected(.failed), .connected(.current): true
+        case .needsReconnect, .subscriptionPaused, .notSaved, .connected(.failed), .connected(.current): true
         default: false
         }
     }
@@ -263,7 +267,7 @@ public enum PDTLaunchMenu {
             return descriptorWithRefreshDetailsAction(cachedPulse: cachedPulse)
         case .notConnected:
             return connectionDescriptor(state, notice: notice, cachedPulse: nil)
-        case .checkingConnection, .connecting, .disconnecting, .needsReconnect, .subscriptionPaused, .keychainUnavailable:
+        case .checkingConnection, .connecting, .disconnecting, .needsReconnect, .subscriptionPaused, .notSaved, .keychainUnavailable:
             return connectionDescriptor(state, notice: notice, cachedPulse: cachedPulse)
         }
     }
@@ -282,6 +286,13 @@ public enum PDTLaunchMenu {
             ("Reconnect to PDT", sentenceCased(reconnectReason(cause)))
         case .subscriptionPaused:
             ("PDT access paused", "Your PDT subscription has ended. Renew it, then check again")
+        case let .notSaved(kind, problem):
+            (
+                kind == .browserSession ? "Sign-in not saved" : "PDT token not saved",
+                problem == .missingEntitlement
+                    ? "This PDTBar build can't save to the Keychain. Quitting PDTBar drops it"
+                    : "PDTBar could not save it on this Mac. Check again tries again"
+            )
         case .keychainUnavailable(.missingEntitlement):
             ("Keychain unavailable", "This PDTBar build can't use the Keychain. Install the signed release")
         case .keychainUnavailable(.failed):

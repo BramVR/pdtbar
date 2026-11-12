@@ -2,12 +2,12 @@
 
 The user launches PDTBar without a working PDT connection, or with one PDT stopped accepting. The menu names the state and offers what fits it: `Sign in with PDT`, `Use a PDT token…`, `Check again`, and `Disconnect from PDT`.
 
-Proof that it works: not connected shows `Not connected`, `Sign in with PDT`, and `Use a PDT token…`, and hides any cached pulse. A revoked token shows `Reconnect to PDT` with `Check again` and `Disconnect from PDT`. `403 API_ACCESS_PAUSED` shows `PDT access paused`. A build without the Keychain entitlement (`-34018`) shows `Keychain unavailable`. One `Check again` click reruns the connection check exactly once; a second click while the check or fetch runs starts nothing. `Sign in with PDT` shows `Signing in with PDT`, then `Fetching portfolio`. A declined sign-in shows `Sign-in failed`.
+Proof that it works: not connected shows `Not connected`, `Sign in with PDT`, and `Use a PDT token…`, and hides any cached pulse. A revoked token shows `Reconnect to PDT` with `Check again` and `Disconnect from PDT`. `403 API_ACCESS_PAUSED` shows `PDT access paused`. A Keychain that refuses the read (`-34018`) shows `Keychain unavailable`. A sign-in or token the Keychain refuses to save, as on a build without the Keychain entitlement, shows `Sign-in not saved` or `PDT token not saved` with `Check again` and `Disconnect from PDT`, and starts no fetch. One `Check again` click reruns the connection check exactly once; a second click while the check or fetch runs starts nothing. `Sign in with PDT` shows `Signing in with PDT`, then `Fetching portfolio`. A declined sign-in shows `Sign-in failed`.
 
 ## Sub-features
 
 - Not-connected setup menu.
-- Reconnect (`signInExpired`, `tokenExpired`, `tokenRevoked`, `tokenInvalid`, `readAccessMissing`), paused subscription, and Keychain unavailable, each keeping a cached pulse visible below the connection rows.
+- Reconnect (`signInExpired`, `tokenExpired`, `tokenRevoked`, `tokenInvalid`, `readAccessMissing`), paused subscription, an unsaved sign-in or token, and Keychain unavailable, each keeping a cached pulse visible below the connection rows.
 - `Check again`, which reruns the connection check once.
 - `Sign in with PDT` (browser, loopback) with `Cancel sign-in`; a failure shows `Sign-in failed` with its reason.
 - `Use a PDT token…`, a secure field whose token is stored without a verification request; the first fetch answers.

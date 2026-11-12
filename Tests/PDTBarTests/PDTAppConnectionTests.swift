@@ -71,7 +71,7 @@ struct PDTAppConnectionTests {
         }
     }
 
-    @Test("A build without the Keychain entitlement reports it and never falls back to the login keychain")
+    @Test("A Keychain that refuses every call reports it, holds a token or sign-in it could not save, and never falls back to the login keychain")
     func missingKeychainEntitlement() throws {
         let keychain = RecordingSecItems(status: errSecMissingEntitlement)
         let connection = PDTAppConnection(
@@ -82,8 +82,9 @@ struct PDTAppConnectionTests {
         )
 
         #expect(connection.check().status == .keychainUnavailable(.missingEntitlement))
-        #expect(connection.connect(token: PDTAPIToken("pdt_pasted")).status == .keychainUnavailable(.missingEntitlement))
-        #expect(connection.signIn(cancellation: PDTCancellation()).status == .keychainUnavailable(.missingEntitlement))
+        #expect(connection.connect(token: PDTAPIToken("pdt_pasted")).status == .notSaved(.personalToken, .missingEntitlement))
+        #expect(connection.signIn(cancellation: PDTCancellation()).status == .notSaved(.browserSession, .missingEntitlement))
+        #expect(connection.check().status == .notSaved(.browserSession, .missingEntitlement))
         #expect(!keychain.queries.isEmpty)
         #expect(keychain.queries.allSatisfy { $0[kSecUseDataProtectionKeychain as String] as? Bool == true })
     }

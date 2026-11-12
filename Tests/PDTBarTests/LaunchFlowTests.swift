@@ -119,6 +119,8 @@ struct PDTLaunchMenuTests {
                 "PDT access paused",
                 ["pdtConnection.signIn", "pdtConnection.token", "pdtConnection.check", "pdtConnection.disconnect"]
             ),
+            (.notSaved(.browserSession, .missingEntitlement), "Sign-in not saved", ["pdtConnection.check", "pdtConnection.disconnect"]),
+            (.notSaved(.personalToken, .failed), "PDT token not saved", ["pdtConnection.check", "pdtConnection.disconnect"]),
             (.keychainUnavailable(.missingEntitlement), "Keychain unavailable", ["pdtConnection.check"]),
             (.keychainUnavailable(.failed), "Could not read the Keychain", ["pdtConnection.check"]),
         ]
@@ -150,7 +152,7 @@ struct PDTLaunchMenuTests {
         }
     }
 
-    @Test("Reconnect, paused, and Keychain screens keep a cached pulse visible; not connected hides it")
+    @Test("Reconnect, paused, not-saved, and Keychain screens keep a cached pulse visible; not connected hides it")
     func connectionScreensAndCachedPulse() throws {
         let cachedPulse = try quietFixtureDescriptor()
 
@@ -158,6 +160,7 @@ struct PDTLaunchMenuTests {
             PDTLaunchState.checkingConnection,
             .needsReconnect(.personalToken, .tokenRevoked),
             .subscriptionPaused,
+            .notSaved(.browserSession, .missingEntitlement),
             .keychainUnavailable(.missingEntitlement),
         ] {
             let descriptor = PDTLaunchMenu.descriptor(for: state, cachedPulse: cachedPulse)
@@ -477,6 +480,7 @@ struct PDTLaunchRuntimeTests {
         let cases: [(PDTConnectionStatus, PDTLaunchState)] = [
             (.needsReconnect(.personalToken, .tokenRevoked), .needsReconnect(.personalToken, .tokenRevoked)),
             (.subscriptionPaused, .subscriptionPaused),
+            (.notSaved(.browserSession, .failed), .notSaved(.browserSession, .failed)),
             (.keychainUnavailable(.missingEntitlement), .keychainUnavailable(.missingEntitlement)),
         ]
         for (status, state) in cases {
@@ -754,6 +758,7 @@ struct PDTLaunchRuntimeTests {
             (.needsReconnect(.personalToken, .tokenRevoked), "Reconnect needed", "Reconnect needed: PDTBar's access was revoked in PDT"),
             (.needsReconnect(.personalToken, .readAccessMissing), "Reconnect needed", "Reconnect needed: this connection can't read your portfolio"),
             (.subscriptionPaused, "Subscription paused", "Paused: your PDT subscription has ended"),
+            (.notSaved(.browserSession, .missingEntitlement), "Connection not saved", "Not saved on this Mac"),
             (.keychainUnavailable(.failed), "Keychain unavailable", "Keychain unavailable"),
         ]
     )

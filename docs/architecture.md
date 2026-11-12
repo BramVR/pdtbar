@@ -42,7 +42,7 @@ then the PDT connection check, sign-in, pasted token, disconnect, first-fetch
 success/failure, returning-launch background detail refresh, retry gating, and
 descriptor updates. Its state is `PDTLaunchState` (checking, not connected,
 connecting, connected with a sync phase, needs reconnect with a cause,
-subscription paused, Keychain unavailable, disconnecting). Work never overlaps.
+subscription paused, not saved, Keychain unavailable, disconnecting). Work never overlaps.
 `PDTAppConnection` is the app's one PDT connection (Keychain store, browser
 sign-in, URLSession, or an offline `--scripted-pdt` script for smokes) and the
 one place store and API errors become connection states. See

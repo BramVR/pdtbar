@@ -10,10 +10,12 @@
   step, so TLC explores every completion order.
 
   Code anchors (Sources/PDTBarCore/LaunchRuntime.swift = Core, Sources/PDTBarApp/main.swift = App):
-    PDTLaunchState offers* ......... Core:94-150 (which connection buttons a state shows)
-    PDTLaunchMenu.descriptor ....... Core:207-330, withDisconnectAction Core:770
-    PDTLaunchRuntime ............... Core:848-1110
-    AppDelegate effect wiring ...... App:60-355
+    PDTLaunchState offers* ......... Core:109-155 (which connection buttons a state shows)
+    PDTLaunchMenu.descriptor ....... Core:227-357, withDisconnectAction Core:609
+    PDTLaunchRuntime ............... Core:695-1000
+    AppDelegate effect wiring ...... App:62-370
+    PDTConnection (the cred ghost) . Sources/PDTBarCore/PDTConnection.swift: status, replace, commit;
+                                     PDTAppConnection.check / signIn / connect / disconnect
 *)
 EXTENDS Naturals, FiniteSets
 
@@ -23,11 +25,15 @@ CONSTANTS
     Mutations     \* {} for the real code; names replay one-line code breaks (see mutations.sh)
 
 \* The connected states are flattened: fetching, fetchFailed, current = .connected(.fetching/.failed/.current).
-ConnectionStates == {"notConnected", "needsReconnect", "subscriptionPaused", "keychainUnavailable"}
+ConnectionStates == {"notConnected", "needsReconnect", "subscriptionPaused", "notSaved", "keychainUnavailable"}
 States == {"checkingConnection", "connecting", "disconnecting", "fetching", "fetchFailed", "current"} \cup ConnectionStates
 \* What a connection operation can report (PDTConnectionStatus).
 Statuses == {"connected"} \cup ConnectionStates
 OpKinds == {"check", "signIn", "token", "disconnect"}
+\* What PDTConnection knows (#301). "none": nothing stored and nothing held. "saved": the store
+\* holds a credential or a reconnect state. "held": PDT gave a credential (a sign-in, a pasted
+\* token, a rotated pair) and the store refused it, so it lives in PDTConnection.refused.
+Creds == {"none", "saved", "held"}
 
 VARIABLES
     \* PDTLaunchRuntime
@@ -46,18 +52,20 @@ VARIABLES
     \* ghosts (#191): the last finished sync committed nothing, and no sync started since
     uncommitted,
     \* ghost (#191): a committed refresh reported lost access, and no connection result since
-    lostAccess
+    lostAccess,
+    \* ghost (#301): what PDTConnection knows, one of Creds
+    cred
 
 vars == <<state, pulse, opInFlight, attemptID, cacheLoading, ffInFlight, bgInFlight,
           menu, ops, cacheLoad, ffWorkers, bgWorkers, opsStarted, retries,
-          record, uncommitted, lostAccess>>
+          record, uncommitted, lostAccess, cred>>
 
 ---------------------------------------------------------------------------------
 (* Runtime predicates, Core PDTLaunchState / PDTLaunchRuntime.isIdle *)
 
 OffersSignIn(st) == st \in {"notConnected", "needsReconnect", "subscriptionPaused"}
-OffersCheckAgain(st) == st \in {"needsReconnect", "subscriptionPaused", "keychainUnavailable"}
-OffersDisconnect(st) == st \in {"needsReconnect", "subscriptionPaused", "fetchFailed", "current"}
+OffersCheckAgain(st) == st \in {"needsReconnect", "subscriptionPaused", "notSaved", "keychainUnavailable"}
+OffersDisconnect(st) == st \in {"needsReconnect", "subscriptionPaused", "notSaved", "fetchFailed", "current"}
 Idle(cl, op, ff, bg) == ~cl /\ ~op /\ ~ff /\ ~bg
 Connected(st) == st \in {"fetching", "fetchFailed", "current"}
 
@@ -108,6 +116,8 @@ Init ==
     /\ record = "none"
     /\ uncommitted = FALSE
     /\ lostAccess = FALSE
+    \* A new process holds nothing: a credential the store refused died with the last one.
+    /\ cred \in {"none", "saved"}
 
 \* beginConnectionOperation: new attempt, operation slot taken, effect runs it.
 BeginOp(st, kind) ==
@@ -137,7 +147,7 @@ StartFirstFetch ==
 \* apply(status): connected starts the one fetch that fits; anything else is shown.
 \* The guards in apply were removed with the parked readiness slot: nothing else runs here.
 Apply(s, p) ==
-    IF s = "connected"
+    IF s = "connected" \/ (s = "notSaved" /\ "notSavedStartsFetch" \in Mutations)
     THEN IF p # "none" /\ "ignoreCachedPulse" \notin Mutations
          THEN /\ StartBg /\ UNCHANGED <<ffInFlight, ffWorkers>>
          ELSE /\ StartFirstFetch /\ UNCHANGED <<bgInFlight, bgWorkers>>
@@ -155,13 +165,45 @@ CacheLoadReturns ==
          /\ IF "checkDuringCacheLoad" \in Mutations
             THEN UNCHANGED <<state, opInFlight, attemptID, ops, opsStarted, record>>
             ELSE BeginOp("checkingConnection", "check")
-    /\ UNCHANGED <<ffInFlight, bgInFlight, ffWorkers, bgWorkers, retries, uncommitted, lostAccess>>
+    /\ UNCHANGED <<ffInFlight, bgInFlight, ffWorkers, bgWorkers, retries, uncommitted, lostAccess, cred>>
     /\ Render
+
+\* What an operation can report, and what PDTConnection knows afterwards (c).
+\* PDTConnection.status: a held credential answers before the store, as notSaved, or as
+\* connected once the retried save lands. Otherwise the store answers, and another process
+\* may have stored or deleted a credential since.
+CheckAnswers(s, c) ==
+    IF cred = "held" /\ "checkReadsStoreOnly" \notin Mutations
+    THEN \/ s = "notSaved" /\ c = "held"
+         \/ s = "connected" /\ c = "saved"
+    ELSE \/ s = "notConnected" /\ c = (IF cred = "held" THEN "held" ELSE "none")
+         \/ s \in {"connected", "needsReconnect", "subscriptionPaused"} /\ c = "saved"
+         \/ s = "keychainUnavailable" /\ c = cred
+
+\* PDTAppConnection.signIn / connect(token:): stored, or refused by the store and held.
+\* A sign-in that was declined, timed out, or cancelled changes nothing and reports like a check.
+SignInAnswers(s, c) ==
+    \/ s = "connected" /\ c = "saved"
+    \/ s = "notSaved" /\ c = "held"
+    \/ CheckAnswers(s, c)
+
+\* PDTAppConnection.disconnect: a held credential is dropped at once. A delete the store
+\* refused over a stored credential is never reported as removed.
+DisconnectAnswers(s, c) ==
+    \/ s = "notConnected" /\ c = "none"
+    \/ s = "keychainUnavailable" /\ c = "saved"
+
+\* A sync that ends in a connection state: a rotated pair the store refused is held, and a
+\* credential another process deleted is gone.
+CredAfterSync(st) == CASE st = "notSaved" -> "held" [] st = "notConnected" -> "none" [] OTHER -> cred
 
 \* runConnectionOperation result on the main queue + completeConnection (stale attempts dropped).
 OpReturns ==
-    \E op \in ops, s \in Statuses :
-        /\ (op.kind = "disconnect" => s \in {"notConnected", "keychainUnavailable"})
+    \E op \in ops, s \in Statuses, c \in Creds :
+        /\ CASE op.kind = "disconnect" -> DisconnectAnswers(s, c)
+             [] op.kind = "check" -> CheckAnswers(s, c)
+             [] OTHER -> SignInAnswers(s, c)
+        /\ cred' = c
         /\ ops' = ops \ {op}
         /\ UNCHANGED <<attemptID, cacheLoading, cacheLoad, opsStarted, retries>>
         /\ IF ~(opInFlight /\ op.id = attemptID) /\ "checkDuringCacheLoad" \notin Mutations
@@ -180,7 +222,7 @@ ClickSignIn ==
     /\ OffersSignIn(state)
     /\ BeginOp("connecting", "signIn")
     /\ UNCHANGED <<pulse, cacheLoading, ffInFlight, bgInFlight, cacheLoad, ffWorkers, bgWorkers, retries,
-                   uncommitted, lostAccess>>
+                   uncommitted, lostAccess, cred>>
     /\ Render
 
 \* connect(token:): Use a PDT token -> .checkingConnection, effect .connectToken
@@ -190,7 +232,7 @@ ClickToken ==
     /\ OffersSignIn(state)
     /\ BeginOp("checkingConnection", "token")
     /\ UNCHANGED <<pulse, cacheLoading, ffInFlight, bgInFlight, cacheLoad, ffWorkers, bgWorkers, retries,
-                   uncommitted, lostAccess>>
+                   uncommitted, lostAccess, cred>>
     /\ Render
 
 \* checkAgain()
@@ -200,7 +242,7 @@ ClickCheckAgain ==
     /\ OffersCheckAgain(state)
     /\ BeginOp("checkingConnection", "check")
     /\ UNCHANGED <<pulse, cacheLoading, ffInFlight, bgInFlight, cacheLoad, ffWorkers, bgWorkers, retries,
-                   uncommitted, lostAccess>>
+                   uncommitted, lostAccess, cred>>
     /\ Render
 
 \* disconnect()
@@ -210,7 +252,7 @@ ClickDisconnect ==
     /\ OffersDisconnect(state)
     /\ BeginOp("disconnecting", "disconnect")
     /\ UNCHANGED <<pulse, cacheLoading, ffInFlight, bgInFlight, cacheLoad, ffWorkers, bgWorkers, retries,
-                   uncommitted, lostAccess>>
+                   uncommitted, lostAccess, cred>>
     /\ Render
 
 \* retryFirstFetch(): accepted only while connected and idle
@@ -222,7 +264,7 @@ ClickRetry ==
     /\ IF pulse # "none"
        THEN /\ StartBg /\ UNCHANGED <<ffInFlight, ffWorkers>>
        ELSE /\ StartFirstFetch /\ UNCHANGED <<bgInFlight, bgWorkers>>
-    /\ UNCHANGED <<pulse, opInFlight, attemptID, cacheLoading, ops, cacheLoad, opsStarted, lostAccess>>
+    /\ UNCHANGED <<pulse, opInFlight, attemptID, cacheLoading, ops, cacheLoad, opsStarted, lostAccess, cred>>
     /\ Render
 
 \* finishFirstPortfolioFetch (App) + completeFirstFetch (Core). Success publishes the
@@ -232,19 +274,20 @@ FirstFetchReturns ==
     /\ ffWorkers' = ffWorkers - 1
     /\ ffInFlight' = ("keepFirstFetchFlag" \in Mutations)
     /\ \E r \in {"ok", "unavailable"} \cup ConnectionStates :
-        CASE r = "ok" ->
-                /\ pulse' = "live"
-                /\ IF "keepFirstFetchFlag" \in Mutations
-                   THEN /\ state' = "current" /\ UNCHANGED <<bgInFlight, bgWorkers, record, uncommitted>>
-                   ELSE /\ bgInFlight' = TRUE /\ bgWorkers' = bgWorkers + 1 /\ state' = "fetching"
-                        /\ SyncStarts
-          [] r = "unavailable" ->
-                /\ UNCHANGED <<pulse, bgInFlight, bgWorkers>> /\ state' = "fetchFailed"
-                /\ record' = "kept" /\ uncommitted' = TRUE
-          [] OTHER ->
-                /\ UNCHANGED <<pulse, bgInFlight, bgWorkers>> /\ state' = r
-                /\ record' = IF "connectionScreenDropsRecord" \in Mutations THEN "none" ELSE "kept"
-                /\ uncommitted' = TRUE
+        /\ cred' = CredAfterSync(r)
+        /\ CASE r = "ok" ->
+                  /\ pulse' = "live"
+                  /\ IF "keepFirstFetchFlag" \in Mutations
+                     THEN /\ state' = "current" /\ UNCHANGED <<bgInFlight, bgWorkers, record, uncommitted>>
+                     ELSE /\ bgInFlight' = TRUE /\ bgWorkers' = bgWorkers + 1 /\ state' = "fetching"
+                          /\ SyncStarts
+             [] r = "unavailable" ->
+                  /\ UNCHANGED <<pulse, bgInFlight, bgWorkers>> /\ state' = "fetchFailed"
+                  /\ record' = "kept" /\ uncommitted' = TRUE
+             [] OTHER ->
+                  /\ UNCHANGED <<pulse, bgInFlight, bgWorkers>> /\ state' = r
+                  /\ record' = IF "connectionScreenDropsRecord" \in Mutations THEN "none" ELSE "kept"
+                  /\ uncommitted' = TRUE
     /\ UNCHANGED <<opInFlight, attemptID, cacheLoading, ops, cacheLoad, opsStarted, retries, lostAccess>>
     /\ Render
 
@@ -253,16 +296,17 @@ BackgroundProgress ==
     /\ bgWorkers > 0 /\ bgInFlight /\ pulse # "none"
     /\ state' = "fetching"
     /\ UNCHANGED <<pulse, opInFlight, attemptID, cacheLoading, ffInFlight, bgInFlight,
-                   ops, cacheLoad, ffWorkers, bgWorkers, opsStarted, retries, record, uncommitted, lostAccess>>
+                   ops, cacheLoad, ffWorkers, bgWorkers, opsStarted, retries, record, uncommitted, lostAccess, cred>>
     /\ Render
 
 \* finishBackgroundPortfolioRefresh (App) + completeBackgroundDetailRefresh (Core).
 \* A base failure commits nothing: it keeps the pulse and its record, and a connection
 \* failure moves to that connection state. A committed refresh whose optional phase lost
 \* access ("lost:<state>", #191) publishes the pulse and moves to that connection state.
-LostResults == {"lost:needsReconnect", "lost:subscriptionPaused", "lost:keychainUnavailable"}
+LostResults == {"lost:needsReconnect", "lost:subscriptionPaused", "lost:notSaved", "lost:keychainUnavailable"}
 LostState(r) == CASE r = "lost:needsReconnect" -> "needsReconnect"
                   [] r = "lost:subscriptionPaused" -> "subscriptionPaused"
+                  [] r = "lost:notSaved" -> "notSaved"
                   [] OTHER -> "keychainUnavailable"
 
 BackgroundReturns ==
@@ -270,18 +314,19 @@ BackgroundReturns ==
     /\ bgWorkers' = bgWorkers - 1
     /\ bgInFlight' = FALSE
     /\ \E r \in {"ok", "unavailable"} \cup ConnectionStates \cup LostResults :
-        CASE r = "ok" -> /\ pulse' = "live" /\ state' = "current"
-                         /\ UNCHANGED <<record, uncommitted>> /\ lostAccess' = FALSE
-          [] r \in LostResults ->
-                /\ pulse' = "live"
-                /\ state' = IF "optionalAccessLossStaysConnected" \in Mutations THEN "current" ELSE LostState(r)
-                /\ UNCHANGED <<record, uncommitted>> /\ lostAccess' = TRUE
-          [] r = "unavailable" -> /\ UNCHANGED pulse /\ state' = "fetchFailed"
-                /\ record' = "kept" /\ uncommitted' = TRUE /\ lostAccess' = FALSE
-          [] OTHER -> /\ UNCHANGED pulse
-                      /\ state' = IF "failureStaysFetching" \in Mutations THEN "fetching" ELSE r
-                      /\ record' = IF "connectionScreenDropsRecord" \in Mutations THEN "none" ELSE "kept"
-                      /\ uncommitted' = TRUE /\ lostAccess' = FALSE
+        /\ cred' = CredAfterSync(IF r \in LostResults THEN LostState(r) ELSE r)
+        /\ CASE r = "ok" -> /\ pulse' = "live" /\ state' = "current"
+                            /\ UNCHANGED <<record, uncommitted>> /\ lostAccess' = FALSE
+             [] r \in LostResults ->
+                  /\ pulse' = "live"
+                  /\ state' = IF "optionalAccessLossStaysConnected" \in Mutations THEN "current" ELSE LostState(r)
+                  /\ UNCHANGED <<record, uncommitted>> /\ lostAccess' = TRUE
+             [] r = "unavailable" -> /\ UNCHANGED pulse /\ state' = "fetchFailed"
+                  /\ record' = "kept" /\ uncommitted' = TRUE /\ lostAccess' = FALSE
+             [] OTHER -> /\ UNCHANGED pulse
+                         /\ state' = IF "failureStaysFetching" \in Mutations THEN "fetching" ELSE r
+                         /\ record' = IF "connectionScreenDropsRecord" \in Mutations THEN "none" ELSE "kept"
+                         /\ uncommitted' = TRUE /\ lostAccess' = FALSE
     /\ UNCHANGED <<opInFlight, attemptID, cacheLoading, ffInFlight, ops, cacheLoad, ffWorkers, opsStarted, retries>>
     /\ Render
 
@@ -309,6 +354,7 @@ TypeOK ==
     /\ state \in States
     /\ record \in {"none", "kept"}
     /\ pulse \in {"none", "cached", "live"}
+    /\ cred \in Creds
     /\ ffWorkers \in 0..3 /\ bgWorkers \in 0..3
 
 \* At most one piece of work runs at once: the cache load, one connection operation,
@@ -338,7 +384,7 @@ MenuTellsTruth == ConnectionMenuTellsTruth /\ FetchingMenuTellsTruth
 
 \* ADR-0002 item 8: a reconnect or paused subscription keeps the cached pulse visible.
 ProblemKeepsPulseVisible ==
-    (menu.st \in {"needsReconnect", "subscriptionPaused", "keychainUnavailable"} /\ pulse # "none")
+    (menu.st \in {"needsReconnect", "subscriptionPaused", "notSaved", "keychainUnavailable"} /\ pulse # "none")
         => menu.kind = "pulse"
 
 \* After a disconnect the menu is setup only: no portfolio is shown as if connected.
@@ -359,6 +405,14 @@ AccessLossLeavesConnected == lostAccess => ~Connected(state)
 \* #191: the record of a sync that committed nothing stays copyable on every screen,
 \* connection screens and connection operations included, until the next sync starts.
 UncommittedRecordKept == uncommitted => record = "kept"
+
+\* #301: only PDT or the user signs out. While PDTConnection holds a credential the store
+\* refused, no check, failed sign-in, or sync turns the menu to Not connected.
+SignedOutOnlyWithoutCredential == state = "notConnected" => cred = "none"
+
+\* ADR-0002 decision 3: a credential reaches the API only once it is stored, so no sync
+\* runs behind one the store refused.
+FetchUsesSavedCredential == (ffWorkers + bgWorkers > 0) => cred = "saved"
 
 \* The user is never stranded: something is running or the menu offers a way forward.
 NeverStranded ==

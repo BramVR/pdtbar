@@ -1,13 +1,20 @@
 import Foundation
 
-/// What the menu may say about PDT access. A projection of the stored
-/// `PDTConnectionState` plus what PDT answered; it holds no secret.
+/// What the menu may say about PDT access. A projection of the
+/// `PDTConnectionState` this process knows plus what PDT answered; it holds no
+/// secret.
 public enum PDTConnectionStatus: Equatable, Sendable {
     case notConnected
     case connected
     case needsReconnect(PDTCredentialKind, PDTReconnectCause)
     /// `403 API_ACCESS_PAUSED`: the subscription ended. The token stays valid and stored.
     case subscriptionPaused
+    /// PDT gave PDTBar this credential and the credential store refused to
+    /// save it. PDTBar holds it until it quits, tries the save again on every
+    /// check, and sends no request with it before it is saved.
+    case notSaved(PDTCredentialKind, PDTKeychainProblem)
+    /// The store could not be read, or it refused a disconnect and still
+    /// holds the credential.
     case keychainUnavailable(PDTKeychainProblem)
 }
 
@@ -61,7 +68,7 @@ public enum PDTFetchFailure: Equatable, Sendable {
     case unavailable
 }
 
-public extension PDTConnectionStatus {
+extension PDTConnectionStatus {
     init(stored state: PDTConnectionState) {
         switch state {
         case .disconnected:
@@ -76,7 +83,13 @@ public extension PDTConnectionStatus {
     }
 
     init(storeError error: Error) {
-        self = .keychainUnavailable(error as? PDTCredentialStoreError == .missingKeychainEntitlement ? .missingEntitlement : .failed)
+        self = .keychainUnavailable(PDTKeychainProblem(storeError: error))
+    }
+}
+
+extension PDTKeychainProblem {
+    init(storeError error: Error) {
+        self = error as? PDTCredentialStoreError == .missingKeychainEntitlement ? .missingEntitlement : .failed
     }
 }
 

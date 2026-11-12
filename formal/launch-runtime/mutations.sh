@@ -34,5 +34,7 @@ done <<'LIST'
 "optionalAccessLossStaysConnected"               AccessLossLeavesConnected
 "connectionScreenDropsRecord"                    UncommittedRecordKept
 "connectionOpDropsRecord"                        UncommittedRecordKept
+"checkReadsStoreOnly"                            SignedOutOnlyWithoutCredential
+"notSavedStartsFetch"                            FetchUsesSavedCredential
 LIST
 rm -f .mutation.cfg .mutation.cfg.bak

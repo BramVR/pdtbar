@@ -651,6 +651,8 @@ private func authMeasureScreen(_ descriptor: MenuDescriptor, state: PDTLaunchSta
     case .notConnected: ("notConnected", .waiting)
     case let .needsReconnect(credential, cause): ("needsReconnect(\(credential.rawValue),\(cause.rawValue))", .waiting)
     case .subscriptionPaused: ("subscriptionPaused", .waiting)
+    case let .notSaved(credential, .missingEntitlement): ("notSaved(\(credential.rawValue),missingEntitlement)", .waiting)
+    case let .notSaved(credential, .failed): ("notSaved(\(credential.rawValue),failed)", .waiting)
     case .keychainUnavailable(.missingEntitlement): ("keychainUnavailable(missingEntitlement)", .waiting)
     case .keychainUnavailable(.failed): ("keychainUnavailable(failed)", .waiting)
     case .connected(.fetching): ("connected(fetching)", .transient)

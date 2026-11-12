@@ -92,6 +92,8 @@ struct DescriptorContractTests {
             PDTLaunchMenu.descriptor(for: .needsReconnect(.personalToken, .tokenRevoked)),
             PDTLaunchMenu.descriptor(for: .needsReconnect(.personalToken, .readAccessMissing)),
             PDTLaunchMenu.descriptor(for: .subscriptionPaused),
+            PDTLaunchMenu.descriptor(for: .notSaved(.browserSession, .missingEntitlement)),
+            PDTLaunchMenu.descriptor(for: .notSaved(.personalToken, .failed)),
             PDTLaunchMenu.descriptor(for: .keychainUnavailable(.missingEntitlement)),
             PDTLaunchMenu.descriptor(for: .keychainUnavailable(.failed)),
             PDTLaunchMenu.descriptor(for: .connected(.fetching)),

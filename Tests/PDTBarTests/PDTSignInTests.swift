@@ -331,13 +331,16 @@ struct PDTConnectionTests {
         #expect(tokens.requests.count == 1)
     }
 
-    @Test("A rotated pair the store refused survives a replacement the store also refuses, and the retried replacement lands", arguments: [false, true])
-    func rotatedPairSurvivesFailedReplacement(signIn: Bool) throws {
-        let store = FailingSaveStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1))), failures: 2)
-        let tokens = ScriptedPDTHTTPTransport([tokenReply(access: "access-2", refresh: "refresh-2"), oauthError(400, "invalid_grant")])
+    @Test("A sign-in or disconnect the store refuses takes the place of a rotated pair it also refused, and lands when the store takes writes again", arguments: [false, true])
+    func refusedReplacementSupersedesRefusedRotation(signIn: Bool) throws {
+        let store = FailingSaveStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1))), failures: .max)
+        let tokens = ScriptedPDTHTTPTransport([tokenReply(access: "access-2", refresh: "refresh-2")])
         let connection = connection(store, tokens)
         let replacement = session("access-9", "refresh-9", expiresAt: testNow + 3600)
-        let replace = {
+        let replaced = signIn ? PDTConnectionState.connected(.browserSession(replacement)) : .disconnected
+
+        #expect(throws: PDTCredentialStoreError.writeFailed(code: EIO)) { try connection.currentToken() }
+        #expect(throws: PDTCredentialStoreError.writeFailed(code: EIO)) {
             if signIn {
                 try connection.signedIn(replacement)
             } else {
@@ -345,16 +348,63 @@ struct PDTConnectionTests {
             }
         }
 
-        #expect(throws: PDTCredentialStoreError.writeFailed(code: EIO)) { try connection.currentToken() }
-        #expect(throws: PDTCredentialStoreError.writeFailed(code: EIO)) { try replace() }
-
-        #expect(try connection.currentToken() == PDTAPIToken("access-2"))
-        #expect(try store.load() == .connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600))))
-
-        try replace()
-
-        #expect(try store.load() == (signIn ? .connected(.browserSession(replacement)) : .disconnected))
+        store.recover()
+        #expect(try connection.state() == replaced)
+        #expect(try store.load() == replaced)
+        if signIn {
+            #expect(try connection.currentToken() == PDTAPIToken("access-9"))
+        } else {
+            #expect(throws: PDTAPIError.missingToken) { try connection.currentToken() }
+        }
         #expect(tokens.requests.count == 1)
+    }
+
+    @Test("While the store keeps refusing a rotated pair, no token is handed out and PDT is not asked again; the pair is used once it is stored")
+    func refusedRotationWaitsForTheStore() throws {
+        let store = FailingSaveStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1))), failures: .max)
+        let tokens = ScriptedPDTHTTPTransport([tokenReply(access: "access-2", refresh: "refresh-2")])
+        let connection = connection(store, tokens)
+
+        #expect(throws: PDTCredentialStoreError.writeFailed(code: EIO)) { try connection.currentToken() }
+        #expect(throws: PDTCredentialStoreError.notSaved) { try connection.currentToken() }
+        #expect(throws: PDTCredentialStoreError.notSaved) { try connection.refresh() }
+        #expect(connection.status() == .notSaved(.browserSession, .failed))
+
+        store.recover()
+        #expect(try connection.currentToken() == PDTAPIToken("access-2"))
+        #expect(connection.status() == .connected)
+        #expect(tokens.requests.count == 1)
+        #expect(try store.load() == .connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600))))
+    }
+
+    @Test("A rejection the store refuses to record still ends the connection: the credential is not sent again and later checks need a reconnect")
+    func refusedRejectionIsHeld() throws {
+        let personal = FailingSaveStore(.connected(.personalToken(PDTAPIToken("pdt_stored"))), failures: .max)
+        let api = ScriptedPDTHTTPTransport([tokenInvalid("revoked")])
+        let pasted = connection(personal, ScriptedPDTHTTPTransport([]))
+
+        #expect(throws: PDTAPIError.tokenInvalid(reason: "revoked")) {
+            try PDTAPIClient(transport: api, tokenProvider: pasted).get(.me)
+        }
+        #expect(pasted.status() == .needsReconnect(.personalToken, .tokenRevoked))
+        #expect(throws: PDTAPIError.tokenInvalid(reason: "revoked")) { try pasted.currentToken() }
+        #expect(api.requests.count == 1)
+        #expect(try personal.load() == .connected(.personalToken(PDTAPIToken("pdt_stored"))))
+        personal.recover()
+        #expect(pasted.status() == .needsReconnect(.personalToken, .tokenRevoked))
+        #expect(try personal.load() == .needsReconnect(.personalToken, .tokenRejected(reason: "revoked")))
+
+        let browser = FailingSaveStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1))), failures: .max)
+        let tokens = ScriptedPDTHTTPTransport([oauthError(400, "invalid_grant")])
+        let signedIn = connection(browser, tokens)
+
+        #expect(throws: PDTAPIError.tokenInvalid(reason: nil)) { try signedIn.currentToken() }
+        #expect(signedIn.status() == .needsReconnect(.browserSession, .signInExpired))
+        #expect(throws: PDTAPIError.tokenInvalid(reason: nil)) { try signedIn.currentToken() }
+        #expect(tokens.requests.count == 1)
+        browser.recover()
+        #expect(signedIn.status() == .needsReconnect(.browserSession, .signInExpired))
+        #expect(try browser.load() == .needsReconnect(.browserSession, .refreshRejected(PDTRefreshToken("refresh-1").fingerprint)))
     }
 
     @Test("A pending pair from a sign-in the user disconnected never reconnects it after a later sign-in is rejected")
@@ -845,6 +895,13 @@ private final class FailingSaveStore: PDTCredentialStore, @unchecked Sendable {
 
     func load() throws -> PDTConnectionState {
         try backing.load()
+    }
+
+    /// Ends the failures early: the store takes writes again.
+    func recover() {
+        lock.lock()
+        failures = 0
+        lock.unlock()
     }
 
     func save(_ state: PDTConnectionState) throws {
