@@ -131,6 +131,44 @@ struct HeldConnectionChangeTests {
         #expect(try item.load().state == .connected(.personalToken(pasted)))
     }
 
+    @Test("A token entered again while the store cannot be read is held, not taken for saved, so an older disconnect held elsewhere cannot erase it")
+    func reentryDecidedOverAnUnreadableStoreIsHeld() throws {
+        let item = InMemoryPDTCredentialStore(.connected(.personalToken(pasted)))
+        let disconnecting = ProcessStore(item, saves: .refused)
+        let disconnector = connection(disconnecting)
+        let reentering = FlakyLoadStore(item, failingLoads: [true])
+        let reenterer = connection(reentering)
+
+        #expect(throws: PDTCredentialStoreError.writeFailed(code: EIO)) { try disconnector.disconnect() }
+        _ = try? reenterer.connect(personalToken: pasted)
+
+        #expect(reenterer.status() == .connected(.saved))
+        disconnecting.takeSaves()
+        #expect(disconnector.status() == .connected(.saved))
+        #expect(try item.load().state == .connected(.personalToken(pasted)))
+    }
+
+    @Test("A pair refreshed behind a sign-in whose save landed unanswered is stored once the store reads again, not taken for the sign-in's earlier write")
+    func refreshBehindAnUnansweredSaveIsNotTakenForThatSave() throws {
+        let expired = PDTBrowserSession(
+            accessToken: PDTAPIToken("access-expired"),
+            refreshToken: PDTRefreshToken("refresh-expired"),
+            accessExpiresAt: clock - 1
+        )
+        let item = InMemoryPDTCredentialStore()
+        let store = FlakyLoadStore(item, failingLoads: [false, true], saves: .landUnanswered)
+        let here = connection(store, tokens: [tokenReply(rotated)])
+
+        _ = try? here.signedIn(expired)
+        store.saves = .taken
+        store.failingLoads = [true, true, true]
+        #expect(try here.currentToken() == rotated.accessToken)
+
+        store.failingLoads = []
+        #expect(here.status() == .connected(.saved))
+        #expect(try item.load().state == .connected(.browserSession(rotated)))
+    }
+
     @Test("A sign-in whose save landed without an answer is not taken for another process's: the pair it has since rotated to is stored")
     func ownSaveThatLandedUnansweredIsMovedOn() throws {
         let item = InMemoryPDTCredentialStore()
@@ -218,7 +256,7 @@ private var invalidGrant: ScriptedPDTHTTPTransport.Reply {
     .response(status: 400, body: Data(#"{"error":"invalid_grant","error_description":"d"}"#.utf8))
 }
 
-private func connection(_ store: ProcessStore, tokens: [ScriptedPDTHTTPTransport.Reply] = []) -> PDTConnection {
+private func connection(_ store: any PDTCredentialStore, tokens: [ScriptedPDTHTTPTransport.Reply] = []) -> PDTConnection {
     PDTConnection(
         store: store,
         tokenEndpoint: PDTTokenEndpoint(
@@ -278,6 +316,44 @@ private final class ProcessStore: PDTCredentialStore, @unchecked Sendable {
             try item.save(connection)
         }
         if saves != .taken {
+            throw PDTCredentialStoreError.writeFailed(code: EIO)
+        }
+    }
+
+    func withExclusiveAccess<Value>(_ body: () throws -> Value) throws -> Value {
+        try item.withExclusiveAccess(body)
+    }
+}
+
+/// A store whose next loads fail in the order given, and whose saves can be refused or land unanswered.
+private final class FlakyLoadStore: PDTCredentialStore, @unchecked Sendable {
+    enum Saves {
+        case taken
+        case landUnanswered
+    }
+
+    private let item: any PDTCredentialStore
+    var failingLoads: [Bool]
+    var saves: Saves
+
+    init(_ item: any PDTCredentialStore, failingLoads: [Bool], saves: Saves = .taken) {
+        self.item = item
+        self.failingLoads = failingLoads
+        self.saves = saves
+    }
+
+    var persistence: PDTCredentialPersistence { item.persistence }
+
+    func load() throws -> PDTStoredConnection {
+        if !failingLoads.isEmpty, failingLoads.removeFirst() {
+            throw PDTCredentialStoreError.unreadable
+        }
+        return try item.load()
+    }
+
+    func save(_ connection: PDTStoredConnection) throws {
+        try item.save(connection)
+        if saves == .landUnanswered {
             throw PDTCredentialStoreError.writeFailed(code: EIO)
         }
     }

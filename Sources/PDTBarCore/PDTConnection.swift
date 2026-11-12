@@ -295,6 +295,7 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
     /// past is dropped, and the stored state is returned.
     private func commit(_ change: Change) -> PDTConnectionState {
         var change = change
+        var attempted: PDTStoredConnection?
         do {
             let stored = try store.load()
             guard let next = change.applied(to: stored) else {
@@ -305,14 +306,15 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
             change.generation = stored.generation
             if next != stored {
                 change.written = next
+                attempted = next
                 try store.save(next)
             }
         } catch {
-            // A save can land and still report an error. Only the whole record
-            // proves it: a token entered again writes the same state with a new generation.
-            let reread = try? store.load()
-            let landed = change.written.map { reread == $0 } ?? (reread?.state == change.state)
-            guard landed else {
+            // A save can land and still report an error. Only this attempt's
+            // whole record proves it: a token entered again writes the same
+            // state with a new generation, and an earlier attempt's write is
+            // older than the change now held.
+            guard let attempted, (try? store.load()) == attempted else {
                 refused = (change, error)
                 return change.state
             }
