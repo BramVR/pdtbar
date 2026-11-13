@@ -50,6 +50,13 @@ public struct MenuWalkPlan: Equatable, Sendable {
                     MenuSelector("Asset types", "pdtbar.row.allocation.portfolio.assetTypes"),
                 ]
             ),
+            MenuWalkSubmenu(
+                name: "prices",
+                opener: MenuSelector("Prices", "pdtbar.row.freshness.summary"),
+                expectedChildren: [
+                    MenuSelector("Top holding price", "pdtbar.row.freshness.price.9001"),
+                ]
+            ),
         ]
     )
 
