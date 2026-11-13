@@ -397,8 +397,8 @@ public enum PDTLaunchMenu {
     }
 
     /// The one row that names a connection kept for this session only. Every
-    /// connected screen shows it where its Disconnect row lives: the PDT
-    /// section without a pulse, Actions with one.
+    /// connected screen shows it beside how PDTBar is connected: the PDT
+    /// section without a pulse, the Data section after Data health with one.
     fileprivate static func notSavedRows(_ state: PDTLaunchState) -> [MenuRow] {
         guard case let .connected(_, .thisSessionOnly(problem)) = state else {
             return []
@@ -630,22 +630,26 @@ private extension MenuDescriptor {
         MenuDescriptorRenderer.descriptorWithTopLevelActions(self, refreshState: state)
     }
 
-    /// What a connected pulse screen adds to Actions: the connection that is
-    /// not saved, and Disconnect where the state offers it.
-    func withConnectionActions(for state: PDTLaunchState) -> MenuDescriptor {
-        var rows = PDTLaunchMenu.notSavedRows(state)
-        if state.offersDisconnect {
-            rows.append(MenuRow(id: "actions.disconnect", role: .connectionDisconnect, title: "Disconnect from PDT"))
-        }
+    /// What a connected pulse screen adds: the connection that is not saved
+    /// to Data, beside Data health, and Disconnect to Actions where the state
+    /// offers it.
+    func withConnectionRows(for state: PDTLaunchState) -> MenuDescriptor {
         var descriptor = self
         let portfolioValueProtectionState = descriptor.portfolioValueProtectionState
-        guard let index = descriptor.sections.firstIndex(where: { $0.id == "actions" }) else {
-            return self
+        descriptor.append(PDTLaunchMenu.notSavedRows(state), toSection: "freshness")
+        if state.offersDisconnect {
+            descriptor.append([MenuRow(id: "actions.disconnect", role: .connectionDisconnect, title: "Disconnect from PDT")], toSection: "actions")
         }
-        let present = Set(descriptor.sections[index].rows.map(\.id))
-        descriptor.sections[index].rows += rows.filter { !present.contains($0.id) }
         descriptor.portfolioValueProtectionState = portfolioValueProtectionState
         return descriptor
+    }
+
+    private mutating func append(_ rows: [MenuRow], toSection id: String) {
+        guard let index = sections.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        let present = Set(sections[index].rows.map(\.id))
+        sections[index].rows += rows.filter { !present.contains($0.id) }
     }
 }
 
@@ -1013,7 +1017,7 @@ public final class PDTLaunchRuntime {
         case .refreshed:
             descriptor = PDTLaunchMenu.descriptorWithRefreshDetailsAction(cachedPulse: pulseMenu)
         }
-        return descriptor.withConnectionActions(for: state)
+        return descriptor.withConnectionRows(for: state)
     }
 
     private var screenElapsedSeconds: Int? {
