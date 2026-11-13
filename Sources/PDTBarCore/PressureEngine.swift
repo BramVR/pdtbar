@@ -45,6 +45,7 @@ public enum PressureEngine {
                     weight: $0.weight,
                     worth: $0.worth,
                     price: validMoney($0.price),
+                    priceAsOf: $0.priceAsOf,
                     copyableIdentifier: $0.copyableIdentifier,
                     isin: $0.isin,
                     recentMove: recentMovesByQuoteID[$0.quoteId],
