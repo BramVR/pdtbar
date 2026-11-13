@@ -274,7 +274,7 @@ public enum MenuDescriptorRenderer {
                 MenuSection(
                     id: "freshness",
                     title: "Data",
-                    rows: dataRows(freshness: freshness, health: dataHealth)
+                    rows: dataRows(freshness: freshness, holdings: allocation.topHoldings, health: dataHealth, settings: settings)
                 ),
                 topLevelActionsSection(refreshState: .available),
             ]
@@ -683,18 +683,43 @@ public enum MenuDescriptorRenderer {
         )
     }
 
-    private static func freshnessSummaryRow(for freshness: FreshnessSnapshot) -> MenuRow {
+    private static func freshnessSummaryRow(
+        for freshness: FreshnessSnapshot,
+        holdings: [HoldingSummary],
+        settings: PortfolioValueDisplaySettings
+    ) -> MenuRow {
         MenuRow(
             id: "freshness.summary",
             role: .freshnessSummary,
             title: "Prices",
             detail: freshnessSummaryDetail(for: freshness),
-            children: freshnessDetailRows(for: freshness)
+            children: freshnessDetailRows(for: freshness) + lastAvailablePriceRows(for: holdings, settings: settings)
         )
     }
 
-    private static func dataRows(freshness: FreshnessSnapshot, health: DataHealthSnapshot) -> [MenuRow] {
-        var rows = [freshnessSummaryRow(for: freshness)]
+    /// Each holding's last price from PDT with the day it is for, which can lag today.
+    private static func lastAvailablePriceRows(
+        for holdings: [HoldingSummary],
+        settings: PortfolioValueDisplaySettings
+    ) -> [MenuRow] {
+        holdings.map { holding in
+            let id = "freshness.price.\(holding.quoteId)"
+            guard let price = holding.price else {
+                return MenuRow(id: id, title: holding.name, detail: "No price from PDT")
+            }
+            let date = holding.priceAsOf.map { [PortfolioValueText.Component.literal(" on \($0)")] } ?? []
+            return MenuRow(id: id, title: holding.name)
+                .withPortfolioValueDetail(PortfolioValueText([.money(price)] + date), settings: settings)
+        }
+    }
+
+    private static func dataRows(
+        freshness: FreshnessSnapshot,
+        holdings: [HoldingSummary],
+        health: DataHealthSnapshot,
+        settings: PortfolioValueDisplaySettings
+    ) -> [MenuRow] {
+        var rows = [freshnessSummaryRow(for: freshness, holdings: holdings, settings: settings)]
         if showsDataHealthRow(for: health) {
             rows.append(dataHealthRow(for: health))
         }

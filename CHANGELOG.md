@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The `Prices` submenu in Data now lists every holding's last price from PDT with the day it is for (`EUR 1,376.80 on 2026-11-12`), even while PDT's prices lag today by a day or more; a holding PDT has not priced reads `No price from PDT`, and hidden portfolio values hide the price but keep its date. Before, a portfolio whose prices were all within a business day showed no prices in that submenu at all, only `Refresh details`.
 - `Connection not saved` now sits in the Data section after `Data health`, next to the connection status, instead of in Actions between `Settings…` and `Disconnect from PDT`. Connected screens without a pulse keep it in the PDT section (#305).
 - `Keychain unavailable`, the README, and the install guide no longer tell you to install a signed release, which has not shipped. The menu now reads `This PDTBar build has no Keychain access, so it can't read or remove your PDT connection`, and the docs say a copy without Keychain access never saves a sign-in and says so before you sign in ([ADR-0003](docs/adr/0003-credential-storage-and-unsaved-connections.md), #305).
 - Fixed a connection change the Keychain refused growing by one held event per token refresh, about one an hour, when another PDTBar process had stored the pair: once a read shows what the Keychain holds, the held refreshes fold into one, so the held change stays the same size however long the Keychain refuses it (#305).
