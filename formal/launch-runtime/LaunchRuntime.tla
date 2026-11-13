@@ -11,7 +11,7 @@
 
   Code anchors (Sources/PDTBarCore/LaunchRuntime.swift = Core, Sources/PDTBarApp/main.swift = App):
     PDTLaunchState offers* ......... Core:109-155 (which connection buttons a state shows)
-    PDTLaunchMenu.descriptor ....... Core:228-353, notSavedRows Core:392, withConnectionActions Core:625
+    PDTLaunchMenu.descriptor ....... Core:228-353, notSavedRows Core:392, withConnectionRows Core:625
     PDTLaunchRuntime ............... Core:715-1034
     AppDelegate effect wiring ...... App:59-363
     PDTConnection (the cred ghost) . Sources/PDTBarCore/PDTConnection.swift: status, replace, record, commit;

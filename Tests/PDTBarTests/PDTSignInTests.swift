@@ -351,9 +351,13 @@ struct PDTConnectionTests {
         #expect(tokens.requests.count == 2)
     }
 
-    @Test("A store found holding a pair this connection has since rotated again is moved on to the newest pair, which stays in use")
+    @Test("A store found holding a pair this connection has since rotated again is moved on to the newest pair, which stays in use, also after another process saw that pair rejected")
     func storeHoldingAMiddlePairIsMovedOn() throws {
-        let store = FailingSaveStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1))), failures: .max)
+        let store = FailingSaveStore(
+            .connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1))),
+            failures: .max,
+            failedSavesLandUnreadable: true
+        )
         let tokens = ScriptedPDTHTTPTransport([
             tokenReply(access: "access-2", refresh: "refresh-2"), tokenReply(access: "access-3", refresh: "refresh-3"),
         ])
@@ -363,9 +367,14 @@ struct PDTConnectionTests {
         clock.advance(by: 3600)
         #expect(try connection.currentToken() == PDTAPIToken("access-3"))
 
-        // A save can land and still report an error, so the first rotated pair may be what the store holds.
+        // The first rotated pair's save landed while the store could not be read back, and another process then saw PDT reject it.
         store.recover()
-        try store.save(PDTStoredConnection(.connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600)))))
+        let middle = try store.load()
+        #expect(middle.state == .connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600))))
+        try store.save(PDTStoredConnection(
+            .needsReconnect(.browserSession, .refreshRejected(PDTRefreshToken("refresh-2").fingerprint)),
+            generation: middle.generation
+        ))
 
         #expect(try connection.currentToken() == PDTAPIToken("access-3"))
         #expect(try store.load().state == .connected(.browserSession(session("access-3", "refresh-3", expiresAt: testNow + 7200))))
@@ -1000,22 +1009,32 @@ private final class FailingSaveStore: PDTCredentialStore, @unchecked Sendable {
     private let lock = NSLock()
     private let backing: InMemoryPDTCredentialStore
     private var failures: Int
+    /// A failed save lands anyway, and the store cannot be read until `recover()`.
+    private let failedSavesLandUnreadable: Bool
+    private var unreadable = false
 
-    init(_ state: PDTConnectionState, failures: Int) {
+    init(_ state: PDTConnectionState, failures: Int, failedSavesLandUnreadable: Bool = false) {
         backing = InMemoryPDTCredentialStore(state)
         self.failures = failures
+        self.failedSavesLandUnreadable = failedSavesLandUnreadable
     }
 
     var persistence: PDTCredentialPersistence { backing.persistence }
 
     func load() throws -> PDTStoredConnection {
-        try backing.load()
+        lock.lock()
+        defer { lock.unlock() }
+        if unreadable {
+            throw PDTCredentialStoreError.unreadable
+        }
+        return try backing.load()
     }
 
     /// Ends the failures early: the store takes writes again.
     func recover() {
         lock.lock()
         failures = 0
+        unreadable = false
         lock.unlock()
     }
 
@@ -1024,6 +1043,10 @@ private final class FailingSaveStore: PDTCredentialStore, @unchecked Sendable {
         defer { lock.unlock() }
         guard failures == 0 else {
             failures -= 1
+            if failedSavesLandUnreadable {
+                try backing.save(connection)
+                unreadable = true
+            }
             throw PDTCredentialStoreError.writeFailed(code: EIO)
         }
         try backing.save(connection)

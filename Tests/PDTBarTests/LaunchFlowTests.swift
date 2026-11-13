@@ -522,6 +522,9 @@ struct PDTLaunchRuntimeTests {
         let actionIDs = { (update: PDTOnboardingUpdate) in
             update.descriptor.sections.first { $0.id == "actions" }?.rows.map(\.id) ?? []
         }
+        let dataIDs = { (update: PDTOnboardingUpdate) in
+            update.descriptor.sections.first { $0.id == "freshness" }?.rows.map(\.id) ?? []
+        }
         let runtime = PDTLaunchRuntime()
 
         let fetching = launched(runtime, cachedPulse: nil, status: .connected(unsaved))
@@ -537,23 +540,26 @@ struct PDTLaunchRuntimeTests {
         #expect(try #require(runtime.retryFirstFetch()).state == .connected(.fetching, unsaved))
         let fetched = runtime.completeFirstFetch(.succeeded(pulse, connection: .connected(unsaved)))
         #expect(fetched.state == .connected(.current, unsaved))
-        #expect(actionIDs(fetched).suffix(2) == ["pdtConnection.notSaved", "actions.disconnect"])
+        #expect(dataIDs(fetched).last == "pdtConnection.notSaved")
+        #expect(actionIDs(fetched).last == "actions.disconnect")
+        #expect(!actionIDs(fetched).contains("pdtConnection.notSaved"))
 
         let refreshing = try #require(runtime.beginBackgroundDetailRefresh())
         #expect(refreshing.state == .connected(.fetching, unsaved))
-        #expect(actionIDs(refreshing).last == "pdtConnection.notSaved")
+        #expect(dataIDs(refreshing).suffix(2) == ["dataHealth", "pdtConnection.notSaved"], "beside the Data health row that says how PDTBar is connected")
         #expect(healthDetail("access", in: refreshing.descriptor) == "Connected, not saved")
         let progress = try #require(runtime.backgroundDetailRefreshProgress(BackgroundDetailRefreshProgress(phase: .income)))
-        #expect(actionIDs(progress).last == "pdtConnection.notSaved")
+        #expect(dataIDs(progress).last == "pdtConnection.notSaved")
 
         let refreshFailed = runtime.completeBackgroundDetailRefresh(.failed(.unavailable(unsaved)))
         #expect(refreshFailed.state == .connected(.failed, unsaved))
-        #expect(actionIDs(refreshFailed).suffix(2) == ["pdtConnection.notSaved", "actions.disconnect"])
+        #expect(dataIDs(refreshFailed).last == "pdtConnection.notSaved")
+        #expect(actionIDs(refreshFailed).last == "actions.disconnect")
 
         _ = try #require(runtime.retryFirstFetch())
         let stillUnsaved = runtime.completeBackgroundDetailRefresh(.succeeded(pulse, outcome: .completed, connection: .connected(unsaved)))
         #expect(stillUnsaved.state == .connected(.current, unsaved))
-        #expect(actionRow("pdtConnection.notSaved", in: stillUnsaved.descriptor)?.title == "Connection not saved")
+        #expect(stillUnsaved.descriptor.sections.first { $0.id == "freshness" }?.rows.last?.title == "Connection not saved")
         #expect(healthRow(in: stillUnsaved.descriptor) == nil, "a connection that is not saved is not a Data health problem")
     }
 

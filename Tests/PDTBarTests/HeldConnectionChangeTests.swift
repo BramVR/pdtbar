@@ -41,6 +41,50 @@ struct HeldConnectionChangeTests {
         }
     }
 
+    @Test("Once a read shows what the store holds, a held change still leaves it, and whatever another process can make of it, where its full replay would")
+    func rebasedChangeMatchesFullReplay() {
+        for events in histories(upTo: 3) {
+            let held = events.dropFirst().reduce(PDTConnection.Change(events[0])) { $0.followed(by: $1) }
+            for stored in storedStates {
+                let rebased = held.rebased(on: PDTStoredConnection(stored))
+                for reachable in [stored] + recordedElsewhere(over: stored) {
+                    let expected = held.applied(to: PDTStoredConnection(reachable))?.state
+                    if rebased.applied(to: PDTStoredConnection(reachable))?.state != expected {
+                        Issue.record("\(events) rebased on \(stored), applied to \(reachable)")
+                    }
+                }
+            }
+        }
+    }
+
+    @Test("Refreshes held over a pair another process stored stay one pending change however many hours the store refuses them")
+    func refreshesHeldOverAnotherProcessesPairStayOneChange() throws {
+        let hours = 200
+        let item = InMemoryPDTCredentialStore(.connected(.browserSession(pair(0))))
+        let unsaved = ProcessStore(item, saves: .refused)
+        let clock = TestClock(pair(0).accessExpiresAt)
+        let here = connection(unsaved, tokens: (1...hours).map { tokenReply(pair($0)) }, clock: clock)
+        let elsewhere = connection(ProcessStore(item), tokens: [invalidGrant], clock: clock)
+
+        for hour in 1...hours {
+            clock.now = pair(hour - 1).accessExpiresAt
+            #expect(try here.currentToken() == pair(hour).accessToken)
+            if hour == hours / 2 {
+                #expect(throws: PDTAPIError.tokenInvalid(reason: nil)) { try elsewhere.currentToken() }
+            }
+            let pending = here.refused?.change.replay?.count
+            if pending != 1 {
+                Issue.record("hour \(hour): \(pending.map(String.init) ?? "no") pending events")
+                break
+            }
+        }
+
+        unsaved.takeSaves()
+        #expect(here.status() == .connected(.saved))
+        #expect(try item.load().state == .connected(.browserSession(pair(hours))))
+        #expect(try elsewhere.currentToken() == pair(hours).accessToken)
+    }
+
     @Test("A token PDT rejected in another process is not handed out or stored again by the process that held it unsaved")
     func heldTokenYieldsToARejectionAnotherProcessRecorded() throws {
         let item = InMemoryPDTCredentialStore()
@@ -256,16 +300,41 @@ private var invalidGrant: ScriptedPDTHTTPTransport.Reply {
     .response(status: 400, body: Data(#"{"error":"invalid_grant","error_description":"d"}"#.utf8))
 }
 
-private func connection(_ store: any PDTCredentialStore, tokens: [ScriptedPDTHTTPTransport.Reply] = []) -> PDTConnection {
+private func connection(
+    _ store: any PDTCredentialStore,
+    tokens: [ScriptedPDTHTTPTransport.Reply] = [],
+    clock: TestClock = TestClock(clock)
+) -> PDTConnection {
     PDTConnection(
         store: store,
         tokenEndpoint: PDTTokenEndpoint(
             client: PDTOAuthClient(id: "test-client", redirectPort: 0),
             transport: ScriptedPDTHTTPTransport(tokens),
-            now: { clock }
+            now: { clock.now }
         ),
-        now: { clock }
+        now: { clock.now }
     )
+}
+
+private final class TestClock: @unchecked Sendable {
+    var now: Date
+
+    init(_ now: Date) {
+        self.now = now
+    }
+}
+
+/// What another process can record over `stored` without replacing it: PDT
+/// rejecting its refresh token or its access token.
+private func recordedElsewhere(over stored: PDTConnectionState) -> [PDTConnectionState] {
+    guard case let .connected(credential) = stored else {
+        return []
+    }
+    var events = [PDTConnectionEvent.tokenRejected(credential.accessToken, reason: "revoked")]
+    if case let .browserSession(session) = credential {
+        events.append(.refreshRejected(session.refreshToken))
+    }
+    return events.map { stored.applying($0) }
 }
 
 /// One stored item as one of two PDTBar processes sees it: both read the same
