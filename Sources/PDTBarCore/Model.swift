@@ -802,6 +802,8 @@ public struct HoldingSummary: Codable, Equatable {
     public var weight: Double
     public var worth: Money
     public var price: Money?
+    /// PDT's date for `price`, which can lag today by a few days.
+    public var priceAsOf: String?
     public var copyableIdentifier: String?
     public var isin: String?
     public var recentMove: PriceMoveSummary?
@@ -816,6 +818,7 @@ public struct HoldingSummary: Codable, Equatable {
         weight: Double,
         worth: Money,
         price: Money?,
+        priceAsOf: String? = nil,
         copyableIdentifier: String? = nil,
         isin: String? = nil,
         recentMove: PriceMoveSummary? = nil,
@@ -829,6 +832,7 @@ public struct HoldingSummary: Codable, Equatable {
         self.weight = weight
         self.worth = worth
         self.price = price
+        self.priceAsOf = priceAsOf?.isEmpty == false ? priceAsOf : nil
         self.copyableIdentifier = copyableIdentifier
         self.isin = PDTBaseHoldingNormalizer.safeISIN(isin)
         self.recentMove = recentMove
@@ -987,6 +991,7 @@ public enum PortfolioOverview {
             weight: holding.weight,
             worth: holding.worth,
             price: sanitizedMoney(holding.price),
+            priceAsOf: holding.priceAsOf,
             copyableIdentifier: holding.copyableIdentifier,
             isin: holding.isin,
             averageBuyPrice: sanitizedMoney(holding.averageBuyPrice),
