@@ -300,7 +300,7 @@ public enum PDTLaunchMenu {
         case .subscriptionPaused:
             ("PDT access paused", "Your PDT subscription has ended. Renew it, then check again")
         case .keychainUnavailable(.missingEntitlement):
-            ("Keychain unavailable", "This PDTBar build can't use the Keychain. Install the signed release")
+            ("Keychain unavailable", "This PDTBar build has no Keychain access, so it can't read or remove your PDT connection")
         case .keychainUnavailable(.failed):
             ("Could not read the Keychain", "PDTBar could not load its PDT connection")
         case .connected:

@@ -41,7 +41,7 @@ Once you have the zip:
 
 If macOS says the app was downloaded from the internet, right-click `PDTBar.app`, choose `Open`, then choose `Open` again. You should only need to do this once.
 
-PDTBar needs a PDT account with API access. Open the menu and choose `Sign in with PDT`. If the menu then shows `Connection not saved`, this copy of PDTBar could not save the sign-in to the Keychain: it works until you quit PDTBar, and you sign in again next time. If it says `Keychain unavailable`, this copy of PDTBar was not signed for the Keychain. Install the signed release in both cases.
+PDTBar needs a PDT account with API access. Open the menu and choose `Sign in with PDT`. If the menu then shows `Connection not saved`, this copy of PDTBar could not save the sign-in to the Keychain: it works until you quit PDTBar, and you sign in again next time. A copy built without Keychain access never saves it, and says so on `Not connected` before you sign in. If it says `Keychain unavailable`, this copy of PDTBar could not read or remove its connection in the Keychain.
 
 ## Use
 
