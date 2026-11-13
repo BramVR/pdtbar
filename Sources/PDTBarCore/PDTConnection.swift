@@ -24,7 +24,7 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
     private let tokenEndpoint: PDTTokenEndpoint
     private let now: @Sendable () -> Date
     private let lock = NSLock()
-    private var refused: (change: Change, error: Error)?
+    private(set) var refused: (change: Change, error: Error)?
     private var hold: RefreshHold?
 
     /// What happened to the connection since the store last agreed with it.
@@ -49,11 +49,10 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
     ///
     /// Refreshes and rejections of a credential the store holds are kept in
     /// `replay`, oldest first, and go through the event table, which lets a
-    /// newer credential from another process win. They are not collapsed
-    /// into one refresh from the oldest pair: the store can hold a pair in
-    /// the middle of the chain when a save landed and still reported an
-    /// error, and only the refresh that names that pair moves it on. Such a
-    /// change gains one event per refresh, about one an hour.
+    /// newer credential from another process win. While the store cannot be
+    /// read back, a save may have landed in the middle of the chain, so every
+    /// event is kept. Once a read shows what the store holds, `rebased(on:)`
+    /// folds the chain from there into one refresh.
     struct Change {
         /// Nil once the change replaces whatever the store holds.
         private(set) var replay: [PDTConnectionEvent]?
@@ -87,6 +86,33 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
             next.replay = replay.map { $0 + [event] }
             next.state = state.applying(event)
             return next
+        }
+
+        /// This change once a read shows the store holds `stored`. No other
+        /// process holds a pair this change rotated to, so a pair `stored`
+        /// does not name can only reach the store by a later save of this
+        /// change. Two refreshes in a row through such a pair fold into one,
+        /// unless an earlier event also produced that pair, which keeps a
+        /// chain of refreshes at one event however long the store refuses it.
+        func rebased(on stored: PDTStoredConnection) -> Change {
+            guard let replay else {
+                return self
+            }
+            var kept: [PDTConnectionEvent] = []
+            for event in replay {
+                if case let .refreshed(session, from) = event,
+                   case let .refreshed(previous, origin)? = kept.last,
+                   previous.refreshToken == from,
+                   !stored.state.names(from),
+                   !kept.dropLast().contains(where: { $0.produces(from) }) {
+                    kept[kept.count - 1] = .refreshed(session, from: origin)
+                } else {
+                    kept.append(event)
+                }
+            }
+            var rebased = self
+            rebased.replay = kept
+            return rebased
         }
 
         /// What the store should hold once it takes this change. Nil when
@@ -313,9 +339,14 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
             // A save can land and still report an error. Only this attempt's
             // whole record proves it: a token entered again writes the same
             // state with a new generation, and an earlier attempt's write is
-            // older than the change now held.
-            guard let attempted, (try? store.load()) == attempted else {
+            // older than the change now held. A read that shows it did not
+            // land shows what the store holds instead.
+            guard let attempted, let reread = try? store.load() else {
                 refused = (change, error)
+                return change.state
+            }
+            guard reread == attempted else {
+                refused = (change.rebased(on: reread), error)
                 return change.state
             }
         }
@@ -379,5 +410,29 @@ private extension PDTConnectionStatus {
             // The delete was refused and the credential is still stored.
             self = .keychainUnavailable(problem)
         }
+    }
+}
+
+private extension PDTConnectionState {
+    /// Whether the event table can move this state with a refresh or
+    /// rejection of `refreshToken`.
+    func names(_ refreshToken: PDTRefreshToken) -> Bool {
+        switch self {
+        case let .connected(.browserSession(session)):
+            session.refreshToken == refreshToken
+        case let .needsReconnect(.browserSession, .refreshRejected(rejected)):
+            rejected == refreshToken.fingerprint
+        default:
+            false
+        }
+    }
+}
+
+private extension PDTConnectionEvent {
+    func produces(_ refreshToken: PDTRefreshToken) -> Bool {
+        guard case let .refreshed(session, _) = self else {
+            return false
+        }
+        return session.refreshToken == refreshToken
     }
 }
