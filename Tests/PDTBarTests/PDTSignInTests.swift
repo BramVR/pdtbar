@@ -1023,8 +1023,7 @@ private final class FailingSaveStore: PDTCredentialStore, @unchecked Sendable {
 
     func load() throws -> PDTStoredConnection {
         lock.lock()
-        let unreadable = unreadable
-        lock.unlock()
+        defer { lock.unlock() }
         if unreadable {
             throw PDTCredentialStoreError.unreadable
         }
