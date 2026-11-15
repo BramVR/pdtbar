@@ -24,7 +24,7 @@ struct DataHealthTests {
         #expect(dataSection(in: fetched.descriptor)?.title == "Data")
         #expect(pricesRow(in: fetched.descriptor)?.title == "Prices")
         #expect(pricesRow(in: fetched.descriptor)?.detail == "Current through 2026-06-24")
-        #expect(pricesRow(in: fetched.descriptor)?.children.allSatisfy { $0.id.hasPrefix("freshness.price.") } == true)
+        #expect(pricesRow(in: fetched.descriptor)?.children.map(\.id) == ["freshness.price.1"])
     }
 
     @Test("All quiet over a saved copy says the saved copy is quiet, not that it is quiet right now")
