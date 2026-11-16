@@ -42,7 +42,7 @@ Scripts/verify_pdtbar.sh capture record "$RUN" menu-clip 4
 Scripts/verify_pdtbar.sh stop "$RUN"
 ```
 
-For the whole cohesive menu plus the `Full allocation list` submenu in one run, use `Scripts/verify_pdtbar.sh menu-smoke`. It prints `menu-walk: ok` and the evidence dir holding `menu.png` and `allocation-overview.png`.
+For the whole cohesive menu plus the `Full allocation list` and `Prices` submenus in one run, use `Scripts/verify_pdtbar.sh menu-smoke`. It prints `menu-walk: ok` and the evidence dir holding `menu.png`, `allocation-overview.png`, and `prices.png`. The `Prices` submenu lists each holding's last price from PDT with its own date (`freshness.price.<quoteId>`).
 
 The image must show the Concentration Stack icon in its highlighted state and the open menu with Summary, Pulse, Allocation with its chart, Income, Data, and Actions. `capture` does not open submenus; `menu-smoke` does. Swap the fixture for the state under test, such as `quiet-no-pressure.json`.
 
