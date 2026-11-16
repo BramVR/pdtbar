@@ -47,6 +47,8 @@ ditto -x -k .build/release-artifacts/PDTBar-macos-$(uname -m)-0.0.0-test.zip /tm
 codesign --verify --deep --strict --verbose=2 /tmp/pdtbar-release-proof/PDTBar.app
 ```
 
+`Scripts/package_app.sh` links against the selected Xcode's macOS SDK and fails before staging when a built binary records a different SDK or a deployment target other than macOS 14.0. SwiftBuild otherwise records the deployment target as the SDK, which runs AppKit in its legacy compatibility mode. `./Scripts/check.sh scripts` runs its fixture test, `Scripts/package-app.test.mjs`.
+
 ## Publish Flow
 
 1. Finalize release notes in the GitHub release body.
