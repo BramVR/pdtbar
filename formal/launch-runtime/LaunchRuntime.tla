@@ -10,10 +10,10 @@
   step, so TLC explores every completion order.
 
   Code anchors (Sources/PDTBarCore/LaunchRuntime.swift = Core, Sources/PDTBarApp/main.swift = App):
-    PDTLaunchState offers* ......... Core:109-155 (which connection buttons a state shows)
-    PDTLaunchMenu.descriptor ....... Core:228-353, notSavedRows Core:392, withConnectionRows Core:625
-    PDTLaunchRuntime ............... Core:715-1034
-    AppDelegate effect wiring ...... App:59-363
+    PDTLaunchState offers* ......... Core:119-165 (which connection buttons a state shows)
+    PDTLaunchMenu.descriptor ....... Core:238-363, notSavedRows Core:402, withConnectionRows Core:636
+    PDTLaunchRuntime ............... Core:729-1048
+    AppDelegate effect wiring ...... App:60-364
     PDTConnection (the cred ghost) . Sources/PDTBarCore/PDTConnection.swift: status, replace, record, commit;
                                      PDTAppConnection.check / signIn / connect / disconnect /
                                      failure(for:) / status(afterSyncEnding:)
@@ -97,7 +97,9 @@ Desc(st, p, k) ==
                      ELSE IF ("connectionScreenOffersRefresh" \in Mutations /\ p # "none") THEN "available"
                      ELSE "none",
       \* The "Connection not saved" row (pdtConnection.notSaved): on every connected screen,
-      \* also the ones that do not offer Disconnect.
+      \* also the ones that do not offer Disconnect. With a pulse it sits in Data after Data
+      \* health (withConnectionRows, #306); without one, in the PDT section (notSavedRows).
+      \* The model tracks only whether the row is present, not where.
       notSaved   |-> Connected(st) /\ k = "session"
                      /\ ~("fetchingHidesNotSaved" \in Mutations /\ st = "fetching") ]
 

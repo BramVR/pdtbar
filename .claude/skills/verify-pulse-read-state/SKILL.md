@@ -15,7 +15,7 @@ description: "Check mark-as-read, pulse read-state reset, or snapshot commit cha
 
 ## Coverage
 
-Sync commit: `33b5faa`. The model describes the code at that commit. Action comments with a file:line cite `1b6ffd4`. Comments that name only a symbol describe the code after #250.
+Sync commit: `cd4d474` (#307). The 2026-11-16 upkeep read every covered hunk from `33b5faa`: #290 moves `setLastSyncFailure(nil)` ahead of the first checkpoint, #300 adds a first-fetch failure write, #303/#306 reshape the sync outcomes, and #307 adds `priceAsOf`. None writes either guarded file or changes a step the model tracks. Action comments cite file:line at `cd4d474`. The Current findings traces below keep their historical `1b6ffd4` lines.
 
 `Sources/PDTBarCore/Persistence.swift`:
 - `PulseReadStore` (`mutationQueue`, `load`, `markRead`, `removeReadFingerprints`) and `OwnerOnlyLocalStore.write` (temp file + rename, so writes are atomic).
@@ -25,7 +25,7 @@ Sync commit: `33b5faa`. The model describes the code at that commit. Action comm
 
 `Sources/PDTBarCore/PressureEngine.swift`: `concentrationItems` (`resetsReadState`) and `reappearedReadFingerprints`.
 
-`PDTCoalescedFirstPortfolioFetch.fetch`, which runs `PressureRunner.run`. It is in `PDTLiveDataSource.swift` at the sync commit; #250 moves it unchanged to `PDTCoalescedFirstPortfolioFetch.swift`.
+`PDTCoalescedFirstPortfolioFetch.fetch` in `PDTCoalescedFirstPortfolioFetch.swift`, which runs `PressureRunner.run`.
 
 `Sources/PDTBarCore/PDTAPIBackgroundDetailRefresh.swift`: `refresh` loads the prior with `loadPriorSnapshotResult`, fetches the base holdings, fills the optional facets in memory, and writes once through `PressureRunner.refreshedPulse` after its last `throwIfCancelled`. `formal/background-detail-refresh` checks that single commit.
 
@@ -33,7 +33,7 @@ Sync commit: `33b5faa`. The model describes the code at that commit. Action comm
 
 `Sources/PDTBarApp/main.swift`: `launch`, `startCachedPulseLoad`, `startFirstPortfolioFetch`, `finishFirstPortfolioFetch`, `startBackgroundPortfolioRefresh`, `finishBackgroundPortfolioRefresh`, `markPulseItemRead`, `applicationWillTerminate`.
 
-If `git diff 33b5faa -- <file>` shows changes inside any symbol above, recheck the model against the code before trusting a pass.
+If `git diff cd4d474 -- <file>` shows changes inside any symbol above, recheck the model against the code before trusting a pass.
 
 ## Run
 
