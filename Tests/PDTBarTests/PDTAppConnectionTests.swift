@@ -21,6 +21,33 @@ struct PDTAppConnectionTests {
         }
     }
 
+    @Test("A scripted check hold file keeps each check open until the file is gone")
+    func scriptedCheckHold() throws {
+        let directory = try temporaryDirectory()
+        let hold = directory.appending(path: "hold-check")
+        let events = directory.appending(path: "events.log")
+        try Data().write(to: hold)
+        let connection = try ScriptedPDTConnection(connection: .tokenRevoked, checkHoldFile: hold.path, eventLog: events.path)
+            .appConnection(lockDirectory: directory)
+        let finished = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var outcome: PDTConnectionOutcome?
+        DispatchQueue.global().async {
+            outcome = connection.check()
+            finished.signal()
+        }
+
+        let deadline = Date().addingTimeInterval(5)
+        while (try? String(contentsOf: events, encoding: .utf8)) != "check\n", Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        #expect((try? String(contentsOf: events, encoding: .utf8)) == "check\n", "check started")
+        #expect(finished.wait(timeout: .now() + 0.3) == .timedOut, "check held while the file exists")
+        try FileManager.default.removeItem(at: hold)
+        #expect(finished.wait(timeout: .now() + 5) == .success)
+        #expect(outcome == PDTConnectionOutcome(.needsReconnect(.personalToken, .tokenRevoked)))
+        #expect(connection.check() == outcome)
+    }
+
     @Test("401 TOKEN_INVALID on a token moves to reconnect with PDT's reason")
     func tokenInvalidNeedsReconnect() throws {
         for (reason, cause) in [("revoked", PDTReconnectCause.tokenRevoked), ("expired", .tokenExpired), ("invalid", .tokenInvalid)] {

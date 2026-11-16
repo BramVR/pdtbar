@@ -205,6 +205,9 @@ public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
     public var keychain: Keychain?
     public var signIn: SignInOutcome?
     public var signInDelaySeconds: Double?
+    /// While a file exists at this path, each check waits before it reports,
+    /// so a smoke can click while the runtime is busy.
+    public var checkHoldFile: String?
     public var api: ScriptedPDTAPIConfiguration
     /// Appends one line per check, sign-in, token, disconnect, and API request path.
     public var eventLog: String?
@@ -215,6 +218,7 @@ public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
         keychain: Keychain? = nil,
         signIn: SignInOutcome? = nil,
         signInDelaySeconds: Double? = nil,
+        checkHoldFile: String? = nil,
         api: ScriptedPDTAPIConfiguration = ScriptedPDTAPIConfiguration(responses: []),
         eventLog: String? = nil
     ) {
@@ -223,6 +227,7 @@ public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
         self.keychain = keychain
         self.signIn = signIn
         self.signInDelaySeconds = signInDelaySeconds
+        self.checkHoldFile = checkHoldFile
         self.api = api
         self.eventLog = eventLog
     }
@@ -243,9 +248,16 @@ public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
         }
         let outcome = signIn ?? .succeeds
         let delay = signInDelaySeconds ?? 0
+        let checkHold = checkHoldFile
         var record: (@Sendable (String) -> Void)?
-        if let log {
-            record = { line in log.append(line) }
+        if log != nil || checkHold != nil {
+            record = { line in
+                log?.append(line)
+                // `check()` logs first, off the main queue, so waiting here keeps that check in flight.
+                while line == "check", let checkHold, FileManager.default.fileExists(atPath: checkHold) {
+                    Thread.sleep(forTimeInterval: 0.05)
+                }
+            }
         }
         return PDTAppConnection(
             store: store,
