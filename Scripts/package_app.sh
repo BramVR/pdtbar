@@ -37,11 +37,11 @@ BUILD_ARGS=(--sdk "$(xcrun --sdk macosx --show-sdk-path)"
   -Xlinker -platform_version -Xlinker macos -Xlinker "${MIN_MACOS}" -Xlinker "${SDK_VERSION}")
 
 require_sdk_metadata() {
-  otool -l "$1" | awk -v minos="${MIN_MACOS}" -v sdk="${SDK_VERSION}" '
+  otool -arch all -l "$1" | awk -v minos="${MIN_MACOS}" -v sdk="${SDK_VERSION}" '
     $1 == "cmd" { build = ($2 == "LC_BUILD_VERSION") }
     build && $1 == "minos" { minimum = ($2 == minos) }
-    build && $1 == "sdk" { valid = (minimum && $2 == sdk) }
-    END { exit !valid }' || fail "Expected macOS ${MIN_MACOS} / SDK ${SDK_VERSION} in $1"
+    build && $1 == "sdk" { seen++; if (!(minimum && $2 == sdk)) bad = 1 }
+    END { exit !(seen && !bad) }' || fail "Expected macOS ${MIN_MACOS} / SDK ${SDK_VERSION} in $1"
 }
 
 build_for_arch() {
@@ -67,6 +67,7 @@ if [[ "${#ARCH_LIST[@]}" -gt 1 ]]; then
   log "==> Creating universal ${PRODUCT_NAME}"
   mkdir -p "$(dirname "${SOURCE_BINARY}")"
   lipo -create "${SOURCE_BINARIES[@]}" -output "${SOURCE_BINARY}"
+  require_sdk_metadata "${SOURCE_BINARY}"
 elif [[ "${#ARCH_LIST[@]}" -eq 1 && -n "${ARCH_LIST[0]}" ]]; then
   build_for_arch "${ARCH_LIST[0]}" SOURCE_BINARY
 else

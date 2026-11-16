@@ -36,14 +36,31 @@ const honored = platform >= 0 && process.env.FAKE_LINKER_IGNORES_PLATFORM_VERSIO
 fs.mkdirSync(binDir, { recursive: true });
 fs.writeFileSync(path.join(binDir, "pdtbar"), "sdk " + (honored ? linker[platform + 3] : "14.0") + "\\n", { mode: 0o755 });
 `,
+  // One LC_BUILD_VERSION block per slice line, as \`otool -arch all -l\` prints a universal binary.
   otool: `#!/bin/sh
 for last; do :; done
-printf ' cmd LC_BUILD_VERSION\\n minos 14.0\\n %s\\n' "$(cat "$last")"
+while IFS= read -r slice; do
+  printf ' cmd LC_BUILD_VERSION\\n minos 14.0\\n %s\\n' "$slice"
+done < "$last"
+`,
+  // Joins the slices. FAKE_LIPO_SLICE_SDK makes it emit a slice with that SDK instead, as a stale input would.
+  lipo: `#!/bin/sh
+out=""; inputs=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -create) ;;
+    -output) out="$2"; shift ;;
+    *) inputs="$inputs $1" ;;
+  esac
+  shift
+done
+cat $inputs > "$out"
+if [ -n "$FAKE_LIPO_SLICE_SDK" ]; then echo "sdk $FAKE_LIPO_SLICE_SDK" >> "$out"; fi
 `,
   codesign: "#!/bin/sh\nexit 0\n",
 };
 
-function packageApp(t, { arches = "", linkerIgnoresPlatformVersion = false } = {}) {
+function packageApp(t, { arches = "", linkerIgnoresPlatformVersion = false, lipoSliceSdk = "" } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pdtbar-package-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const directory of ["Scripts", "bin"]) fs.mkdirSync(path.join(root, directory));
@@ -60,19 +77,20 @@ function packageApp(t, { arches = "", linkerIgnoresPlatformVersion = false } = {
       PDTBAR_APP_IDENTITY: "",
       PDTBAR_PROVISIONING_PROFILE: "",
       FAKE_LINKER_IGNORES_PLATFORM_VERSION: linkerIgnoresPlatformVersion ? "1" : "0",
+      FAKE_LIPO_SLICE_SDK: lipoSliceSdk,
     },
   });
   const binary = path.join(root, "PDTBar.app", "Contents", "MacOS", "PDTBar");
   return { result, packaged: fs.existsSync(binary) ? fs.readFileSync(binary, "utf8").trim() : null };
 }
 
-for (const arches of ["", "arm64"]) {
+for (const arches of ["", "arm64", "arm64 x86_64"]) {
   const label = arches || "default arch";
 
   test(`package_app records the selected SDK, not the deployment target (${label})`, (t) => {
     const { result, packaged } = packageApp(t, { arches });
     assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.equal(packaged, `sdk ${sdkVersion}`);
+    assert.equal(packaged, Array(arches.split(" ").length).fill(`sdk ${sdkVersion}`).join("\n"));
   });
 
   test(`package_app rejects a binary stamped with the deployment target as its SDK (${label})`, (t) => {
@@ -82,3 +100,10 @@ for (const arches of ["", "arm64"]) {
     assert.equal(packaged, null);
   });
 }
+
+test("package_app rejects a universal binary with a slice that records the deployment target as its SDK", (t) => {
+  const { result, packaged } = packageApp(t, { arches: "arm64 x86_64", lipoSliceSdk: "14.0" });
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stderr, /pdtbar-universal/);
+  assert.equal(packaged, null);
+});
