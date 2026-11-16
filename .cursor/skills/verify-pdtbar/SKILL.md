@@ -25,11 +25,19 @@ Scripts/verify_pdtbar.sh launch                                        # quiet-n
 Scripts/verify_pdtbar.sh launch docs/pdt/fixtures/concentration-pressure.json
 ```
 
-This starts `.build/debug/pdtbar --fixture <f> --snapshot-dir <run>/snapshots` with an isolated `PDTBAR_APP_SUPPORT_DIR` and a throwaway `PDTBAR_USER_DEFAULTS_SUITE`. Each launch gets a fresh, empty run dir under `.build/verify-pdtbar/<stamp>-<pid>/`, holding `pid`, `app.log`, `snapshots/`, `app-support/`, `evidence/`, and `defaults-suite`.
+This starts `.build/debug/pdtbar --fixture <f> --snapshot-dir <run>/snapshots` with an isolated `PDTBAR_APP_SUPPORT_DIR` and a throwaway `PDTBAR_USER_DEFAULTS_SUITE`. Each launch gets a fresh, empty run dir under `.build/verify-pdtbar/<stamp>-<pid>/`, holding `pid`, `app.log`, `fixture`, `binary`, `snapshots/`, `app-support/`, `evidence/`, and `defaults-suite`.
 
 Ready means the script printed `ready: <run-dir>`. That requires the process to be alive and `snapshots/latest-portfolio-snapshot.json` to be written, which happens after `PressureRunner` produced the descriptor the status item renders. A live PID alone is not ready. A failed launch prints `app.log`, stops the process, and exits 1.
 
-Fixture mode never checks the PDT connection. To exercise the product path (connection check, sign-in, pasted token, first fetch, background refresh), use the scripted smokes under Drive. They launch the real app with `--app-support-dir <isolated> --scripted-pdt <file>`: an in-memory credential (or the real Keychain store over a fake `SecItem` API that answers a fixed status), a scripted sign-in outcome, and scripted PDT API replies in request order. The script's `eventLog` records each `check`, `sign-in`, `token`, `disconnect`, and `request <path>`.
+Fixture mode never checks the PDT connection. To exercise the product path (connection check, sign-in, pasted token, first fetch, background refresh), use the scripted smokes under Drive, or keep one scripted instance running:
+
+```bash
+Scripts/verify_pdtbar.sh launch-scripted docs/pdt/fixtures/scripted/sync-failure-optional-401.json <seed-snapshot.json>
+```
+
+`launch-scripted <script.json> [seed-snapshot.json]` starts `.build/debug/pdtbar --app-support-dir <run>/app-support --scripted-pdt <run>/scripted-pdt.json`, seeding `app-support/pdtbar/state/latest-portfolio-snapshot.json` when a seed is given. The run dir adds `scripted-pdt.json` and `events.log`. Ready means the process is alive and `events.log` holds a `check`. `docs/pdt/fixtures/scripted/` holds the shipped scripts.
+
+The smokes launch the real app with `--app-support-dir <isolated> --scripted-pdt <file>`: an in-memory credential (or the real Keychain store over a fake `SecItem` API that answers a fixed status), a scripted sign-in outcome, and scripted PDT API replies in request order. The script's `eventLog` records each `check`, `sign-in`, `token`, `disconnect`, and `request <path>`.
 
 Two runs can coexist. Each gets its own status item and run dir. Each `pdtbar-smoke` invocation also isolates its own state under `--artifacts` / `--app-support-dir`.
 
@@ -47,7 +55,7 @@ It is read-only. It fails unless:
 - the recorded PID is alive,
 - its command line is exactly this checkout's `.build/debug/pdtbar` with this run's snapshot dir,
 - the binary has not been rebuilt since launch (inode and mtime recorded in `<run>/binary`), and no Swift file in `PDTBarApp`, `PDTBarAppSupport`, or `PDTBarCore` is newer than it,
-- the fixture snapshot exists.
+- the fixture snapshot exists (fixture run), or `events.log` holds a `check` (scripted run, whose events doctor prints).
 
 It also lists other `pdtbar`/`PDTBar.app` processes so you know not to touch them. `doctor: ok` is the only green result. On a stale build, run `stop`, then `swift build --product pdtbar`, then `launch` again.
 
@@ -60,11 +68,12 @@ PDTBar has no in-process automation port. The repo's driver is `swift run pdtbar
 Pass `--artifacts <run-dir>/evidence` (and `--app-support-dir <run-dir>/smoke-app-support` where accepted) so proof lands in the run dir.
 
 Prompt-free scenarios. None of these captures the screen. They open the menu through AX only if AX is already granted, and otherwise skip that part cleanly:
-- No app launch: `scripted-api-client`, `scripted-api-snapshot`, `scripted-api-auth`, `scripted-pulse-mark-read`, `copy-holding-identifier-action`, `fixture-proof`, `menu-polish-proof`.
+- No app launch: `scripted-api-client`, `scripted-api-snapshot`, `scripted-api-auth`, `auth-measure` (scores the sign-in and connection menus from descriptors), `scripted-pulse-mark-read`, `copy-holding-identifier-action`, `fixture-proof`, `menu-polish-proof`.
 - Real app launch: `scripted-first-fetch`, `scripted-setup-retry`, `scripted-sign-in`, `ready-launch`, `logged-out-launch`. Each fails if the app stops early or writes the fixture sentinel.
-- `make smoke-api` runs `scripted-api-client`, `scripted-api-snapshot`, `scripted-api-auth`, `scripted-first-fetch`, and `scripted-returning-launch` in one sandbox that kills any non-loopback connection, DNS lookup, Keychain lookup, or exec of `claude`, `codex`, or `mcporter`, with menu checks off. See `docs/smoke-checks.md`.
+- `make smoke-api` (`Scripts/api_smoke_matrix.sh [artifacts-dir]`, driving `pdtbar-smoke scripted-api-matrix`) runs `scripted-api-client`, `scripted-api-snapshot`, `scripted-api-auth`, `scripted-first-fetch`, and `scripted-returning-launch` in one sandbox that kills any non-loopback connection, DNS lookup, Keychain lookup, or exec of `claude`, `codex`, or `mcporter`, and blocks `tccd`, so menu checks are off. See `docs/smoke-checks.md`.
+- Packaging, not driven by this skill: `app-bundle-packaging` and `packaged-app` need `./Scripts/package_app.sh`. `sandbox-probe` is the matrix's own self-test.
 
-These are opt-in. They capture the screen (`/usr/sbin/screencapture` or Peekaboo), which can show a Screen Recording prompt or a periodic re-confirmation: `real-user-pulse`, `portfolio-summary-proof`, `portfolio-values-settings-proof`, `peekaboo`, `packaged-onboarding --peekaboo`, and `scripted-returning-launch`, which falls back to a full-screen capture when AX is granted.
+These are opt-in. They capture the screen (`/usr/sbin/screencapture` or Peekaboo), which can show a Screen Recording prompt or a periodic re-confirmation: `real-user-pulse`, `portfolio-summary-proof`, `portfolio-values-settings-proof`, `peekaboo`, `packaged-onboarding --peekaboo`, and `scripted-returning-launch`, which falls back to a full-screen capture when AX is granted. So are the `verify_pdtbar.sh` commands that take pixels: `capture`, `menu-walk`, `menu-smoke`, `menu-measure`, and `auth-states`.
 
 A `pdtbar-smoke` scenario launches its own app. It does not attach to a `verify_pdtbar.sh` instance. Use the launched instance to inspect by hand, to hand to a user, or to prove fixture-mode launch side effects.
 
@@ -100,7 +109,8 @@ Scripts/verify_pdtbar.sh stop "$RUN"
 - Run `can-capture` first. On exit 3 (`can-capture: no (<check>: <detail>)`, for example CI, a locked screen, a sleeping display, the screen saver, or Screen Recording not granted), skip visual proof and say why in the PR. Do not retry or work around it.
 - `capture` runs `doctor` first and refuses a stale or foreign run. `<name>` must match `^[A-Za-z0-9._-]+$`. Seconds are 1 to 30. Use at least 3, because the menu opens about 1.2 seconds into the clip and closes 0.5 seconds before the end.
 - Cohesive menu walk: `Scripts/verify_pdtbar.sh menu-smoke` (or `menu-walk <run-dir>` on a `concentration-pressure` launch) opens the menu, checks every `MenuWalkPlan.cohesiveUI` selector, opens the allocation overview submenu, and writes masked PNGs plus `menu-walk.json` to `<run>/evidence/menu-walk/`. It fails, never skips, when it cannot drive or capture the menu. `menu-walk: ok` is the only green result.
-- Auth states: `Scripts/verify_pdtbar.sh auth-states [out-dir]` builds, then captures the root menu of eight sign-in and connection states over scripted connections (fresh, unentitled Keychain sign-in and Check again, reconnect, disconnected, fetch failed), pressing rows by `pdtbar.row.<id>` through `pdtbar-capture press`. It writes `<out>/<state>.png` plus `<state>.json` (presses, events, rows). Run it on the base and on the change, then compare state by state. A row a build lacks records `pressed: false`. Details: `docs/smoke-checks.md`.
+- Menu height: `Scripts/verify_pdtbar.sh menu-measure <fixture.json>` (or `menu-measure --scripted <script.json> <seed-snapshot.json>`) builds, launches, writes the root menu rows to `measure.json` plus `menu.png`, then stops. Use it for small-screen fit changes (#304); `docs/pdt/fixtures/worst-case-height.json` is the tallest menu. `menu-smoke` sets `PDTBAR_MENU_SCREEN_HEIGHT=100000` so nothing folds.
+- Auth states: `Scripts/verify_pdtbar.sh auth-states [out-dir]` builds `pdtbar`, `pdtbar-capture`, and `pdtbar-dev`, then captures the root menu of eight sign-in and connection states over scripted connections (`fresh`, `unentitled-signin`, `unentitled-checkagain`, `unentitled-signin-pulse`, `reconnect-expired`, `reconnect-revoked`, `disconnected`, `fetch-failed`). It needs `can-capture: yes` and Accessibility already granted. It presses rows by `pdtbar.row.<id>` through `pdtbar-capture press`. It writes `<out>/<state>.png` plus `<state>.json` (presses, events, rows). Run it on the base and on the change, then compare state by state. A row a build lacks records `pressed: false`. Details: `docs/smoke-checks.md`.
 - Read the output. `menu: open` (screenshot) or `menu: opened during clip` (record) means the menu is in frame. Without Accessibility, older macOS captures only the status item (`menu: closed (accessibility not granted)`). On macOS 26 the status item lives in a Control Center window, so capture fails with a clear reason instead.
 - Not blank: `blank-check: ok (lumaRange=..)` must print, and a blank, black, uniform, or transparent image exits 1. Then open the PNG with your image viewer tool and confirm it shows the status item and the expected rows. A recording is proved by its poster PNG, a frame from the clip midpoint, checked the same way.
 - Redaction: fixture data only. Never capture with live portfolio data. The menu is translucent, so content behind it shows faintly, and neighboring menu bar icons are in frame. Clear the screen area under the menu first.
@@ -116,7 +126,7 @@ Scripts/verify_pdtbar.sh stop <run-dir>
 
 ## Helpers
 
-- `Scripts/verify_pdtbar.sh launch [fixture] | doctor <run-dir> | stop <run-dir> | can-capture | capture screenshot <run-dir> <name> | capture record <run-dir> <name> <seconds> | menu-walk <run-dir> | menu-smoke | auth-states [out-dir]` is executable and syntax-checked by `make check`. Capture runs `.build/debug/pdtbar-capture` (`Sources/PDTBarCapture`).
+- `Scripts/verify_pdtbar.sh launch [fixture] | launch-scripted <script.json> [seed-snapshot.json] | doctor <run-dir> | stop <run-dir> | can-capture | capture screenshot <run-dir> <name> | capture record <run-dir> <name> <seconds> | menu-walk <run-dir> | menu-smoke | menu-measure <fixture.json> | menu-measure --scripted <script.json> <seed-snapshot.json> | auth-states [out-dir]` is executable and syntax-checked by `make check`. Capture runs `.build/debug/pdtbar-capture preflight | screenshot | record | walk | measure | press` (`Sources/PDTBarCapture`). `press`, `walk`, and `measure` need Accessibility already granted. Every subcommand but `preflight` and `press` takes pixels.
 - `swift run pdtbar-smoke` with no arguments prints every scenario and its flags.
 
 Keep this skill and `features/` honest as behavior changes with `/maintain-verification-skill`, if installed, or by hand. When a journey fails because a precondition is missing, record why under that feature's Gotchas. Never weaken the journey to make it pass.
