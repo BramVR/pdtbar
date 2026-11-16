@@ -29,14 +29,30 @@ cd "${ROOT_DIR}"
 ARCHES_VALUE="$(printf '%s' "${ARCHES_VALUE}" | tr ',' ' ')"
 read -r -a ARCH_LIST <<< "${ARCHES_VALUE}"
 
+# SwiftBuild can record the deployment target as the SDK, which runs AppKit in its legacy
+# compatibility mode. Pin the SDK at link time and check every binary before staging it.
+MIN_MACOS="14.0"
+SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
+BUILD_ARGS=(--sdk "$(xcrun --sdk macosx --show-sdk-path)"
+  -Xlinker -platform_version -Xlinker macos -Xlinker "${MIN_MACOS}" -Xlinker "${SDK_VERSION}")
+
+require_sdk_metadata() {
+  otool -l "$1" | awk -v minos="${MIN_MACOS}" -v sdk="${SDK_VERSION}" '
+    $1 == "cmd" { build = ($2 == "LC_BUILD_VERSION") }
+    build && $1 == "minos" { minimum = ($2 == minos) }
+    build && $1 == "sdk" { valid = (minimum && $2 == sdk) }
+    END { exit !valid }' || fail "Expected macOS ${MIN_MACOS} / SDK ${SDK_VERSION} in $1"
+}
+
 build_for_arch() {
   local arch="$1"
   local result_var="$2"
   local bin_dir
   log "==> Building ${PRODUCT_NAME} (${CONF}, ${arch})"
-  swift build -c "${CONF}" --product "${PRODUCT_NAME}" --arch "${arch}"
+  swift build "${BUILD_ARGS[@]}" -c "${CONF}" --product "${PRODUCT_NAME}" --arch "${arch}"
   bin_dir="${ROOT_DIR}/.build/${arch}-apple-macosx/${CONF}"
   [[ -x "${bin_dir}/${PRODUCT_NAME}" ]] || fail "Built executable missing at ${bin_dir}/${PRODUCT_NAME}"
+  require_sdk_metadata "${bin_dir}/${PRODUCT_NAME}"
   printf -v "${result_var}" '%s' "${bin_dir}/${PRODUCT_NAME}"
 }
 
@@ -55,10 +71,11 @@ elif [[ "${#ARCH_LIST[@]}" -eq 1 && -n "${ARCH_LIST[0]}" ]]; then
   build_for_arch "${ARCH_LIST[0]}" SOURCE_BINARY
 else
   log "==> Building ${PRODUCT_NAME} (${CONF})"
-  swift build -c "${CONF}" --product "${PRODUCT_NAME}"
-  BIN_DIR="$(swift build -c "${CONF}" --show-bin-path)"
+  swift build "${BUILD_ARGS[@]}" -c "${CONF}" --product "${PRODUCT_NAME}"
+  BIN_DIR="$(swift build "${BUILD_ARGS[@]}" -c "${CONF}" --show-bin-path)"
   SOURCE_BINARY="${BIN_DIR}/${PRODUCT_NAME}"
   [[ -x "${SOURCE_BINARY}" ]] || fail "Built executable missing at ${SOURCE_BINARY}"
+  require_sdk_metadata "${SOURCE_BINARY}"
 fi
 
 log "==> Creating ${APP_NAME}.app"

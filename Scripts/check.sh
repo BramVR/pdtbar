@@ -36,6 +36,9 @@ check_scripts() {
   while IFS= read -r script; do
     run node --check "${script}"
   done < <(find "${ROOT_DIR}/Scripts" -type f -name '*.mjs' | sort)
+
+  log "Running packaging script tests"
+  run node --test "${ROOT_DIR}/Scripts/package-app.test.mjs"
 }
 
 usage() {
