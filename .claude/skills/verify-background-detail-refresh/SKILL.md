@@ -20,7 +20,7 @@ description: "Check a PDT API background detail refresh change against its TLA+ 
 
 ## Covered code and sync commit
 
-Sync commit: `bcbbcf9`. The model was last confirmed against the code at this commit.
+Sync commit: `cd4d474` (#307). The model was last confirmed against the code at this commit. The 2026-11-16 upkeep read every covered hunk from `b7139da` (#290, the squash of `bcbbcf9`, same `Sources/`): only #300 touched a covered file, `PDTSyncFailure.swift`, with visibility and display-text changes that leave `endsSync` as it was. #307's last price comes from the base holdings, so no request, phase, or facet was added.
 
 - `PDTAPIBackgroundDetailRefresh.refresh` in `Sources/PDTBarCore/PDTAPIBackgroundDetailRefresh.swift`: the checkpoints, `setLastSyncFailure(nil)`, the base fetch and its catch, `record`, `optionalPhase`, the three facet closures, the price batch loop, the performance progress and final checkpoint, the outcome, the `refreshedPulse` call, `setLastSyncFailure(failures.last)`. Also `fetch` and `throwIfCancelled` in the same type.
 - `PDTAPIBackgroundDetailRefresh.preserveOptionalDetails` and `priceSeriesWithPriorFallback`. #250 moved these statics from the deleted Claude `PDTBackgroundDetailRefresh` without a behavior change.
@@ -32,7 +32,7 @@ Sync commit: `bcbbcf9`. The model was last confirmed against the code at this co
 Every action's comment names the statement or symbol it models. To see whether a change touches this model, run:
 
 ```bash
-git diff bcbbcf9 -- Sources/PDTBarCore/PDTAPIBackgroundDetailRefresh.swift Sources/PDTBarCore/PDTSyncFailure.swift Sources/PDTBarCore/PDTAPIClient.swift Sources/PDTBarCore/Persistence.swift Sources/PDTBarCore/PDTCancellation.swift
+git diff cd4d474 -- Sources/PDTBarCore/PDTAPIBackgroundDetailRefresh.swift Sources/PDTBarCore/PDTSyncFailure.swift Sources/PDTBarCore/PDTAPIClient.swift Sources/PDTBarCore/Persistence.swift Sources/PDTBarCore/PDTCancellation.swift
 ```
 
 Recheck the model when a hunk falls inside one of the symbols above.
@@ -53,7 +53,7 @@ Expected at the sync commit:
 
 ## Mutations
 
-Each row breaks one statement of the model the way a code change could. Each was confirmed at `bcbbcf9`.
+Each row breaks one statement of the model the way a code change could. Each was confirmed at `bcbbcf9` and again at `cd4d474`.
 
 - `perPhaseCommit`: an optional phase that refreshed its facet commits it, the Claude refresh's shape. Caught by `OneCommitAtEnd`.
 - `optionalIgnoresSyncEnded`: `optionalPhase` loses `guard !syncEnded`. Caught by `NoRequestAfterSyncEnded`.
@@ -111,6 +111,7 @@ When a covered symbol changes on purpose:
 
 ## Out of scope
 
+- The first fetch's own writes to `lastSyncFailure` (#300, `startFirstPortfolioFetch`). `formal/launch-runtime`'s `OneWorkAtATime` keeps a first fetch from overlapping a refresh, which is what makes the cancel the only other actor here.
 - Store write errors. A throwing `refreshedPulse` makes `refresh` throw with the stored failure still cleared.
 - The read-state order inside `commitCurrentSnapshot`. `formal/pulse-read-state` checks it.
 - The app side: `startBackgroundPortfolioRefresh`, `applicationWillTerminate`'s wait, and `PDTLaunchRuntime`. `formal/launch-runtime` checks the wiring.

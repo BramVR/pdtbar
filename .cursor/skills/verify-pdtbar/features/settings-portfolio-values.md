@@ -24,7 +24,7 @@ swift run pdtbar-smoke portfolio-values-settings-proof --artifacts "$RUN/evidenc
 Scripts/verify_pdtbar.sh stop "$RUN"
 ```
 
-It writes `pdtbar-portfolio-values-settings-proof.json` and PNGs.
+It writes `pdtbar-portfolio-values-settings-proof.json` and PNGs: the Settings window through Peekaboo (`--peekaboo`, default `/opt/homebrew/bin/peekaboo`) and the masked menu through `/usr/sbin/screencapture`.
 
 Without screen capture, the masking contract is covered by `swift test` (`Tests/PDTBarTests/PortfolioValueVisibilityTests.swift`). That is not a user-path proof.
 
@@ -42,5 +42,5 @@ The image must show the open menu with fixture money values visible, such as `To
 
 ## Gotchas
 
-- There is no prompt-free user-path journey. The scenario needs AX to click the toggle, and it always calls `/usr/sbin/screencapture`. With Screen Recording missing or needing re-confirmation, macOS can show a dialog. Run it only when the user asked and is present.
+- There is no prompt-free user-path journey. Without AX the scenario returns `skipped` before it captures anything. With AX it clicks the toggle and always calls `/usr/sbin/screencapture`. With Screen Recording missing or needing re-confirmation, macOS can show a dialog. Run it only when the user asked and is present.
 - Always run with `PDTBAR_USER_DEFAULTS_SUITE` isolated. The smoke and `verify_pdtbar.sh` both set it. A bare launch would flip the user's real setting.

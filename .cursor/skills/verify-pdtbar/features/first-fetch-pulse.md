@@ -25,7 +25,7 @@ swift run pdtbar-smoke scripted-first-fetch --artifacts "$RUN/evidence" --app-su
 Scripts/verify_pdtbar.sh stop "$RUN"
 ```
 
-Read `$RUN/evidence/pdtbar-scripted-first-fetch-proof.json`. Pass requires `successSnapshotWritten: true`, `successSnapshotAsOf: 2026-06-22`, `successOpenHoldingCount > 0`, `failureSnapshotWritten: false`, `failureReported: true`, and for both launches `processStillRunning: true` and `fixtureSentinelEmpty: true`. When `accessibilityChecked: true`, `successPulseMenu.visible` and `failureMenu.visible` must be true, with the identifiers in `pdtbar-scripted-first-fetch-{success,failure}-ax.json`.
+Read `$RUN/evidence/pdtbar-scripted-first-fetch-proof.json`. Pass requires `successHoldingsRequests: 2` (the first fetch and the background detail refresh), `successSnapshotWritten: true`, `successSnapshotAsOf: 2026-06-22`, `successOpenHoldingCount > 0`, `failureSnapshotWritten: false`, `failureReported: true`, and for both launches `processStillRunning: true` and `fixtureSentinelEmpty: true`. When `accessibilityChecked: true`, `successPulseMenu.visible` and `failureMenu.visible` must be true, with the identifiers in `pdtbar-scripted-first-fetch-{success,failure}-ax.json`.
 
 Related prompt-free scenarios: `ready-launch` (a connected browser session straight to the pulse) and `scripted-returning-launch` (a seeded snapshot stays visible during the background refresh and survives a failed one).
 

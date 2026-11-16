@@ -2,7 +2,7 @@
 
 The user launches PDTBar without a working PDT connection, or with one PDT stopped accepting. The menu names the state and offers what fits it: `Sign in with PDT`, `Use a PDT token…`, `Check again`, and `Disconnect from PDT`.
 
-Proof that it works: not connected shows `Not connected`, `Sign in with PDT`, and `Use a PDT token…`, and hides any cached pulse. On a build without the Keychain entitlement (`"keychain": "unentitled"` in the script) its detail reads `This PDTBar build can't save your sign-in. You'll sign in each time PDTBar starts`, at first launch and after a relaunch. A revoked token shows `Reconnect to PDT` with `Check again` and `Disconnect from PDT`. `403 API_ACCESS_PAUSED` shows `PDT access paused`. A Keychain that refuses the read (`-34018`) shows `Keychain unavailable`. A sign-in or token the Keychain refuses to save, as on a build without the Keychain entitlement, connects for the session: `Fetching portfolio` starts, and every connected menu carries one `Connection not saved` row until PDTBar quits or the Keychain takes it. One `Check again` click reruns the connection check exactly once; a second click while the check or fetch runs starts nothing. `Sign in with PDT` shows `Signing in with PDT`, then `Fetching portfolio`. A declined sign-in shows `Sign-in failed`.
+Proof that it works: not connected shows `Not connected`, `Sign in with PDT`, and `Use a PDT token…`, and hides any cached pulse. On a build without the Keychain entitlement (`"keychain": "unentitled"` in the script) its detail reads `This PDTBar build can't save your sign-in. You'll sign in each time PDTBar starts`, at first launch and after a relaunch. A revoked token shows `Reconnect to PDT` with `Sign in with PDT`, `Use a PDT token…`, `Check again`, and `Disconnect from PDT`. `403 API_ACCESS_PAUSED` shows `PDT access paused` with the same four rows. A build without Keychain access (`-34018`, `errSecMissingEntitlement`) shows `Keychain unavailable`, and any other Keychain read failure shows `Could not read the Keychain`; both offer `Check again` only. While connected, `Disconnect from PDT` sits in Actions (`pdtbar.row.actions.disconnect`); the connection screens use `pdtbar.row.pdtConnection.disconnect`. A sign-in or token the Keychain refuses to save, as on a build without the Keychain entitlement, connects for the session: `Fetching portfolio` starts, and every connected menu carries one `Connection not saved` row until PDTBar quits or the Keychain takes it. One `Check again` click reruns the connection check exactly once; a second click while the check or fetch runs starts nothing. `Sign in with PDT` shows `Signing in with PDT`, then `Fetching portfolio`. A declined sign-in shows `Sign-in failed`.
 
 ## Sub-features
 
@@ -12,11 +12,11 @@ Proof that it works: not connected shows `Not connected`, `Sign in with PDT`, an
 - `Sign in with PDT` (browser, loopback) with `Cancel sign-in`; a failure shows `Sign-in failed` with its reason.
 - `Use a PDT token…`, a secure field whose token is stored without a verification request; the first fetch answers.
 - `Disconnect from PDT`, which deletes the credential and shows `Remove PDTBar in PDT…`, opening connected apps (sign-in) or Integrations (token).
-- `Connection not saved`, one row on every connected menu while the Keychain has refused the sign-in or token in use.
+- `Connection not saved`, one row on every connected menu while the Keychain has refused the sign-in or token in use. With a pulse it sits in Data after Data health (#306); without one, in the connection rows.
 
 ## How to get to it (user POV)
 
-On a Mac with no PDT connection, launch PDTBar and click the menu bar icon. The connection rows are the whole menu.
+On a Mac with no PDT connection, launch PDTBar and click the menu bar icon. The connection rows and `Quit PDTBar` are the whole menu.
 
 ## Driving it with pdtbar-smoke
 
@@ -29,15 +29,16 @@ swift run pdtbar-smoke logged-out-launch    --artifacts "$RUN/evidence" --app-su
 Scripts/verify_pdtbar.sh stop "$RUN"
 ```
 
-Read `pdtbar-scripted-setup-retry-proof.json` (per scenario: `initialChecks`, `finalChecks`, `finalHoldingsRequests`, `snapshotWritten`, the isolation booleans) and `pdtbar-scripted-sign-in-proof.json` (idle before the click, `sign-in` logged, snapshot written; the declined run fetched nothing).
+Read `pdtbar-scripted-setup-retry-proof.json` (scenarios `reconnect`, `subscription-paused`, `keychain-missing-entitlement`; per scenario: `initialChecks`, `finalChecks`, `finalHoldingsRequests`, `snapshotWritten`, the isolation booleans) and `pdtbar-scripted-sign-in-proof.json` (idle before the click, `sign-in` logged, snapshot written; the declined run fetched nothing).
 
 ## Visual proof
 
-For PR proof, run `Scripts/verify_pdtbar.sh can-capture` first and skip on exit 3. `capture` works only on a `verify_pdtbar.sh launch` run, which is fixture mode, so it cannot show the connection menus. There is no capture path for this feature yet. Prove it with the smoke JSON and AX identifiers above, and say in the PR that no image exists.
+For PR proof, run `Scripts/verify_pdtbar.sh can-capture` first and skip on exit 3. Then `Scripts/verify_pdtbar.sh auth-states <out-dir>` captures the root menu of eight connection states over scripted connections (see Visual capture in [`../SKILL.md`](../SKILL.md)). It needs Accessibility already granted. Run it on the base and the change and compare state by state. Without capture, prove it with the smoke JSON and AX identifiers above, and say in the PR that no image exists.
 
 ## Gotchas
 
 - These smokes need AX to click menu items. Without AX they prove the launch state from the event log (one `check`, no fetch where none is due) and return `skipped` with the missing permission named. Report that as not driven, not as passed.
 - Sign-in is scripted (`signIn: succeeds|denied|portBusy|timedOut|waitsForCancel`). A real `Sign in with PDT` opens a browser and stores a credential in the Keychain, so never run it during verification.
+- `scripted-setup-retry` fails on a host with AX granted (3 of 3 runs on 2026-11-16): `reconnect` and `keychain-missing-entitlement` log `check` 3 times, not 2. The scripted check returns before the smoke's second `Check again` click, which lands 0.5 s later on a menu that offers the row again, so the runtime rightly starts a second check (`checkAgain` refuses unless `isIdle`, `LaunchRuntime.swift:813`). That is a harness timing gap in `Sources/PDTBarSmoke/main.swift` (`scriptedSetupRetrySmoke`), not a product bug. Until the smoke holds the check open, read `subscription-paused` (passes) plus `finalChecks: 3` with no holdings request for the other two, and report the scenario as failed with this reason. Without AX it skips the clicks and returns `skipped` after its launch checks.
 - The paused scenario expects three holdings requests after Check again: the 403, the first fetch, and the background detail refresh that follows it. A fourth means a duplicate fetch.
 - `packaged-onboarding` is the packaged-bundle variant. It needs `./Scripts/package_app.sh` first, and with `--peekaboo` it captures the screen, which makes it opt-in.
