@@ -24,7 +24,8 @@ public struct MenuWalkPlan: Equatable, Sendable {
 
     /// Issue #147's cohesive-UI walk, keyed to today's identifiers. The portfolio overview is the
     /// Allocation chart row, its submenu is "Full allocation list", and the Freshness section is titled "Data".
-    /// Data health is not walked: the fixture's only cause is stale prices, which the Prices row already shows.
+    /// No Data health row to walk. A fixture launch counts as fetched and connected, and the menu lists
+    /// Data health only for causes beyond the stale prices the Prices row already shows.
     /// Holding id 9001 belongs to the pinned fixture.
     public static let cohesiveUI = MenuWalkPlan(
         fixture: "concentration-pressure.json",
