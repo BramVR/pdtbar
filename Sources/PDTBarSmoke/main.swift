@@ -754,6 +754,8 @@ private struct ScriptedSetupRetryScenarioProof: Codable {
     var initialHoldingsRequests: Int
     var initialMenu: MenuCheck?
     var checkAgainClicks: [String?]
+    /// The first click's check was logged and held before the second click.
+    var heldBeforeSecondClick: Bool
     var finalChecks: Int
     var finalHoldingsRequests: Int
     var snapshotWritten: Bool
@@ -816,8 +818,15 @@ private func scriptedSetupRetrySmoke(arguments: [String]) throws -> SmokeReport 
 
     var results: [ScriptedSetupRetryScenarioProof] = []
     for scenario in scenarios {
-        let launch = try launchScriptedPDTApp(app, script: scenario.script, options: options, prefix: "\(name)-\(scenario.name)")
-        defer { terminate(launch.process) }
+        let checkHold = artifacts.appending(path: "\(name)-\(scenario.name)-check-hold")
+        try? FileManager.default.removeItem(at: checkHold)
+        var script = scenario.script
+        script.checkHoldFile = checkHold.path
+        let launch = try launchScriptedPDTApp(app, script: script, options: options, prefix: "\(name)-\(scenario.name)")
+        defer {
+            try? FileManager.default.removeItem(at: checkHold)
+            terminate(launch.process)
+        }
         _ = launch.waitForEventCount("check", atLeast: 1, timeout: options.timeout + 3.0)
         if scenario.initialHoldingsRequests > 0 {
             _ = launch.waitForEventCount("request /v1/portfolio/holdings", atLeast: scenario.initialHoldingsRequests, timeout: options.timeout + 3.0)
@@ -828,6 +837,7 @@ private func scriptedSetupRetrySmoke(arguments: [String]) throws -> SmokeReport 
         let descriptor = PDTLaunchMenu.descriptor(for: scenario.state)
         var initialMenu: MenuCheck?
         var clicks: [String?] = []
+        var heldBeforeSecondClick = false
         if accessibilityChecked {
             initialMenu = try checkMenu(
                 "\(name)-\(scenario.name)",
@@ -837,10 +847,16 @@ private func scriptedSetupRetrySmoke(arguments: [String]) throws -> SmokeReport 
                 timeout: options.timeout,
                 artifacts: artifacts
             )
-            // A second click lands while the check or fetch runs, when the row is gone or refused.
+            // The first click's check is held before the second click, so the second finds the row gone or refused.
+            try Data().write(to: checkHold)
             clicks.append(clickMenuRow("pdtConnection.check", descriptor: descriptor, process: launch.process, timeout: options.timeout))
+            heldBeforeSecondClick = launch.waitForEventCount("check", atLeast: 2, timeout: options.timeout + 3.0)
             clicks.append(clickMenuRow("pdtConnection.check", descriptor: descriptor, process: launch.process, timeout: 0.5))
-            _ = launch.waitForEventCount("check", atLeast: 2, timeout: options.timeout + 3.0)
+            if clicks.last.flatMap({ $0 }) != nil {
+                // A pressed row's action can reach the app after the press call returns.
+                Thread.sleep(forTimeInterval: 1.0)
+            }
+            try FileManager.default.removeItem(at: checkHold)
             if scenario.reachesFetch {
                 _ = waitForFile(launch.snapshot, timeout: options.timeout + 3.0)
                 _ = launch.waitForEventCount("request /v1/portfolio/holdings", atLeast: scenario.initialHoldingsRequests + 2, timeout: options.timeout)
@@ -854,6 +870,7 @@ private func scriptedSetupRetrySmoke(arguments: [String]) throws -> SmokeReport 
         let retryProved = !accessibilityChecked || (
             initialMenu?.visible == true
                 && clicks.first.flatMap { $0 } != nil
+                && heldBeforeSecondClick
                 && finalChecks == 2
                 // A fetch after Check again is the first fetch plus the background detail refresh it starts,
                 // each reading holdings once; a duplicate fetch would add another.
@@ -867,13 +884,13 @@ private func scriptedSetupRetrySmoke(arguments: [String]) throws -> SmokeReport 
             initialHoldingsRequests: initialHoldingsRequests,
             initialMenu: initialMenu,
             checkAgainClicks: clicks,
+            heldBeforeSecondClick: heldBeforeSecondClick,
             finalChecks: finalChecks,
             finalHoldingsRequests: finalHoldingsRequests,
             snapshotWritten: launch.snapshotWritten,
             passed: scenarioIsolation.clean && initialStateProved && retryProved
                 && (accessibilityChecked || !launch.snapshotWritten)
         ))
-        terminate(launch.process)
     }
 
     try stableJSONData(ScriptedSetupRetryProof(
