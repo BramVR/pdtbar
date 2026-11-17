@@ -76,6 +76,7 @@ When a prior snapshot exists, PDTBar compares the current holding against that s
 The `Data` section tells you whether the numbers are current enough for a quick look.
 
 - `Prices` shows whether price data is current, stale, partial, or unknown.
+- The `Prices` submenu lists each holding's last price from PDT with the day it is for, such as `EUR 1,376.80 on 2026-11-12`. That day can lag today by a day or more. A holding PDT has not priced reads `No price from PDT`. With `Show portfolio values` off, the price is hidden but its date stays.
 - Stale data can show the oldest price date and affected holdings.
 - Partial data can show the latest completed detail fill.
 - `Data health` appears when source health is degraded.
