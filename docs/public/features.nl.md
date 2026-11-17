@@ -76,6 +76,7 @@ Is er een eerdere snapshot, dan vergelijkt PDTBar de huidige positie eerst daarm
 Het onderdeel `Data` laat zien of de cijfers actueel genoeg zijn voor een snelle blik.
 
 - `Prices` toont of de prijsgegevens actueel, verouderd, onvolledig of onbekend zijn.
+- Het submenu van `Prices` toont per positie de laatste prijs uit PDT met de dag waarvoor die geldt, zoals `EUR 1,376.80 on 2026-11-12`. Die dag kan een dag of meer achterlopen op vandaag. Heeft PDT nog geen prijs voor een positie, dan staat er `No price from PDT`. Staat `Show portfolio values` uit, dan is de prijs verborgen maar blijft de datum staan.
 - Bij verouderde gegevens kunnen de oudste prijsdatum en de betrokken posities staan.
 - Bij onvolledige gegevens kan staan wanneer de laatste aanvulling van de details is afgerond.
 - `Data health` verschijnt als de bron niet goed werkt.
