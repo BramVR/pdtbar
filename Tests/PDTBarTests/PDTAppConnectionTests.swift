@@ -30,9 +30,9 @@ struct PDTAppConnectionTests {
         let connection = try ScriptedPDTConnection(connection: .tokenRevoked, checkHoldFile: hold.path, eventLog: events.path)
             .appConnection(lockDirectory: directory)
         let finished = DispatchSemaphore(value: 0)
-        nonisolated(unsafe) var outcome: PDTConnectionOutcome?
+        let outcome = LockedOutcome()
         DispatchQueue.global().async {
-            outcome = connection.check()
+            outcome.value = connection.check()
             finished.signal()
         }
 
@@ -44,8 +44,8 @@ struct PDTAppConnectionTests {
         #expect(finished.wait(timeout: .now() + 0.3) == .timedOut, "check held while the file exists")
         try FileManager.default.removeItem(at: hold)
         #expect(finished.wait(timeout: .now() + 5) == .success)
-        #expect(outcome == PDTConnectionOutcome(.needsReconnect(.personalToken, .tokenRevoked)))
-        #expect(connection.check() == outcome)
+        #expect(outcome.value == PDTConnectionOutcome(.needsReconnect(.personalToken, .tokenRevoked)))
+        #expect(connection.check() == outcome.value)
     }
 
     @Test("401 TOKEN_INVALID on a token moves to reconnect with PDT's reason")
@@ -374,6 +374,24 @@ private func temporaryDirectory() throws -> URL {
     let directory = FileManager.default.temporaryDirectory.appending(path: "pdtbar-app-connection-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     return directory
+}
+
+private final class LockedOutcome: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: PDTConnectionOutcome?
+
+    var value: PDTConnectionOutcome? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return stored
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            stored = newValue
+        }
+    }
 }
 
 /// Answers every SecItem call with one status and records each query.

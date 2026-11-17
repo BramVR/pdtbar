@@ -891,7 +891,6 @@ private func scriptedSetupRetrySmoke(arguments: [String]) throws -> SmokeReport 
             passed: scenarioIsolation.clean && initialStateProved && retryProved
                 && (accessibilityChecked || !launch.snapshotWritten)
         ))
-        terminate(launch.process)
     }
 
     try stableJSONData(ScriptedSetupRetryProof(
