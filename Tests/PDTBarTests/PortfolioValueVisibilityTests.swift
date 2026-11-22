@@ -143,6 +143,24 @@ struct PortfolioValueVisibilityTests {
         #expect(leaked.isEmpty, "Hidden GBp descriptor leaked: \(leaked.sorted())")
     }
 
+    // No fixture crosses the cash drag line, so the scans above never saw this row (a31cbba leaked it).
+    @Test("Hidden mode hides the cash drag value in Pulse and its explanation")
+    func hiddenModeHidesCashDragValue() throws {
+        var snapshot = try visibilitySnapshot("quiet-no-pressure.json")
+        let cash = try #require(snapshot.openHoldings.lastIndex { $0.name == "Cash" })
+        snapshot.openHoldings[cash].weight = 0.12
+        snapshot.openHoldings[cash].worth = Money(value: "6144.00", currency: "EUR")
+        let hidden = MenuDescriptorRenderer.render(
+            model: PressureEngine.buildModel(from: snapshot),
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+        let cashDrag = try #require(row(withID: "allocation.cashDrag.glance", in: hidden))
+        let leaked = try monetaryDigitGroups(in: snapshot).filter(renderedText(in: hidden).contains)
+
+        #expect(cashDrag.detail == "12.0%; \(PortfolioValueDisplaySettings.hiddenPlaceholder)")
+        #expect(leaked.isEmpty, "Hidden cash drag descriptor leaked: \(leaked.sorted())")
+    }
+
     @Test("Unresolved sensitive attention data fails closed")
     func unresolvedSensitiveAttentionDataFailsClosed() throws {
         var snapshot = try visibilitySnapshot("quiet-no-pressure.json")
@@ -532,7 +550,13 @@ private func renderedText(in descriptor: MenuDescriptor) -> String {
     ]
     values.append(contentsOf: descriptor.sections.map(\.title))
     values.append(contentsOf: descriptor.sections.flatMap { $0.rows.flatMap(renderedTextValues) })
-    return values.compactMap { $0 }.joined(separator: "\n")
+    return withoutSeverityScores(values.compactMap { $0 }.joined(separator: "\n"))
+}
+
+// A severity score ("high; score 1.00") is model output, not a portfolio value, but it can equal a
+// small snapshot amount (worst-case-height's Cash unit price is EUR 1.00) and trip the digit scan.
+private func withoutSeverityScores(_ text: String) -> String {
+    text.replacingOccurrences(of: #"; score \d+\.\d{2}"#, with: "; score", options: .regularExpression)
 }
 
 private func row(withID id: String, in descriptor: MenuDescriptor) -> MenuRow? {
@@ -575,7 +599,7 @@ private func renderedText(in surface: MenuBarSurface) -> String {
     ]
     values.append(contentsOf: surface.sections.map(\.title))
     values.append(contentsOf: surface.sections.flatMap { $0.rows.flatMap(renderedTextValues) })
-    return values.compactMap { $0 }.joined(separator: "\n")
+    return withoutSeverityScores(values.compactMap { $0 }.joined(separator: "\n"))
 }
 
 private func renderedTextValues(in row: MenuBarRowSurface) -> [String] {
@@ -604,4 +628,5 @@ private let portfolioValueFixtureNames = [
     "big-mover.json",
     "concentration-pressure.json",
     "income-event.json",
+    "worst-case-height.json",
 ]
