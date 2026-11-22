@@ -14,8 +14,6 @@ import Foundation
 @MainActor
 public final class StatusMenuHost {
     public private(set) var menu: NSMenu?
-    /// Off-screen twin of the live menu for measuring candidate items (#296). It must be
-    /// configured like the live menu, or measuring could validate items the live menu never would.
     let measuringMenu = StatusMenuHost.makeMenu()
 
     public init() {}

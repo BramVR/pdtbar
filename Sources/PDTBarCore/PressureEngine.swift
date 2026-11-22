@@ -23,10 +23,11 @@ public enum PressureEngine {
                 + concentrationDriftItems(from: portfolioOverview, priorOverview: priorPortfolioOverview)
         )
         let upcomingIncomeEvents = snapshot.incomeEvents.sorted { $0.date < $1.date }
+        let priceWindows = PriceWindow.byQuote(snapshot.priceSeries)
         let rankedItems = ranked(
             allocationItems
                 + incomeItems(from: snapshot, upcomingEvents: upcomingIncomeEvents)
-                + bigMoverItems(from: snapshot, priorSnapshot: priorSnapshot)
+                + bigMoverItems(from: snapshot, priorSnapshot: priorSnapshot, priceWindows: priceWindows)
         )
         let totalValue = snapshot.totalValue
         let effectiveDetailRefreshOutcome = detailRefreshOutcome ?? snapshot.latestDetailFillOutcome
@@ -35,7 +36,7 @@ public enum PressureEngine {
             detailRefreshOutcome: effectiveDetailRefreshOutcome,
             today: today
         )
-        let recentMovesByQuoteID = recentMoves(from: snapshot.priceSeries)
+        let recentMovesByQuoteID = priceWindows.mapValues(\.summary)
         let nextIncomeEventsByQuoteID = nextIncomeEventsByQuoteID(from: snapshot)
         let topHoldingSummaries = snapshot.openHoldings
             .sorted(by: ranksByAllocation)
@@ -140,7 +141,7 @@ public enum PressureEngine {
                 ),
                 bigMovers: BigMoversSnapshot(
                     priceSeriesCount: snapshot.priceSeries.count,
-                    maxMove: maxMove(from: snapshot.priceSeries)
+                    maxMove: recentMovesByQuoteID.values.max { abs($0.percentChange) < abs($1.percentChange) }
                 ),
                 freshness: freshness,
                 dataHealth: DataHealth.build(
@@ -167,7 +168,7 @@ public enum PressureEngine {
             }
     }
 
-    private static func dayDate(from value: String) -> Date? {
+    static func dayDate(from value: String) -> Date? {
         let parts = value.prefix(10).split(separator: "-").compactMap { Int($0) }
         guard parts.count == 3 else { return nil }
         return dateCalendar.date(
@@ -527,11 +528,15 @@ public enum PressureEngine {
         case unavailable
     }
 
-    private static func bigMoverItems(from snapshot: PortfolioSnapshot, priorSnapshot: PortfolioSnapshot?) -> [AttentionItem] {
+    private static func bigMoverItems(
+        from snapshot: PortfolioSnapshot,
+        priorSnapshot: PortfolioSnapshot?,
+        priceWindows: [Int: PriceWindow]
+    ) -> [AttentionItem] {
         let priorHoldings = priorSnapshot?.openHoldings.reduce(into: [Int: NormalizedHolding]()) { holdings, holding in
             holdings[holding.quoteId] = holdings[holding.quoteId] ?? holding
         } ?? [:]
-        let priceHistorySignals = bigMoverSignals(from: snapshot.priceSeries)
+        let priceHistorySignals = priceWindows.mapValues(bigMoverSignal(window:))
         let moverThreshold = Decimal(string: String(bigMoverThreshold)) ?? 0
         return snapshot.openHoldings.compactMap { holding -> AttentionItem? in
             var canUsePriceHistory = priorHoldings[holding.quoteId] == nil
@@ -608,54 +613,16 @@ public enum PressureEngine {
         ))
     }
 
-    private static func bigMoverSignals(from priceSeries: [PricePoint]) -> [Int: BigMoverSignal] {
-        Dictionary(
-            uniqueKeysWithValues: Dictionary(grouping: priceSeries, by: \.quoteId)
-                .compactMap { quoteId, points -> (Int, BigMoverSignal)? in
-                    guard let signal = bigMoverSignal(points: points) else {
-                        return nil
-                    }
-                    return (quoteId, signal)
-                }
-        )
-    }
-
-    private static func bigMoverSignal(points: [PricePoint]) -> BigMoverSignal? {
-        guard points.count >= 2 else { return nil }
-        let datedPoints: [(point: PricePoint, date: Date, close: Decimal)] = points.compactMap { point in
-            guard let date = dayDate(from: point.date),
-                  let close = posixDecimal(point.closeAdjusted),
-                  close > 0
-            else {
-                return nil
-            }
-            return (point, date, close)
-        }
-        guard datedPoints.count == points.count else { return nil }
-
-        let sorted = datedPoints.sorted {
-            if $0.date != $1.date {
-                return $0.date < $1.date
-            }
-            return $0.close < $1.close
-        }
-        guard let first = sorted.first,
-              let last = sorted.last,
-              first.date < last.date
-        else {
-            return nil
-        }
-
-        let change = (last.close - first.close) / first.close
-        let absoluteChange = change < 0 ? -change : change
+    private static func bigMoverSignal(window: PriceWindow) -> BigMoverSignal {
+        let change = window.change
         return BigMoverSignal(
-            beforeDecimal: first.close,
-            afterDecimal: last.close,
-            absoluteDecimalMove: absoluteChange,
-            moveSize: rounded(Double(truncating: change as NSDecimalNumber), places: 4),
-            currency: last.point.closeCurrency ?? first.point.closeCurrency,
-            windowStart: first.point.date,
-            windowEnd: last.point.date
+            beforeDecimal: window.first.value,
+            afterDecimal: window.last.value,
+            absoluteDecimalMove: change < 0 ? -change : change,
+            moveSize: window.roundedChange,
+            currency: window.last.point.closeCurrency ?? window.first.point.closeCurrency,
+            windowStart: window.first.point.date,
+            windowEnd: window.last.point.date
         )
     }
 
@@ -909,74 +876,5 @@ public enum PressureEngine {
     private static func concentrationScore(weight: Double, threshold: Double) -> Double {
         let relativeExcess = (weight - threshold) / threshold
         return rounded(min(1.0, 0.5 + (relativeExcess * 0.75)), places: 2)
-    }
-
-    private static func maxMove(from prices: [PricePoint]) -> PriceMoveSummary? {
-        let grouped = Dictionary(grouping: prices, by: \.quoteId)
-        return grouped.compactMap { quoteId, points -> PriceMoveSummary? in
-            let sorted = points.sorted { $0.date < $1.date }
-            guard let first = sorted.first,
-                  let last = sorted.last,
-                  let firstClose = Decimal(string: first.closeAdjusted),
-                  let lastClose = Decimal(string: last.closeAdjusted),
-                  firstClose != 0
-            else { return nil }
-
-            let change = (lastClose - firstClose) / firstClose
-            return PriceMoveSummary(
-                quoteId: quoteId,
-                fromDate: first.date,
-                toDate: last.date,
-                percentChange: rounded(Double(truncating: change as NSDecimalNumber), places: 4)
-            )
-        }
-        .max { abs($0.percentChange) < abs($1.percentChange) }
-    }
-
-    private static func recentMoves(from prices: [PricePoint]) -> [Int: PriceMoveSummary] {
-        Dictionary(
-            uniqueKeysWithValues: Dictionary(grouping: prices, by: \.quoteId)
-                .compactMap { quoteId, points -> (Int, PriceMoveSummary)? in
-                    guard let summary = recentMove(quoteId: quoteId, points: points) else {
-                        return nil
-                    }
-                    return (quoteId, summary)
-                }
-        )
-    }
-
-    private static func recentMove(quoteId: Int, points: [PricePoint]) -> PriceMoveSummary? {
-        guard points.count >= 2 else { return nil }
-        let datedPoints: [(point: PricePoint, date: Date, close: Decimal)] = points.compactMap { point in
-            guard let date = dayDate(from: point.date),
-                  let close = posixDecimal(point.closeAdjusted),
-                  close > 0
-            else {
-                return nil
-            }
-            return (point, date, close)
-        }
-        guard datedPoints.count == points.count else { return nil }
-
-        let sorted = datedPoints.sorted {
-            if $0.date != $1.date {
-                return $0.date < $1.date
-            }
-            return $0.point.closeAdjusted < $1.point.closeAdjusted
-        }
-        guard let first = sorted.first,
-              let last = sorted.last,
-              first.date < last.date
-        else {
-            return nil
-        }
-
-        let change = (last.close - first.close) / first.close
-        return PriceMoveSummary(
-            quoteId: quoteId,
-            fromDate: first.point.date,
-            toDate: last.point.date,
-            percentChange: rounded(Double(truncating: change as NSDecimalNumber), places: 4)
-        )
     }
 }

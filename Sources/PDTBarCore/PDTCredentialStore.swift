@@ -108,7 +108,6 @@ public struct FilePDTCredentialStore: PDTCredentialStore {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let temporary = directory.appending(path: ".\(url.lastPathComponent).\(UUID().uuidString)")
         let data = try connection.storedData()
-        // Created 0600 from the first byte, then renamed over the old file.
         let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
         guard descriptor >= 0 else {
             throw PDTCredentialStoreError.writeFailed(code: errno)
@@ -187,7 +186,6 @@ public struct PDTCredentialFileLock: Sendable {
 }
 
 public extension PDTStoredConnection {
-    /// The serialized form a store writes. It holds secrets; only stores see it.
     func storedData() throws -> Data {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -206,9 +204,6 @@ public extension PDTStoredConnection {
     }
 }
 
-/// The state's own JSON object with `generation` beside its one key. Data
-/// from before generations has no such key and reads as generation 0, and a
-/// build from before them reads the state and skips the key.
 extension PDTStoredConnection: Codable {
     private enum CodingKeys: String, CodingKey {
         case generation

@@ -5,10 +5,6 @@ import PDTBarCore
 import PDTBarSmokeProof
 import Security
 
-// `pdtbar-smoke auth-measure`: scores the sign-in, credential, and connection
-// lifecycle over the real `PDTLaunchRuntime` and `PDTAppConnection`. Everything
-// around them is fake: PDT, the Keychain, the browser. Nothing leaves a temp directory.
-
 struct AuthMeasureRun {
     var status: String
     var detail: String
@@ -76,17 +72,12 @@ struct AuthMeasureError: Error, CustomStringConvertible {
     }
 }
 
-// MARK: - Scenarios
-
 private struct AuthScenario {
     enum Store {
-        /// `KeychainPDTCredentialStore` over the fake keychain of that build.
         case keychain(AuthMeasureKeychain.Build)
-        /// `FilePDTCredentialStore`: the `--pdt-credential-file` dev path.
         case file
     }
 
-    /// What is stored before the first launch, and what PDT thinks of it.
     enum Stored {
         case nothing
         case browserSession(accessExpiresAt: Date, accessLive: Bool, refreshLive: Bool)
@@ -96,12 +87,9 @@ private struct AuthScenario {
     enum Action {
         case launch
         case relaunch
-        /// Sign in with PDT, when the menu offers it.
         case signIn
-        /// Check again when offered, else a fetch retry or refresh when offered.
         case checkAgainOrRefresh
         case disconnect
-        /// The deterministic user: Sign in, else Check again, else retry, until the goal or the click budget.
         case userPolicy
     }
 
@@ -109,9 +97,7 @@ private struct AuthScenario {
     var store: Store
     var stored = Stored.nothing
     var cachedPulse = false
-    /// PDT revokes every token it issued when this path is first requested.
     var revokeOnRequest: PDTAPIEndpoint?
-    /// Brings the scenario to its starting state. Shown in the report, never scored.
     var setup: [Action] = []
     var actions: [Action]
 }
@@ -153,10 +139,6 @@ private let authMeasureScenarios: [AuthScenario] = [
     AuthScenario(id: "dev-file", store: .file, setup: authMeasureSignedIn, actions: [.relaunch, .userPolicy]),
 ]
 
-// MARK: - Fake PDT
-
-/// The `full` API fixture, answered by request path instead of request order,
-/// so a product change that sends one request more or less still gets PDT's answer.
 private struct AuthMeasureFixtures {
     private let files: [String: Data]
 
@@ -190,10 +172,6 @@ private struct AuthMeasureFixtures {
     }
 }
 
-/// PDT's token endpoint and REST API with the server side of every credential:
-/// which access and refresh tokens are live. A request with a dead token gets
-/// `401 TOKEN_INVALID`, a dead refresh token gets `invalid_grant`, and a live
-/// one rotates the pair. Replies are `ScriptedPDTHTTPTransport` replies.
 private final class FakePDT: PDTHTTPTransport, @unchecked Sendable {
     private let lock = NSLock()
     private let fixtures: AuthMeasureFixtures
@@ -213,7 +191,6 @@ private final class FakePDT: PDTHTTPTransport, @unchecked Sendable {
     var rejections: Int { locked { rejectionCount } }
     var approvals: Int { locked { approvalCount } }
 
-    /// The browser half of Sign in with PDT: the user approves, PDT issues a session.
     func approveSignIn() -> PDTBrowserSession {
         locked {
             approvalCount += 1
@@ -297,9 +274,6 @@ private final class FakePDT: PDTHTTPTransport, @unchecked Sendable {
     }
 }
 
-// MARK: - Fake keychain
-
-/// `AuthMeasureKeychain` behind the `SecItem` calls `KeychainPDTCredentialStore` makes.
 private final class FakeSecItems: @unchecked Sendable {
     private let lock = NSLock()
     private var keychain: AuthMeasureKeychain
@@ -351,10 +325,6 @@ private final class FakeSecItems: @unchecked Sendable {
     }
 }
 
-// MARK: - Driver
-
-/// One scenario: PDT, the credential store's backing data, and the app's state
-/// directory outlive a relaunch. The runtime and the connection do not.
 private final class AuthMeasureWorld: @unchecked Sendable {
     private static let asOf = "2026-06-22"
     private static let clickBudget = 6
@@ -479,7 +449,6 @@ private final class AuthMeasureWorld: @unchecked Sendable {
         }
     }
 
-    /// A new process: a new runtime and connection over the same store data and state directory.
     private func launch(_ action: AuthMeasureStep.Action) throws {
         let stateDirectory = stateDirectory
         let pdt = pdt
@@ -495,7 +464,6 @@ private final class AuthMeasureWorld: @unchecked Sendable {
     }
 
     private func runUserPolicy() throws {
-        // Sign in costs two clicks: the menu row, then the approval in the browser.
         let choices: [(role: String, action: AuthMeasureStep.Action, clicks: Int)] = [
             ("connectionSignIn", .signIn, 2), ("connectionCheck", .checkAgain, 1), ("fetchRetry", .fetchRetry, 1),
         ]
@@ -523,7 +491,6 @@ private final class AuthMeasureWorld: @unchecked Sendable {
         isIdle && steps.last?.screens.last?.rows.contains { $0.role == role && $0.enabled } == true
     }
 
-    /// Runs one launch or click to rest and records it. False when the runtime refused the click.
     @discardableResult
     private func step(_ action: AuthMeasureStep.Action, clicks: Int = 0, _ start: () -> PDTOnboardingUpdate?) throws -> Bool {
         let rejections = pdt.rejections
@@ -551,7 +518,6 @@ private final class AuthMeasureWorld: @unchecked Sendable {
         return update != nil
     }
 
-    /// Runs every effect inline, the way `Sources/PDTBarApp/main.swift` runs them off the main queue.
     private func settle(_ first: PDTOnboardingUpdate?) throws {
         guard let connection else {
             throw AuthMeasureError("a click ran before the first launch")
@@ -571,7 +537,6 @@ private final class AuthMeasureWorld: @unchecked Sendable {
                 next = runtime.completeCachedPulseLoad(try? PressureRunner.cachedPulse(
                     snapshotStore: SnapshotStore(directory: stateDirectory),
                     pulseReadStore: PulseReadStore(directory: stateDirectory),
-                    // The app reads the current day. Pinned so the report is the same on any day.
                     today: Self.asOf
                 ))
             case .checkConnection:
@@ -660,7 +625,6 @@ private func authMeasureScreen(_ descriptor: MenuDescriptor, state: PDTLaunchSta
     case .connected(.failed, _): ("connected(failed)", .waiting)
     case .connected(.current, _): ("connected(current)", .connectedCurrent)
     }
-    // Roles the app wires to a click, in `makeMenuItem(from:)`.
     let clickable: Set<MenuRowRole> = [
         .connectionSignIn, .connectionToken, .connectionCancel, .connectionCheck, .connectionDisconnect, .connectionRevoke, .fetchRetry,
     ]

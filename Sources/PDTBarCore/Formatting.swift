@@ -67,11 +67,6 @@ func bucketBasisPoints(_ value: Double?, bucketSize: Int) -> String {
     return String(saturatedBasisPointsInt((Double(points) / Double(bucketSize)).rounded() * Double(bucketSize)))
 }
 
-/// Converts an already-rounded Double to Int without trapping. Malformed source
-/// data (for example a garbage price ratio driving `moveSize` toward 1e15+) can
-/// scale past `Int.max` here; fingerprint rendering must degrade gracefully
-/// instead of crashing the app, so out-of-range values saturate at the Int
-/// bounds and NaN maps to 0. Every in-range value converts exactly as before.
 private func saturatedBasisPointsInt(_ value: Double) -> Int {
     guard !value.isNaN else {
         return 0

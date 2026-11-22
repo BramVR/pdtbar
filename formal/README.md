@@ -15,6 +15,8 @@ Run any model with the pinned runner (downloads `tla2tools.jar` 1.7.4 to `~/.cac
 Scripts/formal/tlc.sh formal/<subsystem>/<Spec>.tla
 ```
 
+`./Scripts/check.sh formal` runs every model's `check.sh` and `mutations.sh`; CI runs it in the `Formal models` job. Every `formal/<subsystem>/` needs an executable `check.sh` that exits nonzero when the model fails, and each `mutations.sh` exits nonzero when a replayed bug goes uncaught.
+
 A pass covers the model and its bounds only. Each skill lists what its model leaves out.
 
 Models and their skills name Swift code by symbol (`PDTLaunchRuntime.signIn`, `Persistence.swift`), never by line number. `swift run pdtbar-checks` fails on a line anchor or on a code span naming something no Swift, test, model, or script file has; write a removed name as plain text.

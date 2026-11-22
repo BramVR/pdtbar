@@ -140,6 +140,44 @@ struct BigMoverPressureTests {
         #expect(item.moveSize == 0.2222)
     }
 
+    // #104 flagged recent move ordering same-day closes as strings ("10.20" < "9.50"); #178 fixed only big movers.
+    @Test(
+        "Big mover, recent move, and max move pick the same same-day close",
+        arguments: [
+            ("2026-06-15", "9.00", "2026-06-19", ["9.50", "10.20"], 0.1333),
+            ("2026-06-15", "9.00", "2026-06-19", ["10.20", "9.50"], 0.1333),
+            ("2026-06-19", "11.00", "2026-06-15", ["9.50", "10.20"], 0.1579),
+            ("2026-06-19", "11.00", "2026-06-15", ["10.20", "9.50"], 0.1579),
+        ]
+    )
+    func priceMovesAgreeOnSameDayTieBreak(
+        otherDate: String,
+        otherClose: String,
+        tiedDate: String,
+        tiedCloses: [String],
+        expectedMove: Double
+    ) throws {
+        var snapshot = try snapshot("big-mover")
+        let rows = [(otherDate, otherClose)] + tiedCloses.map { (tiedDate, $0) }
+        snapshot.priceSeries = try priceSeries(
+            "[" + rows.map { #"{ "quoteId": 9001, "date": "\#($0.0)", "closeAdjusted": "\#($0.1)" }"# }
+                .joined(separator: ",") + "]"
+        )
+
+        let model = PressureEngine.buildModel(from: snapshot)
+        let bigMover = try #require(model.rankedAttentionItems.first { $0.id == "bigMovers.move.9001" })
+        let recentMove = try #require(
+            model.facetSnapshots.allocation.topHoldings.first { $0.quoteId == 9001 }?.recentMove
+        )
+        let maxMove = try #require(model.facetSnapshots.bigMovers.maxMove)
+
+        #expect(bigMover.moveSize == expectedMove)
+        #expect(recentMove.percentChange == expectedMove)
+        #expect(maxMove.percentChange == expectedMove)
+        #expect(recentMove.fromDate == "2026-06-15")
+        #expect(recentMove.toDate == "2026-06-19")
+    }
+
     @Test("Seeded prior snapshot still emits big-mover pressure")
     func seededPriorSnapshotStillEmitsBigMoverPressure() throws {
         let model = try model("big-mover", withPrior: true)

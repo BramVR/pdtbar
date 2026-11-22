@@ -372,7 +372,6 @@ public enum PressureRunner {
             pulseReadStore: pulseReadStore,
             source: .cachedSnapshot,
             prunesStaleReadState: false,
-            // A failure recorded before a later complete fill no longer describes this snapshot.
             lastSyncFailure: snapshot.latestDetailFillOutcome == .degraded ? snapshotStore.lastSyncFailure() : nil,
             priorSnapshotLoadStatus: snapshotLoad.status,
             today: today ?? currentDayString()

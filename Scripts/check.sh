@@ -62,8 +62,30 @@ check_proofs() {
   return "${stale}"
 }
 
+# Every model needs a check.sh, so a new model cannot skip CI. A model that
+# replays past bugs in mutations.sh must still catch every one.
+check_formal() {
+  local dir
+  local failed=0
+
+  for dir in "${ROOT_DIR}"/formal/*/; do
+    dir="${dir%/}"
+    log "Checking formal model $(basename "${dir}")"
+    if [[ ! -x "${dir}/check.sh" ]]; then
+      printf 'ERROR: %s has no executable check.sh. Add one that exits nonzero when the model fails.\n' "${dir#"${ROOT_DIR}"/}" >&2
+      failed=1
+      continue
+    fi
+    run "${dir}/check.sh" || failed=1
+    if [[ -f "${dir}/mutations.sh" ]]; then
+      run bash "${dir}/mutations.sh" || failed=1
+    fi
+  done
+  return "${failed}"
+}
+
 usage() {
-  printf 'Usage: %s [all|scripts|build|checks|tests|proofs]\n' "$(basename "$0")" >&2
+  printf 'Usage: %s [all|scripts|build|checks|tests|proofs|formal]\n' "$(basename "$0")" >&2
 }
 
 cmd="${1:-all}"
@@ -83,6 +105,9 @@ case "${cmd}" in
     ;;
   proofs)
     check_proofs
+    ;;
+  formal)
+    check_formal
     ;;
   scripts)
     check_scripts
