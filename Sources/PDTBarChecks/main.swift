@@ -19,6 +19,7 @@ try checkPDTAPIDataHealth()
 try checkProductSpawnsNothing()
 try checkFormalCodeAnchors()
 try checkNoEmptySafeExpectations()
+try checkConcurrencyEscapeHatches()
 
 print("pdtbar-checks: passed")
 
@@ -452,6 +453,56 @@ private func checkNoEmptySafeExpectations() throws {
         hits.isEmpty,
         "#expect over allSatisfy passes on an empty collection; use nonEmptyAllSatisfy (Tests/PDTBarTests/ExpectationSupport.swift) or pin the exact elements: \(hits.joined(separator: ", "))"
     )
+}
+
+/// Shared mutable state hidden from the concurrency checker kept coming back in
+/// review (#59, #183, #306, #310) and once raced for real (768ab93).
+/// `nonisolated(unsafe)` and the unchecked `OSAllocatedUnfairLock` calls are
+/// banned outright. `@unchecked Sendable` may not exceed the per-file counts in
+/// docs/unchecked-sendable-baseline.txt, and that file must drop with the code,
+/// so the count only goes down.
+private func checkConcurrencyEscapeHatches() throws {
+    // Split so this file does not match its own patterns.
+    let unchecked = "@unchecked" + " Sendable"
+    let banned = ["nonisolated" + "(unsafe)", "withLock" + "Unchecked", "unchecked" + "State:"]
+    let fix = "hold mutable state in `OSAllocatedUnfairLock<State>` (`init(initialState:)` + `withLock`, compiler-checked) or an actor; see #310"
+    let baselinePath = "docs/unchecked-sendable-baseline.txt"
+
+    var counts: [String: Int] = [:]
+    var problems: [String] = []
+    for root in ["Sources", "Tests"] {
+        let directory = packageRoot.appending(path: root)
+        for file in try FileManager.default.subpathsOfDirectory(atPath: directory.path).sorted() where file.hasSuffix(".swift") {
+            let path = "\(root)/\(file)"
+            let lines = try String(contentsOf: directory.appending(path: file), encoding: .utf8).components(separatedBy: "\n")
+            for (index, line) in lines.enumerated() {
+                let code = line.components(separatedBy: "//")[0]
+                for pattern in banned where code.contains(pattern) {
+                    problems.append("\(path):\(index + 1) uses `\(pattern)`, which hides shared mutable state from the concurrency checker: \(fix)")
+                }
+                counts[path, default: 0] += code.components(separatedBy: unchecked).count - 1
+            }
+        }
+    }
+
+    var baseline: [String: Int] = [:]
+    let baselineText = try String(contentsOf: packageRoot.appending(path: baselinePath), encoding: .utf8)
+    for line in baselineText.components(separatedBy: "\n") where !line.hasPrefix("#") && !line.isEmpty {
+        let fields = line.split(separator: " ", maxSplits: 1).map(String.init)
+        let count = try require(fields.count == 2 ? Int(fields[0]) : nil, "\(baselinePath): expected `<count> <path>`, got `\(line)`")
+        baseline[fields[1]] = count
+    }
+    for path in Set(counts.keys).union(baseline.keys).sorted() {
+        let count = counts[path] ?? 0
+        let allowed = baseline[path] ?? 0
+        if count > allowed {
+            problems.append("`\(unchecked)` in \(path) (\(count) > baseline \(allowed)): \(fix)")
+        } else if count < allowed {
+            let edit = count == 0 ? "remove \(path) from" : "lower \(path) to \(count) in"
+            problems.append("baseline stale: \(edit) \(baselinePath) so the ratchet keeps the lower count")
+        }
+    }
+    try check(problems.isEmpty, problems.joined(separator: "\n"))
 }
 
 private func assertInformationalCopy(
