@@ -301,9 +301,11 @@ auth_states() {
 import json, sys
 root, path, connection, keychain, replies = sys.argv[1:]
 holdings = open(f"{root}/docs/pdt/fixtures/api/full/01-holdings.json").read()
-unavailable = {"status": 503, "headers": {"Retry-After": "0"},
+# Each reply names the request it answers; an unnamed request fails as unscripted.
+unavailable = {"request": "GET /v1/portfolio/holdings", "status": 503, "headers": {"Retry-After": "0"},
                "body": '{"error":{"code":"SERVICE_UNAVAILABLE","message":"m","details":{},"traceId":"t"}}'}
-responses = {"none": [], "ok": [{"status": 200, "body": holdings}], "503": [unavailable] * 3}[replies]
+responses = {"none": [], "ok": [{"request": "GET /v1/portfolio/holdings", "status": 200, "body": holdings}],
+             "503": [unavailable] * 3}[replies]
 script = {"connection": connection, "signIn": "succeeds", "api": {"responses": responses, "asOf": "2026-06-22"}}
 if keychain != "-":
     script["keychain"] = keychain

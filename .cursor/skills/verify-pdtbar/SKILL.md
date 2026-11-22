@@ -37,7 +37,7 @@ Scripts/verify_pdtbar.sh launch-scripted docs/pdt/fixtures/scripted/sync-failure
 
 `launch-scripted <script.json> [seed-snapshot.json]` starts `.build/debug/pdtbar --app-support-dir <run>/app-support --scripted-pdt <run>/scripted-pdt.json`, seeding `app-support/pdtbar/state/latest-portfolio-snapshot.json` when a seed is given. The run dir adds `scripted-pdt.json` and `events.log`. Ready means the process is alive and `events.log` holds a `check`. `docs/pdt/fixtures/scripted/` holds the shipped scripts.
 
-The smokes launch the real app with `--app-support-dir <isolated> --scripted-pdt <file>`: an in-memory credential (or the real Keychain store over a fake `SecItem` API that answers a fixed status), a scripted sign-in outcome, and scripted PDT API replies in request order. The script's `eventLog` records each `check`, `sign-in`, `token`, `disconnect`, and `request <path>`.
+The smokes launch the real app with `--app-support-dir <isolated> --scripted-pdt <file>`: an in-memory credential (or the real Keychain store over a fake `SecItem` API that answers a fixed status), a scripted sign-in outcome, and scripted PDT API replies, each naming the request it answers (`{"request": "GET /v1/portfolio/holdings", "status": 200, "body": "…"}`; an unnamed request fails as unscripted). The script's `eventLog` records each `check`, `sign-in`, `token`, `disconnect`, and `request <path>`.
 
 Two runs can coexist. Each gets its own status item and run dir. Each `pdtbar-smoke` invocation also isolates its own state under `--artifacts` / `--app-support-dir`.
 

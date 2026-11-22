@@ -102,10 +102,10 @@ private func checkAPIFixtureProvenance() throws {
             .sorted()
         try check(
             replies.map(\.file) == files,
-            "REST fixture provenance for \(scenario) should list its replies in replay order: \(files)"
+            "REST fixture provenance for \(scenario) should list every reply file: \(files)"
         )
         try check(
-            replies.allSatisfy { $0.request.hasPrefix("GET /v1/") },
+            replies.allSatisfy { $0.request.hasPrefix("GET /v1/") && ScriptedPDTHTTPTransport.Request(parsing: $0.request) != nil },
             "REST fixture provenance for \(scenario) should name a GET request for every reply"
         )
     }
@@ -116,7 +116,7 @@ private func checkCoalescedAPIFirstFetch() throws {
     defer {
         try? FileManager.default.removeItem(at: store.directory)
     }
-    let transport = ScriptedPDTHTTPTransport([checkHoldingsReply()])
+    let transport = ScriptedPDTHTTPTransport(["GET /v1/portfolio/holdings": checkHoldingsReply()])
     let firstFetch = PDTCoalescedFirstPortfolioFetch(
         dataSource: PDTAPIDataSource(client: checkAPIClient(transport), options: .firstFetch),
         snapshotStore: store,
@@ -148,19 +148,19 @@ private func checkAPIBackgroundDetailRefresh() throws {
     }
     let emptyPage = #"{"data":[],"meta":{"currentPage":1,"lastPage":1}}"#
     let prices = #"{"data":{"prices":[[{"date":"2026-03-27","closeAdjusted":"19.00","closeCurrency":"EUR","symbolQuoteId":1},{"date":"2026-03-28","closeAdjusted":"20.00","closeCurrency":"EUR","symbolQuoteId":1}]]}}"#
-    func replies(prices priceReply: ScriptedPDTHTTPTransport.Reply) -> [ScriptedPDTHTTPTransport.Reply] {
-        [
-            checkHoldingsReply(),
-            checkReply(#"{"data":{"sectors":[{"categoryName":"Technology","totalValue":{"value":"100.00","currency":"EUR"},"percentage":100}],"assetTypes":[]}}"#),
-            checkReply(#"{"data":{"items":[{"weight":25.0}],"hasMore":false}}"#),
-            checkReply(emptyPage),
-            checkReply(emptyPage),
-            priceReply,
-        ]
+    func replies(prices priceReply: ScriptedPDTHTTPTransport.Reply) -> ScriptedPDTHTTPTransport {
+        ScriptedPDTHTTPTransport([
+            "GET /v1/portfolio/holdings": checkHoldingsReply(),
+            "GET /v1/portfolio/distributions": checkReply(#"{"data":{"sectors":[{"categoryName":"Technology","totalValue":{"value":"100.00","currency":"EUR"},"percentage":100}],"assetTypes":[]}}"#),
+            "GET /v1/x-ray": checkReply(#"{"data":{"items":[{"weight":25.0}],"hasMore":false}}"#),
+            "GET /v1/calendar-events": checkReply(emptyPage),
+            "GET /v1/dividends": checkReply(emptyPage),
+            "GET /v1/prices/batch": priceReply,
+        ])
     }
-    func refresh(_ replies: [ScriptedPDTHTTPTransport.Reply]) throws -> PDTBackgroundDetailRefreshResult {
+    func refresh(_ transport: ScriptedPDTHTTPTransport) throws -> PDTBackgroundDetailRefreshResult {
         try PDTAPIBackgroundDetailRefresh(
-            client: checkAPIClient(ScriptedPDTHTTPTransport(replies)),
+            client: checkAPIClient(transport),
             snapshotStore: store,
             asOf: "2026-03-28"
         ).refresh()
@@ -220,10 +220,10 @@ private func checkPDTAPIDataHealth() throws {
     defer {
         try? FileManager.default.removeItem(at: store.directory)
     }
-    func refresh(_ replies: [ScriptedPDTHTTPTransport.Reply], asOf: String) -> PDTAPIBackgroundDetailRefresh {
+    func refresh(_ script: KeyValuePairs<ScriptedPDTHTTPTransport.Request, ScriptedPDTHTTPTransport.Reply>, asOf: String) -> PDTAPIBackgroundDetailRefresh {
         PDTAPIBackgroundDetailRefresh(
             client: PDTAPIClient(
-                transport: ScriptedPDTHTTPTransport(replies),
+                transport: ScriptedPDTHTTPTransport(script),
                 tokenProvider: InMemoryPDTAPITokenProvider(token: PDTAPIToken(token)),
                 policy: PDTAPIRequestPolicy(maxAttempts: 1)
             ),
@@ -232,15 +232,14 @@ private func checkPDTAPIDataHealth() throws {
         )
     }
     let emptyPage = #"{"data":[],"meta":{"currentPage":1,"lastPage":1}}"#
-    let completeSync = [
-        #"{"data":[{"symbolName":"Check Holding","symbolQuoteId":1,"symbolId":1001,"currentPriceDate":"2026-03-27T23:59:59+00:00","portfolioWeight":"1","closedAt":null,"currentWorthLocal":{"value":"100.00","currency":"EUR"}}]}"#,
-        #"{"data":{"sectors":[],"assetTypes":[]}}"#,
-        #"{"data":{"items":[],"hasMore":false}}"#,
-        emptyPage,
-        emptyPage,
-        #"{"data":{"prices":[[{"date":"2026-03-27","closeAdjusted":"10.00","closeCurrency":"EUR","symbolQuoteId":1}]]}}"#,
-    ].map { ScriptedPDTHTTPTransport.Reply.response(status: 200, body: Data($0.utf8)) }
-    _ = try refresh(completeSync, asOf: "2026-03-28").refresh()
+    _ = try refresh([
+        "GET /v1/portfolio/holdings": checkReply(#"{"data":[{"symbolName":"Check Holding","symbolQuoteId":1,"symbolId":1001,"currentPriceDate":"2026-03-27T23:59:59+00:00","portfolioWeight":"1","closedAt":null,"currentWorthLocal":{"value":"100.00","currency":"EUR"}}]}"#),
+        "GET /v1/portfolio/distributions": checkReply(#"{"data":{"sectors":[],"assetTypes":[]}}"#),
+        "GET /v1/x-ray": checkReply(#"{"data":{"items":[],"hasMore":false}}"#),
+        "GET /v1/calendar-events": checkReply(emptyPage),
+        "GET /v1/dividends": checkReply(emptyPage),
+        "GET /v1/prices/batch": checkReply(#"{"data":{"prices":[[{"date":"2026-03-27","closeAdjusted":"10.00","closeCurrency":"EUR","symbolQuoteId":1}]]}}"#),
+    ], asOf: "2026-03-28").refresh()
 
     let savedCopy = try require(
         try PressureRunner.cachedPulse(snapshotStore: store, today: "2026-03-28"),
@@ -264,7 +263,7 @@ private func checkPDTAPIDataHealth() throws {
         headers: ["Retry-After": "120", "X-Request-Id": token, "Authorization": "Bearer \(token)"]
     )
     do {
-        _ = try refresh([rateLimited], asOf: "2026-03-29").refresh()
+        _ = try refresh(["GET /v1/portfolio/holdings": rateLimited], asOf: "2026-03-29").refresh()
         throw CheckFailure("a rate-limited base request should fail the PDT API refresh")
     } catch PDTAPIError.rateLimited {}
     let failure = try require(store.lastSyncFailure(), "a failed PDT API refresh should store its typed failure")

@@ -5,38 +5,32 @@ import PDTBarCore
 
 @Suite("PDT API data source")
 struct PDTAPIDataSourceTests {
-    @Test("Requests are GET-only to the PDT origin, in a fixed order, with the snapshot date windows")
+    @Test("Requests are GET-only to the PDT origin with no body, one per fixture reply, with the snapshot date windows")
     func requestContract() throws {
         let run = try replay("full")
-
-        #expect(run.transport.requests.map { $0.url!.path } == [
-            "/v1/portfolio/holdings",
-            "/v1/portfolio/distributions",
-            "/v1/x-ray", "/v1/x-ray",
-            "/v1/calendar-events", "/v1/calendar-events",
-            "/v1/dividends",
-            "/v1/symbol-quotes", "/v1/symbol-quotes", "/v1/symbol-quotes",
-            "/v1/symbol-quotes", "/v1/symbol-quotes", "/v1/symbol-quotes",
-            "/v1/prices/batch",
-        ])
-        for request in run.transport.requests {
-            #expect(request.httpMethod == "GET")
-            #expect(request.httpBody == nil)
-            #expect(request.url?.scheme == "https")
-            #expect(request.url?.host == "api.portfoliodividendtracker.com")
-        }
         let requests = run.transport.requests
-        #expect(query(requests[2], "offset") == ["0"])
-        #expect(query(requests[3], "offset") == ["2"])
-        #expect(query(requests[4], "dateFrom") == ["2026-06-22"])
-        #expect(query(requests[4], "dateTo") == ["2026-07-22"])
-        #expect(requests[4...5].map { query($0, "page") } == [["1"], ["2"]])
-        #expect(query(requests[6], "dateFrom") == ["2025-06-17"])
-        #expect(query(requests[6], "dateTo") == ["2026-07-22"])
-        #expect(requests[7...12].map { query($0, "symbolId") } == [["5001"], ["5002"], ["5003"], ["5004"], ["5010"], ["5013"]])
-        #expect(query(requests[13], "symbolQuoteIds[]") == ["9001", "9002", "9003", "9004", "9010", "9013"])
-        #expect(query(requests[13], "dateFrom") == ["2026-06-15"])
-        #expect(query(requests[13], "dateTo") == ["2026-06-22"])
+
+        #expect(run.transport.scriptErrors.isEmpty, "every request has a scripted reply")
+        #expect(run.transport.unusedReplies.isEmpty, "every scripted reply was asked for")
+        #expect(requests.count == 14)
+        #expect(requests.nonEmptyAllSatisfy { request in
+            request.httpMethod == "GET"
+                && request.httpBody == nil
+                && request.url?.scheme == "https"
+                && request.url?.host == "api.portfoliodividendtracker.com"
+        })
+        #expect(Set(sent(requests, to: "/v1/x-ray").flatMap { query($0, "offset") }) == ["0", "2"])
+        let calendar = sent(requests, to: "/v1/calendar-events")
+        #expect(Set(calendar.flatMap { query($0, "page") }) == ["1", "2"])
+        #expect(calendar.nonEmptyAllSatisfy { query($0, "dateFrom") == ["2026-06-22"] && query($0, "dateTo") == ["2026-07-22"] })
+        let dividends = try #require(sent(requests, to: "/v1/dividends").first)
+        #expect(query(dividends, "dateFrom") == ["2025-06-17"])
+        #expect(query(dividends, "dateTo") == ["2026-07-22"])
+        #expect(Set(sent(requests, to: "/v1/symbol-quotes").flatMap { query($0, "symbolId") }) == ["5001", "5002", "5003", "5004", "5010", "5013"])
+        let prices = try #require(sent(requests, to: "/v1/prices/batch").first)
+        #expect(Set(query(prices, "symbolQuoteIds[]")) == ["9001", "9002", "9003", "9004", "9010", "9013"])
+        #expect(query(prices, "dateFrom") == ["2026-06-15"])
+        #expect(query(prices, "dateTo") == ["2026-06-22"])
         #expect(run.failures.isEmpty)
         #expect(run.snapshot.latestDetailFillOutcome == nil)
     }
@@ -44,12 +38,13 @@ struct PDTAPIDataSourceTests {
     @Test("Every paged request asks for at most PDT's documented page size")
     func pagedRequestsStayWithinDocumentedPageSize() throws {
         let documentedMaximumPageSize = 100
-        let pageSizes = try replay("full").transport.requests.compactMap { request in
-            (query(request, "perPage") + query(request, "limit")).first.flatMap(Int.init)
-        }
+        let pagedPaths: Set = ["/v1/x-ray", "/v1/calendar-events", "/v1/dividends", "/v1/symbol-quotes"]
+        let paged = try replay("full").transport.requests.filter { pagedPaths.contains($0.url!.path) }
 
-        #expect(pageSizes.count == 11)
-        #expect(pageSizes.nonEmptyAllSatisfy { $0 <= documentedMaximumPageSize })
+        #expect(paged.nonEmptyAllSatisfy { request in
+            let size = (query(request, "perPage") + query(request, "limit")).first.flatMap(Int.init)
+            return size.map { (1...documentedMaximumPageSize).contains($0) } ?? false
+        })
     }
 
     @Test("Holdings keep open rows, local FX values, identifiers, and tolerate malformed optional fields")
@@ -90,6 +85,7 @@ struct PDTAPIDataSourceTests {
 
         #expect(snapshot.sectors.map(\.name) == ["information-technology", "communication-services", "financials", "health-care"])
         #expect(snapshot.sectors.map(\.percentage) == [30, 20, 20, 15])
+        try #require(snapshot.sectors.count == 4)
         #expect(snapshot.sectors[1].totalValue == Money(value: "8000", currency: "EUR"))
         #expect(snapshot.assetTypes.map(\.name) == ["common-stock", "cash"])
         #expect(snapshot.xRayHoldings?.map(\.weight) == [0.125, 0.0825, 0.04])
@@ -98,6 +94,7 @@ struct PDTAPIDataSourceTests {
         #expect(events.map(\.symbolName) == ["Helix Pharma A/S", "Nova Lithography", "Orbit Communications"])
         #expect(events.map(\.quoteId) == [9003, 9001, 9002])
         #expect(events.map(\.estimated) == [false, false, true])
+        try #require(events.count == 3)
         #expect(events[0].amount == Money(value: "78.00", currency: "EUR"))
         #expect(events[1].amount == nil, "a +/- correction pair nets the Nova dividend out")
         #expect(snapshot.dividendRowCount == 4)
@@ -112,17 +109,22 @@ struct PDTAPIDataSourceTests {
         let quoteIDs = Array(1...120)
         let holdings = quoteIDs.map { holdingRow(quoteId: $0, symbolId: $0 + 1000) }.joined(separator: ",")
         let priceGroup = { (id: Int) in #"[{"date":"2026-06-22","closeAdjusted":"1.00","closeCurrency":"EUR","symbolQuoteId":\#(id)}]"# }
+        // Each chunk's reply is keyed by an id only that chunk carries.
         let batches = [Array(1...50), Array(51...100), Array(101...120)].map { chunk in
-            ok(#"{"data":{"prices":[\#(chunk.map(priceGroup).joined(separator: ","))]}}"#)
+            (
+                ScriptedPDTHTTPTransport.Request(parsing: "GET /v1/prices/batch?symbolQuoteIds[]=\(chunk[0])")!,
+                ok(#"{"data":{"prices":[\#(chunk.map(priceGroup).joined(separator: ","))]}}"#)
+            )
         }
-        let transport = ScriptedPDTHTTPTransport([ok(#"{"data":[\#(holdings)]}"#)] + batches)
+        let transport = ScriptedPDTHTTPTransport(exchanges: [("GET /v1/portfolio/holdings", ok(#"{"data":[\#(holdings)]}"#))] + batches)
 
         let snapshot = try dataSource(transport, options: options(prices: true)).snapshot(asOf: "2026-06-22")
 
-        let batchRequests = transport.requests.dropFirst()
-        #expect(batchRequests.map { query($0, "symbolQuoteIds[]").count } == [50, 50, 20])
-        #expect(batchRequests.flatMap { query($0, "symbolQuoteIds[]") } == quoteIDs.map(String.init))
-        #expect(snapshot.priceSeries.map(\.quoteId) == quoteIDs)
+        let batchRequests = sent(transport.requests, to: "/v1/prices/batch")
+        #expect(transport.scriptErrors.isEmpty)
+        #expect(batchRequests.map { query($0, "symbolQuoteIds[]").count }.sorted() == [20, 50, 50])
+        #expect(batchRequests.flatMap { query($0, "symbolQuoteIds[]") }.sorted() == quoteIDs.map(String.init).sorted())
+        #expect(snapshot.priceSeries.map(\.quoteId).sorted() == quoteIDs)
         #expect(snapshot.latestDetailFillOutcome == nil)
     }
 
@@ -134,7 +136,7 @@ struct PDTAPIDataSourceTests {
             holdingRow(quoteId: 1, symbolId: 2, worthLocal: #"{"value":"lots","currency":"EUR"}"#),
             holdingRow(quoteId: 1, symbolId: 2, closedAt: "20260302"),
         ] {
-            let transport = ScriptedPDTHTTPTransport([ok(#"{"data":[\#(row)]}"#)])
+            let transport = ScriptedPDTHTTPTransport(["GET /v1/portfolio/holdings": ok(#"{"data":[\#(row)]}"#)])
             #expect(throws: PDTAPIError.invalidResponse) {
                 try dataSource(transport, options: .firstFetch).snapshot(asOf: "2026-06-22")
             }
@@ -143,7 +145,7 @@ struct PDTAPIDataSourceTests {
 
     @Test("A holdings failure throws and requests nothing else")
     func holdingsFailureThrows() throws {
-        let transport = ScriptedPDTHTTPTransport([apiError(401, "TOKEN_INVALID", details: #"{"reason":"revoked"}"#)])
+        let transport = ScriptedPDTHTTPTransport(["GET /v1/portfolio/holdings": apiError(401, "TOKEN_INVALID", details: #"{"reason":"revoked"}"#)])
 
         #expect(throws: PDTAPIError.tokenInvalid(reason: "revoked")) {
             try dataSource(transport).snapshot(asOf: "2026-06-22")
@@ -156,21 +158,22 @@ struct PDTAPIDataSourceTests {
         let holdings = ok(#"{"data":[\#(holdingRow(quoteId: 1, symbolId: 2))]}"#)
         let emptyPage = ok(#"{"data":[],"meta":{"currentPage":1,"lastPage":1,"perPage":100,"total":0}}"#)
         let requested = ScriptedPDTHTTPTransport([
-            holdings,
-            ok(#"{"data":{"sectors":[],"assetTypes":[]}}"#),
-            ok(#"{"data":{"items":[],"hasMore":false,"totalCount":0}}"#),
-            emptyPage,
-            emptyPage,
-            emptyPage,
-            ok(#"{"data":{"prices":[]}}"#),
+            "GET /v1/portfolio/holdings": holdings,
+            "GET /v1/portfolio/distributions": ok(#"{"data":{"sectors":[],"assetTypes":[]}}"#),
+            "GET /v1/x-ray": ok(#"{"data":{"items":[],"hasMore":false,"totalCount":0}}"#),
+            "GET /v1/calendar-events": emptyPage,
+            "GET /v1/dividends": emptyPage,
+            "GET /v1/symbol-quotes?symbolId=2": emptyPage,
+            "GET /v1/prices/batch": ok(#"{"data":{"prices":[]}}"#),
         ])
-        let unrequested = ScriptedPDTHTTPTransport([holdings])
+        let unrequested = ScriptedPDTHTTPTransport(["GET /v1/portfolio/holdings": holdings])
         let recorder = FailureRecorder()
 
         let empty = try dataSource(requested, recorder: recorder).snapshot(asOf: "2026-06-22")
         let missing = try dataSource(unrequested, options: .firstFetch).snapshot(asOf: "2026-06-22")
 
-        #expect(requested.requests.count == 7)
+        #expect(requested.scriptErrors.isEmpty)
+        #expect(requested.unusedReplies.isEmpty)
         #expect(recorder.failures.isEmpty)
         #expect(empty.xRayHoldings == [])
         #expect(empty.sectors.isEmpty)
@@ -187,10 +190,10 @@ struct PDTAPIDataSourceTests {
     func failedOptionalFacetDegrades() throws {
         let recorder = FailureRecorder()
         let transport = ScriptedPDTHTTPTransport([
-            ok(#"{"data":[\#(holdingRow(quoteId: 1, symbolId: 2))]}"#),
-            ok(#"{"data":{"sectors":[{"categoryName":"energy","totalValue":{"value":"1.00","currency":"EUR"},"percentage":"most"}],"assetTypes":[]}}"#),
-            ok(#"{"data":{"items":"broken"}}"#),
-            ok(#"{"data":{"prices":[[{"date":"2026-06-22","closeAdjusted":2.5,"symbolQuoteId":1}]]}}"#),
+            "GET /v1/portfolio/holdings": ok(#"{"data":[\#(holdingRow(quoteId: 1, symbolId: 2))]}"#),
+            "GET /v1/portfolio/distributions": ok(#"{"data":{"sectors":[{"categoryName":"energy","totalValue":{"value":"1.00","currency":"EUR"},"percentage":"most"}],"assetTypes":[]}}"#),
+            "GET /v1/x-ray": ok(#"{"data":{"items":"broken"}}"#),
+            "GET /v1/prices/batch": ok(#"{"data":{"prices":[[{"date":"2026-06-22","closeAdjusted":2.5,"symbolQuoteId":1}]]}}"#),
         ])
         let options = PDTAPIDataSourceOptions(includeIncomeEvents: false, includeDividends: false, includeQuoteCodes: false)
 
@@ -200,24 +203,25 @@ struct PDTAPIDataSourceTests {
         #expect(snapshot.xRayHoldings == nil)
         #expect(snapshot.priceSeries.map(\.closeAdjusted) == ["2.5"])
         #expect(snapshot.latestDetailFillOutcome == .degraded)
-        #expect(recorder.failures == [
-            PDTSyncFailure(phase: .allocation, endpoint: .distributions, kind: .unreadableResponse, requestCount: 1),
-            PDTSyncFailure(phase: .xRay, endpoint: .xRay, kind: .unreadableResponse, requestCount: 1),
-        ])
+        #expect(recorder.failures.count == 2)
+        #expect(recorder.failures.contains(PDTSyncFailure(phase: .allocation, endpoint: .distributions, kind: .unreadableResponse, requestCount: 1)))
+        #expect(recorder.failures.contains(PDTSyncFailure(phase: .xRay, endpoint: .xRay, kind: .unreadableResponse, requestCount: 1)))
     }
 
     @Test("An auth failure on an optional facet skips the remaining facets and keeps the token out of the failure")
     func authFailureSkipsRemainingFacets() throws {
         let recorder = FailureRecorder()
         let transport = ScriptedPDTHTTPTransport([
-            ok(#"{"data":[\#(holdingRow(quoteId: 1, symbolId: 2))]}"#),
-            ok(#"{"data":{"sectors":[],"assetTypes":[]}}"#),
-            apiError(401, "TOKEN_INVALID", details: #"{"reason":"expired"}"#),
+            "GET /v1/portfolio/holdings": ok(#"{"data":[\#(holdingRow(quoteId: 1, symbolId: 2))]}"#),
+            "GET /v1/portfolio/distributions": ok(#"{"data":{"sectors":[],"assetTypes":[]}}"#),
+            "GET /v1/x-ray": apiError(401, "TOKEN_INVALID", details: #"{"reason":"expired"}"#),
         ])
 
         let snapshot = try dataSource(transport, recorder: recorder).snapshot(asOf: "2026-06-22")
 
-        #expect(transport.requests.count == 3)
+        // Nothing is asked after the 401, and nothing unscripted is asked at all.
+        #expect(transport.requests.last?.url?.path == "/v1/x-ray")
+        #expect(transport.scriptErrors.isEmpty)
         #expect(snapshot.openHoldings.map(\.quoteId) == [1])
         #expect(snapshot.xRayHoldings == nil)
         #expect(snapshot.latestDetailFillOutcome == .degraded)
@@ -245,7 +249,10 @@ struct PDTAPIDataSourceTests {
     func errorKinds(status: Int, code: String, kind: PDTSyncFailure.Kind) throws {
         let reply = status == 200 ? ok(code) : apiError(status, code)
         let recorder = FailureRecorder()
-        let transport = ScriptedPDTHTTPTransport([ok(#"{"data":[\#(holdingRow(quoteId: 1, symbolId: 2))]}"#), reply])
+        let transport = ScriptedPDTHTTPTransport([
+            "GET /v1/portfolio/holdings": ok(#"{"data":[\#(holdingRow(quoteId: 1, symbolId: 2))]}"#),
+            "GET /v1/portfolio/distributions": reply,
+        ])
         let options = PDTAPIDataSourceOptions(
             includeXRayHoldings: false,
             includeIncomeEvents: false,
@@ -261,7 +268,7 @@ struct PDTAPIDataSourceTests {
 
     @Test("Multi-currency holdings total in the portfolio currency")
     func multiCurrencyTotalsInPortfolioCurrency() throws {
-        let transport = ScriptedPDTHTTPTransport([ok(#"""
+        let transport = ScriptedPDTHTTPTransport(["GET /v1/portfolio/holdings": ok(#"""
         {"data":[
           {"symbolName":"US Traded Co","symbolQuoteId":2001,"symbolId":3001,"currentPriceDate":"2026-06-22T21:59:00+00:00","currentPriceLocal":{"value":"347.66","currency":"EUR"},"currentExchangeRate":1.154,"currentWorth":{"value":"9347.40","currency":"USD"},"currentWorthLocal":{"value":"8100.00","currency":"EUR"},"portfolioWeight":0.34,"closedAt":null},
           {"symbolName":"Danish Traded Co","symbolQuoteId":2002,"symbolId":3002,"currentPriceDate":"2026-06-22T21:59:00+00:00","currentPriceLocal":{"value":"25.00","currency":"DKK"},"currentExchangeRate":2.0,"currentWorth":{"value":"250.00","currency":"DKK"},"currentWorthLocal":{"value":"250.00","currency":"DKK"},"portfolioWeight":0.66,"closedAt":null}
@@ -276,7 +283,7 @@ struct PDTAPIDataSourceTests {
 
     @Test("A portfolio held in USD is totalled in USD")
     func nonEURPortfolioCurrencyIsInferred() throws {
-        let transport = ScriptedPDTHTTPTransport([ok(#"""
+        let transport = ScriptedPDTHTTPTransport(["GET /v1/portfolio/holdings": ok(#"""
         {"data":[
           {"symbolName":"US Portfolio Holding","symbolQuoteId":6001,"symbolId":7001,"currentPriceDate":"2026-06-22T21:59:00+00:00","currentPriceLocal":{"value":"100.00","currency":"USD"},"currentExchangeRate":0.8,"currentWorth":{"value":"400.00","currency":"EUR"},"currentWorthLocal":{"value":"500.00","currency":"USD"},"portfolioWeight":0.67,"closedAt":null},
           {"symbolName":"Second US Portfolio Holding","symbolQuoteId":6002,"symbolId":7002,"currentPriceDate":"2026-06-22T21:59:00+00:00","currentPriceLocal":{"value":"25.00","currency":"USD"},"currentWorth":{"value":"250.00","currency":"USD"},"currentWorthLocal":{"value":"250.00","currency":"USD"},"portfolioWeight":0.33,"closedAt":null}
@@ -292,7 +299,7 @@ struct PDTAPIDataSourceTests {
     @Test("Filtered-out holdings get no quote-code or price request")
     func filteredHoldingsGetNoQuoteOrPriceRequest() throws {
         let transport = ScriptedPDTHTTPTransport([
-            ok(#"""
+            "GET /v1/portfolio/holdings": ok(#"""
             {"data":[
               {"symbolName":"Open Public Co","symbolQuoteId":1001,"symbolId":5001,"currentPriceDate":"2026-06-22T21:59:00+00:00","currentWorth":{"value":"500.00","currency":"EUR"},"currentWorthLocal":{"value":"500.00","currency":"EUR"},"portfolioWeight":0.10,"closedAt":null},
               {"symbolName":"Zero Worth","symbolQuoteId":1003,"symbolId":5003,"currentPriceDate":"2026-06-22T21:59:00+00:00","currentWorthLocal":{"value":"0.00","currency":"EUR"},"portfolioWeight":0.45,"closedAt":null},
@@ -300,8 +307,8 @@ struct PDTAPIDataSourceTests {
               {"symbolName":"Closed Co","symbolQuoteId":1002,"symbolId":5002,"currentPriceDate":"2026-06-21T21:59:00+00:00","currentWorthLocal":{"value":"0.00","currency":"EUR"},"portfolioWeight":0.40,"closedAt":"2026-06-01T00:00:00+00:00"}
             ]}
             """#),
-            ok(#"{"data":[{"id":1001,"code":"PUBC","symbolId":5001}],"meta":{"currentPage":1,"lastPage":1}}"#),
-            ok(#"{"data":{"prices":[[{"date":"2026-06-22","closeAdjusted":"10.25","closeCurrency":"EUR","symbolQuoteId":1001}]]}}"#),
+            "GET /v1/symbol-quotes?symbolId=5001": ok(#"{"data":[{"id":1001,"code":"PUBC","symbolId":5001}],"meta":{"currentPage":1,"lastPage":1}}"#),
+            "GET /v1/prices/batch?symbolQuoteIds[]=1001": ok(#"{"data":{"prices":[[{"date":"2026-06-22","closeAdjusted":"10.25","closeCurrency":"EUR","symbolQuoteId":1001}]]}}"#),
         ])
         let options = PDTAPIDataSourceOptions(
             includeDistributions: false,
@@ -315,9 +322,10 @@ struct PDTAPIDataSourceTests {
         #expect(snapshot.openHoldings.map(\.quoteId) == [1001])
         #expect(snapshot.openHoldings.first?.copyableIdentifier == "PUBC")
         #expect(snapshot.priceSeries.map(\.quoteId) == [1001])
-        #expect(transport.requests.map { $0.url!.path } == ["/v1/portfolio/holdings", "/v1/symbol-quotes", "/v1/prices/batch"])
-        #expect(query(transport.requests[1], "symbolId") == ["5001"])
-        #expect(query(transport.requests[2], "symbolQuoteIds[]") == ["1001"])
+        #expect(transport.scriptErrors.isEmpty)
+        #expect(transport.requests.count == 3)
+        #expect(sent(transport.requests, to: "/v1/symbol-quotes").map { query($0, "symbolId") } == [["5001"]])
+        #expect(sent(transport.requests, to: "/v1/prices/batch").map { query($0, "symbolQuoteIds[]") } == [["1001"]])
     }
 
     @Test(
@@ -365,12 +373,10 @@ private func replay(
     options: PDTAPIDataSourceOptions = PDTAPIDataSourceOptions(),
     asOf: String = "2026-06-22"
 ) throws -> ReplayRun {
-    let directory = packageRoot.appending(path: "docs/pdt/fixtures/api/\(scenario)")
-    let bodies = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-        .filter { $0.pathExtension == "json" }
-        .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        .map { ScriptedPDTHTTPTransport.Reply.response(status: 200, body: try Data(contentsOf: $0)) }
-    let transport = ScriptedPDTHTTPTransport(bodies)
+    let transport = ScriptedPDTHTTPTransport(
+        exchanges: try ScriptedPDTHTTPTransport.fixtureReplies(scenario: scenario, apiFixtures: packageRoot.appending(path: "docs/pdt/fixtures/api"))
+            .map { ($0.request, .response(status: 200, body: $0.body)) }
+    )
     let recorder = FailureRecorder()
     let snapshot = try dataSource(transport, options: options, recorder: recorder).snapshot(asOf: asOf)
     return ReplayRun(snapshot: snapshot, transport: transport, failures: recorder.failures)
@@ -416,6 +422,10 @@ private func ok(_ body: String) -> ScriptedPDTHTTPTransport.Reply {
 
 private func apiError(_ status: Int, _ code: String, details: String = "{}") -> ScriptedPDTHTTPTransport.Reply {
     .response(status: status, body: Data(#"{"error":{"code":"\#(code)","message":"m","details":\#(details),"traceId":"t"}}"#.utf8))
+}
+
+private func sent(_ requests: [URLRequest], to path: String) -> [URLRequest] {
+    requests.filter { $0.url?.path == path }
 }
 
 private func query(_ request: URLRequest, _ name: String) -> [String] {

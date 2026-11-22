@@ -12,7 +12,7 @@ struct DataHealthRedactionTests {
         let store = try seededStore()
         defer { try? FileManager.default.removeItem(at: store.directory) }
         var replies = syncReplies()
-        replies[step.replyIndex] = request.reply
+        replies[step.request] = request.reply
 
         let result = try? refresh(replies, store: store).refresh(cancellation: nil, progress: { _ in })
 
@@ -50,7 +50,7 @@ struct DataHealthRedactionTests {
         let store = try seededStore()
         defer { try? FileManager.default.removeItem(at: store.directory) }
         var replies = syncReplies()
-        replies[FailedStep.allocation.replyIndex] = .response(
+        replies[FailedStep.allocation.request] = .response(
             status: 503,
             body: Data(#"{"error":{"code":"SERVER_ERROR","message":"m","details":{},"traceId":"\#(bodyTraceID)"}}"#.utf8),
             headers: headers
@@ -198,7 +198,7 @@ enum FailedRequest: String, CaseIterable, Sendable {
 enum FailedStep: String, CaseIterable, Sendable {
     case baseHoldings, allocation
 
-    var replyIndex: Int { self == .baseHoldings ? 0 : 1 }
+    var request: ScriptedPDTHTTPTransport.Request { self == .baseHoldings ? "GET /v1/portfolio/holdings" : "GET /v1/portfolio/distributions" }
     var phase: BackgroundDetailRefreshPhase { self == .baseHoldings ? .baseHoldings : .allocation }
     var endpoint: PDTAPIEndpoint { self == .baseHoldings ? .holdings : .distributions }
 }
@@ -260,10 +260,10 @@ private func freeTextProperties(in value: Any, path: String) -> [String] {
     }
 }
 
-private func refresh(_ replies: [ScriptedPDTHTTPTransport.Reply], store: SnapshotStore) -> PDTAPIBackgroundDetailRefresh {
+private func refresh(_ replies: [ScriptedPDTHTTPTransport.Request: ScriptedPDTHTTPTransport.Reply], store: SnapshotStore) -> PDTAPIBackgroundDetailRefresh {
     PDTAPIBackgroundDetailRefresh(
         client: PDTAPIClient(
-            transport: ScriptedPDTHTTPTransport(replies),
+            transport: ScriptedPDTHTTPTransport(exchanges: replies.map { ($0.key, $0.value) }),
             tokenProvider: InMemoryPDTAPITokenProvider(token: PDTAPIToken(Planted.token)),
             policy: PDTAPIRequestPolicy(maxAttempts: 1),
             sleeper: NoSleep()
@@ -280,18 +280,19 @@ private func seededStore() throws -> SnapshotStore {
     return store
 }
 
-/// One complete sync in request order: holdings, distributions, x-ray, calendar, dividends, prices.
-private func syncReplies() -> [ScriptedPDTHTTPTransport.Reply] {
+/// One complete sync, each reply keyed by the request it answers.
+private func syncReplies() -> [ScriptedPDTHTTPTransport.Request: ScriptedPDTHTTPTransport.Reply] {
     let holding = #"{"symbolName":"Holding 1","symbolQuoteId":1,"symbolId":1001,"currentPriceDate":"2026-06-22T23:59:59+00:00","portfolioWeight":"1","closedAt":null,"currentWorthLocal":{"value":"100.00","currency":"EUR"}}"#
     let emptyPage = #"{"data":[],"meta":{"currentPage":1,"lastPage":1}}"#
-    return [
-        #"{"data":[\#(holding)]}"#,
-        #"{"data":{"sectors":[],"assetTypes":[]}}"#,
-        #"{"data":{"items":[],"hasMore":false}}"#,
-        emptyPage,
-        emptyPage,
-        #"{"data":{"prices":[[{"date":"2026-06-22","closeAdjusted":"10.00","closeCurrency":"EUR","symbolQuoteId":1}]]}}"#,
-    ].map { .response(status: 200, body: Data($0.utf8)) }
+    let bodies: [ScriptedPDTHTTPTransport.Request: String] = [
+        "GET /v1/portfolio/holdings": #"{"data":[\#(holding)]}"#,
+        "GET /v1/portfolio/distributions": #"{"data":{"sectors":[],"assetTypes":[]}}"#,
+        "GET /v1/x-ray": #"{"data":{"items":[],"hasMore":false}}"#,
+        "GET /v1/calendar-events": emptyPage,
+        "GET /v1/dividends": emptyPage,
+        "GET /v1/prices/batch": #"{"data":{"prices":[[{"date":"2026-06-22","closeAdjusted":"10.00","closeCurrency":"EUR","symbolQuoteId":1}]]}}"#,
+    ]
+    return bodies.mapValues { .response(status: 200, body: Data($0.utf8)) }
 }
 
 /// Data health as the app shows it after this sync: the degraded pulse the sync

@@ -9,19 +9,15 @@ struct PDTAPIBackgroundDetailRefreshTests {
     func completeRefresh() throws {
         let store = try temporaryStore()
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        let transport = ScriptedPDTHTTPTransport(try fullReplies())
+        let transport = ScriptedPDTHTTPTransport(exchanges: try fullScript())
         let recorder = ProgressRecorder()
 
         let result = try refresh(transport, store: store).refresh(cancellation: nil, progress: recorder.record)
 
-        #expect(transport.requests.map { $0.url!.path } == [
-            "/v1/portfolio/holdings",
-            "/v1/portfolio/distributions",
-            "/v1/x-ray", "/v1/x-ray",
-            "/v1/calendar-events", "/v1/calendar-events",
-            "/v1/dividends",
-            "/v1/prices/batch",
-        ])
+        // The script holds every background facet reply and no symbol-quote lookup.
+        #expect(transport.scriptErrors.isEmpty)
+        #expect(transport.unusedReplies.isEmpty)
+        #expect(!transport.requests.contains { $0.url?.path == "/v1/symbol-quotes" })
         #expect(transport.requests.nonEmptyAllSatisfy { $0.httpMethod == "GET" && $0.url?.host == "api.portfoliodividendtracker.com" })
         #expect(result.outcome == .completed)
         #expect(result.failures.isEmpty)
@@ -45,7 +41,7 @@ struct PDTAPIBackgroundDetailRefreshTests {
     func baseFailureKeepsLastGoodSnapshot() throws {
         let store = try seededStore()
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        let transport = ScriptedPDTHTTPTransport([apiError(503, "SERVICE_UNAVAILABLE")])
+        let transport = ScriptedPDTHTTPTransport([holdingsRequest: apiError(503, "SERVICE_UNAVAILABLE")])
 
         #expect(throws: PDTAPIError.self) {
             try refresh(transport, store: store).refresh(cancellation: nil, progress: { _ in })
@@ -65,11 +61,11 @@ struct PDTAPIBackgroundDetailRefreshTests {
     func completedRefreshClearsEarlierFailure() throws {
         let store = try seededStore()
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        _ = try? refresh(ScriptedPDTHTTPTransport([apiError(503, "SERVICE_UNAVAILABLE")]), store: store)
+        _ = try? refresh(ScriptedPDTHTTPTransport([holdingsRequest: apiError(503, "SERVICE_UNAVAILABLE")]), store: store)
             .refresh(cancellation: nil, progress: { _ in })
         #expect(store.lastSyncFailure() != nil)
 
-        let result = try refresh(ScriptedPDTHTTPTransport(try fullReplies()), store: store)
+        let result = try refresh(ScriptedPDTHTTPTransport(exchanges: try fullScript()), store: store)
             .refresh(cancellation: nil, progress: { _ in })
 
         #expect(result.outcome == .completed)
@@ -80,7 +76,7 @@ struct PDTAPIBackgroundDetailRefreshTests {
     func baseFailurePersistsRequestCount() throws {
         let store = try seededStore()
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        let transport = ScriptedPDTHTTPTransport(Array(repeating: apiError(503, "SERVICE_UNAVAILABLE"), count: 3))
+        let transport = ScriptedPDTHTTPTransport(exchanges: Array(repeating: (holdingsRequest, apiError(503, "SERVICE_UNAVAILABLE")), count: 3))
 
         #expect(throws: PDTAPIError.server(status: 503, retryAfter: nil)) {
             try refresh(transport, store: store, maxAttempts: 3).refresh(cancellation: nil, progress: { _ in })
@@ -94,10 +90,12 @@ struct PDTAPIBackgroundDetailRefreshTests {
     func optionalFailurePersistsRequestCount() throws {
         let store = try seededStore()
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        var replies = try fullReplies()
         let unavailable = apiError(503, "SERVICE_UNAVAILABLE")
-        replies.replaceSubrange(5...6, with: [unavailable, unavailable, unavailable])
-        let transport = ScriptedPDTHTTPTransport(replies)
+        let transport = ScriptedPDTHTTPTransport(exchanges: try fullScript([
+            "GET /v1/calendar-events?page=2": unavailable,
+            "GET /v1/calendar-events?page=2": unavailable,
+            "GET /v1/calendar-events?page=2": unavailable,
+        ]))
 
         let result = try refresh(transport, store: store, maxAttempts: 3).refresh(cancellation: nil, progress: { _ in })
 
@@ -111,10 +109,9 @@ struct PDTAPIBackgroundDetailRefreshTests {
     func optionalFailureKeepsLastGoodFacet() throws {
         let store = try seededStore { $0.sectors = [DistributionSummary(name: "last-good", percentage: 100, totalValue: Money(value: "1", currency: "EUR"))] }
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        var replies = try fullReplies()
-        replies[1] = apiError(500, "SERVER_ERROR")
+        let transport = ScriptedPDTHTTPTransport(exchanges: try fullScript(["GET /v1/portfolio/distributions": apiError(500, "SERVER_ERROR")]))
 
-        let result = try refresh(ScriptedPDTHTTPTransport(replies), store: store).refresh(cancellation: nil, progress: { _ in })
+        let result = try refresh(transport, store: store).refresh(cancellation: nil, progress: { _ in })
 
         #expect(result.outcome == .degraded)
         #expect(result.failures.map(\.phase) == [.allocation])
@@ -132,13 +129,13 @@ struct PDTAPIBackgroundDetailRefreshTests {
         let store = try seededStore { $0.xRayHoldings = [XRayHoldingSummary(weight: 0.42)] }
         defer { try? FileManager.default.removeItem(at: store.directory) }
         let seeded = try #require(try store.loadPriorSnapshotResult().snapshot)
-        var replies = try fullReplies()
-        replies.replaceSubrange(2...3, with: [rateLimited(retryAfter: "120")])
-        let transport = ScriptedPDTHTTPTransport(replies)
+        let transport = ScriptedPDTHTTPTransport(exchanges: try fullScript(["GET /v1/x-ray?offset=0": rateLimited(retryAfter: "120")]))
 
         let result = try refresh(transport, store: store, maxAttempts: 3).refresh(cancellation: nil, progress: { _ in })
 
-        #expect(transport.requests.map { $0.url!.path } == ["/v1/portfolio/holdings", "/v1/portfolio/distributions", "/v1/x-ray"])
+        // The rate-limited request is the sync's last: no retry, no later phase.
+        #expect(transport.requests.filter { $0.url?.path == "/v1/x-ray" }.count == 1)
+        #expect(transport.requests.last?.url?.path == "/v1/x-ray")
         #expect(result.outcome == .degraded)
         #expect(result.failures.map(\.kind) == [.rateLimited(retryAfterSeconds: 120)])
         let saved = try #require(try store.loadPriorSnapshotResult().snapshot)
@@ -151,13 +148,14 @@ struct PDTAPIBackgroundDetailRefreshTests {
     func shortRateLimitRetries() throws {
         let store = try temporaryStore()
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        var replies = try fullReplies()
-        replies.insert(rateLimited(retryAfter: "1"), at: 1)
+        // The distributions key answers the 429 first, then the fixture reply.
+        let transport = ScriptedPDTHTTPTransport(exchanges: [("GET /v1/portfolio/distributions", rateLimited(retryAfter: "1"))] + (try fullScript()))
 
-        let result = try refresh(ScriptedPDTHTTPTransport(replies), store: store, maxAttempts: 3)
+        let result = try refresh(transport, store: store, maxAttempts: 3)
             .refresh(cancellation: nil, progress: { _ in })
 
         #expect(result.outcome == .completed)
+        #expect(transport.requests.filter { $0.url?.path == "/v1/portfolio/distributions" }.count == 2)
     }
 
     @Test("An auth outage skips every later phase and keeps the last good details")
@@ -165,13 +163,14 @@ struct PDTAPIBackgroundDetailRefreshTests {
         let store = try seededStore()
         defer { try? FileManager.default.removeItem(at: store.directory) }
         let seeded = try #require(try store.loadPriorSnapshotResult().snapshot)
-        var replies = try fullReplies()
-        replies[1] = apiError(401, "TOKEN_INVALID", details: #"{"reason":"expired"}"#)
-        let transport = ScriptedPDTHTTPTransport(replies)
+        let transport = ScriptedPDTHTTPTransport(exchanges: try fullScript([
+            "GET /v1/portfolio/distributions": apiError(401, "TOKEN_INVALID", details: #"{"reason":"expired"}"#),
+        ]))
 
         let result = try refresh(transport, store: store).refresh(cancellation: nil, progress: { _ in })
 
-        #expect(transport.requests.map { $0.url!.path } == ["/v1/portfolio/holdings", "/v1/portfolio/distributions"])
+        #expect(transport.requests.count == 2)
+        #expect(Set(transport.requests.map { $0.url!.path }) == ["/v1/portfolio/holdings", "/v1/portfolio/distributions"])
         #expect(result.outcome == .degraded)
         #expect(result.failures.map(\.kind) == [.reconnect])
         let saved = try #require(try store.loadPriorSnapshotResult().snapshot)
@@ -186,12 +185,13 @@ struct PDTAPIBackgroundDetailRefreshTests {
         let store = try temporaryStore()
         defer { try? FileManager.default.removeItem(at: store.directory) }
         _ = try refresh(
-            ScriptedPDTHTTPTransport(syntheticReplies(quoteIDs: quoteIDs) + [prices(quoteID: 1), prices(quoteID: 51)]),
+            ScriptedPDTHTTPTransport(exchanges: syntheticScript(quoteIDs: quoteIDs) + [priceBatch(firstQuoteID: 1, prices(quoteID: 1)), priceBatch(firstQuoteID: 51, prices(quoteID: 51))]),
             store: store,
             asOf: seededAsOf
         ).refresh(cancellation: nil, progress: { _ in })
+        // Both batches answer 401, so whichever goes first is the outage.
         let transport = ScriptedPDTHTTPTransport(
-            syntheticReplies(quoteIDs: quoteIDs) + [apiError(401, "TOKEN_INVALID"), prices(quoteID: 51)]
+            exchanges: syntheticScript(quoteIDs: quoteIDs) + [priceBatch(firstQuoteID: 1, apiError(401, "TOKEN_INVALID")), priceBatch(firstQuoteID: 51, apiError(401, "TOKEN_INVALID"))]
         )
 
         let result = try refresh(transport, store: store).refresh(cancellation: nil, progress: { _ in })
@@ -211,7 +211,7 @@ struct PDTAPIBackgroundDetailRefreshTests {
         defer { try? FileManager.default.removeItem(at: store.directory) }
         let cancellation = PDTCancellation()
         let transport = CancellingTransport(
-            inner: ScriptedPDTHTTPTransport(try fullReplies()),
+            inner: ScriptedPDTHTTPTransport(exchanges: try fullScript()),
             cancelAtRequest: 7,
             cancellation: cancellation
         )
@@ -228,10 +228,8 @@ struct PDTAPIBackgroundDetailRefreshTests {
     func paginationCapDegrades() throws {
         let store = try seededStore { $0.xRayHoldings = [XRayHoldingSummary(weight: 0.42)] }
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        var replies = try fullReplies()
         let endless = ok(#"{"data":{"items":[{"symbolName":"Loop","weight":1}],"hasMore":true}}"#)
-        replies.replaceSubrange(2...3, with: [endless, endless])
-        let transport = ScriptedPDTHTTPTransport(replies)
+        let transport = ScriptedPDTHTTPTransport(exchanges: try fullScript(["GET /v1/x-ray?offset=0": endless, "GET /v1/x-ray?offset=1": endless]))
 
         let result = try refresh(transport, store: store, maxPages: 2).refresh(cancellation: nil, progress: { _ in })
 
@@ -245,10 +243,11 @@ struct PDTAPIBackgroundDetailRefreshTests {
         let store = try seededStore()
         defer { try? FileManager.default.removeItem(at: store.directory) }
         let seeded = try #require(try store.loadPriorSnapshotResult().snapshot)
-        var replies = try fullReplies()
-        replies.replaceSubrange(4...6, with: [ok(#"{"data":[],"meta":{"currentPage":1,"lastPage":3}}"#)])
+        let transport = ScriptedPDTHTTPTransport(exchanges: try fullScript([
+            "GET /v1/calendar-events?page=1": ok(#"{"data":[],"meta":{"currentPage":1,"lastPage":3}}"#),
+        ]))
 
-        let result = try refresh(ScriptedPDTHTTPTransport(replies), store: store).refresh(cancellation: nil, progress: { _ in })
+        let result = try refresh(transport, store: store).refresh(cancellation: nil, progress: { _ in })
 
         #expect(result.outcome == .degraded)
         #expect(result.failures.map(\.phase) == [.income])
@@ -259,9 +258,11 @@ struct PDTAPIBackgroundDetailRefreshTests {
     func timedOutFirstXRayPageKeepsSavedXRay() throws {
         let store = try seededStore { $0.xRayHoldings = [XRayHoldingSummary(weight: 0.42)] }
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        var replies = try fullReplies()
-        replies.replaceSubrange(2...3, with: Array(repeating: .failure(.timedOut), count: 3))
-        let transport = ScriptedPDTHTTPTransport(replies)
+        let transport = ScriptedPDTHTTPTransport(exchanges: try fullScript([
+            "GET /v1/x-ray?offset=0": .failure(.timedOut),
+            "GET /v1/x-ray?offset=0": .failure(.timedOut),
+            "GET /v1/x-ray?offset=0": .failure(.timedOut),
+        ]))
 
         let result = try refresh(transport, store: store, maxAttempts: 3).refresh(cancellation: nil, progress: { _ in })
 
@@ -283,9 +284,11 @@ struct PDTAPIBackgroundDetailRefreshTests {
         }
         defer { try? FileManager.default.removeItem(at: store.directory) }
         let seeded = try #require(try store.loadPriorSnapshotResult().snapshot)
-        var replies = try fullReplies()
-        replies.replaceSubrange(4...6, with: Array(repeating: .failure(.timedOut), count: 3))
-        let transport = ScriptedPDTHTTPTransport(replies)
+        let transport = ScriptedPDTHTTPTransport(exchanges: try fullScript([
+            "GET /v1/calendar-events?page=1": .failure(.timedOut),
+            "GET /v1/calendar-events?page=1": .failure(.timedOut),
+            "GET /v1/calendar-events?page=1": .failure(.timedOut),
+        ]))
 
         let result = try refresh(transport, store: store, maxAttempts: 3).refresh(cancellation: nil, progress: { _ in })
 
@@ -305,10 +308,9 @@ struct PDTAPIBackgroundDetailRefreshTests {
     func failedLaterXRayPageKeepsSavedXRay() throws {
         let store = try seededStore { $0.xRayHoldings = [XRayHoldingSummary(weight: 0.42)] }
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        var replies = try fullReplies()
-        replies[3] = .failure(.timedOut)
+        let transport = ScriptedPDTHTTPTransport(exchanges: try fullScript(["GET /v1/x-ray?offset=2": .failure(.timedOut)]))
 
-        let result = try refresh(ScriptedPDTHTTPTransport(replies), store: store).refresh(cancellation: nil, progress: { _ in })
+        let result = try refresh(transport, store: store).refresh(cancellation: nil, progress: { _ in })
 
         #expect(result.outcome == .degraded)
         #expect(result.failures.map(\.phase) == [.xRay])
@@ -319,7 +321,7 @@ struct PDTAPIBackgroundDetailRefreshTests {
     func completedMultiPageXRayReplacesSavedXRay() throws {
         let store = try seededStore { $0.xRayHoldings = [XRayHoldingSummary(weight: 0.42)] }
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        let transport = ScriptedPDTHTTPTransport(try fullReplies())
+        let transport = ScriptedPDTHTTPTransport(exchanges: try fullScript())
 
         let result = try refresh(transport, store: store).refresh(cancellation: nil, progress: { _ in })
 
@@ -334,12 +336,12 @@ struct PDTAPIBackgroundDetailRefreshTests {
     func cancelBeforeStartClearsEarlierFailure() throws {
         let store = try seededStore()
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        _ = try? refresh(ScriptedPDTHTTPTransport([apiError(503, "SERVICE_UNAVAILABLE")]), store: store)
+        _ = try? refresh(ScriptedPDTHTTPTransport([holdingsRequest: apiError(503, "SERVICE_UNAVAILABLE")]), store: store)
             .refresh(cancellation: nil, progress: { _ in })
         #expect(store.lastSyncFailure() != nil)
         let cancelled = PDTCancellation()
         cancelled.cancel()
-        let transport = ScriptedPDTHTTPTransport(try fullReplies())
+        let transport = ScriptedPDTHTTPTransport(exchanges: try fullScript())
 
         #expect(throws: PDTAPIError.cancelled) {
             try refresh(transport, store: store).refresh(cancellation: cancelled, progress: { _ in })
@@ -352,10 +354,10 @@ struct PDTAPIBackgroundDetailRefreshTests {
 
     @Test("A holding that crosses back into concentration clears its old read mark")
     func readStateResetsOnRecrossing() throws {
-        let replies = syntheticReplies(quoteIDs: [1, 2], weights: ["0.6", "0.4"]) + [prices(quoteID: 1)]
+        let replies = syntheticScript(quoteIDs: [1, 2], weights: ["0.6", "0.4"]) + [priceBatch(firstQuoteID: 1, prices(quoteID: 1))]
         let probe = try temporaryStore()
         defer { try? FileManager.default.removeItem(at: probe.directory) }
-        let current = try refresh(ScriptedPDTHTTPTransport(replies), store: probe)
+        let current = try refresh(ScriptedPDTHTTPTransport(exchanges: replies), store: probe)
             .refresh(cancellation: nil, progress: { _ in })
         let item = try #require(current.model.rankedAttentionItems.first { $0.holdingIdentity?.quoteId == 1 })
 
@@ -372,7 +374,7 @@ struct PDTAPIBackgroundDetailRefreshTests {
         let readStore = PulseReadStore(directory: store.directory)
         try readStore.markRead(item.readFingerprint)
 
-        let result = try refresh(ScriptedPDTHTTPTransport(replies), store: store, readStore: readStore)
+        let result = try refresh(ScriptedPDTHTTPTransport(exchanges: replies), store: store, readStore: readStore)
             .refresh(cancellation: nil, progress: { _ in })
 
         #expect(result.model.rankedAttentionItems.contains { $0.readFingerprint == item.readFingerprint })
@@ -385,7 +387,7 @@ struct PDTAPIBackgroundDetailRefreshTests {
         defer { try? FileManager.default.removeItem(at: store.directory) }
         try Data("{".utf8).write(to: store.currentSnapshotPath)
 
-        let result = try refresh(ScriptedPDTHTTPTransport(try fullReplies()), store: store)
+        let result = try refresh(ScriptedPDTHTTPTransport(exchanges: try fullScript()), store: store)
             .refresh(cancellation: nil, progress: { _ in })
 
         #expect(result.outcome == .completed)
@@ -403,7 +405,7 @@ struct PDTAPIBackgroundDetailRefreshTests {
         let recorder = ProgressRecorder()
 
         _ = try refresh(
-            ScriptedPDTHTTPTransport(syntheticReplies(quoteIDs: quoteIDs) + [prices(quoteID: 1), prices(quoteID: 51)]),
+            ScriptedPDTHTTPTransport(exchanges: syntheticScript(quoteIDs: quoteIDs) + [priceBatch(firstQuoteID: 1, prices(quoteID: 1)), priceBatch(firstQuoteID: 51, prices(quoteID: 51))]),
             store: store
         ).refresh(cancellation: nil, progress: recorder.record)
 
@@ -414,10 +416,10 @@ struct PDTAPIBackgroundDetailRefreshTests {
 
     @Test("Quitting before the commit keeps the prior snapshot and its read mark until a later refresh recrosses")
     func quitBeforeCommitKeepsReadMarkUntilRecrossing() throws {
-        let replies = syntheticReplies(quoteIDs: [1, 2], weights: ["0.6", "0.4"]) + [prices(quoteID: 1)]
+        let replies = syntheticScript(quoteIDs: [1, 2], weights: ["0.6", "0.4"]) + [priceBatch(firstQuoteID: 1, prices(quoteID: 1))]
         let probe = try temporaryStore()
         defer { try? FileManager.default.removeItem(at: probe.directory) }
-        let current = try refresh(ScriptedPDTHTTPTransport(replies), store: probe)
+        let current = try refresh(ScriptedPDTHTTPTransport(exchanges: replies), store: probe)
             .refresh(cancellation: nil, progress: { _ in })
         let alert = try #require(current.model.rankedAttentionItems.first { $0.holdingIdentity?.quoteId == 1 })
 
@@ -435,7 +437,7 @@ struct PDTAPIBackgroundDetailRefreshTests {
         try readStore.markRead(alert.readFingerprint)
 
         let quit = PDTCancellation()
-        let transport = CancellingTransport(inner: ScriptedPDTHTTPTransport(replies), cancelAtRequest: 2, cancellation: quit)
+        let transport = CancellingTransport(inner: ScriptedPDTHTTPTransport(exchanges: replies), cancelAtRequest: 2, cancellation: quit)
         #expect(throws: (any Error).self) {
             try refresh(transport, store: store, readStore: readStore).refresh(cancellation: quit, progress: { _ in })
         }
@@ -445,7 +447,7 @@ struct PDTAPIBackgroundDetailRefreshTests {
         let relaunch = try #require(try PressureRunner.cachedPulse(snapshotStore: store, pulseReadStore: readStore, today: "2026-06-22"))
         #expect(!relaunch.model.rankedAttentionItems.contains { $0.id == alert.id })
 
-        let next = try refresh(ScriptedPDTHTTPTransport(replies), store: store, readStore: readStore)
+        let next = try refresh(ScriptedPDTHTTPTransport(exchanges: replies), store: store, readStore: readStore)
             .refresh(cancellation: nil, progress: { _ in })
 
         #expect(next.model.rankedAttentionItems.contains { $0.readFingerprint == alert.readFingerprint })
@@ -456,14 +458,13 @@ struct PDTAPIBackgroundDetailRefreshTests {
     func completedAfterDegradedRestoresFacet() throws {
         let store = try seededStore { $0.sectors = [DistributionSummary(name: "last-good", percentage: 100, totalValue: Money(value: "1", currency: "EUR"))] }
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        var degradedReplies = try fullReplies()
-        degradedReplies[1] = apiError(500, "SERVER_ERROR")
-        let degraded = try refresh(ScriptedPDTHTTPTransport(degradedReplies), store: store)
+        let degradedScript = try fullScript(["GET /v1/portfolio/distributions": apiError(500, "SERVER_ERROR")])
+        let degraded = try refresh(ScriptedPDTHTTPTransport(exchanges: degradedScript), store: store)
             .refresh(cancellation: nil, progress: { _ in })
         #expect(degraded.outcome == .degraded)
         #expect(try store.loadPriorSnapshotResult().snapshot?.latestCompleteDetailFillAsOf == seededAsOf)
 
-        let repaired = try refresh(ScriptedPDTHTTPTransport(try fullReplies()), store: store)
+        let repaired = try refresh(ScriptedPDTHTTPTransport(exchanges: try fullScript()), store: store)
             .refresh(cancellation: nil, progress: { _ in })
 
         #expect(repaired.outcome == .completed)
@@ -483,7 +484,7 @@ struct PDTAPIBackgroundDetailRefreshTests {
         defer { try? FileManager.default.removeItem(at: store.directory) }
         #expect(try store.loadPriorSnapshotResult().snapshot?.performance != nil)
 
-        let result = try refresh(ScriptedPDTHTTPTransport(try fullReplies()), store: store)
+        let result = try refresh(ScriptedPDTHTTPTransport(exchanges: try fullScript()), store: store)
             .refresh(cancellation: nil, progress: { _ in })
 
         #expect(result.outcome == .completed)
@@ -494,7 +495,9 @@ struct PDTAPIBackgroundDetailRefreshTests {
     func filteredHoldingsGetNoPriceRequest() throws {
         let store = try temporaryStore()
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        let transport = ScriptedPDTHTTPTransport([ok(filteredHoldingsJSON)] + Array(syntheticReplies(quoteIDs: [1]).dropFirst()) + [prices(quoteID: 1001)])
+        let transport = ScriptedPDTHTTPTransport(
+            exchanges: syntheticScript(holdingsJSON: filteredHoldingsJSON) + [priceBatch(firstQuoteID: 1001, prices(quoteID: 1001))]
+        )
 
         _ = try refresh(transport, store: store).refresh(cancellation: nil, progress: { _ in })
 
@@ -510,7 +513,7 @@ struct PDTAPIBackgroundDetailRefreshTests {
         let store = try temporaryStore()
         defer { try? FileManager.default.removeItem(at: store.directory) }
         let transport = ScriptedPDTHTTPTransport(
-            [ok(nonEURHoldingsJSON)] + Array(syntheticReplies(quoteIDs: [1]).dropFirst()) + [ok(#"{"data":{"prices":[]}}"#)]
+            exchanges: syntheticScript(holdingsJSON: nonEURHoldingsJSON) + [("GET /v1/prices/batch", ok(#"{"data":{"prices":[]}}"#))]
         )
 
         _ = try refresh(transport, store: store).refresh(cancellation: nil, progress: { _ in })
@@ -557,7 +560,7 @@ private func temporaryStore() throws -> SnapshotStore {
 /// `seededAsOf`, optionally edited so a test can tell last-good facets apart.
 private func seededStore(_ edit: (inout PortfolioSnapshot) -> Void = { _ in }) throws -> SnapshotStore {
     let store = try temporaryStore()
-    _ = try refresh(ScriptedPDTHTTPTransport(try fullReplies()), store: store, asOf: seededAsOf)
+    _ = try refresh(ScriptedPDTHTTPTransport(exchanges: try fullScript()), store: store, asOf: seededAsOf)
         .refresh(cancellation: nil, progress: { _ in })
     var snapshot = try #require(try store.loadPriorSnapshotResult().snapshot)
     edit(&snapshot)
@@ -565,30 +568,40 @@ private func seededStore(_ edit: (inout PortfolioSnapshot) -> Void = { _ in }) t
     return store
 }
 
-/// The `full` fixture in background-refresh request order. Symbol-quote
-/// lookups belong to the first fetch only.
-private func fullReplies() throws -> [ScriptedPDTHTTPTransport.Reply] {
-    let directory = packageRoot.appending(path: "docs/pdt/fixtures/api/full")
-    return try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-        .filter { $0.pathExtension == "json" && !$0.lastPathComponent.contains("symbol-quotes") }
-        .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        .map { .response(status: 200, body: try Data(contentsOf: $0)) }
+private typealias Exchange = (ScriptedPDTHTTPTransport.Request, ScriptedPDTHTTPTransport.Reply)
+
+private let holdingsRequest: ScriptedPDTHTTPTransport.Request = "GET /v1/portfolio/holdings"
+
+/// The `full` fixture's background-refresh replies, each keyed by its request.
+/// Symbol-quote lookups belong to the first fetch only, so they are left out.
+/// `overrides` answer their keys instead of the fixture, in order.
+private func fullScript(_ overrides: KeyValuePairs<ScriptedPDTHTTPTransport.Request, ScriptedPDTHTTPTransport.Reply> = [:]) throws -> [Exchange] {
+    let overridden = Set(overrides.map(\.key))
+    return try ScriptedPDTHTTPTransport.fixtureReplies(scenario: "full", apiFixtures: packageRoot.appending(path: "docs/pdt/fixtures/api"))
+        .filter { !$0.request.description.hasPrefix("GET /v1/symbol-quotes") && !overridden.contains($0.request) }
+        .map { ($0.request, .response(status: 200, body: $0.body)) }
+        + overrides.map { ($0.key, $0.value) }
 }
 
 /// Holdings plus empty optional facets, ready for price-batch replies.
-private func syntheticReplies(quoteIDs: [Int], weights: [String]? = nil) -> [ScriptedPDTHTTPTransport.Reply] {
-    let weight = String(1.0 / Double(quoteIDs.count))
+private func syntheticScript(quoteIDs: [Int] = [], weights: [String]? = nil, holdingsJSON: String? = nil) -> [Exchange] {
+    let weight = String(1.0 / Double(max(1, quoteIDs.count)))
     let rows = quoteIDs.enumerated().map { index, quoteID in
         #"{"symbolName":"Holding \#(quoteID)","symbolQuoteId":\#(quoteID),"symbolId":\#(quoteID + 1000),"currentPriceDate":"2026-06-22T23:59:59+00:00","portfolioWeight":"\#(weights?[index] ?? weight)","closedAt":null,"currentWorthLocal":{"value":"100.00","currency":"EUR"}}"#
     }
     let emptyPage = #"{"data":[],"meta":{"currentPage":1,"lastPage":1}}"#
     return [
-        ok(#"{"data":[\#(rows.joined(separator: ","))]}"#),
-        ok(#"{"data":{"sectors":[],"assetTypes":[]}}"#),
-        ok(#"{"data":{"items":[],"hasMore":false}}"#),
-        ok(emptyPage),
-        ok(emptyPage),
+        (holdingsRequest, ok(holdingsJSON ?? #"{"data":[\#(rows.joined(separator: ","))]}"#)),
+        ("GET /v1/portfolio/distributions", ok(#"{"data":{"sectors":[],"assetTypes":[]}}"#)),
+        ("GET /v1/x-ray", ok(#"{"data":{"items":[],"hasMore":false}}"#)),
+        ("GET /v1/calendar-events", ok(emptyPage)),
+        ("GET /v1/dividends", ok(emptyPage)),
     ]
+}
+
+/// The reply to the price batch that carries `firstQuoteID`, its chunk's first id.
+private func priceBatch(firstQuoteID: Int, _ reply: ScriptedPDTHTTPTransport.Reply) -> Exchange {
+    (ScriptedPDTHTTPTransport.Request(parsing: "GET /v1/prices/batch?symbolQuoteIds[]=\(firstQuoteID)")!, reply)
 }
 
 private func prices(quoteID: Int) -> ScriptedPDTHTTPTransport.Reply {

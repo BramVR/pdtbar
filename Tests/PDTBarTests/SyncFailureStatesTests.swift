@@ -35,7 +35,7 @@ struct SyncFailureStatesTests {
     func firstFetchRateLimitEndToEnd() throws {
         let snapshots = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-191-first-fetch")
         defer { try? FileManager.default.removeItem(at: snapshots.directory) }
-        let connection = appConnection(replies: [rateLimited(retryAfter: "120")])
+        let connection = appConnection(replies: [holdingsRequest: rateLimited(retryAfter: "120")])
         let runtime = PDTLaunchRuntime()
         _ = connectedLaunch(runtime)
 
@@ -75,7 +75,7 @@ struct SyncFailureStatesTests {
     )
     func optionalPhaseAccessLoss(status: Int, code: String, state: PDTLaunchState, title: String) throws {
         let reply = apiError(status, code, details: #"{"reason":"revoked"}"#)
-        let run = try backgroundRefresh(replies: [try holdingsReply(), reply])
+        let run = try backgroundRefresh(replies: [holdingsRequest: try holdingsReply(), "GET /v1/portfolio/distributions": reply])
         defer { try? FileManager.default.removeItem(at: run.snapshots.directory) }
 
         #expect(run.update.state == state)
@@ -96,7 +96,7 @@ struct SyncFailureStatesTests {
     )
     func optionalPhaseFailureKeepsConnection(status: Int) throws {
         let reply = status == 429 ? rateLimited(retryAfter: "120") : apiError(403, "FORBIDDEN")
-        let run = try backgroundRefresh(replies: [try holdingsReply(), reply])
+        let run = try backgroundRefresh(replies: [holdingsRequest: try holdingsReply(), "GET /v1/portfolio/distributions": reply])
         defer { try? FileManager.default.removeItem(at: run.snapshots.directory) }
 
         #expect(run.update.state == .connected(.current, .saved))
@@ -105,7 +105,7 @@ struct SyncFailureStatesTests {
 
     @Test("A base-phase 401 keeps its failure record on the reconnect screen and through Check again, and commits no snapshot")
     func basePhaseAccessLossKeepsRecord() throws {
-        let run = try backgroundRefresh(replies: [apiError(401, "TOKEN_INVALID", details: #"{"reason":"expired"}"#)])
+        let run = try backgroundRefresh(replies: [holdingsRequest: apiError(401, "TOKEN_INVALID", details: #"{"reason":"expired"}"#)])
         defer { try? FileManager.default.removeItem(at: run.snapshots.directory) }
 
         #expect(run.update.state == .needsReconnect(.personalToken, .tokenExpired))
@@ -131,7 +131,7 @@ struct SyncFailureStatesTests {
 
     @Test("A base-phase pause keeps its record on the paused screen")
     func basePhasePauseKeepsRecord() throws {
-        let run = try backgroundRefresh(replies: [apiError(403, "API_ACCESS_PAUSED")])
+        let run = try backgroundRefresh(replies: [holdingsRequest: apiError(403, "API_ACCESS_PAUSED")])
         defer { try? FileManager.default.removeItem(at: run.snapshots.directory) }
 
         #expect(run.update.state == .subscriptionPaused)
@@ -158,9 +158,9 @@ private struct BackgroundRun {
 /// Seeds a saved snapshot, launches over it, and runs the refresh the way
 /// `AppDelegate.startBackgroundPortfolioRefresh` does: a thrown error and the
 /// store's record, or a committed result and what its last failure means for access.
-private func backgroundRefresh(replies: [ScriptedPDTHTTPTransport.Reply]) throws -> BackgroundRun {
+private func backgroundRefresh(replies: KeyValuePairs<ScriptedPDTHTTPTransport.Request, ScriptedPDTHTTPTransport.Reply>) throws -> BackgroundRun {
     let snapshots = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-191-background")
-    let seed = appConnection(replies: try fullBackgroundReplies())
+    let seed = appConnection(exchanges: try fullBackgroundReplies())
     _ = try PDTAPIBackgroundDetailRefresh(client: seed.apiClient(), snapshotStore: snapshots, asOf: seededAsOf).refresh()
     let cached = try #require(try PressureRunner.cachedPulse(snapshotStore: snapshots, today: "2026-06-22"))
 
@@ -170,7 +170,7 @@ private func backgroundRefresh(replies: [ScriptedPDTHTTPTransport.Reply]) throws
     let start = runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: runtime.connectionAttempt)
     #expect(start.effect == .startBackgroundDetailRefresh)
 
-    let connection = appConnection(replies: replies)
+    let connection = appConnection(exchanges: replies.map { ($0.key, $0.value) })
     let refresh = PDTAPIBackgroundDetailRefresh(client: connection.apiClient(), snapshotStore: snapshots, asOf: "2026-06-22")
     let result: PDTLaunchBackgroundDetailRefreshResult
     do {
@@ -186,11 +186,15 @@ private func backgroundRefresh(replies: [ScriptedPDTHTTPTransport.Reply]) throws
     return BackgroundRun(runtime: runtime, update: runtime.completeBackgroundDetailRefresh(result), snapshots: snapshots)
 }
 
-private func appConnection(replies: [ScriptedPDTHTTPTransport.Reply]) -> PDTAppConnection {
+private func appConnection(replies: KeyValuePairs<ScriptedPDTHTTPTransport.Request, ScriptedPDTHTTPTransport.Reply>) -> PDTAppConnection {
+    appConnection(exchanges: replies.map { ($0.key, $0.value) })
+}
+
+private func appConnection(exchanges: [(ScriptedPDTHTTPTransport.Request, ScriptedPDTHTTPTransport.Reply)]) -> PDTAppConnection {
     PDTAppConnection(
         store: InMemoryPDTCredentialStore(personalToken),
-        tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([])),
-        apiTransport: ScriptedPDTHTTPTransport(replies),
+        tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([:])),
+        apiTransport: ScriptedPDTHTTPTransport(exchanges: exchanges),
         signIn: { _ in throw PDTSignInError.accessDenied }
     )
 }
@@ -220,12 +224,13 @@ private func connectedLaunch(_ runtime: PDTLaunchRuntime) -> PDTOnboardingUpdate
     return runtime.completeConnection(PDTConnectionOutcome(.connected(.saved)), for: runtime.connectionAttempt)
 }
 
-private func fullBackgroundReplies() throws -> [ScriptedPDTHTTPTransport.Reply] {
-    let directory = packageRoot.appending(path: "docs/pdt/fixtures/api/full")
-    return try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-        .filter { $0.pathExtension == "json" && !$0.lastPathComponent.contains("symbol-quotes") }
-        .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        .map { .response(status: 200, body: try Data(contentsOf: $0)) }
+private let holdingsRequest: ScriptedPDTHTTPTransport.Request = "GET /v1/portfolio/holdings"
+
+/// The `full` fixture's replies, each keyed by its request. The background
+/// refresh never asks for symbol quotes, so they stay unused.
+private func fullBackgroundReplies() throws -> [(ScriptedPDTHTTPTransport.Request, ScriptedPDTHTTPTransport.Reply)] {
+    try ScriptedPDTHTTPTransport.fixtureReplies(scenario: "full", apiFixtures: packageRoot.appending(path: "docs/pdt/fixtures/api"))
+        .map { ($0.request, .response(status: 200, body: $0.body)) }
 }
 
 private func holdingsReply() throws -> ScriptedPDTHTTPTransport.Reply {

@@ -51,6 +51,7 @@ When the operator corrects an agent: fix it, add the rule here. A rule already h
 | Hidden portfolio values never leak through model text (a31cbba, #240 repeated #224) | compiler: model text that can hold money is `PortfolioValueText`, and only `PortfolioValueText.rendered(settings:)` turns `Money` into text; `PortfolioValueVisibilityTests` scans hidden rows, submenus, and descriptor JSON of every fixture plus a cash drag for each amount's raw and formatted forms |
 | Data health, copied diagnostics, stored sync failures carry nothing from PDT's answer | `pdtbar-checks` `checkPDTAPIDataHealth` sentinels; `DataHealthRedactionTests` |
 | Test failure output and `measure.json` never echo menu copy or portfolio values | per surface: `DescriptorContractTests` (rule names only), `MenuMeasureReportTests`; new sinks: nothing |
+| A scripted PDT reply answers only the request it names; a wrong, extra, or used-up request fails, never takes another request's reply | `ScriptedPDTHTTPTransport` has no arrival-order init; `ScriptedPDTHTTPTransportTests` |
 | No `nonisolated(unsafe)`; `@unchecked Sendable` only goes down (#59, #183, #306, #310): hold mutable state in `OSAllocatedUnfairLock<State>` with `withLock`, or an actor | `pdtbar-checks` `checkConcurrencyEscapeHatches` + `docs/unchecked-sendable-baseline.txt` |
 | Product code starts no process, names no CLI or MCP tool | `pdtbar-checks` `checkProductSpawnsNothing` |
 | Menu copy gives no advice | `pdtbar-checks` `assertInformationalCopy` |
