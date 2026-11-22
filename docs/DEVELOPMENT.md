@@ -109,7 +109,7 @@ Deterministic app smokes launch
 `pdtbar-smoke`; the app refuses `--scripted-pdt` without an isolated app support
 directory.
 
-`pdtbar-dev pdt-sign-in|pdt-status|pdt-refresh|pdt-disconnect --store <file>`
+`pdtbar-dev pdt-sign-in|pdt-status|pdt-refresh --store <file>` (`pdt-disconnect --store <file> --revoke-test` only in a revoke test)
 is the opt-in live PDT sign-in proof. It keeps the credential in a mode-0600
 file at the given path, never the Keychain, and prints only states, expiry,
 statuses, key names, and token fingerprints. `pdt-sign-in ... --no-browser`
