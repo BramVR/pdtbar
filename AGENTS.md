@@ -49,6 +49,7 @@ When the operator corrects an agent: fix it, add the rule here. A rule already h
 | Measure menus the way the live menu is built | `StatusMenuHost.makeMenu()` single factory; `StatusMenuHostTests.measuringMatchesLiveMenu` |
 | Data health, copied diagnostics, stored sync failures carry nothing from PDT's answer | `pdtbar-checks` `checkPDTAPIDataHealth` sentinels; `DataHealthRedactionTests` |
 | Test failure output and `measure.json` never echo menu copy or portfolio values | per surface: `DescriptorContractTests` (rule names only), `MenuMeasureReportTests`; new sinks: nothing |
+| A scripted PDT reply answers only the request it names; a wrong, extra, or used-up request fails, never takes another request's reply | `ScriptedPDTHTTPTransport` has no arrival-order init; `ScriptedPDTHTTPTransportTests` |
 | Product code starts no process, names no CLI or MCP tool | `pdtbar-checks` `checkProductSpawnsNothing` |
 | Menu copy gives no advice | `pdtbar-checks` `assertInformationalCopy` |
 | A regression test fails on the pre-fix code; say how you checked in the PR | nothing (judgment) |

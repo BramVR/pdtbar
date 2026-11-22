@@ -182,7 +182,7 @@ public final class PDTAppConnection: @unchecked Sendable {
 /// the production store, URLSession, or browser: the credential lives in
 /// memory, or in the Keychain store over a fake SecItem API (`keychain`, or
 /// `keychainStatus` answered to every call), never the real Keychain. Sign-in
-/// is scripted, and API replies come from `api` in request order.
+/// is scripted, and each API reply in `api` answers the request it names.
 public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
     public enum StoredConnection: String, Codable, Sendable {
         case notConnected, browserSession, personalToken, signInExpired, tokenRevoked
@@ -261,7 +261,7 @@ public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
         }
         return PDTAppConnection(
             store: store,
-            tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([])),
+            tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([:])),
             apiTransport: LoggingPDTHTTPTransport(base: api.transport(), log: log),
             signIn: { cancellation in try ScriptedPDTConnection.scriptedSignIn(outcome, delay: delay, cancellation: cancellation) },
             asOf: api.asOf,

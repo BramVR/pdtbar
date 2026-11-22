@@ -9,7 +9,7 @@ import Security
 struct PDTBrowserSignInTests {
     @Test("Approving in the browser exchanges the code with the S256 verifier and closes the listener")
     func approvedSignInExchangesCode() throws {
-        let transport = ScriptedPDTHTTPTransport([tokenReply(access: "access-1", refresh: "refresh-1")])
+        let transport = scriptedTokens(tokenReply(access: "access-1", refresh: "refresh-1"))
         let browser = FakeBrowser { _ in ["code": "auth-code-1"] }
 
         let session = try signIn(transport: transport, browser: browser).run()
@@ -47,7 +47,7 @@ struct PDTBrowserSignInTests {
 
     @Test("Requests with a wrong, missing, or repeated state get an error page and the listener keeps waiting for the real callback")
     func strayCallbacksDoNotEndSignIn() throws {
-        let transport = ScriptedPDTHTTPTransport([tokenReply(access: "access-1", refresh: "refresh-1")])
+        let transport = scriptedTokens(tokenReply(access: "access-1", refresh: "refresh-1"))
         let browser = FakeBrowser(callbacks: { state in
             [
                 "code=forged&state=forged-state",
@@ -71,12 +71,12 @@ struct PDTBrowserSignInTests {
     func deniedAndFailedAuthorization() throws {
         let denied = FakeBrowser { _ in ["error": "access_denied"] }
         #expect(throws: PDTSignInError.accessDenied) {
-            try signIn(transport: ScriptedPDTHTTPTransport([]), browser: denied).run()
+            try signIn(transport: ScriptedPDTHTTPTransport([:]), browser: denied).run()
         }
 
         let invalidScope = FakeBrowser { _ in ["error": "invalid_scope"] }
         #expect(throws: PDTSignInError.authorizationFailed(error: "invalid_scope")) {
-            try signIn(transport: ScriptedPDTHTTPTransport([]), browser: invalidScope).run()
+            try signIn(transport: ScriptedPDTHTTPTransport([:]), browser: invalidScope).run()
         }
     }
 
@@ -87,7 +87,7 @@ struct PDTBrowserSignInTests {
         let browser = FakeBrowser { _ in ["code": "c"] }
 
         #expect(throws: PDTSignInError.portBusy(port: holder.port)) {
-            try signIn(transport: ScriptedPDTHTTPTransport([]), browser: browser, port: holder.port).run()
+            try signIn(transport: ScriptedPDTHTTPTransport([:]), browser: browser, port: holder.port).run()
         }
         #expect(browser.authorizeURL == nil)
     }
@@ -96,19 +96,19 @@ struct PDTBrowserSignInTests {
     func timeoutAndCancellation() throws {
         let idle = FakeBrowser(respond: nil)
         #expect(throws: PDTSignInError.timedOut) {
-            try signIn(transport: ScriptedPDTHTTPTransport([]), browser: idle, timeout: 0.3).run()
+            try signIn(transport: ScriptedPDTHTTPTransport([:]), browser: idle, timeout: 0.3).run()
         }
 
         let cancellation = PDTCancellation()
         cancellation.cancel()
         #expect(throws: PDTSignInError.cancelled) {
-            try signIn(transport: ScriptedPDTHTTPTransport([]), browser: idle).run(cancellation: cancellation)
+            try signIn(transport: ScriptedPDTHTTPTransport([:]), browser: idle).run(cancellation: cancellation)
         }
     }
 
     @Test("A rejected code exchange surfaces the token endpoint error")
     func rejectedExchange() throws {
-        let transport = ScriptedPDTHTTPTransport([oauthError(400, "invalid_grant")])
+        let transport = scriptedTokens(oauthError(400, "invalid_grant"))
         let browser = FakeBrowser { _ in ["code": "stale"] }
 
         #expect(throws: PDTSignInError.tokenExchange(.invalidGrant)) {
@@ -146,8 +146,8 @@ struct PDTConnectionTests {
     @Test("A token near expiry is refreshed, persisted, and used for the request")
     func expiryDrivenRefresh() throws {
         let store = InMemoryPDTCredentialStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow + 120))))
-        let tokens = ScriptedPDTHTTPTransport([tokenReply(access: "access-2", refresh: "refresh-2")])
-        let api = ScriptedPDTHTTPTransport([ok])
+        let tokens = scriptedTokens(tokenReply(access: "access-2", refresh: "refresh-2"))
+        let api = scriptedMe(ok)
         let connection = connection(store, tokens)
 
         _ = try PDTAPIClient(transport: api, tokenProvider: connection).get(.me)
@@ -163,7 +163,7 @@ struct PDTConnectionTests {
     @Test("A token with time left is used without a refresh")
     func freshTokenNotRefreshed() throws {
         let store = InMemoryPDTCredentialStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow + 3000))))
-        let tokens = ScriptedPDTHTTPTransport([])
+        let tokens = ScriptedPDTHTTPTransport([:])
 
         #expect(try connection(store, tokens).currentToken() == PDTAPIToken("access-1"))
         #expect(tokens.requests.isEmpty)
@@ -172,8 +172,8 @@ struct PDTConnectionTests {
     @Test("Concurrent requests share exactly one network refresh and all use the rotated token")
     func concurrentRefreshIsSingleFlight() throws {
         let store = InMemoryPDTCredentialStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1))))
-        let tokens = ScriptedPDTHTTPTransport([tokenReply(access: "access-2", refresh: "refresh-2")], initialDelaySeconds: 0.3)
-        let api = ScriptedPDTHTTPTransport(Array(repeating: ok, count: 8))
+        let tokens = scriptedTokens([tokenReply(access: "access-2", refresh: "refresh-2")], initialDelaySeconds: 0.3)
+        let api = scriptedMe(Array(repeating: ok, count: 8))
         let client = PDTAPIClient(transport: api, tokenProvider: connection(store, tokens))
         let failures = Counter()
 
@@ -252,7 +252,7 @@ struct PDTConnectionTests {
     func failedRefreshIsNotRetriedPerCaller() throws {
         let clock = TestClock()
         let store = InMemoryPDTCredentialStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow + 20))))
-        let tokens = ScriptedPDTHTTPTransport(Array(repeating: .failure(.timedOut), count: 3) + [tokenReply(access: "access-2", refresh: "refresh-2")])
+        let tokens = scriptedTokens(Array(repeating: .failure(.timedOut), count: 3) + [tokenReply(access: "access-2", refresh: "refresh-2")])
         let connection = connection(store, tokens, clock: clock)
         let results = Results()
 
@@ -286,10 +286,10 @@ struct PDTConnectionTests {
     func rateLimitedRefreshHonorsRetryAfter() throws {
         let clock = TestClock()
         let store = InMemoryPDTCredentialStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow + 60))))
-        let tokens = ScriptedPDTHTTPTransport([
+        let tokens = scriptedTokens(
             .response(status: 429, body: Data(), headers: ["Retry-After": "20"]),
-            tokenReply(access: "access-2", refresh: "refresh-2"),
-        ])
+            tokenReply(access: "access-2", refresh: "refresh-2")
+        )
         let connection = connection(store, tokens, clock: clock)
 
         #expect(try connection.currentToken() == PDTAPIToken("access-1"))
@@ -305,8 +305,8 @@ struct PDTConnectionTests {
     func refusedRotationIsUsedAndSavedLater() throws {
         let stale = PDTConnectionState.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1)))
         let store = FailingSaveStore(stale, failures: .max)
-        let tokens = ScriptedPDTHTTPTransport([tokenReply(access: "access-2", refresh: "refresh-2")])
-        let api = ScriptedPDTHTTPTransport([ok, ok])
+        let tokens = scriptedTokens(tokenReply(access: "access-2", refresh: "refresh-2"))
+        let api = scriptedMe(ok, ok)
         let connection = connection(store, tokens)
         let client = PDTAPIClient(transport: api, tokenProvider: connection)
 
@@ -330,9 +330,9 @@ struct PDTConnectionTests {
     func unsavedSessionSurvivesRefreshes(signedInHere: Bool) throws {
         let first = session("access-1", "refresh-1", expiresAt: testNow - 1)
         let store = FailingSaveStore(signedInHere ? .disconnected : .connected(.browserSession(first)), failures: .max)
-        let tokens = ScriptedPDTHTTPTransport([
-            tokenReply(access: "access-2", refresh: "refresh-2"), tokenReply(access: "access-3", refresh: "refresh-3"),
-        ])
+        let tokens = scriptedTokens(
+            tokenReply(access: "access-2", refresh: "refresh-2"), tokenReply(access: "access-3", refresh: "refresh-3")
+        )
         let clock = TestClock()
         let connection = connection(store, tokens, clock: clock)
         if signedInHere {
@@ -358,9 +358,9 @@ struct PDTConnectionTests {
             failures: .max,
             failedSavesLandUnreadable: true
         )
-        let tokens = ScriptedPDTHTTPTransport([
-            tokenReply(access: "access-2", refresh: "refresh-2"), tokenReply(access: "access-3", refresh: "refresh-3"),
-        ])
+        let tokens = scriptedTokens(
+            tokenReply(access: "access-2", refresh: "refresh-2"), tokenReply(access: "access-3", refresh: "refresh-3")
+        )
         let clock = TestClock()
         let connection = connection(store, tokens, clock: clock)
         #expect(try connection.currentToken() == PDTAPIToken("access-2"))
@@ -389,7 +389,7 @@ struct PDTConnectionTests {
     func rejectedUnsavedSessionNeedsReconnect(signedInHere: Bool) throws {
         let first = session("access-1", "refresh-1", expiresAt: testNow - 1)
         let store = FailingSaveStore(signedInHere ? .disconnected : .connected(.browserSession(first)), failures: .max)
-        let tokens = ScriptedPDTHTTPTransport([tokenReply(access: "access-2", refresh: "refresh-2"), oauthError(400, "invalid_grant")])
+        let tokens = scriptedTokens(tokenReply(access: "access-2", refresh: "refresh-2"), oauthError(400, "invalid_grant"))
         let clock = TestClock()
         let connection = connection(store, tokens, clock: clock)
         if signedInHere {
@@ -411,7 +411,7 @@ struct PDTConnectionTests {
     @Test("invalid_grant moves the connection to needs-reconnect and stops further refreshes")
     func invalidGrantNeedsReconnect() throws {
         let store = InMemoryPDTCredentialStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1))))
-        let tokens = ScriptedPDTHTTPTransport([oauthError(400, "invalid_grant")])
+        let tokens = scriptedTokens(oauthError(400, "invalid_grant"))
         let connection = connection(store, tokens)
 
         #expect(throws: PDTAPIError.tokenInvalid(reason: nil)) { try connection.currentToken() }
@@ -423,7 +423,7 @@ struct PDTConnectionTests {
     @Test("A sign-in or disconnect the store refuses takes the place of a rotated pair it also refused, and lands when the store takes writes again", arguments: [false, true])
     func refusedReplacementSupersedesRefusedRotation(signIn: Bool) throws {
         let store = FailingSaveStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1))), failures: .max)
-        let tokens = ScriptedPDTHTTPTransport([tokenReply(access: "access-2", refresh: "refresh-2")])
+        let tokens = scriptedTokens(tokenReply(access: "access-2", refresh: "refresh-2"))
         let connection = connection(store, tokens)
         let replacement = session("access-9", "refresh-9", expiresAt: testNow + 3600)
         let replaced = signIn ? PDTConnectionState.connected(.browserSession(replacement)) : .disconnected
@@ -451,8 +451,8 @@ struct PDTConnectionTests {
     @Test("A rejection the store refuses to record still ends the connection: the credential is not sent again and later checks need a reconnect")
     func refusedRejectionIsHeld() throws {
         let personal = FailingSaveStore(.connected(.personalToken(PDTAPIToken("pdt_stored"))), failures: .max)
-        let api = ScriptedPDTHTTPTransport([tokenInvalid("revoked")])
-        let pasted = connection(personal, ScriptedPDTHTTPTransport([]))
+        let api = scriptedMe(tokenInvalid("revoked"))
+        let pasted = connection(personal, ScriptedPDTHTTPTransport([:]))
 
         #expect(throws: PDTAPIError.tokenInvalid(reason: "revoked")) {
             try PDTAPIClient(transport: api, tokenProvider: pasted).get(.me)
@@ -466,7 +466,7 @@ struct PDTConnectionTests {
         #expect(try personal.load().state == .needsReconnect(.personalToken, .tokenRejected(reason: "revoked")))
 
         let browser = FailingSaveStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1))), failures: .max)
-        let tokens = ScriptedPDTHTTPTransport([oauthError(400, "invalid_grant")])
+        let tokens = scriptedTokens(oauthError(400, "invalid_grant"))
         let signedIn = connection(browser, tokens)
 
         #expect(throws: PDTAPIError.tokenInvalid(reason: nil)) { try signedIn.currentToken() }
@@ -481,7 +481,7 @@ struct PDTConnectionTests {
     @Test("A pending pair from a sign-in the user disconnected never reconnects it after a later sign-in is rejected")
     func pendingPairFromDisconnectedSignInStaysDropped() throws {
         let store = FailingSaveStore(.connected(.browserSession(session("access-x1", "refresh-x1", expiresAt: testNow - 1))), failures: 1)
-        let tokens = ScriptedPDTHTTPTransport([tokenReply(access: "access-x2", refresh: "refresh-x2"), oauthError(400, "invalid_grant")])
+        let tokens = scriptedTokens(tokenReply(access: "access-x2", refresh: "refresh-x2"), oauthError(400, "invalid_grant"))
         let stale = connection(store, tokens)
         let current = connection(store, tokens)
         let laterSignInRejected = PDTConnectionState.needsReconnect(.browserSession, .refreshRejected(PDTRefreshToken("refresh-y1").fingerprint))
@@ -501,7 +501,7 @@ struct PDTConnectionTests {
     func invalidGrantAfterSharedRotation() throws {
         let store = InMemoryPDTCredentialStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow - 1))))
         let rotated = session("access-2", "refresh-2", expiresAt: testNow + 3600)
-        let tokens = HookTransport(reply: oauthError(400, "invalid_grant")) {
+        let tokens = HookTransport(scriptedTokens(oauthError(400, "invalid_grant"))) {
             try? store.save(PDTStoredConnection(.connected(.browserSession(rotated))))
         }
 
@@ -512,8 +512,8 @@ struct PDTConnectionTests {
     @Test("A 401 expired on a token that looked valid refreshes once and retries")
     func expiredRejectionRefreshes() throws {
         let store = InMemoryPDTCredentialStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow + 3000))))
-        let tokens = ScriptedPDTHTTPTransport([tokenReply(access: "access-2", refresh: "refresh-2")])
-        let api = ScriptedPDTHTTPTransport([tokenInvalid("expired"), ok])
+        let tokens = scriptedTokens(tokenReply(access: "access-2", refresh: "refresh-2"))
+        let api = scriptedMe(tokenInvalid("expired"), ok)
 
         _ = try PDTAPIClient(transport: api, tokenProvider: connection(store, tokens)).get(.me)
 
@@ -524,11 +524,11 @@ struct PDTConnectionTests {
     @Test("A 401 revoked on a token another caller already rotated retries with the current token")
     func revokedStaleTokenRetriesWithCurrent() throws {
         let store = InMemoryPDTCredentialStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow + 3000))))
-        let api = HookTransport(replies: [tokenInvalid("revoked"), ok]) {
+        let api = HookTransport(scriptedMe(tokenInvalid("revoked"), ok)) {
             try? store.save(PDTStoredConnection(.connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600)))))
         }
 
-        _ = try PDTAPIClient(transport: api, tokenProvider: connection(store, ScriptedPDTHTTPTransport([]))).get(.me)
+        _ = try PDTAPIClient(transport: api, tokenProvider: connection(store, ScriptedPDTHTTPTransport([:]))).get(.me)
 
         #expect(api.requests.map { $0.value(forHTTPHeaderField: "Authorization") } == ["Bearer access-1", "Bearer access-2"])
     }
@@ -536,8 +536,8 @@ struct PDTConnectionTests {
     @Test("A 401 revoked on the current token refreshes; a rejected refresh then needs a reconnect")
     func revokedCurrentTokenRefreshesThenNeedsReconnect() throws {
         let store = InMemoryPDTCredentialStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow + 3000))))
-        let tokens = ScriptedPDTHTTPTransport([oauthError(400, "invalid_grant")])
-        let api = ScriptedPDTHTTPTransport([tokenInvalid("revoked")])
+        let tokens = scriptedTokens(oauthError(400, "invalid_grant"))
+        let api = scriptedMe(tokenInvalid("revoked"))
 
         #expect(throws: PDTAPIError.tokenInvalid(reason: nil)) {
             try PDTAPIClient(transport: api, tokenProvider: connection(store, tokens)).get(.me)
@@ -550,7 +550,7 @@ struct PDTConnectionTests {
     @Test("A transient refresh failure keeps using an access token that has not expired yet")
     func transientRefreshFailureFallsBack() throws {
         let store = InMemoryPDTCredentialStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow + 60))))
-        let tokens = ScriptedPDTHTTPTransport([.failure(.timedOut)])
+        let tokens = scriptedTokens(.failure(.timedOut))
 
         #expect(try connection(store, tokens).currentToken() == PDTAPIToken("access-1"))
         #expect(try store.load().state == .connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow + 60))))
@@ -559,9 +559,9 @@ struct PDTConnectionTests {
     @Test("A pasted personal token is stored, sent as is, and needs a reconnect when PDT rejects it")
     func personalTokenPath() throws {
         let store = InMemoryPDTCredentialStore()
-        let tokens = ScriptedPDTHTTPTransport([])
+        let tokens = ScriptedPDTHTTPTransport([:])
         let connection = connection(store, tokens)
-        let api = ScriptedPDTHTTPTransport([ok, tokenInvalid("expired")])
+        let api = scriptedMe(ok, tokenInvalid("expired"))
         let client = PDTAPIClient(transport: api, tokenProvider: connection)
 
         try connection.connect(personalToken: PDTAPIToken.personal(pasted: "  1|legacyTokenWithoutPrefix\n"))
@@ -587,7 +587,7 @@ struct PDTConnectionTests {
     @Test("Disconnect deletes the credential and points to PDT's connected apps")
     func disconnect() throws {
         let store = InMemoryPDTCredentialStore(.connected(.browserSession(session("access-1", "refresh-1", expiresAt: testNow + 3000))))
-        let connection = connection(store, ScriptedPDTHTTPTransport([]))
+        let connection = connection(store, ScriptedPDTHTTPTransport([:]))
 
         let revokeAt = try connection.disconnect()
 
@@ -599,7 +599,7 @@ struct PDTConnectionTests {
     @Test("Sign-in replaces a needs-reconnect state")
     func signInAfterReconnect() throws {
         let store = InMemoryPDTCredentialStore(.needsReconnect(.browserSession, .refreshRejected(PDTRefreshToken("refresh-1").fingerprint)))
-        let connection = connection(store, ScriptedPDTHTTPTransport([]))
+        let connection = connection(store, ScriptedPDTHTTPTransport([:]))
 
         try connection.signedIn(session("access-9", "refresh-9", expiresAt: testNow + 3600))
 
@@ -674,7 +674,7 @@ struct PDTCredentialStorageTests {
         let store: any PDTCredentialStore = inKeychain
             ? KeychainPDTCredentialStore(lockDirectory: directory, secItem: keychain.api)
             : FilePDTCredentialStore(url: directory.appending(path: "pdt.json"))
-        let connection = PDTConnection(store: store, tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([])))
+        let connection = PDTConnection(store: store, tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([:])))
 
         try connection.signedIn(session("access-1", "refresh-1", expiresAt: .distantFuture))
         try connection.disconnect()
@@ -754,7 +754,7 @@ struct PDTCredentialStorageTests {
             try store.save(PDTStoredConnection(.connected(.personalToken(PDTAPIToken("pdt_keychain")))))
         }
         #expect(throws: PDTCredentialStoreError.missingKeychainEntitlement) { try store.save(.empty) }
-        let connection = PDTConnection(store: store, tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([])))
+        let connection = PDTConnection(store: store, tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([:])))
         #expect(throws: PDTCredentialStoreError.missingKeychainEntitlement) { try connection.state() }
 
         #expect(keychain.queries.count == 4)
@@ -787,6 +787,26 @@ struct PDTCredentialStorageTests {
         #expect(PDTAPIToken(secrets[0]).fingerprint.description.hasPrefix("sha256:"))
         #expect(PDTAPIToken(secrets[0]).fingerprint.length == secrets[0].count)
     }
+}
+
+private let tokenRequest: ScriptedPDTHTTPTransport.Request = "POST https://auth.portfoliodividendtracker.com/oauth/token"
+
+/// PDT's token endpoint, answering `replies` in order.
+private func scriptedTokens(_ replies: ScriptedPDTHTTPTransport.Reply...) -> ScriptedPDTHTTPTransport {
+    scriptedTokens(replies)
+}
+
+private func scriptedTokens(_ replies: [ScriptedPDTHTTPTransport.Reply], initialDelaySeconds: TimeInterval = 0) -> ScriptedPDTHTTPTransport {
+    ScriptedPDTHTTPTransport(exchanges: replies.map { (tokenRequest, $0) }, initialDelaySeconds: initialDelaySeconds)
+}
+
+/// The PDT API, answering `GET /v1/me` with `replies` in order.
+private func scriptedMe(_ replies: ScriptedPDTHTTPTransport.Reply...) -> ScriptedPDTHTTPTransport {
+    scriptedMe(replies)
+}
+
+private func scriptedMe(_ replies: [ScriptedPDTHTTPTransport.Reply]) -> ScriptedPDTHTTPTransport {
+    ScriptedPDTHTTPTransport(exchanges: replies.map { ("GET /v1/me", $0) })
 }
 
 private var ok: ScriptedPDTHTTPTransport.Reply {
@@ -1107,7 +1127,7 @@ private final class ArrivalOrderTransport: PDTHTTPTransport, @unchecked Sendable
             throw URLError(.resourceUnavailable)
         }
         Thread.sleep(forTimeInterval: replies[arrival].delay)
-        return try ScriptedPDTHTTPTransport([replies[arrival].reply]).send(request, cancellation: cancellation)
+        return try ScriptedPDTHTTPTransport([tokenRequest: replies[arrival].reply]).send(request, cancellation: cancellation)
     }
 }
 
@@ -1116,13 +1136,9 @@ private final class HookTransport: PDTHTTPTransport, @unchecked Sendable {
     private let lock = NSLock()
     private var hook: (() -> Void)?
 
-    init(replies: [ScriptedPDTHTTPTransport.Reply], beforeReply: @escaping () -> Void) {
-        scripted = ScriptedPDTHTTPTransport(replies)
+    init(_ scripted: ScriptedPDTHTTPTransport, beforeReply: @escaping () -> Void) {
+        self.scripted = scripted
         hook = beforeReply
-    }
-
-    convenience init(reply: ScriptedPDTHTTPTransport.Reply, beforeReply: @escaping () -> Void) {
-        self.init(replies: [reply], beforeReply: beforeReply)
     }
 
     var requests: [URLRequest] { scripted.requests }

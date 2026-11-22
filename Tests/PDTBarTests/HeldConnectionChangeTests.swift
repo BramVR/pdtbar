@@ -309,7 +309,7 @@ private func connection(
         store: store,
         tokenEndpoint: PDTTokenEndpoint(
             client: PDTOAuthClient(id: "test-client", redirectPort: 0),
-            transport: ScriptedPDTHTTPTransport(tokens),
+            transport: ScriptedPDTHTTPTransport(exchanges: tokens.map { ("POST https://auth.portfoliodividendtracker.com/oauth/token", $0) }),
             now: { clock.now }
         ),
         now: { clock.now }

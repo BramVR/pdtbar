@@ -12,7 +12,8 @@ read_when:
 
 - Product launch is no-argument `pdtbar`; fixture mode is explicit `--fixture`.
 - The PDT REST API connection is the only setup path: Sign in with PDT (browser) or a pasted PDT token, stored in the Keychain. Product code starts no process; `pdtbar-checks` fails on a process start, or a mention of a local CLI or MCP tool, in `Sources/PDTBarCore`, `Sources/PDTBarAppSupport`, or `Sources/PDTBarApp`.
-- Scripted app smokes launch `pdtbar --app-support-dir <isolated> --scripted-pdt <file>`. The file is a `ScriptedPDTConnection` JSON: stored connection (`notConnected`, `browserSession`, `personalToken`, `signInExpired`, `tokenRevoked`), an optional `keychain` (`unentitled`: reads find nothing, writes answer `-34018`, and the signature has no keychain entitlement, as measured on an ad-hoc build, so the `Not connected` screen says the build can't save a sign-in and a scripted sign-in connects for the session only) or `keychainStatus` (one status for every call), each driving the real Keychain store over a fake `SecItem` API, a scripted sign-in outcome, an optional `checkHoldFile` (each check waits while that file exists, so a smoke can click while a check runs), PDT API replies in request order, and an `eventLog` that records `check`, `sign-in`, `token`, `disconnect`, and `request <path>`. The app refuses `--scripted-pdt` without `--app-support-dir`.
+- Scripted app smokes launch `pdtbar --app-support-dir <isolated> --scripted-pdt <file>`. The file is a `ScriptedPDTConnection` JSON: stored connection (`notConnected`, `browserSession`, `personalToken`, `signInExpired`, `tokenRevoked`), an optional `keychain` (`unentitled`: reads find nothing, writes answer `-34018`, and the signature has no keychain entitlement, as measured on an ad-hoc build, so the `Not connected` screen says the build can't save a sign-in and a scripted sign-in connects for the session only) or `keychainStatus` (one status for every call), each driving the real Keychain store over a fake `SecItem` API, a scripted sign-in outcome, an optional `checkHoldFile` (each check waits while that file exists, so a smoke can click while a check runs), PDT API replies that each name the request they answer (`api.responses[].request`, below), and an `eventLog` that records `check`, `sign-in`, `token`, `disconnect`, and `request <path>`. The app refuses `--scripted-pdt` without `--app-support-dir`.
+- Scripted PDT replies are keyed by request, never by arrival order. `ScriptedPDTHTTPTransport` (tests, smokes, checks, and the `--scripted-pdt` app) answers a request with the reply its key names: `"<METHOD> <target>"`, where a target starting with `/` is on the PDT API origin (`"GET /v1/portfolio/holdings"`, `"GET /v1/calendar-events?page=2"`) and another origin is spelled out (`"POST https://auth.portfoliodividendtracker.com/oauth/token"`). The request must carry every query item the key names. A key listed more than once answers in listed order (a `429`, then a `200`). A request no key matches, one whose replies are used up, or one two keys match throws `ScriptedPDTHTTPTransport.ScriptError` (`unscriptedRequest` or `ambiguousRequest`); the client sees a transport failure, and tests read `scriptErrors` and `unusedReplies`. A wrong or extra request therefore fails, and harmless reordering of independent requests does not.
 - Scripted smokes inject fixture env vars only as sentinels; they fail if the fixture sentinel is written.
 - Missing macOS Accessibility/Screen Recording permission should skip with a setup-required detail unless the smoke is specifically testing that failure.
 
@@ -35,7 +36,7 @@ Tallest menu (#296): measure `docs/pdt/fixtures/worst-case-height.json`, then re
 
 - It drives the real `PDTLaunchRuntime` and `PDTAppConnection` and runs every effect inline. PDT, the Keychain, and the browser are fakes; it launches no app and touches no real Keychain, network, or `~/.pdtbar-dev`.
 - Stores: `KeychainPDTCredentialStore` over a fake entitled keychain, the same over a fake ad-hoc build (reads find nothing, writes answer `-34018`, as measured on an ad-hoc binary), and `FilePDTCredentialStore` in a temp directory.
-- The fake PDT answers by request path from `docs/pdt/fixtures/api/full` and knows which tokens are live, so a dead token gets `401 TOKEN_INVALID` and a dead refresh token gets `invalid_grant`.
+- The fake PDT answers each request with the `docs/pdt/fixtures/api/full` reply its provenance key matches and knows which tokens are live, so a dead token gets `401 TOKEN_INVALID` and a dead refresh token gets `invalid_grant`.
 - Report: `<artifacts>/pdtbar-auth-measure.json`. Per scenario: `clicks`, `silentSignOuts`, `deadEnds`, `osPrompts`, `unnamedStates`, `penalty`, a `findings` line per counted item, and every step with its menus (connection and fetch rows only). `penalty = clicks + 10*silentSignOuts + 5*deadEnds + 5*osPrompts + 3*unnamedStates`; lower is better. Two runs write the same bytes; stdout carries the report's SHA-256.
 - Scenarios are the table in `Sources/PDTBarSmoke/AuthMeasure.swift`; the scoring rules are `AuthMeasureScenario` in `Sources/PDTBarSmokeProof`, covered by `AuthMeasureReportTests`.
 
@@ -95,10 +96,12 @@ REST fixture provenance: `docs/pdt/fixtures/api/provenance.json` says the
 bodies are synthetic, holds no account data, names the PDT API docs version
 they were written against (v0.8.1) and the spec version they were not
 re-checked against (openapi v0.9.0), and lists the fields still assumed rather
-than seen live. Per scenario directory it lists every reply file in replay
-order with the `GET /v1/...` request it answers. `pdtbar-checks` fails when the
-scenario keys differ from the directories, a file list differs from the
-directory's `*.json` files, a request is not a `GET /v1/` request, the version
+than seen live. Per scenario directory it lists every reply file with the
+`GET /v1/...` request it answers; replay loaders
+(`ScriptedPDTHTTPTransport.fixtureReplies`) key each reply by that request.
+`pdtbar-checks` fails when the scenario keys differ from the directories, a file
+list differs from the directory's `*.json` files, a request is not a parseable
+`GET /v1/` scripted request, the version
 is empty, or `synthetic` is false. It lives at the `api/` root because the
 replay loaders read every `*.json` in a scenario directory.
 
@@ -226,7 +229,8 @@ swift run pdtbar-smoke scripted-api-snapshot
 ```
 
 This uses no network, no real credentials, and no Keychain. It replays
-`docs/pdt/fixtures/api/full/` through `PDTAPIDataSource` and writes
+`docs/pdt/fixtures/api/full/`, each reply keyed by its provenance request,
+through `PDTAPIDataSource`, fails on an unscripted request or an unused reply, and writes
 `pdtbar-scripted-api-snapshot-proof.json` with the request paths, GET-only and
 PDT-origin checks, per-facet counts, and the degraded flag. It fails if any facet
 degrades or the fake token appears in the proof.

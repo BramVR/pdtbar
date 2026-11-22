@@ -26,7 +26,7 @@ func authMeasure(arguments: [String]) throws -> AuthMeasureRun {
     }
     try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
 
-    let fixtures = try AuthMeasureFixtures(directory: root.appending(path: "docs/pdt/fixtures/api/full"))
+    let fixtures = try AuthMeasureFixtures(apiFixtures: root.appending(path: "docs/pdt/fixtures/api"), scenario: "full")
     let scratch = FileManager.default.temporaryDirectory.appending(path: "pdtbar-auth-measure-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: scratch) }
     let neverSignedIn = PDTLaunchState.notConnected(signInWouldBe: .saved)
@@ -158,42 +158,24 @@ private let authMeasureScenarios: [AuthScenario] = [
 /// The `full` API fixture, answered by request path instead of request order,
 /// so a product change that sends one request more or less still gets PDT's answer.
 private struct AuthMeasureFixtures {
-    private let files: [String: Data]
+    /// Each reply body keyed by the request `provenance.json` says it answers.
+    private let replies: [(request: ScriptedPDTHTTPTransport.Request, body: Data)]
 
-    init(directory: URL) throws {
-        files = Dictionary(uniqueKeysWithValues: try FileManager.default
-            .contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-            .filter { $0.pathExtension == "json" }
-            .map { ($0.deletingPathExtension().lastPathComponent, try Data(contentsOf: $0)) })
+    init(apiFixtures: URL, scenario: String) throws {
+        replies = try ScriptedPDTHTTPTransport.fixtureReplies(scenario: scenario, apiFixtures: apiFixtures)
     }
 
-    var holdings: Data? { files["01-holdings"] }
+    var holdings: Data? { replies.first { $0.request == "GET /v1/portfolio/holdings" }?.body }
 
-    func body(for url: URL) -> Data? {
-        let query = Dictionary(
-            (URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []).map { ($0.name, $0.value ?? "") },
-            uniquingKeysWith: { first, _ in first }
-        )
-        guard url.path.hasPrefix("/v1/"), let endpoint = PDTAPIEndpoint(rawValue: String(url.path.dropFirst(4))) else {
-            return nil
-        }
-        switch endpoint {
-        case .holdings: return files["01-holdings"]
-        case .distributions: return files["02-distributions"]
-        case .xRay: return files[(query["offset"] ?? "0") == "0" ? "03-x-ray-page-1" : "04-x-ray-page-2"]
-        case .calendarEvents: return files[query["page"] == "2" ? "06-calendar-events-page-2" : "05-calendar-events-page-1"]
-        case .dividends: return files["07-dividends"]
-        case .symbolQuotes: return files.first { $0.key.hasSuffix("-symbol-quotes-\(query["symbolId"] ?? "")") }?.value
-        case .pricesBatch: return files["14-prices-batch"]
-        case .portfolios, .performance, .gains, .me, .personalAccessTokens: return nil
-        }
+    func body(for request: URLRequest) -> Data? {
+        replies.first { $0.request.matches(request) }?.body
     }
 }
 
 /// PDT's token endpoint and REST API with the server side of every credential:
 /// which access and refresh tokens are live. A request with a dead token gets
 /// `401 TOKEN_INVALID`, a dead refresh token gets `invalid_grant`, and a live
-/// one rotates the pair. Replies are `ScriptedPDTHTTPTransport` replies.
+/// one rotates the pair.
 private final class FakePDT: PDTHTTPTransport, @unchecked Sendable {
     private let lock = NSLock()
     private let fixtures: AuthMeasureFixtures
@@ -233,8 +215,12 @@ private final class FakePDT: PDTHTTPTransport, @unchecked Sendable {
     }
 
     func send(_ request: URLRequest, cancellation: PDTCancellation?) throws -> (Data, HTTPURLResponse) {
-        let reply = locked { request.url == PDTOAuthEndpoints.token ? tokenReply(request) : apiReply(request) }
-        return try ScriptedPDTHTTPTransport([reply]).send(request, cancellation: cancellation)
+        switch locked({ request.url == PDTOAuthEndpoints.token ? tokenReply(request) : apiReply(request) }) {
+        case let .response(status, body, headers):
+            return (body, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!)
+        case let .failure(code):
+            throw URLError(code)
+        }
     }
 
     private func mint(accessExpiresAt: Date, accessLive: Bool, refreshLive: Bool) -> PDTBrowserSession {
@@ -284,7 +270,7 @@ private final class FakePDT: PDTHTTPTransport, @unchecked Sendable {
                 #"{"error":{"code":"TOKEN_INVALID","message":"m","details":{"reason":"\#(reason)"},"traceId":"t"}}"#.utf8
             ))
         }
-        guard let body = fixtures.body(for: url) else {
+        guard let body = fixtures.body(for: request) else {
             return .response(status: 404, body: Data(#"{"error":{"code":"NOT_FOUND","message":"m","details":{},"traceId":"t"}}"#.utf8))
         }
         return .response(status: 200, body: body)
@@ -442,7 +428,7 @@ private final class AuthMeasureWorld: @unchecked Sendable {
         _ = try PDTCoalescedFirstPortfolioFetch(
             dataSource: PDTAPIDataSource(
                 client: PDTAPIClient(
-                    transport: ScriptedPDTHTTPTransport([.response(status: 200, body: holdings)]),
+                    transport: ScriptedPDTHTTPTransport(["GET /v1/portfolio/holdings": .response(status: 200, body: holdings)]),
                     tokenProvider: InMemoryPDTAPITokenProvider(token: PDTAPIToken("seed"))
                 ),
                 options: .firstFetch

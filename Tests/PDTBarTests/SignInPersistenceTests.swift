@@ -326,8 +326,8 @@ private final class LaunchDriver {
         api replies: [ScriptedPDTHTTPTransport.Reply] = [],
         tokens tokenReplies: [ScriptedPDTHTTPTransport.Reply] = []
     ) throws {
-        api = ScriptedPDTHTTPTransport(replies)
-        tokens = ScriptedPDTHTTPTransport(tokenReplies)
+        api = ScriptedPDTHTTPTransport(exchanges: replies.map { ("GET /v1/me", $0) })
+        tokens = ScriptedPDTHTTPTransport(exchanges: tokenReplies.map { ("POST https://auth.portfoliodividendtracker.com/oauth/token", $0) })
         connection = PDTAppConnection(
             store: store,
             tokenEndpoint: PDTTokenEndpoint(transport: tokens),

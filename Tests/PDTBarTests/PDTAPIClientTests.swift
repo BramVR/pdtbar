@@ -17,14 +17,19 @@ struct PDTAPIClientTests {
             .portfolios(dateFrom: "2026-01-01", dateTo: "2026-11-09"),
             .symbolQuotes(symbolId: 3),
         ]
-        let transport = ScriptedPDTHTTPTransport(resources.map { _ in ok(#"{"data":[]}"#) })
+        let transport = ScriptedPDTHTTPTransport(exchanges: [
+            "GET /v1/portfolio/holdings", "GET /v1/portfolio/distributions", "GET /v1/me", "GET /v1/personal-access-tokens",
+            "GET /v1/portfolio/performance", "GET /v1/portfolio/gains", "GET /v1/prices/batch", "GET /v1/x-ray",
+            "GET /v1/calendar-events", "GET /v1/dividends", "GET /v1/portfolios", "GET /v1/symbol-quotes",
+        ].map { ($0, ok(#"{"data":[]}"#)) })
         let client = makeClient(transport)
 
         for resource in resources {
             _ = try client.get(resource)
         }
 
-        #expect(transport.requests.count == resources.count)
+        #expect(transport.scriptErrors.isEmpty)
+        #expect(transport.unusedReplies.isEmpty)
         for request in transport.requests {
             #expect(request.httpMethod == "GET")
             #expect(request.httpBody == nil)
@@ -38,7 +43,12 @@ struct PDTAPIClientTests {
 
     @Test("Paths and query strings match the PDT REST contract")
     func pathsAndQueryEncoding() throws {
-        let transport = ScriptedPDTHTTPTransport(Array(repeating: ok(onePage), count: 4))
+        let transport = ScriptedPDTHTTPTransport([
+            "GET /v1/portfolio/holdings": ok(onePage),
+            "GET /v1/prices/batch": ok(onePage),
+            "GET /v1/dividends": ok(onePage),
+            "GET /v1/calendar-events": ok(onePage),
+        ])
         let client = makeClient(transport)
 
         _ = try client.get(.holdings(date: "2026-11-01"))
@@ -57,9 +67,9 @@ struct PDTAPIClientTests {
     @Test("Page pagination collects every page in order")
     func pagePaginationCompletes() throws {
         let transport = ScriptedPDTHTTPTransport([
-            ok(#"{"data":[{"id":1},{"id":2}],"meta":{"currentPage":1,"lastPage":3,"perPage":2,"total":5}}"#),
-            ok(#"{"data":[{"id":3},{"id":4}],"meta":{"currentPage":2,"lastPage":3,"perPage":2,"total":5}}"#),
-            ok(#"{"data":[{"id":5}],"meta":{"currentPage":3,"lastPage":3,"perPage":2,"total":5}}"#),
+            "GET /v1/dividends?page=1": ok(#"{"data":[{"id":1},{"id":2}],"meta":{"currentPage":1,"lastPage":3,"perPage":2,"total":5}}"#),
+            "GET /v1/dividends?page=2": ok(#"{"data":[{"id":3},{"id":4}],"meta":{"currentPage":2,"lastPage":3,"perPage":2,"total":5}}"#),
+            "GET /v1/dividends?page=3": ok(#"{"data":[{"id":5}],"meta":{"currentPage":3,"lastPage":3,"perPage":2,"total":5}}"#),
         ])
 
         let rows: [Row] = try makeClient(transport).getAll(.dividends())
@@ -71,8 +81,8 @@ struct PDTAPIClientTests {
     @Test("Unpaged list envelopes decode with no meta or an empty meta array")
     func unpagedEnvelopesDecode() throws {
         let transport = ScriptedPDTHTTPTransport([
-            ok(#"{"data":[{"id":1},{"id":2}]}"#),
-            ok(#"{"data":[{"id":3}],"meta":[]}"#),
+            "GET /v1/portfolio/holdings": ok(#"{"data":[{"id":1},{"id":2}]}"#),
+            "GET /v1/portfolio/distributions": ok(#"{"data":[{"id":3}],"meta":[]}"#),
         ])
         let client = makeClient(transport)
 
@@ -87,33 +97,34 @@ struct PDTAPIClientTests {
     @Test("Stalled or runaway pagination fails instead of looping")
     func stalledPaginationFails() {
         let stalled = ScriptedPDTHTTPTransport([
-            ok(#"{"data":[{"id":1}],"meta":{"currentPage":1,"lastPage":9,"perPage":1,"total":9}}"#),
-            ok(#"{"data":[],"meta":{"currentPage":2,"lastPage":9,"perPage":1,"total":9}}"#),
+            "GET /v1/dividends?page=1": ok(#"{"data":[{"id":1}],"meta":{"currentPage":1,"lastPage":9,"perPage":1,"total":9}}"#),
+            "GET /v1/dividends?page=2": ok(#"{"data":[],"meta":{"currentPage":2,"lastPage":9,"perPage":1,"total":9}}"#),
         ])
         #expect(throws: PDTAPIError.paginationStalled) {
             let _: [Row] = try makeClient(stalled).getAll(.dividends())
         }
 
-        let repeatedPage = ScriptedPDTHTTPTransport(Array(
-            repeating: ok(#"{"data":[{"id":1}],"meta":{"currentPage":1,"lastPage":2,"perPage":1,"total":2}}"#),
-            count: 2
-        ))
+        let firstPage = ok(#"{"data":[{"id":1}],"meta":{"currentPage":1,"lastPage":2,"perPage":1,"total":2}}"#)
+        let repeatedPage = ScriptedPDTHTTPTransport(["GET /v1/dividends?page=1": firstPage, "GET /v1/dividends?page=2": firstPage])
         #expect(throws: PDTAPIError.paginationStalled) {
             let _: [Row] = try makeClient(repeatedPage).getAll(.dividends())
         }
 
-        let missingMeta = ScriptedPDTHTTPTransport([ok(#"{"data":[{"id":1}]}"#)])
+        let missingMeta = ScriptedPDTHTTPTransport(["GET /v1/dividends": ok(#"{"data":[{"id":1}]}"#)])
         #expect(throws: PDTAPIError.invalidResponse) {
             let _: [Row] = try makeClient(missingMeta).getAll(.dividends())
         }
 
-        let noBudget = ScriptedPDTHTTPTransport([ok(onePage)])
+        let noBudget = ScriptedPDTHTTPTransport(["GET /v1/dividends": ok(onePage)])
         let rows: [Row] = (try? makeClient(noBudget, policy: PDTAPIRequestPolicy(maxPages: 0)).getAll(.dividends())) ?? []
         #expect(rows.isEmpty)
         #expect(noBudget.requests.count == 1)
 
-        let runaway = ScriptedPDTHTTPTransport((1...3).map { page in
-            ok(#"{"data":[{"id":1}],"meta":{"currentPage":\#(page),"lastPage":99,"perPage":1,"total":99}}"#)
+        let runaway = ScriptedPDTHTTPTransport(exchanges: (1...3).map { page in
+            (
+                ScriptedPDTHTTPTransport.Request(parsing: "GET /v1/dividends?page=\(page)")!,
+                ok(#"{"data":[{"id":1}],"meta":{"currentPage":\#(page),"lastPage":99,"perPage":1,"total":99}}"#)
+            )
         })
         #expect(throws: PDTAPIError.paginationLimitExceeded) {
             let _: [Row] = try makeClient(runaway, policy: PDTAPIRequestPolicy(maxPages: 2)).getAll(.dividends())
@@ -124,8 +135,8 @@ struct PDTAPIClientTests {
     @Test("X-ray follows limit/offset until hasMore is false")
     func xRayOffsetPagination() throws {
         let transport = ScriptedPDTHTTPTransport([
-            ok(#"{"data":{"items":[{"id":1},{"id":2}],"hasMore":true,"totalCount":3},"meta":[]}"#),
-            ok(#"{"data":{"items":[{"id":3}],"hasMore":false,"totalCount":3},"meta":[]}"#),
+            "GET /v1/x-ray?offset=0": ok(#"{"data":{"items":[{"id":1},{"id":2}],"hasMore":true,"totalCount":3},"meta":[]}"#),
+            "GET /v1/x-ray?offset=2": ok(#"{"data":{"items":[{"id":3}],"hasMore":false,"totalCount":3},"meta":[]}"#),
         ])
 
         let rows: [Row] = try makeClient(transport).getAll(.xRay)
@@ -148,7 +159,7 @@ struct PDTAPIClientTests {
             (302, "", .unexpectedStatus(302)),
         ]
         for (status, body, expected) in cases {
-            let transport = ScriptedPDTHTTPTransport([.response(status: status, body: Data(body.utf8))])
+            let transport = me(.response(status: status, body: Data(body.utf8)))
             let sleeper = RecordingSleeper()
             #expect(throws: expected) {
                 _ = try makeClient(transport, sleeper: sleeper).get(.me)
@@ -161,13 +172,13 @@ struct PDTAPIClientTests {
     @Test("429 honours Retry-After, then gives up after the attempt budget")
     func rateLimitRetries() throws {
         let limited = PDTAPIError.rateLimited(retryAfter: 2)
-        let recovering = ScriptedPDTHTTPTransport([rateLimited(retryAfter: "2"), ok(#"{"data":[]}"#)])
+        let recovering = me(rateLimited(retryAfter: "2"), ok(#"{"data":[]}"#))
         let sleeper = RecordingSleeper()
         _ = try makeClient(recovering, sleeper: sleeper).get(.me)
         #expect(recovering.requests.count == 2)
         #expect(sleeper.delays == [2])
 
-        let exhausted = ScriptedPDTHTTPTransport(Array(repeating: rateLimited(retryAfter: "2"), count: 5))
+        let exhausted = me(Array(repeating: rateLimited(retryAfter: "2"), count: 5))
         let exhaustedSleeper = RecordingSleeper()
         #expect(throws: limited) {
             _ = try makeClient(exhausted, sleeper: exhaustedSleeper).get(.me)
@@ -179,20 +190,22 @@ struct PDTAPIClientTests {
     @Test("Reporting calls count every request sent, retries and pages included, on success and on failure")
     func reportingCallsCountRequests() throws {
         let unavailable = ScriptedPDTHTTPTransport.Reply.response(status: 503, body: Data(envelope("SERVICE_UNAVAILABLE").utf8))
-        let recovering = ScriptedPDTHTTPTransport([unavailable, ok(#"{"data":[]}"#)])
+        let recovering = me(unavailable, ok(#"{"data":[]}"#))
         let recovered = try makeClient(recovering).getReportingAttempts(.me, as: [String: [Int]].self)
         #expect(recovered.attemptCount == 2)
         #expect(recovered.attemptCount == recovering.requests.count)
 
         let secondPage = #"{"data":[{"id":2}],"meta":{"currentPage":2,"lastPage":2}}"#
         let paged = ScriptedPDTHTTPTransport([
-            ok(#"{"data":[{"id":1}],"meta":{"currentPage":1,"lastPage":2}}"#), unavailable, ok(secondPage),
+            "GET /v1/dividends?page=1": ok(#"{"data":[{"id":1}],"meta":{"currentPage":1,"lastPage":2}}"#),
+            "GET /v1/dividends?page=2": unavailable,
+            "GET /v1/dividends?page=2": ok(secondPage),
         ])
         let rows = try makeClient(paged).getAllReportingAttempts(.dividends(), as: Row.self)
         #expect(rows.value == [Row(id: 1), Row(id: 2)])
         #expect(rows.attemptCount == 3)
 
-        let exhausted = ScriptedPDTHTTPTransport(Array(repeating: unavailable, count: 5))
+        let exhausted = ScriptedPDTHTTPTransport(exchanges: Array(repeating: ("GET /v1/portfolio/holdings", unavailable), count: 5))
         do {
             _ = try makeClient(exhausted).getAllReportingAttempts(.holdings(), as: Row.self)
             Issue.record("expected the call to fail")
@@ -202,7 +215,7 @@ struct PDTAPIClientTests {
             #expect(failure.underlyingError as? PDTAPIError == .server(status: 503, retryAfter: nil))
         }
 
-        let undecodable = ScriptedPDTHTTPTransport([ok(#"{"data":"nope"}"#)])
+        let undecodable = ScriptedPDTHTTPTransport(["GET /v1/portfolio/holdings": ok(#"{"data":"nope"}"#)])
         do {
             _ = try makeClient(undecodable).getAllReportingAttempts(.holdings(), as: Row.self)
             Issue.record("expected the call to fail")
@@ -212,13 +225,13 @@ struct PDTAPIClientTests {
         }
 
         #expect(throws: PDTAPIError.server(status: 503, retryAfter: nil)) {
-            _ = try makeClient(ScriptedPDTHTTPTransport(Array(repeating: unavailable, count: 3))).get(.me)
+            _ = try makeClient(me(Array(repeating: unavailable, count: 3))).get(.me)
         }
     }
 
     @Test("A Retry-After longer than the policy allows fails fast")
     func longRetryAfterFailsFast() {
-        let transport = ScriptedPDTHTTPTransport([rateLimited(retryAfter: "120"), ok(#"{"data":[]}"#)])
+        let transport = me(rateLimited(retryAfter: "120"), ok(#"{"data":[]}"#))
         let sleeper = RecordingSleeper()
         #expect(throws: PDTAPIError.rateLimited(retryAfter: 120)) {
             _ = try makeClient(transport, sleeper: sleeper).get(.me)
@@ -235,7 +248,7 @@ struct PDTAPIClientTests {
         formatter.timeZone = TimeZone(identifier: "GMT")
         formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
         let retryAt = formatter.string(from: now.addingTimeInterval(5))
-        let transport = ScriptedPDTHTTPTransport([rateLimited(retryAfter: retryAt), ok(#"{"data":[]}"#)])
+        let transport = me(rateLimited(retryAfter: retryAt), ok(#"{"data":[]}"#))
         let sleeper = RecordingSleeper()
 
         _ = try makeClient(transport, sleeper: sleeper, now: now).get(.me)
@@ -245,25 +258,25 @@ struct PDTAPIClientTests {
 
     @Test("5xx and transient transport failures back off exponentially; others fail at once")
     func serverAndTransportRetries() throws {
-        let server = ScriptedPDTHTTPTransport([
+        let server = me(
             .response(status: 503, body: Data(envelope("INTERNAL_ERROR").utf8)),
             .failure(.timedOut),
-            ok(#"{"data":[]}"#),
-        ])
+            ok(#"{"data":[]}"#)
+        )
         let sleeper = RecordingSleeper()
         _ = try makeClient(server, sleeper: sleeper).get(.me)
         #expect(server.requests.count == 3)
         #expect(sleeper.delays == [1, 2])
 
-        let unavailable = ScriptedPDTHTTPTransport([
+        let unavailable = me(
             .response(status: 503, body: Data(envelope("INTERNAL_ERROR").utf8), headers: ["Retry-After": "7"]),
-            ok(#"{"data":[]}"#),
-        ])
+            ok(#"{"data":[]}"#)
+        )
         let unavailableSleeper = RecordingSleeper()
         _ = try makeClient(unavailable, sleeper: unavailableSleeper).get(.me)
         #expect(unavailableSleeper.delays == [7])
 
-        let offline = ScriptedPDTHTTPTransport([.failure(.secureConnectionFailed), ok(#"{"data":[]}"#)])
+        let offline = me(.failure(.secureConnectionFailed), ok(#"{"data":[]}"#))
         #expect(throws: PDTAPIError.transport(code: URLError.secureConnectionFailed.rawValue)) {
             _ = try makeClient(offline).get(.me)
         }
@@ -272,7 +285,7 @@ struct PDTAPIClientTests {
 
     @Test("No token, a cancelled caller, or an oversized batch sends nothing")
     func preflightFailuresSendNothing() {
-        let transport = ScriptedPDTHTTPTransport([ok(#"{"data":[]}"#)])
+        let transport = me(ok(#"{"data":[]}"#))
         #expect(throws: PDTAPIError.missingToken) {
             _ = try PDTAPIClient(transport: transport, tokenProvider: InMemoryPDTAPITokenProvider(token: nil)).get(.me)
         }
@@ -299,7 +312,7 @@ struct PDTAPIClientTests {
         #expect(!String(reflecting: token).contains("pdt_test_secret"))
 
         let body = #"{"error":{"code":"FORBIDDEN","message":"portfolio Acme 1234 EUR","details":{},"traceId":"t"}}"#
-        let transport = ScriptedPDTHTTPTransport([.response(status: 403, body: Data(body.utf8))])
+        let transport = me(.response(status: 403, body: Data(body.utf8)))
         do {
             _ = try makeClient(transport).get(.me)
             Issue.record("expected a forbidden error")
@@ -362,6 +375,15 @@ private func makeClient(
 }
 
 private let onePage = #"{"data":[],"meta":{"currentPage":1,"lastPage":1,"perPage":100,"total":0}}"#
+
+/// A transport whose only scripted request is `GET /v1/me`, answered with `replies` in order.
+private func me(_ replies: ScriptedPDTHTTPTransport.Reply...) -> ScriptedPDTHTTPTransport {
+    me(replies)
+}
+
+private func me(_ replies: [ScriptedPDTHTTPTransport.Reply]) -> ScriptedPDTHTTPTransport {
+    ScriptedPDTHTTPTransport(exchanges: replies.map { ("GET /v1/me", $0) })
+}
 
 private func ok(_ body: String) -> ScriptedPDTHTTPTransport.Reply {
     .response(status: 200, body: Data(body.utf8))

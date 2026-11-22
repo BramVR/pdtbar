@@ -3,14 +3,17 @@
   "api": {
     "responses": [
       {
+        "request": "GET /v1/portfolio/holdings",
         "status": 503,
         "body": "{\"error\":{\"code\":\"SERVICE_UNAVAILABLE\",\"message\":\"m\",\"details\":{},\"traceId\":\"t\"}}"
       },
       {
+        "request": "GET /v1/portfolio/holdings",
         "status": 503,
         "body": "{\"error\":{\"code\":\"SERVICE_UNAVAILABLE\",\"message\":\"m\",\"details\":{},\"traceId\":\"t\"}}"
       },
       {
+        "request": "GET /v1/portfolio/holdings",
         "status": 503,
         "body": "{\"error\":{\"code\":\"SERVICE_UNAVAILABLE\",\"message\":\"m\",\"details\":{},\"traceId\":\"t\"}}"
       }

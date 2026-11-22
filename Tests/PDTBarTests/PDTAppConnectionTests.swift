@@ -103,8 +103,8 @@ struct PDTAppConnectionTests {
         let keychain = RecordingSecItems(status: errSecMissingEntitlement)
         let connection = PDTAppConnection(
             store: KeychainPDTCredentialStore(lockDirectory: try temporaryDirectory(), secItem: keychain.api),
-            tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([])),
-            apiTransport: ScriptedPDTHTTPTransport([]),
+            tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([:])),
+            apiTransport: ScriptedPDTHTTPTransport([:]),
             signIn: { _ in browserSession }
         )
 
@@ -136,7 +136,7 @@ struct PDTAppConnectionTests {
         let connection = try ScriptedPDTConnection(
             connection: .notConnected,
             keychain: .unentitled,
-            api: ScriptedPDTAPIConfiguration(responses: [.init(body: String(decoding: holdings, as: UTF8.self))], asOf: asOf)
+            api: ScriptedPDTAPIConfiguration(responses: [.init(request: "GET /v1/portfolio/holdings", body: String(decoding: holdings, as: UTF8.self))], asOf: asOf)
         ).appConnection(lockDirectory: temporaryDirectory())
 
         #expect(connection.check().status == .notConnected(signInWouldBe: .thisSessionOnly(.missingEntitlement)))
@@ -182,8 +182,8 @@ struct PDTAppConnectionTests {
         let cancellation = PDTCancellation()
         let connection = PDTAppConnection(
             store: store,
-            tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([])),
-            apiTransport: ScriptedPDTHTTPTransport([]),
+            tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([:])),
+            apiTransport: ScriptedPDTHTTPTransport([:]),
             signIn: { _ in
                 cancellation.cancel()
                 return browserSession
@@ -209,10 +209,10 @@ struct PDTAppConnectionTests {
 
     @Test("A pasted token is stored and sent as the bearer token")
     func pastedTokenIsUsed() throws {
-        let transport = ScriptedPDTHTTPTransport([try holdingsReply()])
+        let transport = ScriptedPDTHTTPTransport(["GET /v1/portfolio/holdings": try holdingsReply()])
         let connection = PDTAppConnection(
             store: InMemoryPDTCredentialStore(),
-            tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([])),
+            tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport([:])),
             apiTransport: transport,
             signIn: { _ in throw PDTSignInError.accessDenied }
         )
@@ -335,8 +335,9 @@ private func appConnection(
 ) -> PDTAppConnection {
     PDTAppConnection(
         store: store,
-        tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport(tokenReplies)),
-        apiTransport: ScriptedPDTHTTPTransport(replies),
+        tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport(exchanges: tokenReplies.map { ("POST https://auth.portfoliodividendtracker.com/oauth/token", $0) })),
+        // The first fetch reads holdings only; any other request is unscripted.
+        apiTransport: ScriptedPDTHTTPTransport(exchanges: replies.map { ("GET /v1/portfolio/holdings", $0) }),
         signIn: { _ in throw PDTSignInError.accessDenied }
     )
 }

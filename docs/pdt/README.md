@@ -36,8 +36,9 @@ PDT MCP (#250).
   - `quiet-no-pressure.json` — the explicit all-quiet state.
   - `worst-case-height.json` — composed from the frozen fixtures above, not captured: every facet firing at once (both return figures in Summary, three big movers fill Pulse, both allocation pressures spill into Allocation, full Income list). Menu height stress case (#296).
 - [`fixtures/api/`](fixtures/api/) — synthetic PDT REST response bodies, one file
-  per request, numbered in the order `PDTAPIDataSource` sends them. Replay a
-  directory's files sorted by name through `ScriptedPDTHTTPTransport`. Same fake
+  per request. `provenance.json` names the request each file answers;
+  `ScriptedPDTHTTPTransport.fixtureReplies` loads a scenario keyed that way, so
+  replay does not depend on file or request order. Same fake
   universe (`symbolId` = `symbolQuoteId` − 4000). Bodies mix JSON numbers and
   numeric strings on purpose. No `_meta` keys.
   - `full/` — every facet: GBX/FX and second-currency cash holdings, an inactive

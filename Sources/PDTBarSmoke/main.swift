@@ -190,13 +190,20 @@ private func launchScriptedPDTApp(
     )
 }
 
-private func scriptedHoldingsResponse() throws -> ScriptedPDTAPIConfiguration.Response {
-    let holdings = packageRoot.appending(path: "docs/pdt/fixtures/api/full/01-holdings.json")
-    return ScriptedPDTAPIConfiguration.Response(body: String(decoding: try Data(contentsOf: holdings), as: UTF8.self))
+// A static, not a top-level `let`: main.swift globals are still uninitialized while the command dispatch above runs.
+private extension ScriptedPDTHTTPTransport.Request {
+    static let holdings: Self = "GET /v1/portfolio/holdings"
 }
 
+private func scriptedHoldingsResponse() throws -> ScriptedPDTAPIConfiguration.Response {
+    let holdings = packageRoot.appending(path: "docs/pdt/fixtures/api/full/01-holdings.json")
+    return ScriptedPDTAPIConfiguration.Response(request: .holdings, body: String(decoding: try Data(contentsOf: holdings), as: UTF8.self))
+}
+
+/// An error answer to the holdings request.
 private func scriptedAPIError(_ status: Int, _ code: String, headers: [String: String]? = nil) -> ScriptedPDTAPIConfiguration.Response {
     ScriptedPDTAPIConfiguration.Response(
+        request: .holdings,
         status: status,
         body: #"{"error":{"code":"\#(code)","message":"m","details":{},"traceId":"t"}}"#,
         headers: headers
@@ -1500,12 +1507,12 @@ private func scriptedAPIClientSmoke(arguments: [String]) throws -> SmokeReport {
         )
     }
     let transport = ScriptedPDTHTTPTransport([
-        .response(status: 200, body: Data(#"{"data":[{"id":1},{"id":2}]}"#.utf8)),
-        .response(status: 429, body: Data(#"{"error":{"code":"RATE_LIMITED","message":"m","details":{},"traceId":"t"}}"#.utf8), headers: ["Retry-After": "0"]),
-        page(#"{"id":1},{"id":2}"#, 1, 2),
-        page(#"{"id":3}"#, 2, 2),
-        .response(status: 200, body: Data(#"{"data":{"items":[{"id":1}],"hasMore":false,"totalCount":1},"meta":[]}"#.utf8)),
-        .response(status: 401, body: Data(#"{"error":{"code":"TOKEN_INVALID","message":"m","details":{"reason":"expired"},"traceId":"t"}}"#.utf8)),
+        "GET /v1/portfolio/holdings": .response(status: 200, body: Data(#"{"data":[{"id":1},{"id":2}]}"#.utf8)),
+        "GET /v1/dividends?page=1": .response(status: 429, body: Data(#"{"error":{"code":"RATE_LIMITED","message":"m","details":{},"traceId":"t"}}"#.utf8), headers: ["Retry-After": "0"]),
+        "GET /v1/dividends?page=1": page(#"{"id":1},{"id":2}"#, 1, 2),
+        "GET /v1/dividends?page=2": page(#"{"id":3}"#, 2, 2),
+        "GET /v1/x-ray": .response(status: 200, body: Data(#"{"data":{"items":[{"id":1}],"hasMore":false,"totalCount":1},"meta":[]}"#.utf8)),
+        "GET /v1/me": .response(status: 401, body: Data(#"{"error":{"code":"TOKEN_INVALID","message":"m","details":{"reason":"expired"},"traceId":"t"}}"#.utf8)),
     ])
     let client = PDTAPIClient(
         transport: transport,
@@ -1590,12 +1597,13 @@ private func scriptedAPIAuthSmoke(arguments: [String]) throws -> SmokeReport {
         )
     }
     let ok = ScriptedPDTHTTPTransport.Reply.response(status: 200, body: Data(#"{"data":{}}"#.utf8))
+    let tokenRequest: ScriptedPDTHTTPTransport.Request = "POST https://auth.portfoliodividendtracker.com/oauth/token"
     let tokens = ScriptedPDTHTTPTransport([
-        tokenReply(secrets[1], secrets[2]),
-        tokenReply(secrets[3], secrets[4]),
-        .response(status: 400, body: Data(#"{"error":"invalid_grant"}"#.utf8)),
+        tokenRequest: tokenReply(secrets[1], secrets[2]),
+        tokenRequest: tokenReply(secrets[3], secrets[4]),
+        tokenRequest: .response(status: 400, body: Data(#"{"error":"invalid_grant"}"#.utf8)),
     ])
-    let api = ScriptedPDTHTTPTransport(Array(repeating: ok, count: 7))
+    let api = ScriptedPDTHTTPTransport(exchanges: Array(repeating: ("GET /v1/me", ok), count: 7))
     let clock = SmokeClock()
     let tokenEndpoint = PDTTokenEndpoint(
         client: PDTOAuthClient(id: "scripted-client", redirectPort: 0),
@@ -1767,12 +1775,10 @@ private func scriptedAPISnapshotSmoke(arguments: [String]) throws -> SmokeReport
     try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
     let proof = artifacts.appending(path: "pdtbar-scripted-api-snapshot-proof.json")
     let secret = "pdt_scripted_smoke_secret"
-    let fixtures = packageRoot.appending(path: "docs/pdt/fixtures/api/full")
-    let replies = try FileManager.default.contentsOfDirectory(at: fixtures, includingPropertiesForKeys: nil)
-        .filter { $0.pathExtension == "json" }
-        .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        .map { ScriptedPDTHTTPTransport.Reply.response(status: 200, body: try Data(contentsOf: $0)) }
-    let transport = ScriptedPDTHTTPTransport(replies)
+    let transport = ScriptedPDTHTTPTransport(
+        exchanges: try ScriptedPDTHTTPTransport.fixtureReplies(scenario: "full", apiFixtures: packageRoot.appending(path: "docs/pdt/fixtures/api"))
+            .map { ($0.request, .response(status: 200, body: $0.body)) }
+    )
     let failures = SmokeSyncFailureRecorder()
     let dataSource = PDTAPIDataSource(
         client: PDTAPIClient(
@@ -1807,7 +1813,8 @@ private func scriptedAPISnapshotSmoke(arguments: [String]) throws -> SmokeReport
 
     guard proofPayload.onlyGET,
           proofPayload.onlyPDTOrigin,
-          requests.count == replies.count,
+          transport.scriptErrors.isEmpty,
+          transport.unusedReplies.isEmpty,
           proofPayload.openHoldings == 6,
           proofPayload.holdingsWithCopyableIdentifier == 4,
           proofPayload.sectors == 4,
@@ -1881,7 +1888,7 @@ private func scriptedAPIFailedSyncProofs() throws -> [ScriptedAPIFailedSyncProof
             )
         }
         _ = try refresh(ScriptedPDTAPIConfiguration(responses: completeSync).transport(), asOf: "2026-06-21").refresh()
-        let refreshFailed = (try? refresh(ScriptedPDTHTTPTransport([answer]), asOf: "2026-06-22").refresh()) == nil
+        let refreshFailed = (try? refresh(ScriptedPDTHTTPTransport([.holdings: answer]), asOf: "2026-06-22").refresh()) == nil
 
         let failure = store.lastSyncFailure()
         let runtime = DataHealthRuntime(access: .connected, sync: .failed(failure))
@@ -2260,6 +2267,7 @@ private func scriptedReturningLaunchSmoke(arguments: [String]) throws -> SmokeRe
     terminate(successProcess)
 
     let unavailable = ScriptedPDTAPIConfiguration.Response(
+        request: .holdings,
         status: 503,
         body: #"{"error":{"code":"SERVICE_UNAVAILABLE","message":"m","details":{},"traceId":"t"}}"#,
         headers: ["Retry-After": "0"]
@@ -4412,17 +4420,15 @@ private func snapshotAsOf(_ url: URL) -> String? {
     return snapshot.asOf
 }
 
-/// The `full` API fixture in background-refresh request order. Symbol-quote
-/// lookups belong to the first fetch only.
+/// The `full` API fixture's background-refresh replies. Symbol-quote lookups
+/// belong to the first fetch only.
 private func scriptedAPIBackgroundRefreshResponses() throws -> [ScriptedPDTAPIConfiguration.Response] {
-    let directory = packageRoot.appending(path: "docs/pdt/fixtures/api/full")
-    return try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-        .filter { $0.pathExtension == "json" && !$0.lastPathComponent.contains("symbol-quotes") }
-        .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        .map { ScriptedPDTAPIConfiguration.Response(body: String(decoding: try Data(contentsOf: $0), as: UTF8.self)) }
+    try ScriptedPDTHTTPTransport.fixtureReplies(scenario: "full", apiFixtures: packageRoot.appending(path: "docs/pdt/fixtures/api"))
+        .filter { !$0.request.description.hasPrefix("GET /v1/symbol-quotes") }
+        .map { ScriptedPDTAPIConfiguration.Response(request: $0.request, body: String(decoding: $0.body, as: UTF8.self)) }
 }
 
-/// The app's event-log line for each of those replies, in order.
+/// The app's event-log line for each of those replies, in the order the refresh sends them.
 private func scriptedAPIBackgroundRefreshEvents() -> [String] {
     [
         "request /v1/portfolio/holdings",

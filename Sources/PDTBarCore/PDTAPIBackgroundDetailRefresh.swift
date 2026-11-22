@@ -277,15 +277,18 @@ public final class PDTAPIBackgroundDetailRefresh: @unchecked Sendable {
 }
 
 /// Offline API replies for the app's `--scripted-pdt` connection
-/// (`ScriptedPDTConnection.api`).
-/// Responses are served in request order.
+/// (`ScriptedPDTConnection.api`). Each response names the request it answers
+/// (`"GET /v1/portfolio/holdings"`); see `ScriptedPDTHTTPTransport.Request`.
+/// A request no response names fails as an unscripted request.
 public struct ScriptedPDTAPIConfiguration: Codable, Equatable, Sendable {
     public struct Response: Codable, Equatable, Sendable {
+        public var request: ScriptedPDTHTTPTransport.Request
         public var status: Int
         public var body: String
         public var headers: [String: String]?
 
-        public init(status: Int = 200, body: String, headers: [String: String]? = nil) {
+        public init(request: ScriptedPDTHTTPTransport.Request, status: Int = 200, body: String, headers: [String: String]? = nil) {
+            self.request = request
             self.status = status
             self.body = body
             self.headers = headers
@@ -304,7 +307,7 @@ public struct ScriptedPDTAPIConfiguration: Codable, Equatable, Sendable {
 
     public func transport() -> ScriptedPDTHTTPTransport {
         ScriptedPDTHTTPTransport(
-            responses.map { .response(status: $0.status, body: Data($0.body.utf8), headers: $0.headers ?? [:]) },
+            exchanges: responses.map { ($0.request, .response(status: $0.status, body: Data($0.body.utf8), headers: $0.headers ?? [:])) },
             initialDelaySeconds: initialRequestDelaySeconds ?? 0
         )
     }
