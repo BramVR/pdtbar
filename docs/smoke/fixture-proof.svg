@@ -15,7 +15,7 @@
 <text x="44" y="266" class="row">Portfolio</text>
 <text x="44" y="294" class="row">Full allocation list</text>
 <text x="44" y="322" class="row">Income</text>
-<text x="44" y="350" class="row">No income events - No calendar events in the next window</text>
+<text x="44" y="350" class="row">No income events in the next window</text>
   <style>
     .heading { font: 700 18px -apple-system, BlinkMacSystemFont, sans-serif; fill: #18202a; }
     .row { font: 15px -apple-system, BlinkMacSystemFont, sans-serif; fill: #2e3742; }

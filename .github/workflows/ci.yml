@@ -71,5 +71,8 @@ jobs:
       - name: Deterministic checks
         run: swift run pdtbar-checks
 
+      - name: Committed proofs match the code
+        run: ./Scripts/check.sh proofs
+
       - name: Scripted API smoke matrix
         run: ./Scripts/api_smoke_matrix.sh
