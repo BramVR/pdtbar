@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import PDTBarCore
 
@@ -316,11 +317,16 @@ private func connection(
     )
 }
 
-private final class TestClock: @unchecked Sendable {
-    var now: Date
+private final class TestClock: Sendable {
+    private let current: OSAllocatedUnfairLock<Date>
 
     init(_ now: Date) {
-        self.now = now
+        current = OSAllocatedUnfairLock(initialState: now)
+    }
+
+    var now: Date {
+        get { current.withLock { $0 } }
+        set { current.withLock { $0 = newValue } }
     }
 }
 

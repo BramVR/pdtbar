@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 import PDTBarCore
 
@@ -656,15 +657,10 @@ private final class CancellingTransport: PDTHTTPTransport, @unchecked Sendable {
     }
 }
 
-private final class ProgressRecorder: @unchecked Sendable {
-    private let lock = NSLock()
-    private var recorded: [BackgroundDetailRefreshProgress] = []
+private final class ProgressRecorder: Sendable {
+    private let recorded = OSAllocatedUnfairLock<[BackgroundDetailRefreshProgress]>(initialState: [])
 
-    var values: [BackgroundDetailRefreshProgress] {
-        lock.lock()
-        defer { lock.unlock() }
-        return recorded
-    }
+    var values: [BackgroundDetailRefreshProgress] { recorded.withLock { $0 } }
 
     var phases: [BackgroundDetailRefreshPhase] {
         values.map(\.phase).reduce(into: []) { phases, phase in
@@ -675,8 +671,6 @@ private final class ProgressRecorder: @unchecked Sendable {
     }
 
     func record(_ progress: BackgroundDetailRefreshProgress) {
-        lock.lock()
-        defer { lock.unlock() }
-        recorded.append(progress)
+        recorded.withLock { $0.append(progress) }
     }
 }
