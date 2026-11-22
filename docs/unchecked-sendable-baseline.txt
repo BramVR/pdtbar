@@ -3,7 +3,7 @@
 2 Sources/PDTBarApp/main.swift
 2 Sources/PDTBarAppSupport/PDTAppConnection.swift
 1 Sources/PDTBarCore/PDTAPIBackgroundDetailRefresh.swift
-3 Sources/PDTBarCore/PDTAPIClient.swift
+2 Sources/PDTBarCore/PDTAPIClient.swift
 2 Sources/PDTBarCore/PDTBrowserSignIn.swift
 1 Sources/PDTBarCore/PDTCancellation.swift
 1 Sources/PDTBarCore/PDTConnection.swift

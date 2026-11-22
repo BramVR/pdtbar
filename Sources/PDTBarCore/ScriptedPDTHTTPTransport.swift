@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Offline transport for tests and scripted smokes. It answers each request
 /// with the reply scripted for that request, never with a reply meant for
@@ -9,7 +10,7 @@ import Foundation
 /// `ScriptError.unscriptedRequest` instead of succeeding, so a wrong, extra,
 /// or repeated request fails the way it would against PDT. A key scripted more
 /// than once answers its requests in script order (a `429` then a `200`).
-public final class ScriptedPDTHTTPTransport: PDTHTTPTransport, @unchecked Sendable {
+public final class ScriptedPDTHTTPTransport: PDTHTTPTransport, Sendable {
     public enum Reply: Sendable {
         case response(status: Int, body: Data, headers: [String: String] = [:])
         case failure(URLError.Code)
@@ -121,11 +122,14 @@ public final class ScriptedPDTHTTPTransport: PDTHTTPTransport, @unchecked Sendab
         return try entries.map { ($0.request, try Data(contentsOf: apiFixtures.appending(path: scenario).appending(path: $0.file))) }
     }
 
-    private let lock = NSLock()
-    private var script: [(request: Request, replies: [Reply])]
-    private var recorded: [URLRequest] = []
-    private var errors: [ScriptError] = []
-    private var pendingInitialDelay: TimeInterval
+    private struct State {
+        var script: [(request: Request, replies: [Reply])]
+        var recorded: [URLRequest] = []
+        var errors: [ScriptError] = []
+        var pendingInitialDelay: TimeInterval
+    }
+
+    private let state: OSAllocatedUnfairLock<State>
 
     /// `initialDelaySeconds` holds the first request, so scripted smokes can
     /// observe the app while a refresh is in flight. Cancellation ends the wait.
@@ -142,47 +146,43 @@ public final class ScriptedPDTHTTPTransport: PDTHTTPTransport, @unchecked Sendab
                 script.append((request, [reply]))
             }
         }
-        self.script = script
-        pendingInitialDelay = max(0, initialDelaySeconds)
+        state = OSAllocatedUnfairLock(initialState: State(script: script, pendingInitialDelay: max(0, initialDelaySeconds)))
     }
 
     public var requests: [URLRequest] {
-        lock.lock()
-        defer { lock.unlock() }
-        return recorded
+        state.withLock { $0.recorded }
     }
 
     /// Every `ScriptError` thrown so far. A client turns a thrown one into a
     /// transport failure, so tests read it here.
     public var scriptErrors: [ScriptError] {
-        lock.lock()
-        defer { lock.unlock() }
-        return errors
+        state.withLock { $0.errors }
     }
 
     /// Scripted replies no request asked for, one key per reply.
     public var unusedReplies: [Request] {
-        lock.lock()
-        defer { lock.unlock() }
-        return script.flatMap { entry in Array(repeating: entry.request, count: entry.replies.count) }
+        state.withLock { state in
+            state.script.flatMap { entry in Array(repeating: entry.request, count: entry.replies.count) }
+        }
     }
 
     public func send(_ request: URLRequest, cancellation: PDTCancellation?) throws -> (Data, HTTPURLResponse) {
         try waitForInitialDelay(cancellation: cancellation)
-        lock.lock()
-        defer { lock.unlock() }
-        recorded.append(request)
-        let matches = script.indices.filter { script[$0].request.matches(request) }
-        let sent = "\(request.httpMethod ?? "GET") \(request.url?.absoluteString ?? "")"
-        guard matches.count < 2 else {
-            errors.append(.ambiguousRequest(sent))
-            throw ScriptError.ambiguousRequest(sent)
+        let reply = try state.withLock { state -> Reply in
+            state.recorded.append(request)
+            let matches = state.script.indices.filter { state.script[$0].request.matches(request) }
+            let sent = "\(request.httpMethod ?? "GET") \(request.url?.absoluteString ?? "")"
+            guard matches.count < 2 else {
+                state.errors.append(.ambiguousRequest(sent))
+                throw ScriptError.ambiguousRequest(sent)
+            }
+            guard let index = matches.first, !state.script[index].replies.isEmpty else {
+                state.errors.append(.unscriptedRequest(sent))
+                throw ScriptError.unscriptedRequest(sent)
+            }
+            return state.script[index].replies.removeFirst()
         }
-        guard let index = matches.first, !script[index].replies.isEmpty else {
-            errors.append(.unscriptedRequest(sent))
-            throw ScriptError.unscriptedRequest(sent)
-        }
-        switch script[index].replies.removeFirst() {
+        switch reply {
         case let .response(status, body, headers):
             let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
             return (body, response)
@@ -192,10 +192,10 @@ public final class ScriptedPDTHTTPTransport: PDTHTTPTransport, @unchecked Sendab
     }
 
     private func waitForInitialDelay(cancellation: PDTCancellation?) throws {
-        lock.lock()
-        let delay = pendingInitialDelay
-        pendingInitialDelay = 0
-        lock.unlock()
+        let delay = state.withLock { state in
+            defer { state.pendingInitialDelay = 0 }
+            return state.pendingInitialDelay
+        }
         let deadline = Date().addingTimeInterval(delay)
         while Date() < deadline {
             if cancellation?.isCancelled == true {
