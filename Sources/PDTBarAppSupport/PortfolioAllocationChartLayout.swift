@@ -98,7 +98,6 @@ public struct PortfolioAllocationChartLayout {
     /// Bars and axis ticks share this mapping, so a tick lines up with a bar of the same weight.
     public static func barHeight(for weight: CGFloat, plotHeight: CGFloat, scaleMaxWeight: CGFloat) -> CGFloat {
         guard weight > 0, plotHeight > 0 else { return 0 }
-        // Offset from the floor instead of clamping to it, so two different small weights never draw the same height.
         let floor = min(minimumPositiveBarHeight, plotHeight)
         return floor + (plotHeight - floor) * weight / scaleMaxWeight
     }

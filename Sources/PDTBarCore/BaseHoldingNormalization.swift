@@ -187,12 +187,8 @@ public enum PDTBaseHoldingNormalizer {
         )
     }
 
-    // The headline total is always denominated in the portfolio currency. Each open
-    // holding contributes its portfolio-currency worth component; trading-currency
-    // worths are converted with the holding exchange rate (trading -> portfolio,
-    // so portfolio = trading / rate per docs/pdt/fixtures-schema-notes.md). Worths
-    // that cannot be expressed in the portfolio currency are excluded rather than
-    // silently mixed into a total with a mismatched currency label.
+    // PDT's holding exchange rate is trading -> portfolio, so portfolio = trading / rate
+    // (docs/pdt/fixtures-schema-notes.md).
     private static func totalPortfolioCurrencyWorth(
         of holdings: [PDTBaseHoldingInput],
         currency: String

@@ -23,10 +23,6 @@ public enum MenuOverflowStep: Int, CaseIterable, Sendable {
 }
 
 public extension MenuBarSurface {
-    /// The first build, along the overflow ladder, whose height fits `budget`.
-    ///
-    /// The unchanged surface is built and measured first, so a menu that fits renders exactly
-    /// as it would without this call. When even the last step overflows, its build is returned.
     func fitted<Built>(
         within budget: Double,
         build: (MenuBarSurface) -> Built,
@@ -118,7 +114,6 @@ private extension MenuBarSectionSurface {
     }
 
     func foldingTail() -> MenuBarSectionSurface {
-        // Two rows fold into one "1 more" row of the same height, so only longer tails save space.
         guard id != "actions", !title.isEmpty, rows.count > 2 else { return self }
         var section = self
         section.rows = [rows[0]] + [

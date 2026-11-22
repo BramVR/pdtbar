@@ -697,7 +697,6 @@ public enum MenuDescriptorRenderer {
         )
     }
 
-    /// Each holding's last price from PDT with the day it is for, which can lag today.
     private static func lastAvailablePriceRows(
         for holdings: [HoldingSummary],
         settings: PortfolioValueDisplaySettings
@@ -726,8 +725,6 @@ public enum MenuDescriptorRenderer {
         return rows
     }
 
-    /// The Prices row above already shows stale and unknown price dates, so
-    /// Data health is listed only when it has something else to report.
     private static func showsDataHealthRow(for health: DataHealthSnapshot) -> Bool {
         DataHealth.verdictBeyondPriceFreshness(of: health) != .healthy
     }
@@ -1170,9 +1167,7 @@ public enum MenuDescriptorRenderer {
 enum MenuRefreshActionState {
     case available
     case inProgress
-    /// Shown but not clickable: a refresh may start only once readiness comes back ready.
     case waitingForSetup
-    /// No row: the failure notice above the pulse already carries the retry.
     case retryOfferedAbove
 }
 
@@ -1388,7 +1383,6 @@ private func incomeEventDetail(for event: IncomeEventSummary) -> PortfolioValueT
     return PortfolioValueText(components)
 }
 
-/// Short enough that a detail with an amount fits the native subtitle on one line.
 private func incomeEventDatePhrase(for event: IncomeEventSummary) -> String {
     switch event.kind {
     case "ex-dividend": "Ex-dividend \(event.date)"

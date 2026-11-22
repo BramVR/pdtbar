@@ -130,13 +130,6 @@ public enum PDTConnectionEvent: Sendable {
 }
 
 public extension PDTConnectionState {
-    /// Every connection transition. Events about a credential that is no
-    /// longer current (a refresh after a disconnect, a rejection of a token
-    /// that was already rotated, a refresh of a pair the store has moved past)
-    /// leave the state alone. A refresh PDT accepted proves the chain is live,
-    /// so it wins over a concurrent `refreshRejected` of the pair it rotated,
-    /// and only of that pair: a rejection names the pair it lost, so a pair
-    /// from a sign-in the user has since replaced cannot reconnect it.
     func applying(_ event: PDTConnectionEvent) -> PDTConnectionState {
         switch (self, event) {
         case let (_, .signedIn(session)):
@@ -160,8 +153,6 @@ public extension PDTConnectionState {
 }
 
 extension PDTConnectionEvent {
-    /// A sign-in, pasted token, or disconnect: `applying` gives the same
-    /// state whatever it is applied to.
     var replacesAnyState: Bool {
         switch self {
         case .signedIn, .personalTokenEntered, .disconnected: true
