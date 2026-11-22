@@ -34,10 +34,10 @@ struct AllocationPressureTests {
         let highCash = PressureEngine.buildModel(from: snapshot)
         let item = try #require(highCash.rankedAttentionItems.first { $0.id == "allocation.cashDrag" })
         #expect(item.title == "Cash drag")
-        #expect(item.detail == "12.0%; EUR 6,144.00")
+        #expect(item.detail.shown == "12.0%; EUR 6,144.00")
         #expect(item.explanation.trigger.value == "Cash allocation line crossed")
         #expect(item.explanation.threshold?.value == "10.0%")
-        #expect(item.explanation.currentValue?.value == "12.0%; EUR 6,144.00")
+        #expect(item.explanation.currentValue?.value.shown == "12.0%; EUR 6,144.00")
         #expect(item.explanation.supportingSourceSlots.map(\.id) == ["allocation.overview"])
 
         snapshot.openHoldings.removeLast()

@@ -120,7 +120,7 @@ private extension MenuRow {
             row.detail = portfolioValueDetail.rendered(settings: settings)
         }
         if let portfolioValueSummaryTotal, var summary = row.portfolioSummary {
-            summary.totalValue = display(portfolioValueSummaryTotal, settings: settings)
+            summary.totalValue = PortfolioValueText.money(portfolioValueSummaryTotal).rendered(settings: settings)
             row.portfolioSummary = summary
         }
         if let portfolioValueBarDetails, var chart = row.barChart {
@@ -208,10 +208,7 @@ public enum MenuDescriptorRenderer {
                     role: .pulseAttention,
                     title: item.title,
                     children: attentionChildren(for: item, model: model, settings: settings)
-                ).withPortfolioValueDetail(
-                    attentionDetail(for: item, model: model),
-                    settings: settings
-                )
+                ).withPortfolioValueDetail(item.detail, settings: settings)
             }
         }
 
@@ -247,7 +244,6 @@ public enum MenuDescriptorRenderer {
                         ]) + allocationPressureRows(
                         for: allocation,
                         shownInPulse: Set(pulseRows.map(\.id)),
-                        model: model,
                         settings: settings
                     )
                 ),
@@ -296,7 +292,7 @@ public enum MenuDescriptorRenderer {
             portfolioSummary: MenuRowPortfolioSummary(
                 totalValue: model.portfolioGlance.openHoldingCount == 0
                     ? "No open holdings"
-                    : display(model.portfolioGlance.totalValue, settings: settings),
+                    : PortfolioValueText.money(model.portfolioGlance.totalValue).rendered(settings: settings),
                 cagr: portfolioSummaryCAGR(model.portfolioPerformance),
                 totalIncrease: portfolioSummaryPercent(model.portfolioPerformance.totalPercentageIncrease)
             )
@@ -346,98 +342,6 @@ public enum MenuDescriptorRenderer {
             .literal("\(holding.name) \(percent(holding.weight)); "),
             .money(holding.worth),
         ])
-    }
-
-    private static func attentionDetail(
-        for item: AttentionItem,
-        model: PortfolioPulseModel
-    ) -> PortfolioValueText {
-        if item.id == "allocation.cashDrag",
-           let cash = model.facetSnapshots.allocation.portfolioOverview.cashSummary
-        {
-            return PortfolioValueText([
-                .literal("\(percent(cash.weight)); "),
-                .money(cash.value),
-            ])
-        }
-        if item.typedFacet == .bigMovers,
-           let name = item.holdingIdentity?.name,
-           let moveSize = item.moveSize,
-           let beforeValue = item.beforeValue,
-           let afterValue = item.afterValue,
-           let currency = item.valueCurrency
-        {
-            var components: [PortfolioValueText.Component] = [
-                .literal("\(name) moved \(signedPercent(moveSize)) from "),
-                .money(Money(value: String(beforeValue), currency: currency)),
-                .literal(" to "),
-                .money(Money(value: String(afterValue), currency: currency)),
-            ]
-            if let beforeWeight = item.beforeWeight,
-               let afterWeight = item.afterWeight
-            {
-                components.append(
-                    .literal(
-                        " while portfolio weight changed \(percent(beforeWeight))"
-                            + " -> \(percent(afterWeight))."
-                    )
-                )
-            } else {
-                components.append(.literal(" over price history window."))
-            }
-            return PortfolioValueText(components)
-        }
-        if item.typedFacet == .income,
-           let event = incomeEvent(for: item, model: model)
-        {
-            return incomeAttentionDetail(for: event)
-        }
-        if item.id == "allocation.cashDrag"
-            || item.typedFacet == .bigMovers
-            || item.typedFacet == .income
-        {
-            return PortfolioValueText([.unresolvedSensitive(item.detail)])
-        }
-        return PortfolioValueText([.literal(item.detail)])
-    }
-
-    private static func incomeAttentionDetail(for event: IncomeEventSummary) -> PortfolioValueText {
-        let base = "\(event.symbolName) has an ex-dividend date on \(event.date)"
-        guard let amount = event.amount else {
-            return PortfolioValueText([.literal("\(base).")])
-        }
-        var components: [PortfolioValueText.Component] = [
-            .literal("\(base); latest recorded dividend "),
-            .money(amount),
-        ]
-        if let changePercent = event.changePercent,
-           let priorAmount = event.priorAmount
-        {
-            let direction = changePercent >= 0 ? "up" : "down"
-            components += [
-                .literal(", \(direction) \(percent(abs(changePercent))) from prior "),
-                .money(priorAmount),
-            ]
-        }
-        components.append(.literal("."))
-        return PortfolioValueText(components)
-    }
-
-    private static func incomeEvent(
-        for item: AttentionItem,
-        model: PortfolioPulseModel
-    ) -> IncomeEventSummary? {
-        model.facetSnapshots.income.upcomingEvents.first { event in
-            guard event.kind == "ex-dividend",
-                  event.date == item.eventDate
-            else {
-                return false
-            }
-            if let quoteID = item.holdingIdentity?.quoteId {
-                return event.quoteId == quoteID
-            }
-            return event.symbolName == item.holdingIdentity?.name
-        }
     }
 
     static func descriptorWithTopLevelActions(
@@ -590,20 +494,20 @@ public enum MenuDescriptorRenderer {
                 item.typedFacet == .allocation && item.holdingIdentity?.quoteId == holding.quoteId
             }
             let drillDownDetail = attention?.explanation.currentValue?.value
-            return MenuRow(
+            let row = MenuRow(
                 id: "allocation.\(holding.quoteId)",
                 role: drillDownDetail == nil ? .allocationHolding : .allocationDrillDown,
                 title: holding.name,
-                detail: drillDownDetail ?? percent(holding.weight),
+                detail: percent(holding.weight),
                 children: allocationChildren(for: holding, attention: attention, settings: settings)
             )
+            return drillDownDetail.map { row.withPortfolioValueDetail($0, settings: settings) } ?? row
         }
     }
 
     private static func allocationPressureRows(
         for allocation: AllocationSnapshot,
         shownInPulse: Set<String>,
-        model: PortfolioPulseModel,
         settings: PortfolioValueDisplaySettings
     ) -> [MenuRow] {
         allocation.allocationPressureItems.filter { !shownInPulse.contains("\($0.id).glance") }.map { item in
@@ -611,13 +515,8 @@ public enum MenuDescriptorRenderer {
                 id: "\(item.id).allocation",
                 role: .allocationDrillDown,
                 title: item.title,
-                children: explanationRows(
-                    for: item,
-                    itemID: "\(item.id).allocation",
-                    model: model,
-                    settings: settings
-                )
-            ).withPortfolioValueDetail(attentionDetail(for: item, model: model), settings: settings)
+                children: explanationRows(for: item, itemID: "\(item.id).allocation", settings: settings)
+            ).withPortfolioValueDetail(item.detail, settings: settings)
         }
     }
 
@@ -951,7 +850,7 @@ public enum MenuDescriptorRenderer {
         model: PortfolioPulseModel,
         settings: PortfolioValueDisplaySettings
     ) -> [MenuRow] {
-        var rows = explanationRows(for: item, itemID: item.id, model: model, settings: settings)
+        var rows = explanationRows(for: item, itemID: item.id, settings: settings)
         if let sources = sourceSlotsDetail(for: item, supportingDataSlots: model.supportingDataSlots) {
             rows.append(
                 MenuRow(
@@ -976,7 +875,6 @@ public enum MenuDescriptorRenderer {
     private static func explanationRows(
         for item: AttentionItem,
         itemID: String,
-        model: PortfolioPulseModel,
         settings: PortfolioValueDisplaySettings
     ) -> [MenuRow] {
         let explanation = item.explanation
@@ -992,58 +890,17 @@ public enum MenuDescriptorRenderer {
                 id: "\(itemID).\(suffix)",
                 role: .pulseAttentionExpansion,
                 title: fact.label
-            ).withPortfolioValueDetail(
-                explanationDetail(for: item, suffix: suffix, fact: fact, model: model),
-                settings: settings
-            )
+            ).withPortfolioValueDetail(factDetail(fact), settings: settings)
         }
     }
 
-    private static func explanationDetail(
-        for item: AttentionItem,
-        suffix: String,
-        fact: AttentionExplanationFact,
-        model: PortfolioPulseModel
-    ) -> PortfolioValueText {
-        if item.id == "allocation.cashDrag",
-           suffix == "currentValue",
-           let cash = model.facetSnapshots.allocation.portfolioOverview.cashSummary
-        {
-            return PortfolioValueText([
-                .literal("\(percent(cash.weight)); "),
-                .money(cash.value),
-            ])
-        }
-        if item.typedFacet == .bigMovers,
-           let currency = item.valueCurrency
-        {
-            if suffix == "currentValue", let afterValue = item.afterValue {
-                return .money(Money(value: String(afterValue), currency: currency))
-            }
-            if suffix == "priorValue", let beforeValue = item.beforeValue {
-                return .money(Money(value: String(beforeValue), currency: currency))
-            }
-        }
-        if item.typedFacet == .income,
-           suffix == "priorValue",
-           let priorAmount = incomeEvent(for: item, model: model)?.priorAmount
-        {
-            return .money(priorAmount)
-        }
-        if (item.id == "allocation.cashDrag" && suffix == "currentValue")
-            || (item.typedFacet == .bigMovers && ["currentValue", "priorValue"].contains(suffix))
-            || (item.typedFacet == .income && suffix == "priorValue")
-        {
-            return PortfolioValueText([.unresolvedSensitive(factDetail(fact))])
-        }
-        return PortfolioValueText([.literal(factDetail(fact))])
-    }
-
-    private static func factDetail(_ fact: AttentionExplanationFact) -> String {
+    private static func factDetail(_ fact: AttentionExplanationFact) -> PortfolioValueText {
         if fact.key == "severity",
            let score = fact.numericValue
         {
-            return "\(fact.value); score \(decimalString(String(score), places: 2))"
+            return PortfolioValueText(
+                fact.value.components + [.literal("; score \(decimalString(String(score), places: 2))")]
+            )
         }
         return fact.value
     }
@@ -1157,9 +1014,8 @@ public enum MenuDescriptorRenderer {
             rows.append(
                 MenuRow(
                     id: "allocation.\(holding.quoteId).line",
-                    title: threshold.label,
-                    detail: threshold.value
-                )
+                    title: threshold.label
+                ).withPortfolioValueDetail(threshold.value, settings: settings)
             )
         }
         return rows

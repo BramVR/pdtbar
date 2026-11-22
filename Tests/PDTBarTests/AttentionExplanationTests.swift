@@ -30,8 +30,8 @@ struct AttentionExplanationTests {
         #expect(bigMoverExplanation.trigger.value == "Price move crossed recent-window line")
         #expect(bigMoverExplanation.severity.value == "medium")
         #expect(bigMoverExplanation.threshold?.value == "10.0%")
-        #expect(bigMoverExplanation.currentValue?.value == "EUR 612.40")
-        #expect(bigMoverExplanation.priorValue?.value == "EUR 545.00")
+        #expect(bigMoverExplanation.currentValue?.value.shown == "EUR 612.40")
+        #expect(bigMoverExplanation.priorValue?.value.shown == "EUR 545.00")
         #expect(bigMoverExplanation.supportingSourceSlots.map(\.id) == [
             "bigMovers.priorSnapshot",
             "bigMovers.prices",
@@ -102,8 +102,8 @@ struct AttentionExplanationTests {
         }
         """)
         #expect(bigMover.explanation.threshold?.value == "10.0%")
-        #expect(bigMover.explanation.currentValue?.value == "EUR 612.40")
-        #expect(bigMover.explanation.priorValue?.value == "EUR 545.00")
+        #expect(bigMover.explanation.currentValue?.value.shown == "EUR 612.40")
+        #expect(bigMover.explanation.priorValue?.value.shown == "EUR 545.00")
 
         let income = try legacyItem("""
         {
@@ -121,7 +121,7 @@ struct AttentionExplanationTests {
         }
         """)
         #expect(income.explanation.threshold?.value == "2026-06-22..2026-07-22")
-        #expect(income.explanation.currentValue?.value == "2026-06-24; EUR 78.00")
+        #expect(income.explanation.currentValue?.value.shown == "2026-06-24; EUR 78.00")
     }
 
     @Test("Legacy facet and severity strings decode to typed safe vocabulary")

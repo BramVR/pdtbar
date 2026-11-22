@@ -95,8 +95,8 @@ struct BigMoverPressureTests {
         )
 
         #expect(item.valueCurrency == "USD")
-        #expect(item.explanation.currentValue?.value == "USD 112.00")
-        #expect(item.explanation.priorValue?.value == "USD 100.00")
+        #expect(item.explanation.currentValue?.value.shown == "USD 112.00")
+        #expect(item.explanation.priorValue?.value.shown == "USD 100.00")
     }
 
     @Test("Cold-start price history emits without current holding price")
@@ -145,7 +145,7 @@ struct BigMoverPressureTests {
         let model = try model("big-mover", withPrior: true)
         let item = try #require(model.rankedAttentionItems.first { $0.id == "bigMovers.move.9001" })
 
-        #expect(item.detail == "Nova Lithography moved +12.4% from EUR 545.00 to EUR 612.40 while portfolio weight changed 9.4% -> 11.6%.")
+        #expect(item.detail.shown == "Nova Lithography moved +12.4% from EUR 545.00 to EUR 612.40 while portfolio weight changed 9.4% -> 11.6%.")
         #expect(item.beforeWeight == 0.0942)
         #expect(item.afterWeight == 0.1158)
         #expect(item.supportingDataSlotIDs == ["bigMovers.priorSnapshot", "bigMovers.prices"])

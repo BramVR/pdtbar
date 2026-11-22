@@ -1,15 +1,5 @@
 import Foundation
 
-func display(_ money: Money) -> String {
-    "\(money.currency) \(decimalString(money.value, places: 2))"
-}
-
-func display(_ money: Money, settings: PortfolioValueDisplaySettings) -> String {
-    settings.showPortfolioValues
-        ? display(money)
-        : PortfolioValueDisplaySettings.hiddenPlaceholder
-}
-
 func fingerprintToken(_ value: String) -> String {
     value.lowercased()
         .map { character -> Character in

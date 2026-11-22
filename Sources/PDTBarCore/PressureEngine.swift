@@ -235,7 +235,7 @@ public enum PressureEngine {
                 itemWithPrior.explanation.priorValue = AttentionExplanationFact(
                     key: "priorValue",
                     label: "Prior",
-                    value: percent(priorWeight),
+                    value: .literal(percent(priorWeight)),
                     numericValue: priorWeight,
                     unit: "fraction"
                 )
@@ -266,7 +266,7 @@ public enum PressureEngine {
                     facet: "allocation",
                     rank: offset + 1,
                     title: "\(holding.name) concentration",
-                    detail: percent(holding.weight),
+                    detail: .literal(percent(holding.weight)),
                     severity: score >= 0.8 ? "high" : "medium",
                     score: score,
                     holdingIdentity: HoldingIdentity(name: holding.name, quoteId: holding.quoteId),
@@ -286,14 +286,14 @@ public enum PressureEngine {
                         threshold: AttentionExplanationFact(
                             key: "threshold",
                             label: "Threshold",
-                            value: percent(concentrationThreshold),
+                            value: .literal(percent(concentrationThreshold)),
                             numericValue: concentrationThreshold,
                             unit: "fraction"
                         ),
                         currentValue: AttentionExplanationFact(
                             key: "currentValue",
                             label: "Current",
-                            value: percent(holding.weight),
+                            value: .literal(percent(holding.weight)),
                             numericValue: holding.weight,
                             unit: "fraction"
                         ),
@@ -316,7 +316,7 @@ public enum PressureEngine {
                     facet: "allocation",
                     rank: offset + 1,
                     title: title,
-                    detail: percent(weight),
+                    detail: .literal(percent(weight)),
                     severity: score >= 0.8 ? "high" : "medium",
                     score: score,
                     currentWeight: weight,
@@ -335,14 +335,14 @@ public enum PressureEngine {
                         threshold: AttentionExplanationFact(
                             key: "threshold",
                             label: "Threshold",
-                            value: percent(sectorConcentrationThreshold),
+                            value: .literal(percent(sectorConcentrationThreshold)),
                             numericValue: sectorConcentrationThreshold,
                             unit: "fraction"
                         ),
                         currentValue: AttentionExplanationFact(
                             key: "currentValue",
                             label: "Current",
-                            value: percent(weight),
+                            value: .literal(percent(weight)),
                             numericValue: weight,
                             unit: "fraction"
                         ),
@@ -359,13 +359,14 @@ public enum PressureEngine {
             return []
         }
         let score = concentrationScore(weight: cash.weight, threshold: cashDragThreshold)
+        let cashText = PortfolioValueText([.literal("\(percent(cash.weight)); "), .money(cash.value)])
         return [
             AttentionItem(
                 id: "allocation.cashDrag",
                 facet: "allocation",
                 rank: 1,
                 title: "Cash drag",
-                detail: "\(percent(cash.weight)); \(display(cash.value))",
+                detail: cashText,
                 severity: score >= 0.8 ? "high" : "medium",
                 score: score,
                 currentWeight: cash.weight,
@@ -384,14 +385,14 @@ public enum PressureEngine {
                     threshold: AttentionExplanationFact(
                         key: "threshold",
                         label: "Threshold",
-                        value: percent(cashDragThreshold),
+                        value: .literal(percent(cashDragThreshold)),
                         numericValue: cashDragThreshold,
                         unit: "fraction"
                     ),
                     currentValue: AttentionExplanationFact(
                         key: "currentValue",
                         label: "Current",
-                        value: "\(percent(cash.weight)); \(display(cash.value))",
+                        value: cashText,
                         numericValue: cash.weight,
                         unit: "fraction"
                     ),
@@ -422,7 +423,7 @@ public enum PressureEngine {
                 facet: "allocation",
                 rank: 1,
                 title: "Top \(current.rankCount) concentration drift",
-                detail: "\(percent(prior.weight)) -> \(percent(current.weight))",
+                detail: .literal("\(percent(prior.weight)) -> \(percent(current.weight))"),
                 severity: score >= 0.8 ? "high" : "medium",
                 score: score,
                 currentWeight: current.weight,
@@ -443,21 +444,21 @@ public enum PressureEngine {
                     threshold: AttentionExplanationFact(
                         key: "threshold",
                         label: "Threshold",
-                        value: percent(concentrationDriftThreshold),
+                        value: .literal(percent(concentrationDriftThreshold)),
                         numericValue: concentrationDriftThreshold,
                         unit: "fraction"
                     ),
                     currentValue: AttentionExplanationFact(
                         key: "currentValue",
                         label: "Current",
-                        value: percent(current.weight),
+                        value: .literal(percent(current.weight)),
                         numericValue: current.weight,
                         unit: "fraction"
                     ),
                     priorValue: AttentionExplanationFact(
                         key: "priorValue",
                         label: "Prior",
-                        value: percent(prior.weight),
+                        value: .literal(percent(prior.weight)),
                         numericValue: prior.weight,
                         unit: "fraction"
                     ),
@@ -667,7 +668,8 @@ public enum PressureEngine {
         let beforeValue = Double(truncating: signal.beforeDecimal as NSDecimalNumber)
         let afterValue = Double(truncating: signal.afterDecimal as NSDecimalNumber)
         let score = rounded(min(1.0, abs(signal.moveSize) / 0.20), places: 2)
-        let valueCopy = "from \(currency) \(decimalString(String(beforeValue), places: 2)) to \(currency) \(decimalString(String(afterValue), places: 2))"
+        let before = Money(value: String(beforeValue), currency: currency)
+        let after = Money(value: String(afterValue), currency: currency)
         let detailSuffix = beforeWeight.map {
             " while portfolio weight changed \(percent($0)) -> \(percent(holding.weight))."
         } ?? " over price history window."
@@ -676,7 +678,13 @@ public enum PressureEngine {
             facet: "bigMovers",
             rank: 0,
             title: "\(holding.name) moved \(signedPercent(signal.moveSize))",
-            detail: "\(holding.name) moved \(signedPercent(signal.moveSize)) \(valueCopy)\(detailSuffix)",
+            detail: PortfolioValueText([
+                .literal("\(holding.name) moved \(signedPercent(signal.moveSize)) from "),
+                .money(before),
+                .literal(" to "),
+                .money(after),
+                .literal(detailSuffix),
+            ]),
             severity: abs(signal.moveSize) >= 0.20 ? "high" : "medium",
             score: score,
             holdingIdentity: HoldingIdentity(name: holding.name, quoteId: holding.quoteId),
@@ -702,21 +710,21 @@ public enum PressureEngine {
                 threshold: AttentionExplanationFact(
                     key: "threshold",
                     label: "Threshold",
-                    value: percent(bigMoverThreshold),
+                    value: .literal(percent(bigMoverThreshold)),
                     numericValue: bigMoverThreshold,
                     unit: "fraction"
                 ),
                 currentValue: AttentionExplanationFact(
                     key: "currentValue",
                     label: "Current",
-                    value: "\(currency) \(decimalString(String(afterValue), places: 2))",
+                    value: .money(after),
                     numericValue: afterValue,
                     unit: currency
                 ),
                 priorValue: AttentionExplanationFact(
                     key: "priorValue",
                     label: "Prior",
-                    value: "\(currency) \(decimalString(String(beforeValue), places: 2))",
+                    value: .money(before),
                     numericValue: beforeValue,
                     unit: currency
                 ),
@@ -771,18 +779,18 @@ public enum PressureEngine {
                         threshold: AttentionExplanationFact(
                             key: "threshold",
                             label: "Threshold",
-                            value: "\(snapshot.asOf)..\(incomeWindowEnd)"
+                            value: .literal("\(snapshot.asOf)..\(incomeWindowEnd)")
                         ),
                         currentValue: AttentionExplanationFact(
                             key: "currentValue",
                             label: "Current",
-                            value: event.date
+                            value: .literal(event.date)
                         ),
                         priorValue: event.priorAmount.map {
                             AttentionExplanationFact(
                                 key: "priorValue",
                                 label: "Prior",
-                                value: display($0)
+                                value: .money($0)
                             )
                         },
                         supportingSourceSlots: explanationSourceSlots(["income.calendar"])
@@ -801,26 +809,33 @@ public enum PressureEngine {
         return "income.ex-dividend.\(event.symbolName)"
     }
 
-    private static func incomeCopy(for event: IncomeEventSummary) -> String {
+    private static func incomeCopy(for event: IncomeEventSummary) -> PortfolioValueText {
         let base = "\(event.symbolName) has an ex-dividend date on \(event.date)"
         guard let amount = event.amount else {
-            return "\(base)."
+            return .literal("\(base).")
         }
-        guard let changePercent = event.changePercent,
-              let priorAmount = event.priorAmount
-        else {
-            return "\(base); latest recorded dividend \(display(amount))."
+        var components: [PortfolioValueText.Component] = [
+            .literal("\(base); latest recorded dividend "),
+            .money(amount),
+        ]
+        if let changePercent = event.changePercent,
+           let priorAmount = event.priorAmount
+        {
+            let direction = changePercent >= 0 ? "up" : "down"
+            components += [
+                .literal(", \(direction) \(percent(abs(changePercent))) from prior "),
+                .money(priorAmount),
+            ]
         }
-
-        let direction = changePercent >= 0 ? "up" : "down"
-        return "\(base); latest recorded dividend \(display(amount)), \(direction) \(percent(abs(changePercent))) from prior \(display(priorAmount))."
+        components.append(.literal("."))
+        return PortfolioValueText(components)
     }
 
     private static func explanationSeverity(severity: AttentionSeverity, score: Double) -> AttentionExplanationFact {
         AttentionExplanationFact(
             key: "severity",
             label: "Severity",
-            value: severity.rawValue,
+            value: .literal(severity.rawValue),
             numericValue: score
         )
     }

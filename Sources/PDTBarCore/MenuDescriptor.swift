@@ -365,7 +365,9 @@ public struct PortfolioValueDisplaySettings: Codable, Equatable, Sendable {
     }
 }
 
-struct PortfolioValueText: Codable, Equatable {
+/// Text that may hold portfolio values. Money stays typed until `rendered(settings:)`, the only
+/// place that formats it, so model code cannot bake a value into a string the setting never sees.
+public struct PortfolioValueText: Codable, Equatable, ExpressibleByStringLiteral {
     enum Component: Codable, Equatable {
         case literal(String)
         case money(Money)
@@ -378,17 +380,37 @@ struct PortfolioValueText: Codable, Equatable {
         self.components = components
     }
 
+    public init(stringLiteral value: String) {
+        self.init([.literal(value)])
+    }
+
+    /// Model JSON from before this type stored plain strings; their sensitivity is unknown.
+    public init(from decoder: Decoder) throws {
+        if let legacy = try? decoder.singleValueContainer().decode(String.self) {
+            self.init([.unresolvedSensitive(legacy)])
+            return
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(try container.decode([Component].self, forKey: .components))
+    }
+
+    static func literal(_ text: String) -> PortfolioValueText {
+        PortfolioValueText([.literal(text)])
+    }
+
     static func money(_ money: Money) -> PortfolioValueText {
         PortfolioValueText([.money(money)])
     }
 
-    func rendered(settings: PortfolioValueDisplaySettings) -> String {
+    public func rendered(settings: PortfolioValueDisplaySettings) -> String {
         components.map { component in
             switch component {
             case .literal(let value):
                 return value
             case .money(let money):
-                return display(money, settings: settings)
+                return settings.showPortfolioValues
+                    ? "\(money.currency) \(decimalString(money.value, places: 2))"
+                    : PortfolioValueDisplaySettings.hiddenPlaceholder
             case .unresolvedSensitive(let value):
                 return settings.showPortfolioValues
                     ? value

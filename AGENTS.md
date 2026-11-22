@@ -47,6 +47,7 @@ When the operator corrects an agent: fix it, add the rule here. A rule already h
 | No `#expect` over bare `allSatisfy` (passes on empty); use `nonEmptyAllSatisfy` or pin exact elements | `swift run pdtbar-checks` (`checkNoEmptySafeExpectations`), CI |
 | Every shown pulse joins the read store | compiler: `DisplayedPulse.pulse` is `private(set)`, only `show(_:)` sets it (`LaunchRuntime.swift`) |
 | Measure menus the way the live menu is built | `StatusMenuHost.makeMenu()` single factory; `StatusMenuHostTests.measuringMatchesLiveMenu` |
+| Hidden portfolio values never leak through model text (a31cbba, #240 repeated #224) | compiler: model text that can hold money is `PortfolioValueText`, and only `PortfolioValueText.rendered(settings:)` turns `Money` into text; `PortfolioValueVisibilityTests` scans every fixture plus a cash drag |
 | Data health, copied diagnostics, stored sync failures carry nothing from PDT's answer | `pdtbar-checks` `checkPDTAPIDataHealth` sentinels; `DataHealthRedactionTests` |
 | Test failure output and `measure.json` never echo menu copy or portfolio values | per surface: `DescriptorContractTests` (rule names only), `MenuMeasureReportTests`; new sinks: nothing |
 | Product code starts no process, names no CLI or MCP tool | `pdtbar-checks` `checkProductSpawnsNothing` |

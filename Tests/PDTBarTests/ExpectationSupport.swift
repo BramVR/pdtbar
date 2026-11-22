@@ -1,3 +1,5 @@
+import PDTBarCore
+
 extension Sequence {
     /// `allSatisfy` is true for an empty sequence, so `#expect(rows.nonEmptyAllSatisfy { … })`
     /// passes when the rows it checks are gone (#307). This one also needs an element.
@@ -11,5 +13,12 @@ extension Sequence {
             sawElement = true
         }
         return sawElement
+    }
+}
+
+extension PortfolioValueText {
+    /// The text with portfolio values shown, as the menu renders it by default.
+    var shown: String {
+        rendered(settings: PortfolioValueDisplaySettings())
     }
 }
