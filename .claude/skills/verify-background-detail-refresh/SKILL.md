@@ -42,14 +42,14 @@ Recheck the model when a hunk falls inside one of the symbols above.
 Needs a JDK 11+. The runner pins TLA+ 1.7.4.
 
 ```bash
-Scripts/formal/tlc.sh formal/background-detail-refresh/BackgroundDetailRefresh.tla
+formal/background-detail-refresh/check.sh
 formal/background-detail-refresh/mutations.sh
 ```
 
 Expected at the sync commit:
 
-- The model run prints `No error has been found` with 1,470 states generated, 989 distinct, depth 15, in about a second. Any failure means the change broke something or the model needs updating.
-- `mutations.sh` prints one row per mutation with the invariant it expects to be violated, and exits 0 in about 8 seconds. A row that reports `No error has been found` means the model lost its teeth.
+- `check.sh` runs the model and exits 1 unless it prints `No error has been found` with 1,470 states generated, 989 distinct, depth 15, in about a second. Any failure means the change broke something or the model needs updating.
+- `mutations.sh` prints one row per mutation with the invariant it expects to be violated, in about 8 seconds, and exits nonzero when any row misses (the model lost its teeth).
 
 ## Mutations
 

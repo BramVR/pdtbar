@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import os
 import Testing
 import PDTBarAppSupport
 import PDTBarCore
@@ -856,11 +857,10 @@ private extension Array {
     var only: Element? { count == 1 ? first : nil }
 }
 
-private final class FakeBrowser: @unchecked Sendable {
-    private let lock = NSLock()
+private final class FakeBrowser: Sendable {
     private let callbacks: (@Sendable (_ state: String) -> [String])?
-    private var opened: URL?
-    private var statuses: [Int?] = []
+    private let opened = OSAllocatedUnfairLock<URL?>(initialState: nil)
+    private let statuses = OSAllocatedUnfairLock<[Int?]>(initialState: [])
 
     init(callbacks: (@Sendable (_ state: String) -> [String])?) {
         self.callbacks = callbacks
@@ -879,11 +879,7 @@ private final class FakeBrowser: @unchecked Sendable {
         })
     }
 
-    var authorizeURL: URL? {
-        lock.lock()
-        defer { lock.unlock() }
-        return opened
-    }
+    var authorizeURL: URL? { opened.withLock { $0 } }
 
     func waitForCallbackStatus() -> Int? {
         waitForCallbackStatuses(count: 1).first ?? nil
@@ -892,9 +888,7 @@ private final class FakeBrowser: @unchecked Sendable {
     func waitForCallbackStatuses(count: Int) -> [Int?] {
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline {
-            lock.lock()
-            let current = statuses
-            lock.unlock()
+            let current = statuses.withLock { $0 }
             if current.count >= count {
                 return current
             }
@@ -904,9 +898,7 @@ private final class FakeBrowser: @unchecked Sendable {
     }
 
     func open(_ url: URL) throws {
-        lock.lock()
-        opened = url
-        lock.unlock()
+        opened.withLock { $0 = url }
         guard let callbacks else {
             return
         }
@@ -915,28 +907,23 @@ private final class FakeBrowser: @unchecked Sendable {
         DispatchQueue.global().async {
             for callbackURL in urls {
                 let result = Self.get(callbackURL)
-                self.lock.lock()
-                self.statuses.append(result)
-                self.lock.unlock()
+                self.statuses.withLock { $0.append(result) }
             }
         }
     }
 
     static func get(_ url: URL) -> Int? {
         let done = DispatchSemaphore(value: 0)
-        let result = Box()
+        let status = OSAllocatedUnfairLock<Int?>(initialState: nil)
         let session = URLSession(configuration: .ephemeral)
         session.dataTask(with: url) { _, response, _ in
-            result.status = (response as? HTTPURLResponse)?.statusCode
+            let code = (response as? HTTPURLResponse)?.statusCode
+            status.withLock { $0 = code }
             done.signal()
         }.resume()
         _ = done.wait(timeout: .now() + 5)
         session.invalidateAndCancel()
-        return result.status
-    }
-
-    private final class Box: @unchecked Sendable {
-        var status: Int?
+        return status.withLock { $0 }
     }
 }
 
@@ -974,20 +961,13 @@ private struct PortHolder {
 
 private let testNow = Date(timeIntervalSince1970: 1_800_000_000)
 
-private final class TestClock: @unchecked Sendable {
-    private let lock = NSLock()
-    private var current = testNow
+private final class TestClock: Sendable {
+    private let current = OSAllocatedUnfairLock(initialState: testNow)
 
-    var now: Date {
-        lock.lock()
-        defer { lock.unlock() }
-        return current
-    }
+    var now: Date { current.withLock { $0 } }
 
     func advance(by seconds: TimeInterval) {
-        lock.lock()
-        current += seconds
-        lock.unlock()
+        current.withLock { $0 += seconds }
     }
 }
 
@@ -1008,21 +988,14 @@ private final class Results: @unchecked Sendable {
     }
 }
 
-private final class Counter: @unchecked Sendable {
-    private let lock = NSLock()
-    private var count = 0
+private final class Counter: Sendable {
+    private let count = OSAllocatedUnfairLock(initialState: 0)
 
     func increment() {
-        lock.lock()
-        count += 1
-        lock.unlock()
+        count.withLock { $0 += 1 }
     }
 
-    var value: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return count
-    }
+    var value: Int { count.withLock { $0 } }
 }
 
 private final class FailingSaveStore: PDTCredentialStore, @unchecked Sendable {

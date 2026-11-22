@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 import PDTBarCore
 
@@ -437,19 +438,12 @@ private struct NoSleep: PDTAPISleeper {
     func sleep(seconds _: TimeInterval, cancellation _: PDTCancellation?) throws {}
 }
 
-private final class FailureRecorder: @unchecked Sendable {
-    private let lock = NSLock()
-    private var recorded: [PDTSyncFailure] = []
+private final class FailureRecorder: Sendable {
+    private let recorded = OSAllocatedUnfairLock<[PDTSyncFailure]>(initialState: [])
 
-    var failures: [PDTSyncFailure] {
-        lock.lock()
-        defer { lock.unlock() }
-        return recorded
-    }
+    var failures: [PDTSyncFailure] { recorded.withLock { $0 } }
 
     func record(_ failure: PDTSyncFailure) {
-        lock.lock()
-        defer { lock.unlock() }
-        recorded.append(failure)
+        recorded.withLock { $0.append(failure) }
     }
 }

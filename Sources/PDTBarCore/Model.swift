@@ -716,7 +716,6 @@ public struct FacetSnapshots: Codable, Equatable {
         income = try container.decode(IncomeSnapshot.self, forKey: .income)
         bigMovers = try container.decode(BigMoversSnapshot.self, forKey: .bigMovers)
         freshness = try container.decode(FreshnessSnapshot.self, forKey: .freshness)
-        // Data Health written by a build with another shape is rebuilt, never a decode failure.
         dataHealth = (try? container.decodeIfPresent(DataHealthSnapshot.self, forKey: .dataHealth))
             ?? DataHealth.build(DataHealthInput.default(freshness: freshness))
     }
@@ -1021,8 +1020,6 @@ public enum PortfolioOverview {
         return lhs.quoteId < rhs.quoteId
     }
 
-    // Overview rows render weights as fractions and distributions as 0...100 percentages.
-    // Over-range upstream facts are treated as malformed instead of being clamped.
     private static func validWeight(_ value: Double) -> Bool {
         value.isFinite && value >= 0 && value <= 1
     }

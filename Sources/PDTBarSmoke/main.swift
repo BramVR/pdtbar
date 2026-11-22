@@ -1,5 +1,4 @@
 // swiftlint:disable file_length
-// Tracked debt: finding 20 will split this smoke harness.
 import ApplicationServices
 import AppKit
 import Foundation
@@ -26,8 +25,6 @@ private let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirect
 private let defaultFixture = packageRoot.appending(path: "docs/pdt/fixtures/quiet-no-pressure.json")
 private let scriptedPDTAsOf = "2026-06-22"
 private let menuNotCheckedByDesign = "menu: not checked (TCC unreachable by design)"
-/// The app applies a finished fetch on its main queue after the snapshot and
-/// the last event are readable, so a sandbox kill there lands after both.
 private let scriptedLaunchLivenessHold: TimeInterval = 0.5
 
 private struct SmokeCommand: Sendable {
@@ -85,8 +82,6 @@ do {
     Foundation.exit(1)
 }
 
-// MARK: - Scripted PDT connection launches
-
 private struct ScriptedPDTLaunch {
     let appSupportDirectory: URL
     let script: URL
@@ -141,7 +136,6 @@ private struct ScriptedPDTFiles {
     let eventLog: URL
 }
 
-/// Writes the script into `<appSupport>/scripted-pdt.json` with its event log beside it.
 private func writeScriptedPDT(_ script: ScriptedPDTConnection, appSupportDirectory: URL) throws -> ScriptedPDTFiles {
     let eventLog = appSupportDirectory.appending(path: "scripted-pdt-events.log")
     var script = script
@@ -210,7 +204,6 @@ private func scriptedAPIError(_ status: Int, _ code: String, headers: [String: S
     )
 }
 
-/// Enough 503s to exhaust the client's retries on the required holdings request.
 private func scriptedHoldingsUnavailable() -> [ScriptedPDTAPIConfiguration.Response] {
     Array(
         repeating: scriptedAPIError(503, "SERVICE_UNAVAILABLE", headers: ["Retry-After": "0"]),
@@ -218,7 +211,6 @@ private func scriptedHoldingsUnavailable() -> [ScriptedPDTAPIConfiguration.Respo
     )
 }
 
-/// The pulse and snapshot the app's first fetch builds from the same scripted replies.
 private func expectedFirstFetch(_ api: ScriptedPDTAPIConfiguration) throws -> (pulse: PulseLifecycleResult, snapshot: PortfolioSnapshot?) {
     let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-scripted-first-fetch-expected")
     defer {
@@ -245,7 +237,6 @@ private struct MenuCheck: Codable {
     var evidencePath: String?
 }
 
-/// Opens the status menu and checks it shows `descriptor`'s rows and `texts`.
 private func checkMenu(
     _ name: String,
     descriptor: MenuDescriptor,
@@ -287,7 +278,6 @@ private func checkMenu(
     )
 }
 
-/// Clicks a menu row through Accessibility while the menu shows `descriptor`.
 private func clickMenuRow(_ rowID: String, descriptor: MenuDescriptor, process: Process, timeout: TimeInterval) -> String? {
     let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
     let identifiers = Set(requiredSetupMenuTargets(in: surface).map(\.accessibilityIdentifier))
@@ -337,8 +327,6 @@ private extension ScriptedLaunchIsolation {
     var clean: Bool { processStillRunning && fixtureSentinelEmpty }
 }
 
-/// Waits for `launch` to leave `expected` on disk and log `expectedEvents`,
-/// holds, then reads what it left behind. Call before the smoke stops the app.
 private func scriptedLaunchEvidence(
     _ launch: ScriptedPDTLaunch,
     seed: PortfolioSnapshot? = nil,
@@ -377,8 +365,6 @@ private struct ScriptedLaunchEvidenceProof: Codable {
         publishedOpenHoldingCount = evidence.published?.openHoldings.count
     }
 }
-
-// MARK: scripted-api-matrix
 
 private struct SandboxRuleProof: Codable {
     var rule: String
@@ -603,8 +589,6 @@ private func machLookup(_ serviceName: String) -> kern_return_t {
     return bootstrapLookUp(bootstrap, serviceName, &service)
 }
 
-// MARK: scripted-first-fetch
-
 private struct ScriptedFirstFetchProof: Codable {
     var success: ScriptedLaunchIsolation
     var successSnapshotPath: String
@@ -648,7 +632,6 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
     let successEvidence = scriptedLaunchEvidence(
         success,
         expected: expected.snapshot,
-        // The background refresh that follows the first fetch asks for holdings again and finds the script empty.
         expectedEvents: ["check", holdingsRequest, holdingsRequest],
         timeout: options.timeout + 3.0
     )
@@ -752,8 +735,6 @@ private func scriptedFirstFetchSmoke(arguments: [String]) throws -> SmokeReport 
     )
 }
 
-// MARK: scripted-setup-retry
-
 private struct ScriptedSetupRetryScenarioProof: Codable {
     var name: String
     var isolation: ScriptedLaunchIsolation
@@ -761,7 +742,6 @@ private struct ScriptedSetupRetryScenarioProof: Codable {
     var initialHoldingsRequests: Int
     var initialMenu: MenuCheck?
     var checkAgainClicks: [String?]
-    /// The first click's check was logged and held before the second click.
     var heldBeforeSecondClick: Bool
     var finalChecks: Int
     var finalHoldingsRequests: Int
@@ -779,9 +759,7 @@ private struct SetupRetryScenario {
     var name: String
     var script: ScriptedPDTConnection
     var state: PDTLaunchState
-    /// Holdings requests the launch makes before the user acts.
     var initialHoldingsRequests: Int
-    /// Whether Check again reaches a successful fetch.
     var reachesFetch: Bool
 }
 
@@ -854,7 +832,6 @@ private func scriptedSetupRetrySmoke(arguments: [String]) throws -> SmokeReport 
                 timeout: options.timeout,
                 artifacts: artifacts
             )
-            // The first click's check is held before the second click, so the second finds the row gone or refused.
             try Data().write(to: checkHold)
             clicks.append(clickMenuRow("pdtConnection.check", descriptor: descriptor, process: launch.process, timeout: options.timeout))
             heldBeforeSecondClick = launch.waitForEventCount("check", atLeast: 2, timeout: options.timeout + 3.0)
@@ -879,8 +856,6 @@ private func scriptedSetupRetrySmoke(arguments: [String]) throws -> SmokeReport 
                 && clicks.first.flatMap { $0 } != nil
                 && heldBeforeSecondClick
                 && finalChecks == 2
-                // A fetch after Check again is the first fetch plus the background detail refresh it starts,
-                // each reading holdings once; a duplicate fetch would add another.
                 && finalHoldingsRequests == scenario.initialHoldingsRequests + (scenario.reachesFetch ? 2 : 0)
                 && launch.snapshotWritten == scenario.reachesFetch
         )
@@ -930,8 +905,6 @@ private func scriptedSetupRetrySmoke(arguments: [String]) throws -> SmokeReport 
         artifacts: artifactsList
     )
 }
-
-// MARK: scripted-sign-in
 
 private struct ScriptedSignInProof: Codable {
     var success: ScriptedLaunchIsolation
@@ -1087,8 +1060,6 @@ private func scriptedSignInSmoke(arguments: [String]) throws -> SmokeReport {
     )
 }
 
-// MARK: logged-out-launch / ready-launch
-
 private func loggedOutLaunchSmoke(arguments: [String]) throws -> SmokeReport {
     let name = "logged-out-launch"
     let options = try SmokeOptions(arguments: arguments)
@@ -1192,8 +1163,6 @@ private func readyLaunchSmoke(arguments: [String]) throws -> SmokeReport {
         artifacts: artifactsList
     )
 }
-
-// MARK: packaged-onboarding
 
 private struct PackagedOnboardingProof: Codable {
     var appBundlePath: String
@@ -1850,8 +1819,6 @@ private func scriptedAPISnapshotSmoke(arguments: [String]) throws -> SmokeReport
     )
 }
 
-/// One failed background refresh per PDT answer, each over a store that holds a
-/// saved copy. Every answer carries a planted token, account id, URL, and body.
 private func scriptedAPIFailedSyncProofs() throws -> [ScriptedAPIFailedSyncProof] {
     let token = "pdt_SENTINEL_TOKEN_0123456789abcdef0123456789abcdef"
     let planted = [token, "acct-SENTINEL-4242", "https://api.portfoliodividendtracker.com/v1/accounts/acct-SENTINEL-4242", "RAW_BODY_SENTINEL"]
@@ -1930,8 +1897,6 @@ private func menuText(in row: MenuRow) -> String {
     ([row.title, row.detail ?? "", row.actionTarget?.copyText ?? ""] + row.children.map(menuText)).joined(separator: "\n")
 }
 
-/// Proof of one failed sync. Every field is a closed type, a literal, or text
-/// built from them, so the proof file is safe to attach.
 private struct ScriptedAPIFailedSyncProof: Codable {
     var reply: String
     var failure: PDTSyncFailure?
@@ -4420,15 +4385,12 @@ private func snapshotAsOf(_ url: URL) -> String? {
     return snapshot.asOf
 }
 
-/// The `full` API fixture's background-refresh replies. Symbol-quote lookups
-/// belong to the first fetch only.
 private func scriptedAPIBackgroundRefreshResponses() throws -> [ScriptedPDTAPIConfiguration.Response] {
     try ScriptedPDTHTTPTransport.fixtureReplies(scenario: "full", apiFixtures: packageRoot.appending(path: "docs/pdt/fixtures/api"))
         .filter { !$0.request.description.hasPrefix("GET /v1/symbol-quotes") }
         .map { ScriptedPDTAPIConfiguration.Response(request: $0.request, body: String(decoding: $0.body, as: UTF8.self)) }
 }
 
-/// The app's event-log line for each of those replies, in the order the refresh sends them.
 private func scriptedAPIBackgroundRefreshEvents() -> [String] {
     [
         "request /v1/portfolio/holdings",

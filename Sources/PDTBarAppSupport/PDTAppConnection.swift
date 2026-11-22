@@ -71,8 +71,6 @@ public final class PDTAppConnection: @unchecked Sendable {
         } catch {
             return PDTConnectionOutcome(connection.status(), notice: .signInFailed(.failed))
         }
-        // A cancel during the code exchange or the wait for the store lock still wins.
-        // The connection uses a session the store refuses, and its status says it is not saved.
         _ = try? connection.signedIn(session, unless: cancellation)
         return PDTConnectionOutcome(connection.status())
     }
@@ -90,7 +88,6 @@ public final class PDTAppConnection: @unchecked Sendable {
         let revokeAt = storedKind() == .personalToken ? PDTOAuthEndpoints.integrations : PDTOAuthEndpoints.connectedApps
         _ = try? connection.disconnect()
         let status = connection.status()
-        // The notice says the credential is gone, so it waits for a delete the store took.
         guard case .notConnected = status else {
             return PDTConnectionOutcome(status)
         }
@@ -253,7 +250,6 @@ public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
         if log != nil || checkHold != nil {
             record = { line in
                 log?.append(line)
-                // `check()` logs first, off the main queue, so waiting here keeps that check in flight.
                 while line == "check", let checkHold, FileManager.default.fileExists(atPath: checkHold) {
                     Thread.sleep(forTimeInterval: 0.05)
                 }

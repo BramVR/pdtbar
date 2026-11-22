@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 import PDTBarCore
 
@@ -402,32 +403,23 @@ private func queryValue(_ request: URLRequest, _ name: String) -> String? {
         .queryItems?.first { $0.name == name }?.value
 }
 
-private final class RecordingSleeper: PDTAPISleeper, @unchecked Sendable {
-    private let lock = NSLock()
-    private var recorded: [TimeInterval] = []
+private final class RecordingSleeper: PDTAPISleeper {
+    private let recorded = OSAllocatedUnfairLock<[TimeInterval]>(initialState: [])
 
-    var delays: [TimeInterval] {
-        lock.lock()
-        defer { lock.unlock() }
-        return recorded
-    }
+    var delays: [TimeInterval] { recorded.withLock { $0 } }
 
     func sleep(seconds: TimeInterval, cancellation _: PDTCancellation?) throws {
-        lock.lock()
-        defer { lock.unlock() }
-        recorded.append(seconds)
+        recorded.withLock { $0.append(seconds) }
     }
 }
 
-private final class RedirectCapture: @unchecked Sendable {
-    private let lock = NSLock()
-    private(set) var called = false
-    private(set) var request: URLRequest?
+private final class RedirectCapture: Sendable {
+    private let recorded = OSAllocatedUnfairLock<(called: Bool, request: URLRequest?)>(initialState: (false, nil))
+
+    var called: Bool { recorded.withLock { $0.called } }
+    var request: URLRequest? { recorded.withLock { $0.request } }
 
     func record(_ request: URLRequest?) {
-        lock.lock()
-        defer { lock.unlock() }
-        called = true
-        self.request = request
+        recorded.withLock { $0 = (true, request) }
     }
 }

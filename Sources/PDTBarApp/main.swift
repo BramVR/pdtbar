@@ -6,9 +6,7 @@ import PDTBarAppSupport
 import PDTBarCore
 import SwiftUI
 
-/// How a portfolio sync ended, as its worker hands it to the main queue.
 private enum PortfolioFetchOutcome: @unchecked Sendable {
-    /// The snapshot was committed. `connection` is what the connection says after the sync.
     case committed(PulseLifecycleResult, detail: PDTBackgroundDetailRefreshOutcome, connection: PDTConnectionStatus)
     case failed(PDTFetchFailure, errorDescription: String, syncFailure: PDTSyncFailure?)
 }
@@ -144,10 +142,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         let pulseReadStore = PulseReadStore(directory: stateDirectory)
         DispatchQueue.global(qos: .userInitiated).async {
             let outcome: PortfolioFetchOutcome
-            // Cleared first, so a fetch that fails without a PDT request cannot show an older record.
             snapshotStore.setLastSyncFailure(nil)
             do {
-                // The coalesced fetch persists the snapshot before it returns a pulse.
                 let pulse = try PDTCoalescedFirstPortfolioFetch(
                     dataSource: PDTAPIDataSource(
                         client: connection.apiClient(),
@@ -314,8 +310,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         NSWorkspace.shared.open(url)
     }
 
-    /// The pasted-token fallback. The field is secure, and the value goes
-    /// straight into the store; it is never logged or shown.
     @objc private func enterPDTToken(_ sender: NSMenuItem) {
         statusMenuHost.dismissWithoutAnimation()
         let alert = NSAlert()
@@ -408,10 +402,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         let budget = menuHeightBudget(for: item)
         fittedMenuHeightBudget = budget
         let fitted = surface.fitted(within: budget, build: makeMenuItems(from:), height: statusMenuHost.measuredHeight(of:))
-        // Mutate the one live menu in place. Assigning a fresh NSMenu on every
-        // update would leave an already-open menu tracking a detached
-        // instance that later progress updates and cancelTracking() calls can
-        // no longer reach, freezing stale fetch-progress rows on screen.
         let menu = statusMenuHost.apply(
             items: fitted.built,
             cancelOpenMenu: cancelOpenMenu
@@ -707,7 +697,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             }).joined(separator: " - ")
         )
 
-        // The section heading above names the chart; the title stays in the accessibility label only.
         let detailField: NSTextField?
         if let detail, !detail.isEmpty {
             let field = NSTextField(labelWithString: detail)
@@ -784,7 +773,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         let selectedTitleField = NSTextField(labelWithString: "")
         selectedTitleField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize)
         selectedTitleField.textColor = NSColor.secondaryLabelColor
-        // Middle truncation: a long holding name gives way before the weight and value at the end.
         selectedTitleField.lineBreakMode = .byTruncatingMiddle
         selectedTitleField.maximumNumberOfLines = 1
         selectedTitleField.translatesAutoresizingMaskIntoConstraints = false
@@ -796,7 +784,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
                 selectedAccent.isHidden = true
                 return
             }
-            // bar.detail already names the holding and its weight; a fail-closed placeholder does not.
             let detailNamesHolding = !bar.detail.isEmpty && bar.detail != PortfolioValueDisplaySettings.hiddenPlaceholder
             selectedTitleField.stringValue = detailNamesHolding ? bar.detail : "\(bar.label): \(bar.percentageLabel)"
             selectedAccent.isHidden = false

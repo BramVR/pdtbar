@@ -267,7 +267,7 @@ Live PDT sign-in (opt-in, needs Bram's PDT account and a browser):
 swift run pdtbar-dev pdt-sign-in --store <file>   # add --no-browser to print the URL instead of opening it
 swift run pdtbar-dev pdt-status --store <file>
 swift run pdtbar-dev pdt-refresh --store <file>
-swift run pdtbar-dev pdt-disconnect --store <file>
+swift run pdtbar-dev pdt-disconnect --store <file> --revoke-test   # revoke tests only; refuses without the flag
 ```
 
 Live app over that store (opt-in, live PDT reads; never in the default gate):
