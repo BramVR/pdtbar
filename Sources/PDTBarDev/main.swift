@@ -67,8 +67,20 @@ do {
             usage: pdtbar-dev model --fixture <path>
                    pdtbar-dev descriptor --fixture <path> [--portfolio-values <visible|hidden>]
                    pdtbar-dev <run|seed-prior> --fixture <path> --snapshot-dir <path>
-                   pdtbar-dev <pdt-sign-in|pdt-status|pdt-refresh|pdt-disconnect> --store <path>
+                   pdtbar-dev <pdt-sign-in|pdt-status|pdt-refresh> --store <path>
                    pdtbar-dev pdt-sign-in --store <path> --no-browser
+                   pdtbar-dev pdt-disconnect --store <path> --revoke-test
+            """.utf8
+        )
+    )
+    Foundation.exit(64)
+} catch CommandError.keepDevConnection {
+    FileHandle.standardError.write(
+        Data(
+            """
+            pdtbar-dev: pdt-disconnect drops the dev store's PDT connection. Live proofs leave the dev store and its PDT grant connected.
+            Run it only in a test about revoking, as `pdt-disconnect --store <path> --revoke-test`, then `pdt-sign-in` again.
+
             """.utf8
         )
     )
@@ -80,4 +92,5 @@ do {
 
 enum CommandError: Error {
     case usage
+    case keepDevConnection
 }

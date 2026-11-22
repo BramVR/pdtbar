@@ -6,8 +6,12 @@ enum PDTConnectionCommand {
 
     static func run(_ arguments: [String]) throws -> [String] {
         let noBrowser = arguments.count == 4 && arguments[0] == "pdt-sign-in" && arguments[3] == "--no-browser"
-        guard arguments.count == 3 || noBrowser, names.contains(arguments[0]), arguments[1] == "--store" else {
+        let revokeTest = arguments.count == 4 && arguments[0] == "pdt-disconnect" && arguments[3] == "--revoke-test"
+        guard arguments.count == 3 || noBrowser || revokeTest, names.contains(arguments[0]), arguments[1] == "--store" else {
             throw CommandError.usage
+        }
+        if arguments[0] == "pdt-disconnect", !revokeTest {
+            throw CommandError.keepDevConnection
         }
         let tokenEndpoint = PDTTokenEndpoint(transport: URLSessionPDTHTTPTransport())
         let connection = PDTConnection(

@@ -53,5 +53,5 @@ When the operator corrects an agent: fix it, add the rule here. A rule already h
 | Menu copy gives no advice | `pdtbar-checks` `assertInformationalCopy` |
 | A regression test fails on the pre-fix code; say how you checked in the PR | nothing (judgment) |
 | A user-visible menu change updates `docs/public/features.{en,nl}.md` in the same PR (#311 trailed #307) | nothing (judgment: no reliable signal for which change is user-visible) |
-| Live PDT proofs leave the dev store and grant connected; revoke only in a revoke test, then sign in again | nothing (`docs/smoke-checks.md`) |
+| Live PDT proofs leave the dev store and grant connected; revoke only in a revoke test, then sign in again | `pdtbar-dev pdt-disconnect` refuses without `--revoke-test` and says why |
 | `main` needs one approving review; agents never `--admin` merge | GitHub branch protection |
