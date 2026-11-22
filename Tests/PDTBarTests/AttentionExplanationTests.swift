@@ -11,27 +11,27 @@ struct AttentionExplanationTests {
         let bigMover = try model("big-mover", withPrior: true)
 
         let concentrationExplanation = try #require(concentration.rankedAttentionItems.first?.explanation)
-        #expect(concentrationExplanation.trigger.value == "Concentration line crossed")
-        #expect(concentrationExplanation.severity.value == "medium")
-        #expect(concentrationExplanation.threshold?.value == "20.0%")
-        #expect(concentrationExplanation.currentValue?.value == "24.2%")
+        #expect(concentrationExplanation.trigger.value.shown == "Concentration line crossed")
+        #expect(concentrationExplanation.severity.value.shown == "medium")
+        #expect(concentrationExplanation.threshold?.value.shown == "20.0%")
+        #expect(concentrationExplanation.currentValue?.value.shown == "24.2%")
         #expect(concentrationExplanation.priorValue == nil)
         #expect(concentrationExplanation.supportingSourceSlots.map(\.id) == ["allocation.holdings"])
 
         let incomeExplanation = try #require(income.rankedAttentionItems.first { $0.facet == "income" }?.explanation)
-        #expect(incomeExplanation.trigger.value == "Ex-dividend date in income window")
-        #expect(incomeExplanation.severity.value == "low")
-        #expect(incomeExplanation.threshold?.value == "2026-06-22..2026-07-22")
-        #expect(incomeExplanation.currentValue?.value == "2026-06-24")
+        #expect(incomeExplanation.trigger.value.shown == "Ex-dividend date in income window")
+        #expect(incomeExplanation.severity.value.shown == "low")
+        #expect(incomeExplanation.threshold?.value.shown == "2026-06-22..2026-07-22")
+        #expect(incomeExplanation.currentValue?.value.shown == "2026-06-24")
         #expect(incomeExplanation.priorValue == nil)
         #expect(incomeExplanation.supportingSourceSlots.map(\.id) == ["income.calendar"])
 
         let bigMoverExplanation = try #require(bigMover.rankedAttentionItems.first?.explanation)
-        #expect(bigMoverExplanation.trigger.value == "Price move crossed recent-window line")
-        #expect(bigMoverExplanation.severity.value == "medium")
-        #expect(bigMoverExplanation.threshold?.value == "10.0%")
-        #expect(bigMoverExplanation.currentValue?.value == "EUR 612.40")
-        #expect(bigMoverExplanation.priorValue?.value == "EUR 545.00")
+        #expect(bigMoverExplanation.trigger.value.shown == "Price move crossed recent-window line")
+        #expect(bigMoverExplanation.severity.value.shown == "medium")
+        #expect(bigMoverExplanation.threshold?.value.shown == "10.0%")
+        #expect(bigMoverExplanation.currentValue?.value.shown == "EUR 612.40")
+        #expect(bigMoverExplanation.priorValue?.value.shown == "EUR 545.00")
         #expect(bigMoverExplanation.supportingSourceSlots.map(\.id) == [
             "bigMovers.priorSnapshot",
             "bigMovers.prices",
@@ -80,8 +80,8 @@ struct AttentionExplanationTests {
           "supportingDataSlotIDs": ["allocation.holdings"]
         }
         """)
-        #expect(concentration.explanation.threshold?.value == "20.0%")
-        #expect(concentration.explanation.currentValue?.value == "24.2%")
+        #expect(concentration.explanation.threshold?.value.shown == "20.0%")
+        #expect(concentration.explanation.currentValue?.value.shown == "24.2%")
 
         let bigMover = try legacyItem("""
         {
@@ -101,9 +101,9 @@ struct AttentionExplanationTests {
           "supportingDataSlotIDs": ["bigMovers.priorSnapshot", "bigMovers.prices"]
         }
         """)
-        #expect(bigMover.explanation.threshold?.value == "10.0%")
-        #expect(bigMover.explanation.currentValue?.value == "EUR 612.40")
-        #expect(bigMover.explanation.priorValue?.value == "EUR 545.00")
+        #expect(bigMover.explanation.threshold?.value.shown == "10.0%")
+        #expect(bigMover.explanation.currentValue?.value.shown == "EUR 612.40")
+        #expect(bigMover.explanation.priorValue?.value.shown == "EUR 545.00")
 
         let income = try legacyItem("""
         {
@@ -120,8 +120,8 @@ struct AttentionExplanationTests {
           "supportingDataSlotIDs": ["income.calendar"]
         }
         """)
-        #expect(income.explanation.threshold?.value == "2026-06-22..2026-07-22")
-        #expect(income.explanation.currentValue?.value == "2026-06-24; EUR 78.00")
+        #expect(income.explanation.threshold?.value.shown == "2026-06-22..2026-07-22")
+        #expect(income.explanation.currentValue?.value.shown == "2026-06-24; EUR 78.00")
     }
 
     @Test("Legacy facet and severity strings decode to typed safe vocabulary")
@@ -159,7 +159,7 @@ struct AttentionExplanationTests {
         #expect(severityString == "low")
         #expect(item.typedFacet == .unknown)
         #expect(item.typedSeverity == .low)
-        #expect(item.explanation.severity.value == "low")
+        #expect(item.explanation.severity.value.shown == "low")
         #expect(item.readFingerprint.contains("pulse:v1:unknown"))
 
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(item)) as? [String: Any]
@@ -177,6 +177,34 @@ struct AttentionExplanationTests {
         #expect(object["facet"] as? String == "allocation")
         #expect(object["severity"] as? String == "medium")
         #expect(decoded == item)
+    }
+
+    @Test("Model JSON names schema version 2 for typed portfolio value text")
+    func modelJSONNamesSchemaVersionForTypedText() throws {
+        let data = try stableJSONData(model("concentration-pressure"))
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let item = try #require((object["rankedAttentionItems"] as? [[String: Any]])?.first)
+        let explanation = try #require(item["explanation"] as? [String: Any])
+        let current = try #require(explanation["currentValue"] as? [String: Any])
+
+        #expect(object["schemaVersion"] as? Int == 2)
+        #expect(item["detail"] is [String: Any])
+        #expect(current["value"] is [String: Any])
+    }
+
+    @Test("Model JSON from schema version 1 encodes again as version 2")
+    func schemaVersion1ModelJSONEncodesAgainAsVersion2() throws {
+        let decoded = try JSONDecoder().decode(
+            PortfolioPulseModel.self,
+            from: schemaVersion1JSON(model("income-event"))
+        )
+        let encoded = try stableJSONData(decoded)
+        let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let item = try #require((object["rankedAttentionItems"] as? [[String: Any]])?.first)
+
+        #expect(object["schemaVersion"] as? Int == 2)
+        #expect(item["detail"] is [String: Any])
+        #expect(try JSONDecoder().decode(PortfolioPulseModel.self, from: encoded) == decoded)
     }
 
     @Test("Income explanation window only surfaces in-window events")
@@ -201,8 +229,8 @@ struct AttentionExplanationTests {
             .filter { $0.facet == "income" }
 
         #expect(items.map(\.title) == ["Inside Window ex-dividend"])
-        #expect(items.first?.explanation.threshold?.value == "2026-06-22..2026-07-22")
-        #expect(items.first?.explanation.currentValue?.value == "2026-07-22")
+        #expect(items.first?.explanation.threshold?.value.shown == "2026-06-22..2026-07-22")
+        #expect(items.first?.explanation.currentValue?.value.shown == "2026-07-22")
     }
 
     private func model(_ fixtureName: String, withPrior: Bool = false) throws -> PortfolioPulseModel {
@@ -210,6 +238,27 @@ struct AttentionExplanationTests {
         let snapshot = try PDTFixtureDataSource.snapshot(from: fixture)
         let prior = withPrior ? try? PDTFixtureDataSource.priorSnapshot(from: fixture) : nil
         return PressureEngine.buildModel(from: snapshot, priorSnapshot: prior)
+    }
+
+    /// The model as main's `pdtbar-dev model` printed it: schema version 1, each attention `detail`
+    /// and fact `value` as the string it shows.
+    private func schemaVersion1JSON(_ model: PortfolioPulseModel) throws -> Data {
+        func downgrade(_ json: Any) throws -> Any {
+            if let array = json as? [Any] {
+                return try array.map(downgrade)
+            }
+            guard let object = json as? [String: Any] else {
+                return json
+            }
+            if object["components"] != nil {
+                let data = try JSONSerialization.data(withJSONObject: object)
+                return try JSONDecoder().decode(PortfolioValueText.self, from: data).shown
+            }
+            return try object.mapValues(downgrade)
+        }
+        var object = try #require(downgrade(JSONSerialization.jsonObject(with: stableJSONData(model))) as? [String: Any])
+        object["schemaVersion"] = 1
+        return try JSONSerialization.data(withJSONObject: object)
     }
 
     private func legacyItem(_ json: String) throws -> AttentionItem {

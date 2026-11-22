@@ -41,8 +41,8 @@ struct PortfolioValueVisibilityTests {
         #expect(hiddenAtAppChoke == hidden)
         #expect(hiddenAfterRoundTripText.contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
         #expect(
-            try monetaryDigitGroups(in: snapshot).filter(hiddenAfterRoundTripText.contains).isEmpty,
-            "Decoded hidden \(fixtureName) descriptor leaked snapshot monetary digit groups"
+            try leakedAmounts(in: hiddenAfterRoundTripText, snapshot: snapshot, model: model).isEmpty,
+            "Decoded hidden \(fixtureName) descriptor leaked snapshot amounts"
         )
         #expect(
             hidden.applying(
@@ -50,8 +50,12 @@ struct PortfolioValueVisibilityTests {
             ) == hidden
         )
         #expect(
-            try monetaryDigitGroups(in: snapshot).filter(hiddenText.contains).isEmpty,
-            "Hidden \(fixtureName) descriptor leaked snapshot monetary digit groups"
+            try leakedAmounts(in: hiddenText, snapshot: snapshot, model: model).isEmpty,
+            "Hidden \(fixtureName) descriptor leaked snapshot amounts"
+        )
+        #expect(
+            try leakedAmounts(in: descriptorJSON(hiddenAtAppChoke), snapshot: snapshot, model: model).isEmpty,
+            "Hidden \(fixtureName) descriptor JSON leaked snapshot amounts"
         )
         #expect(!hiddenJSON.contains("\"portfolioValueDetail\""))
         #expect(!hiddenJSON.contains("\"portfolioValueBarDetails\""))
@@ -72,11 +76,11 @@ struct PortfolioValueVisibilityTests {
         )
         let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
         let text = renderedText(in: descriptor) + renderedText(in: surface)
-        let leaked = try monetaryDigitGroups(in: snapshot).filter(text.contains)
+        let leaked = try leakedAmounts(in: text + descriptorJSON(descriptor), snapshot: snapshot, model: model)
 
         #expect(text.contains("Total portfolio value"))
         #expect(text.contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
-        #expect(leaked.isEmpty, "Hidden \(fixtureName) surface leaked: \(leaked.sorted())")
+        #expect(leaked.isEmpty, "Hidden \(fixtureName) surface leaked: \(leaked)")
     }
 
     @Test(
@@ -105,11 +109,7 @@ struct PortfolioValueVisibilityTests {
         #expect(pulse.model == hidden.model)
         #expect(hidden.model == restored.model)
         #expect(renderedText(in: hidden.descriptor).contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
-        #expect(
-            try monetaryDigitGroups(in: snapshot)
-                .filter(renderedText(in: hidden.descriptor).contains)
-                .isEmpty
-        )
+        #expect(try leakedAmounts(in: renderedText(in: hidden.descriptor), snapshot: snapshot, model: hidden.model).isEmpty)
         #expect(
             try monetaryDisplays(in: snapshot).contains(where: renderedText(in: restored.descriptor).contains),
             "Restored \(fixtureName) descriptor did not render a snapshot monetary value"
@@ -133,14 +133,123 @@ struct PortfolioValueVisibilityTests {
                 changePercent: 0.2571
             ),
         ]
+        let model = PressureEngine.buildModel(from: snapshot)
         let descriptor = MenuDescriptorRenderer.render(
-            model: PressureEngine.buildModel(from: snapshot),
+            model: model,
             settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
         )
-        let text = renderedText(in: descriptor)
-        let leaked = try monetaryDigitGroups(in: snapshot).filter(text.contains)
+        let leaked = try leakedAmounts(in: renderedText(in: descriptor), snapshot: snapshot, model: model)
 
-        #expect(leaked.isEmpty, "Hidden GBp descriptor leaked: \(leaked.sorted())")
+        #expect(leaked.isEmpty, "Hidden GBp descriptor leaked: \(leaked)")
+    }
+
+    // No fixture crosses the cash drag line, so the scans above never saw this row (a31cbba leaked it).
+    @Test("Hidden mode hides the cash drag value in Pulse and its explanation")
+    func hiddenModeHidesCashDragValue() throws {
+        var snapshot = try visibilitySnapshot("quiet-no-pressure.json")
+        let cash = try #require(snapshot.openHoldings.lastIndex { $0.name == "Cash" })
+        snapshot.openHoldings[cash].weight = 0.12
+        snapshot.openHoldings[cash].worth = Money(value: "6144.00", currency: "EUR")
+        let model = PressureEngine.buildModel(from: snapshot)
+        let hidden = MenuDescriptorRenderer.render(
+            model: model,
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+        let cashDrag = try #require(row(withID: "allocation.cashDrag.glance", in: hidden))
+        let leaked = try leakedAmounts(
+            in: renderedText(in: hidden) + descriptorJSON(hidden),
+            snapshot: snapshot,
+            model: model
+        )
+
+        #expect(cashDrag.detail == "12.0%; \(PortfolioValueDisplaySettings.hiddenPlaceholder)")
+        #expect(leaked.isEmpty, "Hidden cash drag descriptor leaked: \(leaked)")
+    }
+
+    // A fact's key is data, so a decoded Current fact that calls itself "severity" cannot print its
+    // numeric value next to the placeholder.
+    @Test("A decoded fact's key cannot unmask its numeric value")
+    func decodedFactKeyCannotUnmaskNumericValue() throws {
+        var snapshot = try visibilitySnapshot("quiet-no-pressure.json")
+        let cash = try #require(snapshot.openHoldings.lastIndex { $0.name == "Cash" })
+        snapshot.openHoldings[cash].weight = 0.12
+        var model = PressureEngine.buildModel(from: snapshot)
+        let cashDrag = try #require(model.rankedAttentionItems.firstIndex { $0.id == "allocation.cashDrag" })
+        model.rankedAttentionItems[cashDrag].explanation.currentValue = try JSONDecoder().decode(
+            AttentionExplanationFact.self,
+            from: Data(#"{"key": "severity", "label": "Current", "value": "EUR 123.45", "numericValue": 123.45}"#.utf8)
+        )
+        let hidden = MenuDescriptorRenderer.render(
+            model: model,
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+        let current = try #require(row(withID: "allocation.cashDrag.currentValue", in: hidden))
+        let json = try #require(String(data: stableJSONData(hidden), encoding: .utf8))
+
+        #expect(current.detail == PortfolioValueDisplaySettings.hiddenPlaceholder)
+        #expect(!json.contains("123.45"))
+    }
+
+    // A fact's number can be money, so the severity row shows the item's own score or none. A decoded
+    // Severity fact that is not a severity fact shows none.
+    @Test(
+        "A decoded Severity fact never shows its own number",
+        arguments: [
+            (
+                #"{"key": "currentValue", "label": "Severity", "value": "medium", "numericValue": 123.45, "unit": "EUR"}"#,
+                "medium"
+            ),
+            (
+                #"{"key": "severity", "label": "Severity", "value": "medium", "numericValue": 123.45}"#,
+                "medium; score 0.66"
+            ),
+        ]
+    )
+    func decodedSeverityFactNeverShowsItsOwnNumber(_ severityFact: String, _ expected: String) throws {
+        let item = try JSONDecoder().decode(AttentionItem.self, from: Data("""
+        {
+          "id": "allocation.concentration.9001",
+          "facet": "allocation",
+          "rank": 1,
+          "title": "Nova Lithography concentration",
+          "detail": "24.2%",
+          "severity": "medium",
+          "score": 0.66,
+          "supportingDataSlotIDs": ["allocation.holdings"],
+          "explanation": {
+            "trigger": {"key": "trigger", "label": "Trigger", "value": "Concentration line crossed"},
+            "severity": \(severityFact),
+            "supportingSourceSlots": []
+          }
+        }
+        """.utf8))
+        var model = PressureEngine.buildModel(from: try visibilitySnapshot("concentration-pressure.json"))
+        model.rankedAttentionItems = [item]
+
+        for showPortfolioValues in [true, false] {
+            let descriptor = MenuDescriptorRenderer.render(
+                model: model,
+                settings: PortfolioValueDisplaySettings(showPortfolioValues: showPortfolioValues)
+            )
+            let severity = try #require(row(withID: "allocation.concentration.9001.severity", in: descriptor))
+            let json = try #require(String(data: stableJSONData(descriptor), encoding: .utf8))
+
+            #expect(severity.detail == expected)
+            #expect(!json.contains("123.45"))
+        }
+    }
+
+    @Test("The severity row's score is the item's own, whatever number its fact holds")
+    func severityRowScoreIsTheItemsOwn() throws {
+        var model = PressureEngine.buildModel(from: try visibilitySnapshot("concentration-pressure.json"))
+        model.rankedAttentionItems[0].explanation.severity.numericValue = 123.45
+        let hidden = MenuDescriptorRenderer.render(
+            model: model,
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+        let severity = try #require(row(withID: "allocation.concentration.9001.severity", in: hidden))
+
+        #expect(severity.detail == "medium; score 0.66")
     }
 
     @Test("Unresolved sensitive attention data fails closed")
@@ -403,6 +512,54 @@ struct PortfolioValueVisibilityTests {
         #expect(!((second.detail ?? "").contains("GBp 111.11")))
     }
 
+    // PDT can list an estimate, which has no amount, before the confirmed event for the same quote
+    // and date. The menu describes the first one listed (copy taken from main at 3dfed5b).
+    @Test(
+        "Income attention describes the first ex-dividend event PDT lists for its quote and date",
+        arguments: [true, false]
+    )
+    func incomeAttentionDescribesFirstListedEvent(_ showPortfolioValues: Bool) throws {
+        let snapshot = try incomeEventSnapshot { events in
+            let confirmed = try #require(events.firstIndex { $0["id"] as? Int == 1001 })
+            var estimate = events[confirmed]
+            estimate["id"] = 1000
+            estimate["isEstimated"] = true
+            events.insert(estimate, at: confirmed)
+        }
+        let descriptor = MenuDescriptorRenderer.render(
+            model: PressureEngine.buildModel(from: snapshot),
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: showPortfolioValues)
+        )
+        let attention = try #require(row(withID: "income.ex-dividend.9003.glance", in: descriptor))
+
+        #expect(attention.detail == "Helix Pharma A/S has an ex-dividend date on 2026-06-24.")
+    }
+
+    // An event whose symbol maps to no held quote matched no event in main's renderer, which then
+    // hid the whole copy with portfolio values (copy taken from main at 3dfed5b).
+    @Test("Income attention without a quote hides its whole copy with portfolio values")
+    func incomeAttentionWithoutQuoteHidesWholeCopy() throws {
+        let snapshot = try incomeEventSnapshot { events in
+            let confirmed = try #require(events.firstIndex { $0["id"] as? Int == 1001 })
+            events[confirmed]["symbolId"] = 5999
+        }
+        let model = PressureEngine.buildModel(from: snapshot)
+        let id = "income.ex-dividend.symbol.5999.glance"
+        let shown = try #require(row(withID: id, in: MenuDescriptorRenderer.render(model: model)))
+        let hidden = try #require(
+            row(
+                withID: id,
+                in: MenuDescriptorRenderer.render(
+                    model: model,
+                    settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+                )
+            )
+        )
+
+        #expect(shown.detail == "Helix Pharma A/S has an ex-dividend date on 2026-06-24.")
+        #expect(hidden.detail == PortfolioValueDisplaySettings.hiddenPlaceholder)
+    }
+
     @Test("App applies portfolio value visibility at one menu installation choke point")
     func appHasSinglePortfolioValueVisibilityChokePoint() throws {
         let source = try String(
@@ -473,14 +630,66 @@ private func visibilitySnapshot(_ fixtureName: String) throws -> PortfolioSnapsh
     )
 }
 
+/// income-event.json with its PDT calendar events edited, read through the same normalizer as live data.
+private func incomeEventSnapshot(
+    editingCalendarEvents edit: (inout [[String: Any]]) throws -> Void
+) throws -> PortfolioSnapshot {
+    let source = visibilityPackageRoot.appending(path: "docs/pdt/fixtures/income-event.json")
+    var payload = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: source)) as? [String: Any])
+    var calendar = try #require(payload["listCalendarEvents"] as? [String: Any])
+    var events = try #require(calendar["data"] as? [[String: Any]])
+    try edit(&events)
+    calendar["data"] = events
+    payload["listCalendarEvents"] = calendar
+    let edited = FileManager.default.temporaryDirectory
+        .appending(path: "pdtbar-income-event-\(UUID().uuidString).json")
+    try JSONSerialization.data(withJSONObject: payload).write(to: edited)
+    defer { try? FileManager.default.removeItem(at: edited) }
+    return try PDTFixtureDataSource.snapshot(from: edited)
+}
+
 private func monetaryDisplays(in snapshot: PortfolioSnapshot) throws -> Set<String> {
     Set(try snapshotMoney(in: snapshot).map(formattedMoney))
 }
 
-private func monetaryDigitGroups(in snapshot: PortfolioSnapshot) throws -> Set<String> {
+/// Snapshot amounts that `text` shows. Each amount is searched in every form code could print it:
+/// PDT's raw `value` (`6144.00`), and two decimals with and without grouping (`6,144.00`,
+/// `6144.00`). A form counts unless a digit touches it, so `EUR 6144.00,12%` counts.
+///
+/// The severity scores `model` renders (`high; score 1.00`) are left out, each as its exact text. A
+/// score is not a portfolio value but can equal a small amount (worst-case-height's Cash unit price
+/// is EUR 1.00), and any other text with a score's shape still counts.
+private func leakedAmounts(
+    in text: String,
+    snapshot: PortfolioSnapshot,
+    model: PortfolioPulseModel
+) throws -> [String] {
+    let items = model.rankedAttentionItems + model.attentionItems
+        + model.facetSnapshots.allocation.allocationPressureItems
+    let scanned = items.reduce(text) { text, item in
+        text.replacingOccurrences(
+            of: "\(item.severity); score \(decimalStringForTest(String(item.score), places: 2))",
+            with: "\(item.severity); score"
+        )
+    }
     var values = try snapshotMoney(in: snapshot).map(\.value)
     values.append(contentsOf: snapshot.priceSeries.map(\.closeAdjusted))
-    return Set(values.map { decimalStringForTest($0, places: 2) })
+    let forms = Set(values.flatMap { value in
+        [
+            value,
+            decimalStringForTest(value, places: 2),
+            decimalStringForTest(value, places: 2, grouped: false),
+        ]
+    })
+    return forms.filter { form in
+        let number = NSRegularExpression.escapedPattern(for: form)
+        return scanned.range(of: #"(?<!\d)\#(number)(?!\d)"#, options: .regularExpression) != nil
+    }.sorted()
+}
+
+/// Descriptor JSON as `pdtbar-dev descriptor` prints it.
+private func descriptorJSON(_ descriptor: MenuDescriptor) throws -> String {
+    try #require(String(data: stableJSONData(descriptor), encoding: .utf8))
 }
 
 private func snapshotMoney(in snapshot: PortfolioSnapshot) throws -> [Money] {
@@ -512,14 +721,14 @@ private func formattedMoney(_ money: Money) -> String {
     "\(money.currency) \(decimalStringForTest(money.value, places: 2))"
 }
 
-private func decimalStringForTest(_ value: String, places: Int) -> String {
+private func decimalStringForTest(_ value: String, places: Int, grouped: Bool = true) -> String {
     guard let decimal = Decimal(string: value, locale: Locale(identifier: "en_US_POSIX")) else {
         return value
     }
     let formatter = NumberFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.numberStyle = .decimal
-    formatter.usesGroupingSeparator = true
+    formatter.usesGroupingSeparator = grouped
     formatter.minimumFractionDigits = places
     formatter.maximumFractionDigits = places
     return formatter.string(from: decimal as NSDecimalNumber) ?? value
@@ -604,4 +813,5 @@ private let portfolioValueFixtureNames = [
     "big-mover.json",
     "concentration-pressure.json",
     "income-event.json",
+    "worst-case-height.json",
 ]

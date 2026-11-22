@@ -11,7 +11,11 @@ public struct Money: Codable, Equatable {
 }
 
 public struct PortfolioPulseModel: Codable, Equatable {
-    public var schemaVersion: Int
+    /// 2: attention `detail` and explanation fact `value` encode as `PortfolioValueText` objects.
+    /// 1 stored them as strings, which still decode (`docs/architecture.md`). A decoded model has the
+    /// current shape whatever version it came from, so encoding always writes this one.
+    public static let currentSchemaVersion = 2
+
     public var asOf: String
     public var allQuiet: Bool
     public var allQuietSignal: AllQuietSignal
@@ -23,7 +27,6 @@ public struct PortfolioPulseModel: Codable, Equatable {
     public var supportingDataSlots: [SupportingDataSlot]
 
     public init(
-        schemaVersion: Int = 1,
         asOf: String,
         allQuiet: Bool,
         allQuietSignal: AllQuietSignal,
@@ -33,7 +36,6 @@ public struct PortfolioPulseModel: Codable, Equatable {
         facetSnapshots: FacetSnapshots,
         supportingDataSlots: [SupportingDataSlot]
     ) {
-        self.schemaVersion = schemaVersion
         self.asOf = asOf
         self.allQuiet = allQuiet
         self.allQuietSignal = allQuietSignal
@@ -46,7 +48,6 @@ public struct PortfolioPulseModel: Codable, Equatable {
     }
 
     public init(
-        schemaVersion: Int = 1,
         asOf: String,
         allQuiet: Bool,
         allQuietSignal: AllQuietSignal,
@@ -55,7 +56,6 @@ public struct PortfolioPulseModel: Codable, Equatable {
         supportingDataSlots: [SupportingDataSlot]
     ) {
         self.init(
-            schemaVersion: schemaVersion,
             asOf: asOf,
             allQuiet: allQuiet,
             allQuietSignal: allQuietSignal,
@@ -86,7 +86,7 @@ public struct PortfolioPulseModel: Codable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        _ = try container.decode(Int.self, forKey: .schemaVersion)
         asOf = try container.decode(String.self, forKey: .asOf)
         allQuiet = try container.decode(Bool.self, forKey: .allQuiet)
         allQuietSignal = try container.decode(AllQuietSignal.self, forKey: .allQuietSignal)
@@ -104,6 +104,20 @@ public struct PortfolioPulseModel: Codable, Equatable {
             )
         portfolioPerformance = try container.decodeIfPresent(PortfolioPerformanceSummary.self, forKey: .portfolioPerformance)
             ?? PortfolioPerformanceSummary()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(Self.currentSchemaVersion, forKey: .schemaVersion)
+        try container.encode(asOf, forKey: .asOf)
+        try container.encode(allQuiet, forKey: .allQuiet)
+        try container.encode(allQuietSignal, forKey: .allQuietSignal)
+        try container.encode(attentionItems, forKey: .attentionItems)
+        try container.encode(rankedAttentionItems, forKey: .rankedAttentionItems)
+        try container.encode(portfolioGlance, forKey: .portfolioGlance)
+        try container.encode(portfolioPerformance, forKey: .portfolioPerformance)
+        try container.encode(facetSnapshots, forKey: .facetSnapshots)
+        try container.encode(supportingDataSlots, forKey: .supportingDataSlots)
     }
 }
 
@@ -141,14 +155,14 @@ public struct AllQuietSignal: Codable, Equatable {
 public struct AttentionExplanationFact: Codable, Equatable {
     public var key: String
     public var label: String
-    public var value: String
+    public var value: PortfolioValueText
     public var numericValue: Double?
     public var unit: String?
 
     public init(
         key: String,
         label: String,
-        value: String,
+        value: PortfolioValueText,
         numericValue: Double? = nil,
         unit: String? = nil
     ) {
@@ -201,11 +215,11 @@ public struct AttentionExplanation: Codable, Equatable {
         supportingDataSlotIDs: [String]
     ) -> AttentionExplanation {
         AttentionExplanation(
-            trigger: AttentionExplanationFact(key: "trigger", label: "Trigger", value: trigger),
+            trigger: AttentionExplanationFact(key: "trigger", label: "Trigger", value: .literal(trigger)),
             severity: AttentionExplanationFact(
                 key: "severity",
                 label: "Severity",
-                value: severity,
+                value: .literal(severity),
                 numericValue: score
             ),
             supportingSourceSlots: supportingDataSlotIDs.map { AttentionExplanationSourceSlot(id: $0) }
@@ -333,7 +347,7 @@ public struct AttentionItem: Codable, Equatable {
     public var facet: String
     public var rank: Int
     public var title: String
-    public var detail: String
+    public var detail: PortfolioValueText
     public var severity: String
     public var score: Double
     public var holdingIdentity: HoldingIdentity?
@@ -369,7 +383,7 @@ public struct AttentionItem: Codable, Equatable {
         facet: String,
         rank: Int,
         title: String,
-        detail: String = "",
+        detail: PortfolioValueText = .literal(""),
         severity: String,
         score: Double,
         holdingIdentity: HoldingIdentity? = nil,
@@ -414,7 +428,7 @@ public struct AttentionItem: Codable, Equatable {
         self.resetsReadState = resetsReadState
         self.supportingDataSlotIDs = supportingDataSlotIDs
         if let explanation {
-            self.explanation = Self.normalizedExplanation(explanation, severity: self.severity)
+            self.explanation = Self.normalizedExplanation(explanation, severity: self.severity, score: score)
         } else {
             self.explanation = Self.legacyExplanation(
                 title: title,
@@ -442,7 +456,7 @@ public struct AttentionItem: Codable, Equatable {
         facet = AttentionFacet(legacyValue: try container.decode(String.self, forKey: .facet)).rawValue
         rank = try container.decode(Int.self, forKey: .rank)
         title = try container.decode(String.self, forKey: .title)
-        detail = try container.decodeIfPresent(String.self, forKey: .detail) ?? ""
+        detail = try container.decodeIfPresent(PortfolioValueText.self, forKey: .detail) ?? .literal("")
         severity = AttentionSeverity(legacyValue: try container.decode(String.self, forKey: .severity)).rawValue
         score = try container.decode(Double.self, forKey: .score)
         holdingIdentity = try container.decodeIfPresent(HoldingIdentity.self, forKey: .holdingIdentity)
@@ -462,7 +476,7 @@ public struct AttentionItem: Codable, Equatable {
         resetsReadState = try container.decodeIfPresent(Bool.self, forKey: .resetsReadState) ?? false
         supportingDataSlotIDs = try container.decode([String].self, forKey: .supportingDataSlotIDs)
         if let decodedExplanation = try container.decodeIfPresent(AttentionExplanation.self, forKey: .explanation) {
-            explanation = Self.normalizedExplanation(decodedExplanation, severity: severity)
+            explanation = Self.normalizedExplanation(decodedExplanation, severity: severity, score: score)
         } else {
             explanation = Self.legacyExplanation(
                 title: title,
@@ -484,12 +498,21 @@ public struct AttentionItem: Codable, Equatable {
         }
     }
 
+    // The severity slot restates the item's own severity and score. Of the fact passed in, only its
+    // label survives, and whether it was a severity fact with a score; its number never does.
     private static func normalizedExplanation(
         _ explanation: AttentionExplanation,
-        severity: String
+        severity: String,
+        score: Double
     ) -> AttentionExplanation {
         var explanation = explanation
-        explanation.severity.value = severity
+        let decoded = explanation.severity
+        explanation.severity = AttentionExplanationFact(
+            key: "severity",
+            label: decoded.label,
+            value: .literal(severity),
+            numericValue: decoded.key == "severity" && decoded.numericValue != nil ? score : nil
+        )
         return explanation
     }
 
@@ -520,7 +543,7 @@ public struct AttentionItem: Codable, Equatable {
             explanation.threshold = AttentionExplanationFact(
                 key: "threshold",
                 label: "Threshold",
-                value: percent(threshold),
+                value: .literal(percent(threshold)),
                 numericValue: threshold,
                 unit: "fraction"
             )
@@ -530,14 +553,14 @@ public struct AttentionItem: Codable, Equatable {
             explanation.threshold = AttentionExplanationFact(
                 key: "threshold",
                 label: "Threshold",
-                value: "\(windowStart)..\(windowEnd)"
+                value: .literal("\(windowStart)..\(windowEnd)")
             )
         }
         if let currentWeight {
             explanation.currentValue = AttentionExplanationFact(
                 key: "currentValue",
                 label: "Current",
-                value: percent(currentWeight),
+                value: .literal(percent(currentWeight)),
                 numericValue: currentWeight,
                 unit: "fraction"
             )
@@ -547,7 +570,7 @@ public struct AttentionItem: Codable, Equatable {
             explanation.currentValue = AttentionExplanationFact(
                 key: "currentValue",
                 label: "Current",
-                value: "\(valueCurrency) \(decimalString(String(afterValue), places: 2))",
+                value: .money(Money(value: String(afterValue), currency: valueCurrency)),
                 numericValue: afterValue,
                 unit: valueCurrency
             )
@@ -555,16 +578,16 @@ public struct AttentionItem: Codable, Equatable {
             explanation.currentValue = AttentionExplanationFact(
                 key: "currentValue",
                 label: "Current",
-                value: signedPercent(moveSize),
+                value: .literal(signedPercent(moveSize)),
                 numericValue: moveSize,
                 unit: "fraction"
             )
         } else if let eventDate {
-            let amountDetail = amount.map { "; \(display($0))" } ?? ""
+            let amountDetail: [PortfolioValueText.Component] = amount.map { [.literal("; "), .money($0)] } ?? []
             explanation.currentValue = AttentionExplanationFact(
                 key: "currentValue",
                 label: "Current",
-                value: "\(eventDate)\(amountDetail)"
+                value: PortfolioValueText([.literal(eventDate)] + amountDetail)
             )
         }
         if let beforeValue,
@@ -573,7 +596,7 @@ public struct AttentionItem: Codable, Equatable {
             explanation.priorValue = AttentionExplanationFact(
                 key: "priorValue",
                 label: "Prior",
-                value: "\(valueCurrency) \(decimalString(String(beforeValue), places: 2))",
+                value: .money(Money(value: String(beforeValue), currency: valueCurrency)),
                 numericValue: beforeValue,
                 unit: valueCurrency
             )
@@ -581,7 +604,7 @@ public struct AttentionItem: Codable, Equatable {
             explanation.priorValue = AttentionExplanationFact(
                 key: "priorValue",
                 label: "Prior",
-                value: percent(beforeWeight),
+                value: .literal(percent(beforeWeight)),
                 numericValue: beforeWeight,
                 unit: "fraction"
             )

@@ -618,7 +618,7 @@ private func renderedCopy(from model: PortfolioPulseModel, descriptor: MenuDescr
         descriptor.statusTitle,
     ]
     copy.append(contentsOf: model.rankedAttentionItems.flatMap {
-        [$0.title, $0.detail]
+        [$0.title, $0.detail.rendered(settings: PortfolioValueDisplaySettings())]
     })
     copy.append(contentsOf: model.supportingDataSlots.map(\.label))
     copy.append(contentsOf: descriptor.sections.map(\.title))
