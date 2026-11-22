@@ -217,7 +217,7 @@ struct PortfolioOverviewTests {
         #expect(detailsRow.children.contains { $0.id == "allocation.portfolio.concentration" } == false)
         #expect(detailsRow.children.contains { $0.id == "allocation.portfolio.cash" } == false)
         #expect(detailsRow.children.filter { $0.title == "Cash" }.map(\.id) == ["allocation.9010"])
-        #expect(detailsRow.children.suffix(2).allSatisfy { !$0.children.isEmpty })
+        #expect(detailsRow.children.suffix(2).nonEmptyAllSatisfy { !$0.children.isEmpty })
     }
 
     @Test("Portfolio allocation chart carries holding bars and detailed info drills into holdings")
@@ -300,7 +300,7 @@ struct PortfolioOverviewTests {
         #expect(chart.bars.map(\.id) == snapshot.openHoldings
             .sorted { $0.weight == $1.weight ? $0.name < $1.name : $0.weight > $1.weight }
             .map { "allocation.portfolio.chart.\($0.quoteId)" })
-        #expect(chart.bars.allSatisfy { $0.weight > 0 })
+        #expect(chart.bars.nonEmptyAllSatisfy { $0.weight > 0 })
         #expect(chart.bars.last?.percentageLabel == "0.1%")
     }
 
@@ -333,7 +333,7 @@ struct PortfolioOverviewTests {
             #expect(barRect.width < 10)
         }
         let heights = weights.indices.map { layout.barRect(at: $0).height }
-        #expect(zip(heights, heights.dropFirst()).allSatisfy { $0 > $1 }, "a smaller weight draws a shorter bar")
+        #expect(zip(heights, heights.dropFirst()).nonEmptyAllSatisfy { $0 > $1 }, "a smaller weight draws a shorter bar")
         #expect(heights.first == layout.plotRect.height)
     }
 

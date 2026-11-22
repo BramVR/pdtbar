@@ -17,6 +17,8 @@ Scripts/formal/tlc.sh formal/<subsystem>/<Spec>.tla
 
 A pass covers the model and its bounds only. Each skill lists what its model leaves out.
 
+Models and their skills name Swift code by symbol (`PDTLaunchRuntime.signIn`, `Persistence.swift`), never by line number. `swift run pdtbar-checks` fails on a line anchor or on a code span naming something no Swift, test, model, or script file has; write a removed name as plain text.
+
 ## Models
 
 - `launch-runtime`: launch, PDT connection check / sign-in / disconnect, first fetch, cached pulse, background refresh wiring. Skill `verify-launch-runtime`. Check: `formal/launch-runtime/check.sh`. Mutations: `formal/launch-runtime/mutations.sh`.

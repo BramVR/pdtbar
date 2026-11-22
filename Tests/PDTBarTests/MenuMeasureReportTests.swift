@@ -72,7 +72,7 @@ struct MenuMeasureReportTests {
         #expect(measured[7].text.flags.isEmpty)
         #expect(measured[0].text.length == rows[0].1.count)
         #expect(measured[1].kind == "pdtbar.row.allocation.concentration.#.glance")
-        #expect(measured.allSatisfy { $0.text.text == nil })
+        #expect(measured.nonEmptyAllSatisfy { $0.text.text == nil })
     }
 
     @Test("Raw text is written only on opt-in")

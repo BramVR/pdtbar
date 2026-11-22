@@ -21,7 +21,7 @@ struct PDTAPIBackgroundDetailRefreshTests {
             "/v1/dividends",
             "/v1/prices/batch",
         ])
-        #expect(transport.requests.allSatisfy { $0.httpMethod == "GET" && $0.url?.host == "api.portfoliodividendtracker.com" })
+        #expect(transport.requests.nonEmptyAllSatisfy { $0.httpMethod == "GET" && $0.url?.host == "api.portfoliodividendtracker.com" })
         #expect(result.outcome == .completed)
         #expect(result.failures.isEmpty)
         #expect(recorder.phases == BackgroundDetailRefreshPhase.allCases)
@@ -34,7 +34,7 @@ struct PDTAPIBackgroundDetailRefreshTests {
         #expect(!saved.sectors.isEmpty)
         #expect(saved.xRayHoldings?.count == 3)
         #expect(!saved.incomeEvents.isEmpty)
-        #expect(saved.incomeEvents.allSatisfy { $0.quoteId != nil })
+        #expect(saved.incomeEvents.nonEmptyAllSatisfy { $0.quoteId != nil })
         #expect(Set(saved.priceSeries.map(\.quoteId)) == [9001, 9004])
         #expect(saved.performance == nil)
         #expect(store.lastSyncFailure() == nil)

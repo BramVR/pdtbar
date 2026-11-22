@@ -93,7 +93,7 @@ struct MenuOverflowFitTests {
         #expect(pulse.title.isEmpty)
         #expect(pulse.rows.map(\.title) == ["Pulse"])
         #expect(pulse.rows[0].detail == "Orbit Communications moved +25.0%")
-        #expect(collapsed.sections.filter { $0.id != "actions" }.allSatisfy { $0.title.isEmpty })
+        #expect(collapsed.sections.filter { $0.id != "actions" }.nonEmptyAllSatisfy { $0.title.isEmpty })
         #expect(estimatedHeight(collapsed) <= 640 - 8)
         #expect(collapsed.sections.first { $0.id == "actions" } == original.sections.first { $0.id == "actions" })
     }

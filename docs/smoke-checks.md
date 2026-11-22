@@ -544,3 +544,8 @@ This renders sanitized setup, fetching, all-quiet, pressure, and retryable-error
 menu cards from the same descriptors used by the app and AX smoke, including the
 quiet Data/Prices overview row. It contains only fixture/scripted copy and no
 live portfolio payloads.
+
+`docs/smoke/menu-polish-proof.svg` and `docs/smoke/fixture-proof.svg` (default
+fixture) are committed. `./Scripts/check.sh proofs` (CI too) fails when the
+renderer no longer draws them; rerun the two commands above without other
+arguments and commit the result with the menu change.

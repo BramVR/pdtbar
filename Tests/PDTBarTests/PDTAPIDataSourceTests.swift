@@ -48,7 +48,7 @@ struct PDTAPIDataSourceTests {
         }
 
         #expect(pageSizes.count == 11)
-        #expect(pageSizes.allSatisfy { $0 <= documentedMaximumPageSize })
+        #expect(pageSizes.nonEmptyAllSatisfy { $0 <= documentedMaximumPageSize })
     }
 
     @Test("Holdings keep open rows, local FX values, identifiers, and tolerate malformed optional fields")

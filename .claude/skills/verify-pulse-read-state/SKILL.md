@@ -15,7 +15,7 @@ description: "Check mark-as-read, pulse read-state reset, or snapshot commit cha
 
 ## Coverage
 
-Sync commit: `cd4d474` (#307). The 2026-11-16 upkeep read every covered hunk from `33b5faa`: #290 moves `setLastSyncFailure(nil)` ahead of the first checkpoint, #300 adds a first-fetch failure write, #303/#306 reshape the sync outcomes, and #307 adds `priceAsOf`. None writes either guarded file or changes a step the model tracks. Action comments cite file:line at `cd4d474`. The Current findings traces below keep their historical `1b6ffd4` lines.
+Sync commit: `cd4d474` (#307). The 2026-11-16 upkeep read every covered hunk from `33b5faa`: #290 moves `setLastSyncFailure(nil)` ahead of the first checkpoint, #300 adds a first-fetch failure write, #303/#306 reshape the sync outcomes, and #307 adds `priceAsOf`. None writes either guarded file or changes a step the model tracks. Action comments name symbols, never line numbers. The Current findings traces below are history on `1b6ffd4`; names there that the code no longer has are plain text, not code spans.
 
 `Sources/PDTBarCore/Persistence.swift`:
 - `PulseReadStore` (`mutationQueue`, `load`, `markRead`, `removeReadFingerprints`) and `OwnerOnlyLocalStore.write` (temp file + rename, so writes are atomic).
@@ -57,31 +57,31 @@ Read every TLC result with the `/statechart` skill. It turns a violation into it
 
 ## Current findings
 
-Both reproduce on `1b6ffd4`. Finding 1 is fixed in #269, finding 2 in #270. Each was also replayed on the real Swift code with a throwaway sequential test through `PDTBackgroundDetailRefresh` and `PDTLaunchRuntime`.
+Both reproduce on `1b6ffd4`. Finding 1 is fixed in #269, finding 2 in #270. Each was also replayed on the real Swift code with a throwaway sequential test through PDTBackgroundDetailRefresh and `PDTLaunchRuntime`.
 
 Finding 1, stale background publish (fixed in #269). Shortest TLC trace on `1b6ffd4` (9 states). Today `PulseReadState_broken_bgpublish.cfg` replays it in 10 states: steps 4 and 5 become `BgEarlyReset` (#270), `BgCommit` (the single commit, #250), and `BgLoadReadState`.
 
-1. Start (`Init`). The snapshot holds a concentration row in weight bucket `c1`. The read store holds the same holding's older bucket mark `c2`. The cached pulse (`PressureRunner.cachedPulse`, Persistence.swift:343) shows `c1` unread.
-2. `BgStart`. `startBackgroundPortfolioRefresh` starts the worker (main.swift:257).
-3. `BgLoadPrior`. `refresh` loads the prior snapshot, already at `c1` (PDTBackgroundDetailRefresh.swift:198), and fetches `c1` (202).
-4. `BgBaseCommit`. Base commit (PDTBackgroundDetailRefresh.swift:225).
-5. `BgLoadReadState`. `refreshedPulse` loads read state `{c2}` (Persistence.swift:461) and commits (469). `c1` stays visible because `c2` is a changed bucket mark (`concentrationItems`, PressureEngine.swift:210).
-6. `MarkRead`. The user clicks the row. `markPulseItemRead` saves `c1` (main.swift:1038, Persistence.swift:38). Store `{c1, c2}`.
-7. `MarkReadReload`. `markPulseItemRead` republishes with the reloaded store (main.swift:1040-1041). The row shows read.
-8. `BgReset`. `readStateAfterResettingReappearedItems` finds nothing to remove and returns the loaded `{c2}` (Persistence.swift:586-588).
-9. `BgPublish`. `finishBackgroundPortfolioRefresh` (main.swift:320) calls `completeBackgroundDetailRefresh` (LaunchRuntime.swift:1169) with readState `{c2}`. The row is unread again while the store says read.
+1. Start (`Init`). The snapshot holds a concentration row in weight bucket `c1`. The read store holds the same holding's older bucket mark `c2`. The cached pulse (`PressureRunner.cachedPulse`) shows `c1` unread.
+2. `BgStart`. `startBackgroundPortfolioRefresh` starts the worker.
+3. `BgLoadPrior`. `refresh` loads the prior snapshot, already at `c1`, and fetches `c1`.
+4. BgBaseCommit. Base commit.
+5. `BgLoadReadState`. `refreshedPulse` loads read state `{c2}` and commits. `c1` stays visible because `c2` is a changed bucket mark (`PressureEngine.concentrationItems`).
+6. `MarkRead`. The user clicks the row. `markPulseItemRead` saves `c1`. Store `{c1, c2}`.
+7. `MarkReadReload`. `markPulseItemRead` republishes with the reloaded store. The row shows read.
+8. `BgReset`. readStateAfterResettingReappearedItems finds nothing to remove and returns the loaded `{c2}`.
+9. `BgPublish`. `finishBackgroundPortfolioRefresh` calls `completeBackgroundDetailRefresh` with readState `{c2}`. The row is unread again while the store says read.
 
 The mark-read can also land after step 8, while the worker's `finishBackgroundPortfolioRefresh` block waits in the main queue. Fix (#269): `PDTLaunchRuntime` re-reads the store for every pulse it publishes, so no worker's read state reaches the menu. The related flag bug, where a mark-read during a refresh stopped the progress rows, is fixed in #268 and checked by `verify-launch-runtime`.
 
 Finding 2, reset lost on quit (fixed in #270). Shortest TLC trace on `1b6ffd4` (5 states):
 
 1. Start (`Init`). The read store holds concentration mark `c1` from an earlier crossing. The snapshot has the holding below threshold. PDT now has it at `c1`.
-2. `BgStart`. `startBackgroundPortfolioRefresh` (main.swift:257).
-3. `BgLoadPrior`. `refresh` loads the below-threshold prior (PDTBackgroundDetailRefresh.swift:198) and fetches `c1` (202).
-4. `BgBaseCommit`. The base commit (225) records the crossing. The reset is owed.
-5. `Relaunch`. The user quits. `applicationWillTerminate` (main.swift:1117) cancels the refresh, which throws at its next `throwIfCancelled` (256-400) before `refreshedPulse` (406). On relaunch `cachedPulse` hides `c1` as read.
+2. `BgStart`. `startBackgroundPortfolioRefresh`.
+3. `BgLoadPrior`. `refresh` loads the below-threshold prior and fetches `c1`.
+4. BgBaseCommit. The base commit records the crossing. The reset is owed.
+5. `Relaunch`. The user quits. `applicationWillTerminate` cancels the refresh, which throws at its next `throwIfCancelled` before `refreshedPulse`. On relaunch `cachedPulse` hides `c1` as read.
 
-After step 5 the prior is already above threshold, so no later refresh sees a crossing and `c1` stays read. A crash or force quit in the same window does the same. `PressureRunner.run` has the same commit-then-reset order (Persistence.swift:430, then 508) with a shorter window. A quit there kills the first-fetch worker at an arbitrary point, since quit neither cancels nor waits for it. Fix (#270): `SnapshotStore.commitCurrentSnapshot` removes the marks of items that re-cross against the snapshot on disk before it writes, so every commit site gets the order and no worker owes a reset after a commit. A stop between the two writes leaves the old snapshot below threshold, and the next run removes the mark again, which changes nothing. Later commits of the same holdings compare against the base already on disk, so they do not remove a mark the user set mid refresh. Regression test: `BackgroundDetailRefreshTests` "A returning concentration alert stays unread after a quit mid refresh", on the Claude refresh. #250 deletes it with that refresh and replaces it with an API refresh test of a cancel before the commit.
+After step 5 the prior is already above threshold, so no later refresh sees a crossing and `c1` stays read. A crash or force quit in the same window does the same. `PressureRunner.run` has the same commit-then-reset order (Persistence.swift) with a shorter window. A quit there kills the first-fetch worker at an arbitrary point, since quit neither cancels nor waits for it. Fix (#270): `SnapshotStore.commitCurrentSnapshot` removes the marks of items that re-cross against the snapshot on disk before it writes, so every commit site gets the order and no worker owes a reset after a commit. A stop between the two writes leaves the old snapshot below threshold, and the next run removes the mark again, which changes nothing. Later commits of the same holdings compare against the base already on disk, so they do not remove a mark the user set mid refresh. Regression test: BackgroundDetailRefreshTests "A returning concentration alert stays unread after a quit mid refresh", on the Claude refresh. #250 deletes it with that refresh and replaces it with an API refresh test of a cancel before the commit.
 
 Since #250 the background refresh writes the snapshot once, in `refreshedPulse` after its last `throwIfCancelled`, so the cancel window in step 5 is gone. `PulseReadState_broken_reset_order.cfg` still fails in 5 states: `BgStart`, `BgLoadPrior`, `BgCommit` (the one write records the crossing before the reset), `Relaunch`. That stop now takes a crash, a force quit, or the 4 s quit timeout, because a normal quit's cancel no longer stops a refresh past its last checkpoint.
 
@@ -92,16 +92,16 @@ When a new finding is fixed, flip its constant to TRUE in every config except th
 Replay the counterexample against the code. For each step, open the function its action comment names and ask whether the code can take that step from that state.
 
 - Real bug: every step maps to code that can run in that order. Main-thread actions (`MarkRead*`, `*Publish`, `*Start`) never interleave with each other. Worker actions interleave with anything. `Relaunch` can happen at any point.
-- Modelling error: a step needs something the code rules out, such as a menu row that is not shown, two refreshes at once (`portfolioRefreshInFlight` and `firstFetchInFlight` prevent that), or a split of something that runs inside one `mutationQueue.sync`. Fix the model and say why in the action comment.
+- Modelling error: a step needs something the code rules out, such as a menu row that is not shown, two refreshes at once (`backgroundDetailRefreshInFlight` and `firstFetchInFlight` in `PDTLaunchRuntime` prevent that), or a split of something that runs inside one `mutationQueue.sync`. Fix the model and say why in the action comment.
 
 Never weaken an invariant or remove an action to make a finding pass. A sequential test through `PressureRunner` and `PDTLaunchRuntime`, as used for finding 1, is a cheap way to confirm a trace on the real code.
 
 ## Updating the model
 
 - Keep one action per indivisible step in the code: one `mutationQueue.sync` call, one file write, or one main-thread handler or `DispatchQueue.main.async` block.
-- If a change splits or merges such a step, split or merge the action, update its file:line comment, and rerun `check.sh`.
+- If a change splits or merges such a step, split or merge the action, update the symbols its comment names, and rerun `check.sh`.
 - New fingerprint kinds or reset rules go in `ConcItem`, `Resets`, `Stale`, and `ToRemove`.
-- After confirming the model describes the code at a new commit, move the sync commit above to that commit and refresh the line anchors. Do not move it on a pass alone.
+- After confirming the model describes the code at a new commit, move the sync commit above to that commit. Do not move it on a pass alone.
 
 ## Out of scope
 

@@ -9,11 +9,11 @@
   refresh) is "in flight" bookkeeping whose completion is a later main-queue
   step, so TLC explores every completion order.
 
-  Code anchors (Sources/PDTBarCore/LaunchRuntime.swift = Core, Sources/PDTBarApp/main.swift = App):
-    PDTLaunchState offers* ......... Core:119-165 (which connection buttons a state shows)
-    PDTLaunchMenu.descriptor ....... Core:238-363, notSavedRows Core:402, withConnectionRows Core:636
-    PDTLaunchRuntime ............... Core:729-1048
-    AppDelegate effect wiring ...... App:60-364
+  Code anchors name symbols, never line numbers (pdtbar-checks checks them):
+    PDTLaunchState.offersSignIn / offersCheckAgain / offersDisconnect (which connection buttons a state shows)
+    PDTLaunchMenu.descriptor, PDTLaunchMenu.notSavedRows, PDTLaunchMenu.withConnectionRows
+    PDTLaunchRuntime ............... Sources/PDTBarCore/LaunchRuntime.swift
+    AppDelegate effect wiring ...... Sources/PDTBarApp/main.swift
     PDTConnection (the cred ghost) . Sources/PDTBarCore/PDTConnection.swift: status, replace, record, commit;
                                      PDTAppConnection.check / signIn / connect / disconnect /
                                      failure(for:) / status(afterSyncEnding:)

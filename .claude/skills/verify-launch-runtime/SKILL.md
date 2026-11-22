@@ -16,13 +16,13 @@ Run it when a change touches any covered function below, the order of main-queue
 Sync commit: `cd4d474` (#307). Confirmed by the 2026-11-16 upkeep, which read every covered hunk from `79bf904` (#303): #306 moved `Connection not saved` to the Data section and folds held token refreshes, #304 fits the menu to the screen; none changes a step, guard, flag, or role the model tracks. After you confirm the model still describes the covered code at a newer commit, move this line forward. Never move it without that check.
 
 `Sources/PDTBarCore/LaunchRuntime.swift`:
-- `PDTLaunchState` 119 and its `offersSignIn` / `offersCheckAgain` / `offersDisconnect` 145-165.
-- `PDTLaunchMenu.descriptor(for:cachedPulse:notice:fetchingElapsedSeconds:syncFailure:)` 238, `notSavedRows` 402, `withConnectionRows` 636.
-- `PDTConnectionAttempt` 704. `PDTLaunchRuntime` 729: `launch` 766, `completeCachedPulseLoad` 771, `completeConnection` 782, `signIn` 791, `connect(token:)` 798, `cancelSignIn` 806, `checkAgain` 813, `disconnect` 820, `retryFirstFetch` 828, `firstFetchProgress` 838, `completeFirstFetch` 845, `beginBackgroundDetailRefresh` 859, `backgroundDetailRefreshProgress` 866, `completeBackgroundDetailRefresh` 874, `pulseReadStateDidChange` 896, `apply` 910, `endCommitted` 925, `endUncommitted` 936, `beginConnectionOperation` 952, `startBackgroundDetailRefresh` 965, `descriptor` 990.
+- `PDTLaunchState` and its `offersSignIn` / `offersCheckAgain` / `offersDisconnect`.
+- `PDTLaunchMenu.descriptor(for:cachedPulse:notice:fetchingElapsedSeconds:syncFailure:)`, `notSavedRows`, `withConnectionRows`.
+- `PDTConnectionAttempt`. `PDTLaunchRuntime`: `launch`, `completeCachedPulseLoad`, `completeConnection`, `signIn`, `connect(token:)`, `cancelSignIn`, `checkAgain`, `disconnect`, `retryFirstFetch`, `firstFetchProgress`, `completeFirstFetch`, `beginBackgroundDetailRefresh`, `backgroundDetailRefreshProgress`, `completeBackgroundDetailRefresh`, `pulseReadStateDidChange`, `apply`, `endCommitted`, `endUncommitted`, `beginConnectionOperation`, `startBackgroundDetailRefresh`, `descriptor`.
 
-`Sources/PDTBarCore/MenuDescriptorRenderer.swift`: `refreshActionRow` 479 with its "Refresh now" rows (`waitingForSetup` is shown but not clickable).
+`Sources/PDTBarCore/MenuDescriptorRenderer.swift`: `refreshActionRow` with its "Refresh now" rows (`waitingForSetup` is shown but not clickable).
 
-`Sources/PDTBarApp/main.swift` (`AppDelegate`): `launch` 60, `startCachedPulseLoad` 93, `runConnectionOperation` 111, `startSignIn` 128, `startFirstPortfolioFetch` 134, `finishFirstPortfolioFetch` 175, `startBackgroundPortfolioRefresh` 226, `finishBackgroundPortfolioRefresh` 276, connection selectors 290-337, `handleLaunchUpdate` 339, `connectionAction(for:)` 984 role-to-selector wiring.
+`Sources/PDTBarApp/main.swift` (`AppDelegate`): `launch`, `startCachedPulseLoad`, `runConnectionOperation`, `startSignIn`, `startFirstPortfolioFetch`, `finishFirstPortfolioFetch`, `startBackgroundPortfolioRefresh`, `finishBackgroundPortfolioRefresh`, connection selectors, `handleLaunchUpdate`, `connectionAction(for:)` role-to-selector wiring.
 
 `Sources/PDTBarCore/PDTConnection.swift` and `Sources/PDTBarAppSupport/PDTAppConnection.swift`, only as the `cred` ghost: what `status`, `replace`, `record`, and `commit` let `check`, `signIn`, `connect(token:)`, `disconnect`, `failure(for:)`, and `status(afterSyncEnding:)` report while a credential the store refused is held and used (#301, ADR-0003 decision 3). Run the model when that changes.
 
@@ -61,7 +61,7 @@ Open findings (listed in `check.sh` as `OPEN_FINDINGS`): none.
 When TLC reports a violation, replay its steps against the Swift code before you believe or dismiss it:
 1. For each step, open the function named in the action's comment and confirm the code allows that step from that state: guards, which rows the menu offers, and whether the work is really still running.
 2. If every step is possible in the code, it is a real bug. Report it as steps in the code's names. Do not weaken the invariant or the model to make it pass.
-3. If a step is impossible in the code, the model is wrong. Fix the action to match the code and cite the line that rules the step out.
+3. If a step is impossible in the code, the model is wrong. Fix the action to match the code and name the statement that rules the step out.
 4. Where the runtime side can be driven without AppKit, confirm with a scratch swift-testing case that calls `PDTLaunchRuntime` in the same order.
 
 ## Updating the model for an intended change
@@ -91,5 +91,5 @@ Left out:
 - Quit-time refresh cancellation (`applicationWillTerminate`).
 - What the background refresh does inside (see `verify-background-detail-refresh`), credential refresh, storage, and the replay of a change the store refused (`PDTConnection`, covered by `PDTSignInTests`, `SignInPersistenceTests`, and `HeldConnectionChangeTests`, which also holds the stored generation rule), and read-state writes (see `verify-pulse-read-state`).
 - Timer cadence: a first-fetch progress tick is a re-render only.
-- The small-screen fit (#304, `MenuOverflowFit`, `menuNeedsUpdate` in `AppDelegate`): it folds rows into submenus and re-installs the last descriptor. Clickable rows keep their selectors one level down, and Actions is never folded, so it changes no state, guard, or offered action the model tracks.
+- The small-screen fit (#304, `MenuOverflowStep` in `MenuOverflowFit.swift`, `menuNeedsUpdate` in `AppDelegate`): it folds rows into submenus and re-installs the last descriptor. Clickable rows keep their selectors one level down, and Actions is never folded, so it changes no state, guard, or offered action the model tracks.
 - Where a row sits. `Connection not saved` moves between the PDT section and Data (#306); the model checks only that it is present.

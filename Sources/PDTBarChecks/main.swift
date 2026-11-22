@@ -17,6 +17,8 @@ try checkCoalescedAPIFirstFetch()
 try checkAPIBackgroundDetailRefresh()
 try checkPDTAPIDataHealth()
 try checkProductSpawnsNothing()
+try checkFormalCodeAnchors()
+try checkNoEmptySafeExpectations()
 
 print("pdtbar-checks: passed")
 
@@ -336,6 +338,120 @@ private func checkProductSpawnsNothing() throws {
         }
     }
     try check(hits.isEmpty, "product code should start no process and name no CLI or MCP tool: \(hits.joined(separator: ", "))")
+}
+
+/// Formal models and their verify skills name code by symbol, never by line
+/// number. Line anchors drifted with every edit and took resync commits
+/// (#266, #282, #289, #290, #309); a name the code no longer has fails here.
+private func checkFormalCodeAnchors() throws {
+    let fileManager = FileManager.default
+    let formal = packageRoot.appending(path: "formal")
+    var documents: [String] = []
+    for model in try fileManager.contentsOfDirectory(atPath: formal.path).sorted() {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: formal.appending(path: model).path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            continue
+        }
+        documents += try fileManager.contentsOfDirectory(atPath: formal.appending(path: model).path)
+            .filter { $0.hasSuffix(".tla") }
+            .sorted()
+            .map { "formal/\(model)/\($0)" }
+        let skill = ".claude/skills/verify-\(model)/SKILL.md"
+        try check(fileManager.fileExists(atPath: packageRoot.appending(path: skill).path), "formal/\(model) needs its verify skill at \(skill)")
+        documents.append(skill)
+    }
+
+    let word = try Regex(#"[A-Za-z_][A-Za-z0-9_]*"#)
+    let tlaComment = try Regex(#"\(\*[\s\S]*?\*\)|\\\*[^\n]*"#)
+    var names = Set<String>()
+    var fileNames = Set<String>()
+    for root in ["Sources", "Tests", "formal", "Scripts"] {
+        let directory = packageRoot.appending(path: root)
+        for path in try fileManager.subpathsOfDirectory(atPath: directory.path) {
+            let file = URL(fileURLWithPath: path)
+            fileNames.insert(file.lastPathComponent)
+            fileNames.insert(file.deletingPathExtension().lastPathComponent)
+            guard ["swift", "tla", "cfg", "sh"].contains(file.pathExtension) else {
+                continue
+            }
+            var text = try String(contentsOf: directory.appending(path: path), encoding: .utf8)
+            if ["tla", "cfg"].contains(file.pathExtension) {
+                text = text.replacing(tlaComment, with: " ")
+            }
+            names.formUnion(text.matches(of: word).map { String(text[$0.range]) })
+        }
+    }
+
+    let lineAnchor = try Regex(#"\.(swift|tla):[0-9]|\b(Core|App):[0-9]|`[^`\n]+` [0-9]{2,4}\b"#)
+    let codeSpan = try Regex(#"`([^`\n]+)`"#)
+    let qualifiedName = try Regex(#"\b[A-Z][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+"#)
+    let identifier = try Regex(#"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*(\(.*\))?$"#)
+    let sha = try Regex(#"^[0-9a-f]{7,40}$"#)
+    let fileExtensions: Set<String> = ["swift", "tla", "cfg", "sh"]
+    let otherExtensions: Set<String> = ["jar", "json", "md", "png", "svg", "txt", "yml"]
+    var problems: [String] = []
+    for document in documents {
+        let lines = try String(contentsOf: packageRoot.appending(path: document), encoding: .utf8).components(separatedBy: "\n")
+        for (index, line) in lines.enumerated() {
+            let location = "\(document):\(index + 1)"
+            if line.contains(lineAnchor) {
+                problems.append("\(location) cites a line number; name the symbol instead")
+            }
+            let tokens = document.hasSuffix(".tla")
+                ? line.matches(of: qualifiedName).map { String(line[$0.range]) }
+                : line.matches(of: codeSpan).map { String(line[$0.range].dropFirst().dropLast()) }
+            for token in tokens {
+                let lastPart = token.split(separator: ".").last.map(String.init) ?? token
+                if token.contains(" ") || otherExtensions.contains(lastPart) {
+                    continue
+                }
+                if fileExtensions.contains(lastPart) || token.contains("/") {
+                    if !fileExtensions.contains(lastPart) {
+                        continue
+                    }
+                    let name = URL(fileURLWithPath: token).lastPathComponent
+                    if !fileNames.contains(name) && !fileManager.fileExists(atPath: packageRoot.appending(path: token).path) {
+                        problems.append("\(location) names file `\(token)`, which does not exist")
+                    }
+                    continue
+                }
+                guard token.wholeMatch(of: identifier) != nil, token.wholeMatch(of: sha) == nil else {
+                    continue
+                }
+                let parts = token.split(separator: "(", maxSplits: 1)[0].split(separator: ".").map(String.init)
+                let missing = parts.filter { !names.contains($0) && !fileNames.contains($0) }
+                if !missing.isEmpty {
+                    problems.append("\(location) names `\(token)`, but no Swift, test, model, or script code has \(missing.joined(separator: ", "))")
+                }
+            }
+        }
+    }
+    try check(
+        problems.isEmpty,
+        """
+        formal code anchors must name live symbols, never line numbers. Write a removed name as plain text, \
+        not a code span. See AGENTS.md "Rules and what enforces them".
+        \(problems.joined(separator: "\n"))
+        """
+    )
+}
+
+/// `allSatisfy` is true for an empty collection, so an `#expect` over it kept
+/// passing after the rows it checked were gone (#307). Tests use
+/// `nonEmptyAllSatisfy` from Tests/PDTBarTests/ExpectationSupport.swift.
+private func checkNoEmptySafeExpectations() throws {
+    let tests = packageRoot.appending(path: "Tests")
+    var hits: [String] = []
+    for file in try FileManager.default.subpathsOfDirectory(atPath: tests.path).sorted() where file.hasSuffix(".swift") {
+        let lines = try String(contentsOf: tests.appending(path: file), encoding: .utf8).components(separatedBy: "\n")
+        for (index, line) in lines.enumerated() where line.contains("#expect(") && line.contains(".allSatisfy") {
+            hits.append("Tests/\(file):\(index + 1)")
+        }
+    }
+    try check(
+        hits.isEmpty,
+        "#expect over allSatisfy passes on an empty collection; use nonEmptyAllSatisfy (Tests/PDTBarTests/ExpectationSupport.swift) or pin the exact elements: \(hits.joined(separator: ", "))"
+    )
 }
 
 private func assertInformationalCopy(

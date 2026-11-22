@@ -41,8 +41,29 @@ check_scripts() {
   run node --test "${ROOT_DIR}/Scripts/package-app.test.mjs"
 }
 
+# Committed descriptor proofs drifted from the code and needed regeneration
+# commits (#219, #289); fail when the renderer no longer draws them.
+check_proofs() {
+  local out="${ROOT_DIR}/.build/check-proofs"
+  local stale=0
+  mkdir -p "${out}"
+
+  log "Checking committed descriptor proofs"
+  run swift run pdtbar-smoke menu-polish-proof --output "${out}/menu-polish-proof.svg" >/dev/null
+  run swift run pdtbar-smoke fixture-proof --output "${out}/fixture-proof.svg" >/dev/null
+  if ! cmp -s "${out}/menu-polish-proof.svg" "${ROOT_DIR}/docs/smoke/menu-polish-proof.svg"; then
+    printf 'ERROR: docs/smoke/menu-polish-proof.svg is stale. Run: swift run pdtbar-smoke menu-polish-proof --output docs/smoke/menu-polish-proof.svg\n' >&2
+    stale=1
+  fi
+  if ! cmp -s "${out}/fixture-proof.svg" "${ROOT_DIR}/docs/smoke/fixture-proof.svg"; then
+    printf 'ERROR: docs/smoke/fixture-proof.svg is stale. Run: swift run pdtbar-smoke fixture-proof\n' >&2
+    stale=1
+  fi
+  return "${stale}"
+}
+
 usage() {
-  printf 'Usage: %s [all|scripts|build|checks|tests]\n' "$(basename "$0")" >&2
+  printf 'Usage: %s [all|scripts|build|checks|tests|proofs]\n' "$(basename "$0")" >&2
 }
 
 cmd="${1:-all}"
@@ -56,8 +77,12 @@ case "${cmd}" in
     run swift build
     log "Running deterministic PDTBar checks"
     run swift run pdtbar-checks
+    check_proofs
     log "Running Swift tests"
     run "${ROOT_DIR}/Scripts/test.sh"
+    ;;
+  proofs)
+    check_proofs
     ;;
   scripts)
     check_scripts

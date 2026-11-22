@@ -11,12 +11,15 @@ on:
       # Swift tests load these fixtures at runtime, so keep them CI-triggering.
       - "docs/pdt/fixtures/**"
       - "!**.md"
+      # pdtbar-checks checks the code anchors in the formal-model skills.
+      - ".claude/skills/verify-*/SKILL.md"
   pull_request:
     paths:
       - "**"
       - "!docs/**"
       - "docs/pdt/fixtures/**"
       - "!**.md"
+      - ".claude/skills/verify-*/SKILL.md"
 
 permissions:
   contents: read
@@ -67,6 +70,9 @@ jobs:
 
       - name: Deterministic checks
         run: swift run pdtbar-checks
+
+      - name: Committed proofs match the code
+        run: ./Scripts/check.sh proofs
 
       - name: Scripted API smoke matrix
         run: ./Scripts/api_smoke_matrix.sh
