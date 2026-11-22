@@ -169,7 +169,7 @@ struct IncomeCalendarTests {
             .incomeEventKind,
             .incomeEventState,
         ])
-        #expect(nextRow?.children.allSatisfy { child in
+        #expect(nextRow?.children.nonEmptyAllSatisfy { child in
             child.actionTarget?.kind == .incomeEvent
                 && child.actionTarget?.incomeEvent?.eventID == target?.incomeEvent?.eventID
                 && child.actionTarget?.incomeEvent?.rowID == child.id
@@ -239,8 +239,8 @@ struct IncomeCalendarTests {
             "Overflow Later",
         ])
         #expect(allRowIDs(in: rows).count == Set(allRowIDs(in: rows)).count)
-        #expect(allRowIDs(in: rows).allSatisfy { !$0.isEmpty })
-        #expect(allRowIDs(in: rows).allSatisfy { id in
+        #expect(allRowIDs(in: rows).nonEmptyAllSatisfy { !$0.isEmpty })
+        #expect(allRowIDs(in: rows).nonEmptyAllSatisfy { id in
             rowsByID(in: rows)[id]?.accessibilityIdentifier == "pdtbar.row.\(id)"
         })
     }

@@ -113,7 +113,7 @@ struct PDTAppConnectionTests {
         #expect(connection.signIn(cancellation: PDTCancellation()).status == .connected(.thisSessionOnly(.missingEntitlement)))
         #expect(connection.check().status == .connected(.thisSessionOnly(.missingEntitlement)))
         #expect(!keychain.queries.isEmpty)
-        #expect(keychain.queries.allSatisfy { $0[kSecUseDataProtectionKeychain as String] as? Bool == true })
+        #expect(keychain.queries.nonEmptyAllSatisfy { $0[kSecUseDataProtectionKeychain as String] as? Bool == true })
     }
 
     @Test("A scripted Keychain status drives the real Keychain store, including during a fetch")
@@ -202,7 +202,7 @@ struct PDTAppConnectionTests {
             PDTAppConnection.logLabel(for: DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: echoed))),
         ]
 
-        #expect(labels.allSatisfy { !$0.contains(echoed) })
+        #expect(labels.nonEmptyAllSatisfy { !$0.contains(echoed) })
         #expect(labels[0] == "tokenInvalid")
         #expect(PDTAppConnection.logLabel(for: PDTAPIError.server(status: 503, retryAfter: nil)).contains("503"))
     }

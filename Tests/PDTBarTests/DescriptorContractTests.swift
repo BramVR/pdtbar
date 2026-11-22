@@ -18,16 +18,16 @@ struct DescriptorContractTests {
 
             #expect(!descriptor.sections.isEmpty)
             #expect(descriptor.statusAccessibilityIdentifier == "pdtbar.status")
-            #expect(descriptor.sections.allSatisfy { !$0.id.isEmpty })
-            #expect(descriptor.sections.allSatisfy { $0.accessibilityIdentifier == "pdtbar.section.\($0.id)" })
-            #expect(rows.allSatisfy { !$0.id.isEmpty })
-            #expect(rows.allSatisfy { $0.accessibilityIdentifier == "pdtbar.row.\($0.id)" })
-            #expect(rows.allSatisfy { $0.role != .row })
+            #expect(descriptor.sections.nonEmptyAllSatisfy { !$0.id.isEmpty })
+            #expect(descriptor.sections.nonEmptyAllSatisfy { $0.accessibilityIdentifier == "pdtbar.section.\($0.id)" })
+            #expect(rows.nonEmptyAllSatisfy { !$0.id.isEmpty })
+            #expect(rows.nonEmptyAllSatisfy { $0.accessibilityIdentifier == "pdtbar.row.\($0.id)" })
+            #expect(rows.nonEmptyAllSatisfy { $0.role != .row })
             #expect(Set(rows.map(\.id)).count == rows.count)
             #expect(decoded.supportingDataSlots.map(\.id).contains("allocation.overview"))
             #expect(decoded.supportingDataSlots.count == 5)
             #expect(!decoded.facetSnapshots.allocation.totalValue.value.contains(","))
-            #expect(renderedCopy(from: decoded, descriptor: descriptor).allSatisfy { !containsAdviceLikeLanguage($0) })
+            #expect(renderedCopy(from: decoded, descriptor: descriptor).nonEmptyAllSatisfy { !containsAdviceLikeLanguage($0) })
         }
     }
 

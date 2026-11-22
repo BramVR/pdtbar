@@ -18,6 +18,7 @@ try checkAPIBackgroundDetailRefresh()
 try checkPDTAPIDataHealth()
 try checkProductSpawnsNothing()
 try checkFormalCodeAnchors()
+try checkNoEmptySafeExpectations()
 
 print("pdtbar-checks: passed")
 
@@ -432,6 +433,24 @@ private func checkFormalCodeAnchors() throws {
         not a code span. See AGENTS.md "Rules and what enforces them".
         \(problems.joined(separator: "\n"))
         """
+    )
+}
+
+/// `allSatisfy` is true for an empty collection, so an `#expect` over it kept
+/// passing after the rows it checked were gone (#307). Tests use
+/// `nonEmptyAllSatisfy` from Tests/PDTBarTests/ExpectationSupport.swift.
+private func checkNoEmptySafeExpectations() throws {
+    let tests = packageRoot.appending(path: "Tests")
+    var hits: [String] = []
+    for file in try FileManager.default.subpathsOfDirectory(atPath: tests.path).sorted() where file.hasSuffix(".swift") {
+        let lines = try String(contentsOf: tests.appending(path: file), encoding: .utf8).components(separatedBy: "\n")
+        for (index, line) in lines.enumerated() where line.contains("#expect(") && line.contains(".allSatisfy") {
+            hits.append("Tests/\(file):\(index + 1)")
+        }
+    }
+    try check(
+        hits.isEmpty,
+        "#expect over allSatisfy passes on an empty collection; use nonEmptyAllSatisfy (Tests/PDTBarTests/ExpectationSupport.swift) or pin the exact elements: \(hits.joined(separator: ", "))"
     )
 }
 

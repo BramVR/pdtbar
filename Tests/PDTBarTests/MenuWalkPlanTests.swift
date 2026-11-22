@@ -56,7 +56,7 @@ struct MenuWalkPlanTests {
     func planNamesAreSafeFileNames() {
         let names = MenuWalkPlan.cohesiveUI.submenus.map(\.name)
         #expect(Set(names).count == names.count)
-        #expect(names.allSatisfy { $0.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil })
+        #expect(names.nonEmptyAllSatisfy { $0.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil })
         #expect(MenuWalkPlan.named["cohesive-ui"] == .cohesiveUI)
     }
 }

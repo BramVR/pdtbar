@@ -188,7 +188,7 @@ struct PDTConnectionTests {
         #expect(failures.value == 0)
         #expect(tokens.requests.count == 1)
         #expect(api.requests.count == 8)
-        #expect(api.requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer access-2" })
+        #expect(api.requests.nonEmptyAllSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer access-2" })
     }
 
     @Test("Two connections over one store share one refresh even when the winner's save lands after the loser would have re-read", arguments: [false, true])
@@ -260,7 +260,7 @@ struct PDTConnectionTests {
             results.record(Result { try connection.currentToken() })
         }
 
-        #expect(results.values.allSatisfy { (try? $0.get()) == PDTAPIToken("access-1") })
+        #expect(results.values.nonEmptyAllSatisfy { (try? $0.get()) == PDTAPIToken("access-1") })
         #expect(tokens.requests.count == 1)
 
         clock.advance(by: 5)
@@ -758,7 +758,7 @@ struct PDTCredentialStorageTests {
         #expect(throws: PDTCredentialStoreError.missingKeychainEntitlement) { try connection.state() }
 
         #expect(keychain.queries.count == 4)
-        #expect(keychain.queries.allSatisfy { $0[kSecUseDataProtectionKeychain as String] as? Bool == true })
+        #expect(keychain.queries.nonEmptyAllSatisfy { $0[kSecUseDataProtectionKeychain as String] as? Bool == true })
         #expect(keychain.added.isEmpty)
     }
 
@@ -781,7 +781,7 @@ struct PDTCredentialStorageTests {
             var dumped = ""
             dump(value, to: &dumped)
             for text in [String(describing: value), String(reflecting: value), dumped] {
-                #expect(secrets.allSatisfy { !text.contains($0) }, "leaked through \(type(of: value))")
+                #expect(secrets.nonEmptyAllSatisfy { !text.contains($0) }, "leaked through \(type(of: value))")
             }
         }
         #expect(PDTAPIToken(secrets[0]).fingerprint.description.hasPrefix("sha256:"))

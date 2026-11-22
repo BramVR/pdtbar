@@ -81,7 +81,7 @@ struct PDTAPIClientTests {
 
         #expect(holdings.map(\.id) == [1, 2])
         #expect(distributions.map(\.id) == [3])
-        #expect(transport.requests.allSatisfy { queryValue($0, "page") == nil })
+        #expect(transport.requests.nonEmptyAllSatisfy { queryValue($0, "page") == nil })
     }
 
     @Test("Stalled or runaway pagination fails instead of looping")
@@ -132,7 +132,7 @@ struct PDTAPIClientTests {
 
         #expect(rows.map(\.id) == [1, 2, 3])
         #expect(transport.requests.map { queryValue($0, "offset") } == ["0", "2"])
-        #expect(transport.requests.allSatisfy { queryValue($0, "limit") == "100" })
+        #expect(transport.requests.nonEmptyAllSatisfy { queryValue($0, "limit") == "100" })
     }
 
     @Test("API error envelopes map to typed errors without retrying")

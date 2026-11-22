@@ -155,7 +155,7 @@ struct PulseReadTests {
 
         let changedModel = PressureEngine.buildModel(from: changedSnapshot, priorSnapshot: snapshot)
 
-        #expect(changedModel.rankedAttentionItems.allSatisfy { $0.holdingIdentity?.quoteId != 9001 })
+        #expect(changedModel.rankedAttentionItems.nonEmptyAllSatisfy { $0.holdingIdentity?.quoteId != 9001 })
     }
 
     @Test("Fresh concentration re-crossing resets old read state")
@@ -322,7 +322,7 @@ struct PulseReadTests {
         try readStore.markRead(bigMover.readFingerprint)
         let cached = try #require(try PressureRunner.cachedPulse(snapshotStore: snapshotStore, pulseReadStore: readStore))
 
-        #expect(cached.model.rankedAttentionItems.allSatisfy { $0.facet != "bigMovers" })
+        #expect(!cached.model.rankedAttentionItems.contains { $0.facet == "bigMovers" })
         #expect(cached.descriptor.statusBadge == nil)
         #expect(cached.descriptor.statusTitle.contains("All caught up"))
         #expect(try readStore.load().contains(bigMover.readFingerprint))
