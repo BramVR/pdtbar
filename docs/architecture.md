@@ -152,7 +152,8 @@ attention item's `detail` and each explanation fact's `value` are
 `PortfolioValueText`, encoded as `{"components": [...]}` with money as a typed
 `money` component that only `PortfolioValueText.rendered(settings:)` formats.
 Version 1 stored them as strings; a string still decodes, as text shown only
-while portfolio values are visible. `pdtbar-dev model` prints this JSON; the
+while portfolio values are visible. The Severity row shows the item's own
+`severity` and `score`; a decoded fact's number never reaches the menu. `pdtbar-dev model` prints this JSON; the
 app never writes the model to disk.
 
 Live and fixture PDT decoders both feed PDT-shaped DTO inputs into

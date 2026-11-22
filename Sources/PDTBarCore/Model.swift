@@ -418,7 +418,7 @@ public struct AttentionItem: Codable, Equatable {
         self.resetsReadState = resetsReadState
         self.supportingDataSlotIDs = supportingDataSlotIDs
         if let explanation {
-            self.explanation = Self.normalizedExplanation(explanation, severity: self.severity)
+            self.explanation = Self.normalizedExplanation(explanation, severity: self.severity, score: score)
         } else {
             self.explanation = Self.legacyExplanation(
                 title: title,
@@ -466,7 +466,7 @@ public struct AttentionItem: Codable, Equatable {
         resetsReadState = try container.decodeIfPresent(Bool.self, forKey: .resetsReadState) ?? false
         supportingDataSlotIDs = try container.decode([String].self, forKey: .supportingDataSlotIDs)
         if let decodedExplanation = try container.decodeIfPresent(AttentionExplanation.self, forKey: .explanation) {
-            explanation = Self.normalizedExplanation(decodedExplanation, severity: severity)
+            explanation = Self.normalizedExplanation(decodedExplanation, severity: severity, score: score)
         } else {
             explanation = Self.legacyExplanation(
                 title: title,
@@ -488,12 +488,21 @@ public struct AttentionItem: Codable, Equatable {
         }
     }
 
+    // The severity slot restates the item's own severity and score. Of the fact passed in, only its
+    // label survives, and whether it was a severity fact with a score; its number never does.
     private static func normalizedExplanation(
         _ explanation: AttentionExplanation,
-        severity: String
+        severity: String,
+        score: Double
     ) -> AttentionExplanation {
         var explanation = explanation
-        explanation.severity.value = .literal(severity)
+        let decoded = explanation.severity
+        explanation.severity = AttentionExplanationFact(
+            key: "severity",
+            label: decoded.label,
+            value: .literal(severity),
+            numericValue: decoded.key == "severity" && decoded.numericValue != nil ? score : nil
+        )
         return explanation
     }
 

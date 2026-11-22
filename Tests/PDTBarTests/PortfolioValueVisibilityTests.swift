@@ -160,8 +160,8 @@ struct PortfolioValueVisibilityTests {
         #expect(leaked.isEmpty, "Hidden cash drag descriptor leaked: \(leaked)")
     }
 
-    // A fact's key is data. Only the severity slot shows a score, so a decoded Current fact that calls
-    // itself "severity" cannot print its numeric value next to the placeholder.
+    // A fact's key is data, so a decoded Current fact that calls itself "severity" cannot print its
+    // numeric value next to the placeholder.
     @Test("A decoded fact's key cannot unmask its numeric value")
     func decodedFactKeyCannotUnmaskNumericValue() throws {
         var snapshot = try visibilitySnapshot("quiet-no-pressure.json")
@@ -182,6 +182,68 @@ struct PortfolioValueVisibilityTests {
 
         #expect(current.detail == PortfolioValueDisplaySettings.hiddenPlaceholder)
         #expect(!json.contains("123.45"))
+    }
+
+    // A fact's number can be money, so the severity row shows the item's own score or none. A decoded
+    // Severity fact that is not a severity fact shows none.
+    @Test(
+        "A decoded Severity fact never shows its own number",
+        arguments: [
+            (
+                #"{"key": "currentValue", "label": "Severity", "value": "medium", "numericValue": 123.45, "unit": "EUR"}"#,
+                "medium"
+            ),
+            (
+                #"{"key": "severity", "label": "Severity", "value": "medium", "numericValue": 123.45}"#,
+                "medium; score 0.66"
+            ),
+        ]
+    )
+    func decodedSeverityFactNeverShowsItsOwnNumber(_ severityFact: String, _ expected: String) throws {
+        let item = try JSONDecoder().decode(AttentionItem.self, from: Data("""
+        {
+          "id": "allocation.concentration.9001",
+          "facet": "allocation",
+          "rank": 1,
+          "title": "Nova Lithography concentration",
+          "detail": "24.2%",
+          "severity": "medium",
+          "score": 0.66,
+          "supportingDataSlotIDs": ["allocation.holdings"],
+          "explanation": {
+            "trigger": {"key": "trigger", "label": "Trigger", "value": "Concentration line crossed"},
+            "severity": \(severityFact),
+            "supportingSourceSlots": []
+          }
+        }
+        """.utf8))
+        var model = PressureEngine.buildModel(from: try visibilitySnapshot("concentration-pressure.json"))
+        model.rankedAttentionItems = [item]
+
+        for showPortfolioValues in [true, false] {
+            let descriptor = MenuDescriptorRenderer.render(
+                model: model,
+                settings: PortfolioValueDisplaySettings(showPortfolioValues: showPortfolioValues)
+            )
+            let severity = try #require(row(withID: "allocation.concentration.9001.severity", in: descriptor))
+            let json = try #require(String(data: stableJSONData(descriptor), encoding: .utf8))
+
+            #expect(severity.detail == expected)
+            #expect(!json.contains("123.45"))
+        }
+    }
+
+    @Test("The severity row's score is the item's own, whatever number its fact holds")
+    func severityRowScoreIsTheItemsOwn() throws {
+        var model = PressureEngine.buildModel(from: try visibilitySnapshot("concentration-pressure.json"))
+        model.rankedAttentionItems[0].explanation.severity.numericValue = 123.45
+        let hidden = MenuDescriptorRenderer.render(
+            model: model,
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+        let severity = try #require(row(withID: "allocation.concentration.9001.severity", in: hidden))
+
+        #expect(severity.detail == "medium; score 0.66")
     }
 
     @Test("Unresolved sensitive attention data fails closed")

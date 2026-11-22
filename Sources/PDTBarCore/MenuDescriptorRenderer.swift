@@ -878,10 +878,10 @@ public enum MenuDescriptorRenderer {
         settings: PortfolioValueDisplaySettings
     ) -> [MenuRow] {
         let explanation = item.explanation
-        // The slot, not the fact's decoded key, says which number is a score.
+        // The score is the item's own. A fact's number can be money: a big mover's Current is its price.
         var severity = explanation.severity
-        if let score = severity.numericValue {
-            severity.value.components.append(.literal("; score \(decimalString(String(score), places: 2))"))
+        if severity.numericValue != nil {
+            severity.value.components.append(.literal("; score \(decimalString(String(item.score), places: 2))"))
         }
         return [
             ("trigger", explanation.trigger),
