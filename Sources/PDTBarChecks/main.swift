@@ -19,6 +19,7 @@ try checkPDTAPIDataHealth()
 try checkProductSpawnsNothing()
 try checkFormalCodeAnchors()
 try checkNoEmptySafeExpectations()
+try checkFeatureGuidesQuoteMenuCopy(fixtures)
 
 print("pdtbar-checks: passed")
 
@@ -452,6 +453,103 @@ private func checkNoEmptySafeExpectations() throws {
         hits.isEmpty,
         "#expect over allSatisfy passes on an empty collection; use nonEmptyAllSatisfy (Tests/PDTBarTests/ExpectationSupport.swift) or pin the exact elements: \(hits.joined(separator: ", "))"
     )
+}
+
+/// The public feature guides fell behind the menu: of eight menu changes
+/// (#286 to #307) only #307 reached them, and in a follow-up (#311). Every
+/// fixed label the menu draws over the fixture corpus is quoted in both guides.
+private func checkFeatureGuidesQuoteMenuCopy(_ fixtures: [URL]) throws {
+    let guides = ["docs/public/features.en.md", "docs/public/features.nl.md"]
+    let guideTexts = try guides.map { try String(contentsOf: packageRoot.appending(path: $0), encoding: .utf8) }
+    let allowlistPath = "docs/features-menu-copy-allowlist.txt"
+    var allowlist = Set<String>()
+    for line in try String(contentsOf: packageRoot.appending(path: allowlistPath), encoding: .utf8).components(separatedBy: "\n")
+    where !line.hasPrefix("#") && !line.trimmingCharacters(in: .whitespaces).isEmpty {
+        let parts = line.components(separatedBy: " | ")
+        try check(
+            parts.count == 2 && !parts[1].trimmingCharacters(in: .whitespaces).isEmpty,
+            "\(allowlistPath) entries are `menu copy | reason`: \(line)"
+        )
+        allowlist.insert(parts[0])
+    }
+
+    var menuCopy = Set<String>()
+    for fixture in fixtures {
+        let names = try namesFromPDT(in: fixture)
+        let snapshot = try PDTFixtureDataSource.snapshot(from: fixture)
+        // No fixture has a holding PDT has not priced, which the menu draws with its own copy.
+        var unpriced = snapshot
+        unpriced.openHoldings.indices.first.map { unpriced.openHoldings[$0].price = nil }
+        for snapshot in [snapshot, unpriced] {
+            let model = PressureEngine.buildModel(from: snapshot)
+            for showPortfolioValues in [true, false] {
+                let settings = PortfolioValueDisplaySettings(showPortfolioValues: showPortfolioValues)
+                let descriptor = MenuDescriptorRenderer.render(model: model, settings: settings)
+                menuCopy.formUnion(drawnMenuText(descriptor).filter { isFixedCopy($0, names: names) })
+            }
+        }
+    }
+
+    var problems: [String] = []
+    for copy in menuCopy.subtracting(allowlist).sorted() {
+        for (guide, text) in zip(guides, guideTexts) where !text.contains("`\(copy)`") {
+            problems.append(
+                "menu copy `\(copy)` is not in \(guide); describe it there and in the other feature guide, or add it to \(allowlistPath) with a reason"
+            )
+        }
+    }
+    for copy in allowlist.sorted() {
+        if !menuCopy.contains(copy) {
+            problems.append("\(allowlistPath) lists `\(copy)`, which the menu no longer draws; remove the entry")
+        } else if guideTexts.allSatisfy({ $0.contains("`\(copy)`") }) {
+            problems.append("\(allowlistPath) lists `\(copy)`, which both feature guides now quote; remove the entry")
+        }
+    }
+    try check(problems.isEmpty, problems.joined(separator: "\n"))
+}
+
+/// The text a person reads in the menu. The summary card draws its metrics, not its row title.
+private func drawnMenuText(_ descriptor: MenuDescriptor) -> [String] {
+    func walk(_ rows: [MenuRow]) -> [String] {
+        rows.flatMap { row in
+            let own = row.portfolioSummary.map { [$0.totalValue] + $0.performanceMetrics.map(\.label) }
+                ?? [row.title, row.detail].compactMap { $0 }
+            return own + walk(row.children)
+        }
+    }
+    return descriptor.sections.map(\.title) + walk(descriptor.sections.flatMap(\.rows))
+}
+
+/// Holding, ticker, sector, asset-type, and exchange names from a fixture, in `normalizedWords` form.
+private func namesFromPDT(in fixture: URL) throws -> [String] {
+    let nameKeys: Set<String> = ["symbolName", "categoryName", "exchangeName", "code", "isin"]
+    var names: [String] = []
+    func collect(_ value: Any, key: String?) {
+        if let text = value as? String, let key, nameKeys.contains(key) {
+            names.append(normalizedWords(text))
+        } else if let object = value as? [String: Any] {
+            object.forEach { collect($1, key: $0) }
+        } else if let array = value as? [Any] {
+            array.forEach { collect($0, key: key) }
+        }
+    }
+    collect(try JSONSerialization.jsonObject(with: Data(contentsOf: fixture)), key: nil)
+    return names.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+}
+
+/// Fixed copy has words, no number (amounts, dates, counts), and no name PDT supplied,
+/// which the menu may restyle (`health-care` reads `Health Care`).
+private func isFixedCopy(_ text: String, names: [String]) -> Bool {
+    let words = normalizedWords(text)
+    return text.contains(where: \.isLetter)
+        && !text.contains(where: \.isNumber)
+        && !names.contains { words.contains($0) }
+}
+
+/// Lowercased words separated and wrapped by single spaces, so `contains` matches whole words.
+private func normalizedWords(_ text: String) -> String {
+    let words = text.lowercased().split { !$0.isLetter && !$0.isNumber }
+    return " \(words.joined(separator: " ")) "
 }
 
 private func assertInformationalCopy(
