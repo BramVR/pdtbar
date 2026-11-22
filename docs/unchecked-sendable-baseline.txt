@@ -11,10 +11,8 @@
 1 Sources/PDTBarDev/PDTConnectionCommands.swift
 3 Sources/PDTBarSmoke/AuthMeasure.swift
 5 Sources/PDTBarSmoke/main.swift
-3 Tests/PDTBarTests/HeldConnectionChangeTests.swift
-2 Tests/PDTBarTests/PDTAPIBackgroundDetailRefreshTests.swift
-2 Tests/PDTBarTests/PDTAPIClientTests.swift
-1 Tests/PDTBarTests/PDTAPIDataSourceTests.swift
-2 Tests/PDTBarTests/PDTAppConnectionTests.swift
-10 Tests/PDTBarTests/PDTSignInTests.swift
-2 Tests/PDTBarTests/SignInPersistenceTests.swift
+2 Tests/PDTBarTests/HeldConnectionChangeTests.swift
+1 Tests/PDTBarTests/PDTAPIBackgroundDetailRefreshTests.swift
+1 Tests/PDTBarTests/PDTAppConnectionTests.swift
+6 Tests/PDTBarTests/PDTSignInTests.swift
+1 Tests/PDTBarTests/SignInPersistenceTests.swift

@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Security
 import Testing
 import PDTBarAppSupport
@@ -434,14 +435,11 @@ private enum FakeKeychain: CustomStringConvertible {
     }
 }
 
-private final class KeychainItem: @unchecked Sendable {
-    private let lock = NSLock()
-    private var data: Data?
+private final class KeychainItem: Sendable {
+    private let stored = OSAllocatedUnfairLock<Data?>(initialState: nil)
 
     func copy(into result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let data else {
+        guard let data = stored.withLock({ $0 }) else {
             return errSecItemNotFound
         }
         result?.pointee = data as CFData
@@ -449,20 +447,18 @@ private final class KeychainItem: @unchecked Sendable {
     }
 
     func set(_ value: Data?) -> OSStatus {
-        lock.lock()
-        defer { lock.unlock() }
-        data = value
+        stored.withLock { $0 = value }
         return errSecSuccess
     }
 
     func update(_ value: Data?) -> OSStatus {
-        lock.lock()
-        defer { lock.unlock() }
-        guard data != nil else {
-            return errSecItemNotFound
+        stored.withLock { data in
+            guard data != nil else {
+                return errSecItemNotFound
+            }
+            data = value
+            return errSecSuccess
         }
-        data = value
-        return errSecSuccess
     }
 }
 
