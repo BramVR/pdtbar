@@ -12,10 +12,10 @@ public struct Money: Codable, Equatable {
 
 public struct PortfolioPulseModel: Codable, Equatable {
     /// 2: attention `detail` and explanation fact `value` encode as `PortfolioValueText` objects.
-    /// 1 stored them as strings, which still decode (`docs/architecture.md`).
+    /// 1 stored them as strings, which still decode (`docs/architecture.md`). A decoded model has the
+    /// current shape whatever version it came from, so encoding always writes this one.
     public static let currentSchemaVersion = 2
 
-    public var schemaVersion: Int
     public var asOf: String
     public var allQuiet: Bool
     public var allQuietSignal: AllQuietSignal
@@ -27,7 +27,6 @@ public struct PortfolioPulseModel: Codable, Equatable {
     public var supportingDataSlots: [SupportingDataSlot]
 
     public init(
-        schemaVersion: Int = currentSchemaVersion,
         asOf: String,
         allQuiet: Bool,
         allQuietSignal: AllQuietSignal,
@@ -37,7 +36,6 @@ public struct PortfolioPulseModel: Codable, Equatable {
         facetSnapshots: FacetSnapshots,
         supportingDataSlots: [SupportingDataSlot]
     ) {
-        self.schemaVersion = schemaVersion
         self.asOf = asOf
         self.allQuiet = allQuiet
         self.allQuietSignal = allQuietSignal
@@ -50,7 +48,6 @@ public struct PortfolioPulseModel: Codable, Equatable {
     }
 
     public init(
-        schemaVersion: Int = currentSchemaVersion,
         asOf: String,
         allQuiet: Bool,
         allQuietSignal: AllQuietSignal,
@@ -59,7 +56,6 @@ public struct PortfolioPulseModel: Codable, Equatable {
         supportingDataSlots: [SupportingDataSlot]
     ) {
         self.init(
-            schemaVersion: schemaVersion,
             asOf: asOf,
             allQuiet: allQuiet,
             allQuietSignal: allQuietSignal,
@@ -90,7 +86,7 @@ public struct PortfolioPulseModel: Codable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        _ = try container.decode(Int.self, forKey: .schemaVersion)
         asOf = try container.decode(String.self, forKey: .asOf)
         allQuiet = try container.decode(Bool.self, forKey: .allQuiet)
         allQuietSignal = try container.decode(AllQuietSignal.self, forKey: .allQuietSignal)
@@ -108,6 +104,20 @@ public struct PortfolioPulseModel: Codable, Equatable {
             )
         portfolioPerformance = try container.decodeIfPresent(PortfolioPerformanceSummary.self, forKey: .portfolioPerformance)
             ?? PortfolioPerformanceSummary()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(Self.currentSchemaVersion, forKey: .schemaVersion)
+        try container.encode(asOf, forKey: .asOf)
+        try container.encode(allQuiet, forKey: .allQuiet)
+        try container.encode(allQuietSignal, forKey: .allQuietSignal)
+        try container.encode(attentionItems, forKey: .attentionItems)
+        try container.encode(rankedAttentionItems, forKey: .rankedAttentionItems)
+        try container.encode(portfolioGlance, forKey: .portfolioGlance)
+        try container.encode(portfolioPerformance, forKey: .portfolioPerformance)
+        try container.encode(facetSnapshots, forKey: .facetSnapshots)
+        try container.encode(supportingDataSlots, forKey: .supportingDataSlots)
     }
 }
 

@@ -192,6 +192,21 @@ struct AttentionExplanationTests {
         #expect(current["value"] is [String: Any])
     }
 
+    @Test("Model JSON from schema version 1 encodes again as version 2")
+    func schemaVersion1ModelJSONEncodesAgainAsVersion2() throws {
+        let decoded = try JSONDecoder().decode(
+            PortfolioPulseModel.self,
+            from: schemaVersion1JSON(model("income-event"))
+        )
+        let encoded = try stableJSONData(decoded)
+        let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let item = try #require((object["rankedAttentionItems"] as? [[String: Any]])?.first)
+
+        #expect(object["schemaVersion"] as? Int == 2)
+        #expect(item["detail"] is [String: Any])
+        #expect(try JSONDecoder().decode(PortfolioPulseModel.self, from: encoded) == decoded)
+    }
+
     @Test("Income explanation window only surfaces in-window events")
     func incomeExplanationWindowOnlySurfacesInWindowEvents() {
         let snapshot = PortfolioSnapshot(
@@ -223,6 +238,27 @@ struct AttentionExplanationTests {
         let snapshot = try PDTFixtureDataSource.snapshot(from: fixture)
         let prior = withPrior ? try? PDTFixtureDataSource.priorSnapshot(from: fixture) : nil
         return PressureEngine.buildModel(from: snapshot, priorSnapshot: prior)
+    }
+
+    /// The model as main's `pdtbar-dev model` printed it: schema version 1, each attention `detail`
+    /// and fact `value` as the string it shows.
+    private func schemaVersion1JSON(_ model: PortfolioPulseModel) throws -> Data {
+        func downgrade(_ json: Any) throws -> Any {
+            if let array = json as? [Any] {
+                return try array.map(downgrade)
+            }
+            guard let object = json as? [String: Any] else {
+                return json
+            }
+            if object["components"] != nil {
+                let data = try JSONSerialization.data(withJSONObject: object)
+                return try JSONDecoder().decode(PortfolioValueText.self, from: data).shown
+            }
+            return try object.mapValues(downgrade)
+        }
+        var object = try #require(downgrade(JSONSerialization.jsonObject(with: stableJSONData(model))) as? [String: Any])
+        object["schemaVersion"] = 1
+        return try JSONSerialization.data(withJSONObject: object)
     }
 
     private func legacyItem(_ json: String) throws -> AttentionItem {
