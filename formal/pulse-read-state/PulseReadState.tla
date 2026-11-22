@@ -12,27 +12,27 @@
 (* Abstraction. One income/big-mover row ("inc") whose fingerprint is its  *)
 (* value, and one concentration row ("conc") that is below the threshold   *)
 (* or above it in one of two weight buckets. Fingerprints are the values.  *)
-(* File writes are atomic (OwnerOnlyLocalStore.write renames a temp file,  *)
-(* Persistence.swift:126). Paths are Swift file:line at commit cd4d474,    *)
-(* under Sources/PDTBarCore/ unless they say main.swift (PDTBarApp).       *)
-(* Comments that name a symbol without a line describe the same commit.    *)
+(* File writes are atomic (OwnerOnlyLocalStore.write renames a temp file  *)
+(* in Persistence.swift). Comments name Swift symbols, never line numbers, *)
+(* in Sources/PDTBarCore/ unless they say main.swift (PDTBarApp), at the   *)
+(* sync commit in verify-pulse-read-state. pdtbar-checks checks the names. *)
 (***************************************************************************)
 EXTENDS FiniteSets
 
 CONSTANTS
     \* TRUE is current code (#269): every pulse PDTLaunchRuntime shows goes
-    \* through DisplayedPulse.show (LaunchRuntime.swift:720), which re-reads
+    \* through DisplayedPulse.show (LaunchRuntime.swift), which re-reads
     \* the store, the background refresh result included. FALSE replays the
     \* code before #269, which published the worker's read state.
     ReapplyOnBgPublish,
     \* TRUE is current code (#270): SnapshotStore.commitCurrentSnapshot
-    \* (Persistence.swift:657) removes the read marks of items that re-cross
-    \* against the snapshot on disk (661), then writes the snapshot (665). The
-    \* reset after the commit only prunes stale marks (566). FALSE replays the
+    \* (Persistence.swift) removes the read marks of items that re-cross
+    \* against the snapshot on disk, then writes the snapshot. The reset after
+    \* the commit only prunes stale marks (PressureRunner.readStateAfterPruningStaleItems). FALSE replays the
     \* code before #270, which reset re-crossed marks after the commit.
     ResetBeforeSnapshotCommit,
     \* TRUE is current code: PulseReadStore.markRead runs its load and save
-    \* inside PulseReadStore.mutationQueue (Persistence.swift:20, 38).
+    \* inside PulseReadStore.mutationQueue (Persistence.swift).
     MarkReadSerialized
 
 ASSUME ReapplyOnBgPublish \in BOOLEAN
@@ -82,7 +82,7 @@ vars == <<pdt, snap, store, display, wPc, wPrior, wNew, wLoaded, wRead,
 -----------------------------------------------------------------------------
 (* Pure pressure-engine helpers.                                           *)
 
-\* PressureEngine.concentrationItems, PressureEngine.swift:221.
+\* PressureEngine.concentrationItems, PressureEngine.swift.
 ConcItem(s, p, r) ==
     IF s.conc = "below" THEN "none"
     ELSE IF p = NoSnap THEN s.conc
@@ -90,12 +90,12 @@ ConcItem(s, p, r) ==
     ELSE IF \E f \in r \cap ConcFps : f # s.conc THEN s.conc
     ELSE "none"
 
-\* freshItem.resetsReadState = true, PressureEngine.swift:244.
+\* resetsReadState = true in PressureEngine.concentrationItems.
 Resets(s, p) == s.conc \in ConcFps /\ p # NoSnap /\ p.conc = "below"
 
 Reappeared(s, p) == IF Resets(s, p) THEN {s.conc} ELSE {}
 
-\* PressureRunner.staleReadFingerprints, Persistence.swift:583.
+\* PressureRunner.staleReadFingerprints, Persistence.swift.
 Stale(s, loaded) ==
     IF s.inc = "none" THEN {} ELSE {f \in loaded \cap IncFps : f # s.inc}
 
@@ -108,8 +108,8 @@ ToRemove(s, p, loaded) ==
 Pulse(s, p, r, read) ==
     [shown |-> TRUE, inc |-> s.inc, conc |-> ConcItem(s, p, r), read |-> read]
 
-\* PressureRunner.cachedPulse, Persistence.swift:351: no prior, no reset (374).
-\* The runtime installs it through DisplayedPulse.show (LaunchRuntime.swift:720),
+\* PressureRunner.cachedPulse, Persistence.swift: no prior, no reset.
+\* The runtime installs it through DisplayedPulse.show (LaunchRuntime.swift),
 \* which joins the store again on the main thread.
 CachedDisplay ==
     IF snap = NoSnap THEN NoDisplay ELSE Pulse(snap, NoSnap, store, store)
@@ -137,7 +137,7 @@ Init ==
     /\ snap \in SnapVals
     /\ store \in SUBSET FP
     /\ intended = store
-    \* AppDelegate.startCachedPulseLoad, main.swift:93. Refreshes wait for it.
+    \* AppDelegate.startCachedPulseLoad, main.swift. Refreshes wait for it.
     /\ display = CachedDisplay
     /\ wPc = "idle"
     /\ wPrior = NoSnap
@@ -156,12 +156,12 @@ PdtChanges ==
                    mainPc, mainFp, mainLoaded, intended, owed>>
 
 -----------------------------------------------------------------------------
-(* Main thread: markPulseItemRead, main.swift:925.                         *)
+(* Main thread: AppDelegate.markPulseItemRead, main.swift.                 *)
 
-\* main.swift:930 try readStore.markRead(fingerprint), with
-\* PulseReadStore.markRead, Persistence.swift:38, under mutationQueue. The
-\* menu row resolves its fingerprint from currentPulse.unfilteredModel by
-\* attention ID when the menu is built (main.swift:521), so f is a shown row.
+\* AppDelegate.markPulseItemRead calls PulseReadStore.markRead, which runs
+\* under mutationQueue. The menu row resolves its fingerprint from
+\* currentPulse.unfilteredModel by attention ID when the menu is built
+\* (main.swift), so f is a shown row.
 MarkRead(f) ==
     /\ MarkReadSerialized
     /\ mainPc = "idle"
@@ -174,7 +174,7 @@ MarkRead(f) ==
     /\ UNCHANGED <<pdt, snap, display, wPc, wPrior, wNew, wLoaded, wRead,
                    mainLoaded, owed>>
 
-\* Broken variant: PulseReadStore.markRead load step (Persistence.swift:40)
+\* Broken variant: PulseReadStore.markRead load step (Persistence.swift)
 \* outside mutationQueue.
 MarkReadLoad(f) ==
     /\ ~MarkReadSerialized
@@ -187,7 +187,7 @@ MarkReadLoad(f) ==
     /\ UNCHANGED <<pdt, snap, store, display, wPc, wPrior, wNew, wLoaded,
                    wRead, intended, owed>>
 
-\* Broken variant: PulseReadStore.markRead save step (Persistence.swift:45)
+\* Broken variant: PulseReadStore.markRead save step (Persistence.swift)
 \* outside mutationQueue.
 MarkReadSave ==
     /\ mainPc = "saving"
@@ -197,9 +197,9 @@ MarkReadSave ==
     /\ UNCHANGED <<pdt, snap, display, wPc, wPrior, wNew, wLoaded, wRead,
                    mainFp, mainLoaded, owed>>
 
-\* main.swift:931 PDTLaunchRuntime.pulseReadStateDidChange,
-\* LaunchRuntime.swift:896, which applies readStore.load() through
-\* DisplayedPulse.show (720).
+\* AppDelegate.markPulseItemRead then calls
+\* PDTLaunchRuntime.pulseReadStateDidChange, which applies readStore.load()
+\* through DisplayedPulse.show.
 MarkReadReload ==
     /\ mainPc = "reloading"
     /\ display' = [display EXCEPT !.read = store]
@@ -210,9 +210,9 @@ MarkReadReload ==
 -----------------------------------------------------------------------------
 (* Shared worker steps.                                                    *)
 
-\* PulseReadStore.removeReadFingerprints, Persistence.swift:49, called from
-\* PressureRunner.readStateAfterPruningStaleItems, Persistence.swift:566
-\* (readStateAfterResettingReappearedItems before #270). With nothing to
+\* PulseReadStore.removeReadFingerprints, called from
+\* PressureRunner.readStateAfterPruningStaleItems in Persistence.swift
+\* (which replaced a reappeared-items reset in #270). With nothing to
 \* remove the result keeps the loaded state.
 ResetEffect(to) ==
     /\ LET rm == ToRemove(wNew, wPrior, wLoaded) IN
@@ -228,9 +228,9 @@ ResetEffect(to) ==
     /\ UNCHANGED <<pdt, snap, display, wPrior, wNew, wLoaded, mainPc, mainFp,
                    mainLoaded>>
 
-\* SnapshotStore.commitCurrentSnapshot, Persistence.swift:658-663: drop the
+\* SnapshotStore.commitCurrentSnapshot, Persistence.swift: drop the
 \* marks of items that re-cross against the snapshot on disk, in one
-\* removeReadFingerprints write, before the snapshot write (665). Only the
+\* removeReadFingerprints write, before the snapshot write. Only the
 \* running worker writes the snapshot, so snap here is the prior it loaded.
 EarlyResetEffect(to) ==
     /\ store' = store \ Reappeared(wNew, snap)
@@ -239,7 +239,7 @@ EarlyResetEffect(to) ==
     /\ UNCHANGED <<pdt, snap, display, wPrior, wNew, wLoaded, wRead, mainPc,
                    mainFp, mainLoaded, owed>>
 
-\* SnapshotStore.commitCurrentSnapshot, Persistence.swift:665 snapshot write.
+\* SnapshotStore.commitCurrentSnapshot, Persistence.swift: the snapshot write.
 CommitEffect(to) ==
     /\ snap' = wNew
     \* A reset is owed when this write records a crossing against the
@@ -265,8 +265,8 @@ FirstFetchStart ==
     /\ UNCHANGED <<pdt, snap, store, display, wPrior, wNew, wLoaded, wRead,
                    mainPc, mainFp, mainLoaded, intended, owed>>
 
-\* PressureRunner.run, Persistence.swift:416-417: fetch, load prior. Since
-\* #270 displayReadState loads after the commit (429). Only the publish and
+\* PressureRunner.run, Persistence.swift: fetch, load prior. Since
+\* #270 displayReadState loads after the commit. Only the publish and
 \* the changed-bucket check read it, and the publish re-reads the store, so
 \* loading it here keeps the model smaller without changing any property.
 FirstFetchLoad ==
@@ -282,18 +282,18 @@ FirstFetchEarlyReset ==
     /\ wPc = "ffEarlyReset"
     /\ EarlyResetEffect("ffCommit")
 
-\* PressureRunner.run, Persistence.swift:428 commitCurrentSnapshot.
+\* PressureRunner.run, Persistence.swift: its commitCurrentSnapshot call.
 FirstFetchCommit ==
     /\ wPc = "ffCommit"
     /\ CommitEffect("ffReset")
 
-\* PressureRunner.lifecycleResult, Persistence.swift:507, reset branch.
+\* PressureRunner.lifecycleResult, Persistence.swift, reset branch.
 FirstFetchReset ==
     /\ wPc = "ffReset"
     /\ ResetEffect("ffReady")
 
-\* main.swift:175 finishFirstPortfolioFetch, then completeFirstFetch
-\* (LaunchRuntime.swift:845), whose DisplayedPulse.show (720) re-reads the store.
+\* AppDelegate.finishFirstPortfolioFetch, then PDTLaunchRuntime.completeFirstFetch,
+\* whose DisplayedPulse.show re-reads the store.
 FirstFetchPublish ==
     /\ wPc = "ffReady"
     /\ mainPc = "idle"
@@ -351,7 +351,7 @@ BgLoadReadState ==
     /\ UNCHANGED <<pdt, snap, store, display, wPrior, wNew, wRead, mainPc, mainFp,
                    mainLoaded, intended, owed>>
 
-\* PressureRunner.lifecycleResult, Persistence.swift:507, reset branch.
+\* PressureRunner.lifecycleResult, Persistence.swift, reset branch.
 BgReset ==
     /\ wPc = "bgReset"
     /\ ResetEffect("bgReady")
@@ -370,11 +370,11 @@ BgPublish ==
 -----------------------------------------------------------------------------
 \* The app quits or crashes at any point and launches again. In-flight work
 \* is lost; files stay. A normal quit runs applicationWillTerminate
-\* (main.swift:1005-1008): it cancels a background refresh and waits up to
+\* (AppDelegate.applicationWillTerminate): it cancels a background refresh and waits up to
 \* 4 s, so a refresh that has not reached refreshedPulse stops at its next
 \* throwIfCancelled and its finishBackgroundPortfolioRefresh never runs. A
 \* crash, force quit, or the 4 s timeout can stop the worker at any step.
-\* Then AppDelegate.launch, main.swift:60, and startCachedPulseLoad, 93.
+\* Then AppDelegate.launch and AppDelegate.startCachedPulseLoad.
 Relaunch ==
     /\ ClearWorker
     /\ ClearMain
