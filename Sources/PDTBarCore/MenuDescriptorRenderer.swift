@@ -878,9 +878,14 @@ public enum MenuDescriptorRenderer {
         settings: PortfolioValueDisplaySettings
     ) -> [MenuRow] {
         let explanation = item.explanation
+        // The slot, not the fact's decoded key, says which number is a score.
+        var severity = explanation.severity
+        if let score = severity.numericValue {
+            severity.value.components.append(.literal("; score \(decimalString(String(score), places: 2))"))
+        }
         return [
             ("trigger", explanation.trigger),
-            ("severity", explanation.severity),
+            ("severity", severity),
             ("threshold", explanation.threshold),
             ("currentValue", explanation.currentValue),
             ("priorValue", explanation.priorValue),
@@ -890,19 +895,8 @@ public enum MenuDescriptorRenderer {
                 id: "\(itemID).\(suffix)",
                 role: .pulseAttentionExpansion,
                 title: fact.label
-            ).withPortfolioValueDetail(factDetail(fact), settings: settings)
+            ).withPortfolioValueDetail(fact.value, settings: settings)
         }
-    }
-
-    private static func factDetail(_ fact: AttentionExplanationFact) -> PortfolioValueText {
-        if fact.key == "severity",
-           let score = fact.numericValue
-        {
-            return PortfolioValueText(
-                fact.value.components + [.literal("; score \(decimalString(String(score), places: 2))")]
-            )
-        }
-        return fact.value
     }
 
     private static func sourceSlotsDetail(

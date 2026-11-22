@@ -160,6 +160,30 @@ struct PortfolioValueVisibilityTests {
         #expect(leaked.isEmpty, "Hidden cash drag descriptor leaked: \(leaked)")
     }
 
+    // A fact's key is data. Only the severity slot shows a score, so a decoded Current fact that calls
+    // itself "severity" cannot print its numeric value next to the placeholder.
+    @Test("A decoded fact's key cannot unmask its numeric value")
+    func decodedFactKeyCannotUnmaskNumericValue() throws {
+        var snapshot = try visibilitySnapshot("quiet-no-pressure.json")
+        let cash = try #require(snapshot.openHoldings.lastIndex { $0.name == "Cash" })
+        snapshot.openHoldings[cash].weight = 0.12
+        var model = PressureEngine.buildModel(from: snapshot)
+        let cashDrag = try #require(model.rankedAttentionItems.firstIndex { $0.id == "allocation.cashDrag" })
+        model.rankedAttentionItems[cashDrag].explanation.currentValue = try JSONDecoder().decode(
+            AttentionExplanationFact.self,
+            from: Data(#"{"key": "severity", "label": "Current", "value": "EUR 123.45", "numericValue": 123.45}"#.utf8)
+        )
+        let hidden = MenuDescriptorRenderer.render(
+            model: model,
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+        )
+        let current = try #require(row(withID: "allocation.cashDrag.currentValue", in: hidden))
+        let json = try #require(String(data: stableJSONData(hidden), encoding: .utf8))
+
+        #expect(current.detail == PortfolioValueDisplaySettings.hiddenPlaceholder)
+        #expect(!json.contains("123.45"))
+    }
+
     @Test("Unresolved sensitive attention data fails closed")
     func unresolvedSensitiveAttentionDataFailsClosed() throws {
         var snapshot = try visibilitySnapshot("quiet-no-pressure.json")
@@ -638,8 +662,13 @@ private func renderedText(in descriptor: MenuDescriptor) -> String {
 
 // A severity score ("high; score 1.00") is model output, not a portfolio value, but it can equal a
 // small snapshot amount (worst-case-height's Cash unit price is EUR 1.00) and trip the digit scan.
+// Only a score after a severity word is left out, so "######; score 6144.00" still counts.
 private func withoutSeverityScores(_ text: String) -> String {
-    text.replacingOccurrences(of: #"; score \d+\.\d{2}"#, with: "; score", options: .regularExpression)
+    text.replacingOccurrences(
+        of: #"\b(low|medium|high); score \d+\.\d{2}"#,
+        with: "$1; score",
+        options: .regularExpression
+    )
 }
 
 private func row(withID id: String, in descriptor: MenuDescriptor) -> MenuRow? {
