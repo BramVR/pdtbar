@@ -278,7 +278,7 @@ public enum PressureEngine {
                         trigger: AttentionExplanationFact(
                             key: "trigger",
                             label: "Trigger",
-                            value: "Concentration line crossed"
+                            value: .literal("Concentration line crossed")
                         ),
                         severity: explanationSeverity(
                             severity: score >= 0.8 ? "high" : "medium",
@@ -327,7 +327,7 @@ public enum PressureEngine {
                         trigger: AttentionExplanationFact(
                             key: "trigger",
                             label: "Trigger",
-                            value: "Sector concentration line crossed"
+                            value: .literal("Sector concentration line crossed")
                         ),
                         severity: explanationSeverity(
                             severity: score >= 0.8 ? "high" : "medium",
@@ -377,7 +377,7 @@ public enum PressureEngine {
                     trigger: AttentionExplanationFact(
                         key: "trigger",
                         label: "Trigger",
-                        value: "Cash allocation line crossed"
+                        value: .literal("Cash allocation line crossed")
                     ),
                     severity: explanationSeverity(
                         severity: score >= 0.8 ? "high" : "medium",
@@ -436,7 +436,7 @@ public enum PressureEngine {
                     trigger: AttentionExplanationFact(
                         key: "trigger",
                         label: "Trigger",
-                        value: "Top concentration drift crossed"
+                        value: .literal("Top concentration drift crossed")
                     ),
                     severity: explanationSeverity(
                         severity: score >= 0.8 ? "high" : "medium",
@@ -702,7 +702,7 @@ public enum PressureEngine {
                 trigger: AttentionExplanationFact(
                     key: "trigger",
                     label: "Trigger",
-                    value: "Price move crossed recent-window line"
+                    value: .literal("Price move crossed recent-window line")
                 ),
                 severity: explanationSeverity(
                     severity: abs(signal.moveSize) >= 0.20 ? "high" : "medium",
@@ -777,7 +777,7 @@ public enum PressureEngine {
                         trigger: AttentionExplanationFact(
                             key: "trigger",
                             label: "Trigger",
-                            value: "Ex-dividend date in income window"
+                            value: .literal("Ex-dividend date in income window")
                         ),
                         severity: explanationSeverity(severity: .low, score: 0.45),
                         threshold: AttentionExplanationFact(

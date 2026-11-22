@@ -11,25 +11,25 @@ struct AttentionExplanationTests {
         let bigMover = try model("big-mover", withPrior: true)
 
         let concentrationExplanation = try #require(concentration.rankedAttentionItems.first?.explanation)
-        #expect(concentrationExplanation.trigger.value == "Concentration line crossed")
-        #expect(concentrationExplanation.severity.value == "medium")
-        #expect(concentrationExplanation.threshold?.value == "20.0%")
-        #expect(concentrationExplanation.currentValue?.value == "24.2%")
+        #expect(concentrationExplanation.trigger.value.shown == "Concentration line crossed")
+        #expect(concentrationExplanation.severity.value.shown == "medium")
+        #expect(concentrationExplanation.threshold?.value.shown == "20.0%")
+        #expect(concentrationExplanation.currentValue?.value.shown == "24.2%")
         #expect(concentrationExplanation.priorValue == nil)
         #expect(concentrationExplanation.supportingSourceSlots.map(\.id) == ["allocation.holdings"])
 
         let incomeExplanation = try #require(income.rankedAttentionItems.first { $0.facet == "income" }?.explanation)
-        #expect(incomeExplanation.trigger.value == "Ex-dividend date in income window")
-        #expect(incomeExplanation.severity.value == "low")
-        #expect(incomeExplanation.threshold?.value == "2026-06-22..2026-07-22")
-        #expect(incomeExplanation.currentValue?.value == "2026-06-24")
+        #expect(incomeExplanation.trigger.value.shown == "Ex-dividend date in income window")
+        #expect(incomeExplanation.severity.value.shown == "low")
+        #expect(incomeExplanation.threshold?.value.shown == "2026-06-22..2026-07-22")
+        #expect(incomeExplanation.currentValue?.value.shown == "2026-06-24")
         #expect(incomeExplanation.priorValue == nil)
         #expect(incomeExplanation.supportingSourceSlots.map(\.id) == ["income.calendar"])
 
         let bigMoverExplanation = try #require(bigMover.rankedAttentionItems.first?.explanation)
-        #expect(bigMoverExplanation.trigger.value == "Price move crossed recent-window line")
-        #expect(bigMoverExplanation.severity.value == "medium")
-        #expect(bigMoverExplanation.threshold?.value == "10.0%")
+        #expect(bigMoverExplanation.trigger.value.shown == "Price move crossed recent-window line")
+        #expect(bigMoverExplanation.severity.value.shown == "medium")
+        #expect(bigMoverExplanation.threshold?.value.shown == "10.0%")
         #expect(bigMoverExplanation.currentValue?.value.shown == "EUR 612.40")
         #expect(bigMoverExplanation.priorValue?.value.shown == "EUR 545.00")
         #expect(bigMoverExplanation.supportingSourceSlots.map(\.id) == [
@@ -80,8 +80,8 @@ struct AttentionExplanationTests {
           "supportingDataSlotIDs": ["allocation.holdings"]
         }
         """)
-        #expect(concentration.explanation.threshold?.value == "20.0%")
-        #expect(concentration.explanation.currentValue?.value == "24.2%")
+        #expect(concentration.explanation.threshold?.value.shown == "20.0%")
+        #expect(concentration.explanation.currentValue?.value.shown == "24.2%")
 
         let bigMover = try legacyItem("""
         {
@@ -101,7 +101,7 @@ struct AttentionExplanationTests {
           "supportingDataSlotIDs": ["bigMovers.priorSnapshot", "bigMovers.prices"]
         }
         """)
-        #expect(bigMover.explanation.threshold?.value == "10.0%")
+        #expect(bigMover.explanation.threshold?.value.shown == "10.0%")
         #expect(bigMover.explanation.currentValue?.value.shown == "EUR 612.40")
         #expect(bigMover.explanation.priorValue?.value.shown == "EUR 545.00")
 
@@ -120,7 +120,7 @@ struct AttentionExplanationTests {
           "supportingDataSlotIDs": ["income.calendar"]
         }
         """)
-        #expect(income.explanation.threshold?.value == "2026-06-22..2026-07-22")
+        #expect(income.explanation.threshold?.value.shown == "2026-06-22..2026-07-22")
         #expect(income.explanation.currentValue?.value.shown == "2026-06-24; EUR 78.00")
     }
 
@@ -159,7 +159,7 @@ struct AttentionExplanationTests {
         #expect(severityString == "low")
         #expect(item.typedFacet == .unknown)
         #expect(item.typedSeverity == .low)
-        #expect(item.explanation.severity.value == "low")
+        #expect(item.explanation.severity.value.shown == "low")
         #expect(item.readFingerprint.contains("pulse:v1:unknown"))
 
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(item)) as? [String: Any]
@@ -201,8 +201,8 @@ struct AttentionExplanationTests {
             .filter { $0.facet == "income" }
 
         #expect(items.map(\.title) == ["Inside Window ex-dividend"])
-        #expect(items.first?.explanation.threshold?.value == "2026-06-22..2026-07-22")
-        #expect(items.first?.explanation.currentValue?.value == "2026-07-22")
+        #expect(items.first?.explanation.threshold?.value.shown == "2026-06-22..2026-07-22")
+        #expect(items.first?.explanation.currentValue?.value.shown == "2026-07-22")
     }
 
     private func model(_ fixtureName: String, withPrior: Bool = false) throws -> PortfolioPulseModel {

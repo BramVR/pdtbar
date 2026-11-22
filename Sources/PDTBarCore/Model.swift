@@ -369,7 +369,7 @@ public struct AttentionItem: Codable, Equatable {
         facet: String,
         rank: Int,
         title: String,
-        detail: PortfolioValueText = "",
+        detail: PortfolioValueText = .literal(""),
         severity: String,
         score: Double,
         holdingIdentity: HoldingIdentity? = nil,
@@ -442,7 +442,7 @@ public struct AttentionItem: Codable, Equatable {
         facet = AttentionFacet(legacyValue: try container.decode(String.self, forKey: .facet)).rawValue
         rank = try container.decode(Int.self, forKey: .rank)
         title = try container.decode(String.self, forKey: .title)
-        detail = try container.decodeIfPresent(PortfolioValueText.self, forKey: .detail) ?? ""
+        detail = try container.decodeIfPresent(PortfolioValueText.self, forKey: .detail) ?? .literal("")
         severity = AttentionSeverity(legacyValue: try container.decode(String.self, forKey: .severity)).rawValue
         score = try container.decode(Double.self, forKey: .score)
         holdingIdentity = try container.decodeIfPresent(HoldingIdentity.self, forKey: .holdingIdentity)

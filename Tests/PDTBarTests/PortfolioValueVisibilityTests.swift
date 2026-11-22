@@ -41,8 +41,8 @@ struct PortfolioValueVisibilityTests {
         #expect(hiddenAtAppChoke == hidden)
         #expect(hiddenAfterRoundTripText.contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
         #expect(
-            try monetaryDigitGroups(in: snapshot).filter(hiddenAfterRoundTripText.contains).isEmpty,
-            "Decoded hidden \(fixtureName) descriptor leaked snapshot monetary digit groups"
+            try leakedAmounts(in: hiddenAfterRoundTripText, snapshot: snapshot).isEmpty,
+            "Decoded hidden \(fixtureName) descriptor leaked snapshot amounts"
         )
         #expect(
             hidden.applying(
@@ -50,8 +50,12 @@ struct PortfolioValueVisibilityTests {
             ) == hidden
         )
         #expect(
-            try monetaryDigitGroups(in: snapshot).filter(hiddenText.contains).isEmpty,
-            "Hidden \(fixtureName) descriptor leaked snapshot monetary digit groups"
+            try leakedAmounts(in: hiddenText, snapshot: snapshot).isEmpty,
+            "Hidden \(fixtureName) descriptor leaked snapshot amounts"
+        )
+        #expect(
+            try leakedAmounts(in: descriptorJSON(hiddenAtAppChoke), snapshot: snapshot).isEmpty,
+            "Hidden \(fixtureName) descriptor JSON leaked snapshot amounts"
         )
         #expect(!hiddenJSON.contains("\"portfolioValueDetail\""))
         #expect(!hiddenJSON.contains("\"portfolioValueBarDetails\""))
@@ -72,11 +76,11 @@ struct PortfolioValueVisibilityTests {
         )
         let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
         let text = renderedText(in: descriptor) + renderedText(in: surface)
-        let leaked = try monetaryDigitGroups(in: snapshot).filter(text.contains)
+        let leaked = try leakedAmounts(in: text + descriptorJSON(descriptor), snapshot: snapshot)
 
         #expect(text.contains("Total portfolio value"))
         #expect(text.contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
-        #expect(leaked.isEmpty, "Hidden \(fixtureName) surface leaked: \(leaked.sorted())")
+        #expect(leaked.isEmpty, "Hidden \(fixtureName) surface leaked: \(leaked)")
     }
 
     @Test(
@@ -105,11 +109,7 @@ struct PortfolioValueVisibilityTests {
         #expect(pulse.model == hidden.model)
         #expect(hidden.model == restored.model)
         #expect(renderedText(in: hidden.descriptor).contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
-        #expect(
-            try monetaryDigitGroups(in: snapshot)
-                .filter(renderedText(in: hidden.descriptor).contains)
-                .isEmpty
-        )
+        #expect(try leakedAmounts(in: renderedText(in: hidden.descriptor), snapshot: snapshot).isEmpty)
         #expect(
             try monetaryDisplays(in: snapshot).contains(where: renderedText(in: restored.descriptor).contains),
             "Restored \(fixtureName) descriptor did not render a snapshot monetary value"
@@ -137,10 +137,9 @@ struct PortfolioValueVisibilityTests {
             model: PressureEngine.buildModel(from: snapshot),
             settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
         )
-        let text = renderedText(in: descriptor)
-        let leaked = try monetaryDigitGroups(in: snapshot).filter(text.contains)
+        let leaked = try leakedAmounts(in: renderedText(in: descriptor), snapshot: snapshot)
 
-        #expect(leaked.isEmpty, "Hidden GBp descriptor leaked: \(leaked.sorted())")
+        #expect(leaked.isEmpty, "Hidden GBp descriptor leaked: \(leaked)")
     }
 
     // No fixture crosses the cash drag line, so the scans above never saw this row (a31cbba leaked it).
@@ -155,10 +154,10 @@ struct PortfolioValueVisibilityTests {
             settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
         )
         let cashDrag = try #require(row(withID: "allocation.cashDrag.glance", in: hidden))
-        let leaked = try monetaryDigitGroups(in: snapshot).filter(renderedText(in: hidden).contains)
+        let leaked = try leakedAmounts(in: renderedText(in: hidden) + descriptorJSON(hidden), snapshot: snapshot)
 
         #expect(cashDrag.detail == "12.0%; \(PortfolioValueDisplaySettings.hiddenPlaceholder)")
-        #expect(leaked.isEmpty, "Hidden cash drag descriptor leaked: \(leaked.sorted())")
+        #expect(leaked.isEmpty, "Hidden cash drag descriptor leaked: \(leaked)")
     }
 
     @Test("Unresolved sensitive attention data fails closed")
@@ -561,10 +560,28 @@ private func monetaryDisplays(in snapshot: PortfolioSnapshot) throws -> Set<Stri
     Set(try snapshotMoney(in: snapshot).map(formattedMoney))
 }
 
-private func monetaryDigitGroups(in snapshot: PortfolioSnapshot) throws -> Set<String> {
+/// Snapshot amounts that `text` shows as whole numbers. Each amount is searched in every form code
+/// could print it: PDT's raw `value` (`6144.00`), and two decimals with and without grouping
+/// (`6,144.00`, `6144.00`). A form inside a longer number does not count.
+private func leakedAmounts(in text: String, snapshot: PortfolioSnapshot) throws -> [String] {
     var values = try snapshotMoney(in: snapshot).map(\.value)
     values.append(contentsOf: snapshot.priceSeries.map(\.closeAdjusted))
-    return Set(values.map { decimalStringForTest($0, places: 2) })
+    let forms = Set(values.flatMap { value in
+        [
+            value,
+            decimalStringForTest(value, places: 2),
+            decimalStringForTest(value, places: 2, grouped: false),
+        ]
+    })
+    return forms.filter { form in
+        let number = NSRegularExpression.escapedPattern(for: form)
+        return text.range(of: #"(?<![\d.,])\#(number)(?!\d|[.,]\d)"#, options: .regularExpression) != nil
+    }.sorted()
+}
+
+/// Descriptor JSON as `pdtbar-dev descriptor` prints it, with severity scores left out as in `renderedText`.
+private func descriptorJSON(_ descriptor: MenuDescriptor) throws -> String {
+    withoutSeverityScores(try #require(String(data: stableJSONData(descriptor), encoding: .utf8)))
 }
 
 private func snapshotMoney(in snapshot: PortfolioSnapshot) throws -> [Money] {
@@ -596,14 +613,14 @@ private func formattedMoney(_ money: Money) -> String {
     "\(money.currency) \(decimalStringForTest(money.value, places: 2))"
 }
 
-private func decimalStringForTest(_ value: String, places: Int) -> String {
+private func decimalStringForTest(_ value: String, places: Int, grouped: Bool = true) -> String {
     guard let decimal = Decimal(string: value, locale: Locale(identifier: "en_US_POSIX")) else {
         return value
     }
     let formatter = NumberFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.numberStyle = .decimal
-    formatter.usesGroupingSeparator = true
+    formatter.usesGroupingSeparator = grouped
     formatter.minimumFractionDigits = places
     formatter.maximumFractionDigits = places
     return formatter.string(from: decimal as NSDecimalNumber) ?? value

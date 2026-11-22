@@ -10,10 +10,10 @@ struct AllocationPressureTests {
         let item = try #require(model.rankedAttentionItems.first { $0.id == "allocation.sector.information-technology" })
 
         #expect(item.title == "Information Technology sector concentration")
-        #expect(item.detail == "30.9%")
-        #expect(item.explanation.trigger.value == "Sector concentration line crossed")
-        #expect(item.explanation.threshold?.value == "30.0%")
-        #expect(item.explanation.currentValue?.value == "30.9%")
+        #expect(item.detail.shown == "30.9%")
+        #expect(item.explanation.trigger.value.shown == "Sector concentration line crossed")
+        #expect(item.explanation.threshold?.value.shown == "30.0%")
+        #expect(item.explanation.currentValue?.value.shown == "30.9%")
         #expect(item.explanation.supportingSourceSlots.map(\.id) == ["allocation.sectors"])
         #expect(model.facetSnapshots.allocation.allocationPressureItems.map(\.id).contains(item.id))
     }
@@ -35,8 +35,8 @@ struct AllocationPressureTests {
         let item = try #require(highCash.rankedAttentionItems.first { $0.id == "allocation.cashDrag" })
         #expect(item.title == "Cash drag")
         #expect(item.detail.shown == "12.0%; EUR 6,144.00")
-        #expect(item.explanation.trigger.value == "Cash allocation line crossed")
-        #expect(item.explanation.threshold?.value == "10.0%")
+        #expect(item.explanation.trigger.value.shown == "Cash allocation line crossed")
+        #expect(item.explanation.threshold?.value.shown == "10.0%")
         #expect(item.explanation.currentValue?.value.shown == "12.0%; EUR 6,144.00")
         #expect(item.explanation.supportingSourceSlots.map(\.id) == ["allocation.overview"])
 
@@ -54,11 +54,11 @@ struct AllocationPressureTests {
         let item = model.rankedAttentionItems.first { $0.id == "allocation.concentrationDrift.top3" }
 
         #expect(item?.title == "Top 3 concentration drift")
-        #expect(item?.detail == "38.0% -> 45.0%")
-        #expect(item?.explanation.trigger.value == "Top concentration drift crossed")
-        #expect(item?.explanation.threshold?.value == "5.0%")
-        #expect(item?.explanation.currentValue?.value == "45.0%")
-        #expect(item?.explanation.priorValue?.value == "38.0%")
+        #expect(item?.detail.shown == "38.0% -> 45.0%")
+        #expect(item?.explanation.trigger.value.shown == "Top concentration drift crossed")
+        #expect(item?.explanation.threshold?.value.shown == "5.0%")
+        #expect(item?.explanation.currentValue?.value.shown == "45.0%")
+        #expect(item?.explanation.priorValue?.value.shown == "38.0%")
         #expect(item?.explanation.supportingSourceSlots.map(\.id) == [
             "allocation.overview",
             "allocation.priorSnapshot",

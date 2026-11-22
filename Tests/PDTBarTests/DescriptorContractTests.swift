@@ -67,7 +67,7 @@ struct DescriptorContractTests {
             """.utf8)
         )
 
-        #expect(legacyAttention.detail == "")
+        #expect(legacyAttention.detail.shown == "")
         #expect(legacyMenuRow.id == "")
         #expect(legacyMenuRow.role == .row)
         #expect(legacyQuietMenuRow.role == .pulseQuiet)
