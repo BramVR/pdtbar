@@ -179,6 +179,19 @@ struct AttentionExplanationTests {
         #expect(decoded == item)
     }
 
+    @Test("Model JSON names schema version 2 for typed portfolio value text")
+    func modelJSONNamesSchemaVersionForTypedText() throws {
+        let data = try stableJSONData(model("concentration-pressure"))
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let item = try #require((object["rankedAttentionItems"] as? [[String: Any]])?.first)
+        let explanation = try #require(item["explanation"] as? [String: Any])
+        let current = try #require(explanation["currentValue"] as? [String: Any])
+
+        #expect(object["schemaVersion"] as? Int == 2)
+        #expect(item["detail"] is [String: Any])
+        #expect(current["value"] is [String: Any])
+    }
+
     @Test("Income explanation window only surfaces in-window events")
     func incomeExplanationWindowOnlySurfacesInWindowEvents() {
         let snapshot = PortfolioSnapshot(

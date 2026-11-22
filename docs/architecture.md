@@ -147,6 +147,14 @@ fetched. Menu descriptors render this state; AppKit does not derive health
 facts. `FacetSnapshots` rebuilds `dataHealth` when the stored shape is not this
 one, so model JSON from an older build still decodes.
 
+`PortfolioPulseModel.schemaVersion` is 2 (`currentSchemaVersion`). Since 2, an
+attention item's `detail` and each explanation fact's `value` are
+`PortfolioValueText`, encoded as `{"components": [...]}` with money as a typed
+`money` component that only `PortfolioValueText.rendered(settings:)` formats.
+Version 1 stored them as strings; a string still decodes, as text shown only
+while portfolio values are visible. `pdtbar-dev model` prints this JSON; the
+app never writes the model to disk.
+
 Live and fixture PDT decoders both feed PDT-shaped DTO inputs into
 `PDTSnapshotNormalizer`, so holding filtering, symbol quote joins, dividend
 correction handling, optional facets, price history, and fixture/live parity

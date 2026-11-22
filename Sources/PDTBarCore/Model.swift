@@ -11,6 +11,10 @@ public struct Money: Codable, Equatable {
 }
 
 public struct PortfolioPulseModel: Codable, Equatable {
+    /// 2: attention `detail` and explanation fact `value` encode as `PortfolioValueText` objects.
+    /// 1 stored them as strings, which still decode (`docs/architecture.md`).
+    public static let currentSchemaVersion = 2
+
     public var schemaVersion: Int
     public var asOf: String
     public var allQuiet: Bool
@@ -23,7 +27,7 @@ public struct PortfolioPulseModel: Codable, Equatable {
     public var supportingDataSlots: [SupportingDataSlot]
 
     public init(
-        schemaVersion: Int = 1,
+        schemaVersion: Int = currentSchemaVersion,
         asOf: String,
         allQuiet: Bool,
         allQuietSignal: AllQuietSignal,
@@ -46,7 +50,7 @@ public struct PortfolioPulseModel: Codable, Equatable {
     }
 
     public init(
-        schemaVersion: Int = 1,
+        schemaVersion: Int = currentSchemaVersion,
         asOf: String,
         allQuiet: Bool,
         allQuietSignal: AllQuietSignal,
