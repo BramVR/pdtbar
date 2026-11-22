@@ -22,9 +22,10 @@ public enum PressureEngine {
                 + cashDragItems(from: portfolioOverview)
                 + concentrationDriftItems(from: portfolioOverview, priorOverview: priorPortfolioOverview)
         )
+        let upcomingIncomeEvents = snapshot.incomeEvents.sorted { $0.date < $1.date }
         let rankedItems = ranked(
             allocationItems
-                + incomeItems(from: snapshot)
+                + incomeItems(from: snapshot, upcomingEvents: upcomingIncomeEvents)
                 + bigMoverItems(from: snapshot, priorSnapshot: priorSnapshot)
         )
         let totalValue = snapshot.totalValue
@@ -134,7 +135,7 @@ public enum PressureEngine {
                     allocationPressureItems: allocationItems
                 ),
                 income: IncomeSnapshot(
-                    upcomingEvents: snapshot.incomeEvents.sorted { $0.date < $1.date },
+                    upcomingEvents: upcomingIncomeEvents,
                     dividendRowCount: snapshot.dividendRowCount
                 ),
                 bigMovers: BigMoversSnapshot(
@@ -733,7 +734,10 @@ public enum PressureEngine {
         )
     }
 
-    private static func incomeItems(from snapshot: PortfolioSnapshot) -> [AttentionItem] {
+    private static func incomeItems(
+        from snapshot: PortfolioSnapshot,
+        upcomingEvents: [IncomeEventSummary]
+    ) -> [AttentionItem] {
         let incomeWindowEnd = dayString(daysFrom: snapshot.asOf, days: 30) ?? snapshot.asOf
         guard let incomeWindowStartDate = dayDate(from: snapshot.asOf),
               let incomeWindowEndDate = dayDate(from: incomeWindowEnd)
@@ -759,7 +763,7 @@ public enum PressureEngine {
                     facet: "income",
                     rank: offset + 1,
                     title: "\(event.symbolName) ex-dividend",
-                    detail: incomeCopy(for: event),
+                    detail: incomeDetail(for: event, upcomingEvents: upcomingEvents),
                     severity: "low",
                     score: 0.45,
                     holdingIdentity: identity,
@@ -807,6 +811,25 @@ public enum PressureEngine {
             return "income.ex-dividend.symbol.\(symbolId)"
         }
         return "income.ex-dividend.\(event.symbolName)"
+    }
+
+    /// PDT can list an estimate, which has no amount, before the confirmed event for the same quote
+    /// and date. The copy describes the first event listed, as the menu always has. An event without
+    /// a quote matches none, and its whole copy hides with portfolio values.
+    private static func incomeDetail(
+        for event: IncomeEventSummary,
+        upcomingEvents: [IncomeEventSummary]
+    ) -> PortfolioValueText {
+        guard let quoteId = event.quoteId else {
+            return PortfolioValueText(incomeCopy(for: event).components.map { component in
+                guard case .literal(let text) = component else { return component }
+                return .unresolvedSensitive(text)
+            })
+        }
+        let listed = upcomingEvents.first {
+            $0.kind == "ex-dividend" && $0.date == event.date && $0.quoteId == quoteId
+        }
+        return incomeCopy(for: listed ?? event)
     }
 
     private static func incomeCopy(for event: IncomeEventSummary) -> PortfolioValueText {

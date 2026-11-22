@@ -421,6 +421,54 @@ struct PortfolioValueVisibilityTests {
         #expect(!((second.detail ?? "").contains("GBp 111.11")))
     }
 
+    // PDT can list an estimate, which has no amount, before the confirmed event for the same quote
+    // and date. The menu describes the first one listed (copy taken from main at 3dfed5b).
+    @Test(
+        "Income attention describes the first ex-dividend event PDT lists for its quote and date",
+        arguments: [true, false]
+    )
+    func incomeAttentionDescribesFirstListedEvent(_ showPortfolioValues: Bool) throws {
+        let snapshot = try incomeEventSnapshot { events in
+            let confirmed = try #require(events.firstIndex { $0["id"] as? Int == 1001 })
+            var estimate = events[confirmed]
+            estimate["id"] = 1000
+            estimate["isEstimated"] = true
+            events.insert(estimate, at: confirmed)
+        }
+        let descriptor = MenuDescriptorRenderer.render(
+            model: PressureEngine.buildModel(from: snapshot),
+            settings: PortfolioValueDisplaySettings(showPortfolioValues: showPortfolioValues)
+        )
+        let attention = try #require(row(withID: "income.ex-dividend.9003.glance", in: descriptor))
+
+        #expect(attention.detail == "Helix Pharma A/S has an ex-dividend date on 2026-06-24.")
+    }
+
+    // An event whose symbol maps to no held quote matched no event in main's renderer, which then
+    // hid the whole copy with portfolio values (copy taken from main at 3dfed5b).
+    @Test("Income attention without a quote hides its whole copy with portfolio values")
+    func incomeAttentionWithoutQuoteHidesWholeCopy() throws {
+        let snapshot = try incomeEventSnapshot { events in
+            let confirmed = try #require(events.firstIndex { $0["id"] as? Int == 1001 })
+            events[confirmed]["symbolId"] = 5999
+        }
+        let model = PressureEngine.buildModel(from: snapshot)
+        let id = "income.ex-dividend.symbol.5999.glance"
+        let shown = try #require(row(withID: id, in: MenuDescriptorRenderer.render(model: model)))
+        let hidden = try #require(
+            row(
+                withID: id,
+                in: MenuDescriptorRenderer.render(
+                    model: model,
+                    settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
+                )
+            )
+        )
+
+        #expect(shown.detail == "Helix Pharma A/S has an ex-dividend date on 2026-06-24.")
+        #expect(hidden.detail == PortfolioValueDisplaySettings.hiddenPlaceholder)
+    }
+
     @Test("App applies portfolio value visibility at one menu installation choke point")
     func appHasSinglePortfolioValueVisibilityChokePoint() throws {
         let source = try String(
@@ -489,6 +537,24 @@ private func visibilitySnapshot(_ fixtureName: String) throws -> PortfolioSnapsh
     try PDTFixtureDataSource.snapshot(
         from: visibilityPackageRoot.appending(path: "docs/pdt/fixtures/\(fixtureName)")
     )
+}
+
+/// income-event.json with its PDT calendar events edited, read through the same normalizer as live data.
+private func incomeEventSnapshot(
+    editingCalendarEvents edit: (inout [[String: Any]]) throws -> Void
+) throws -> PortfolioSnapshot {
+    let source = visibilityPackageRoot.appending(path: "docs/pdt/fixtures/income-event.json")
+    var payload = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: source)) as? [String: Any])
+    var calendar = try #require(payload["listCalendarEvents"] as? [String: Any])
+    var events = try #require(calendar["data"] as? [[String: Any]])
+    try edit(&events)
+    calendar["data"] = events
+    payload["listCalendarEvents"] = calendar
+    let edited = FileManager.default.temporaryDirectory
+        .appending(path: "pdtbar-income-event-\(UUID().uuidString).json")
+    try JSONSerialization.data(withJSONObject: payload).write(to: edited)
+    defer { try? FileManager.default.removeItem(at: edited) }
+    return try PDTFixtureDataSource.snapshot(from: edited)
 }
 
 private func monetaryDisplays(in snapshot: PortfolioSnapshot) throws -> Set<String> {
