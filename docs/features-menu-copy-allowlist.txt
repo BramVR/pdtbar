@@ -1,0 +1,4 @@
+# Menu copy the public feature guides (docs/public/features.{en,nl}.md) need not quote.
+# `swift run pdtbar-checks` fails when fixed menu copy is in neither this list nor both guides.
+# One entry per line: <menu copy exactly as drawn> | <why the guides leave it out>
+# Keep this short: describe new menu copy in the guides instead.

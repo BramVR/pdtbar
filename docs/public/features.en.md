@@ -23,7 +23,9 @@ The menu-bar icon is a compact Concentration Stack. It stays visible while PDTBa
 - The tooltip and accessibility label include the current status in words.
 - If nothing needs attention, the icon shows no alert.
 
-Click the icon to open the menu. The first section is `Pulse`, which shows the portfolio value and either the top attention items or `All quiet`.
+Click the icon to open the menu. It starts with a summary card: `Total portfolio value`, plus `CAGR` and `Total increase` when PDT has those figures. Without open holdings the card reads `No open holdings`.
+
+The first section is `Pulse`, which shows either the top attention items or `All quiet`. `All quiet` reads `No attention items right now.` and opens to `Open holdings`, the weight of your top holdings, and how current your `Prices` are.
 
 ## Attention items
 
@@ -38,17 +40,22 @@ PDTBar can currently show:
 - Big holding price moves of 10% or more over the recent window.
 - Confirmed ex-dividend dates inside the next 30 days.
 
-Each attention item can expand to show the trigger, severity, threshold, current value, prior value when available, and the source data PDTBar used.
+Each attention item expands to show:
+
+- `Trigger`: the line it crossed, such as `Concentration line crossed`, `Sector concentration line crossed`, `Price move crossed recent-window line`, or `Ex-dividend date in income window`.
+- `Severity`, `Threshold`, and `Current`, plus `Prior` when an earlier value exists.
+- `Sources`: the PDT data PDTBar used, such as `Open holdings`, `Sector breakdown`, `Calendar events`, or `Price rows`.
+- `Mark as read`, which takes the item out of the Pulse count.
 
 ## Allocation
 
 The `Allocation` section shows the shape of the portfolio without opening PDT.
 
 - `Portfolio` shows a compact allocation chart.
-- `Detailed info` opens the holding list.
-- Holdings show their portfolio weight and value when available.
-- Holding details can include recent move, next income event, average buy price, gain/loss, and a copyable identifier when PDT provides them.
-- Sector and asset-type summaries appear below the holding list when PDT provides that data.
+- `Full allocation list` opens the holding list. Each holding shows its portfolio weight.
+- A holding opens to `Worth`, `Price`, `ISIN`, `Recent move`, `Next income`, `Average buy price`, `Gain/loss`, `Gain/loss %`, and `Copy identifier`, each when PDT provides it.
+- `Sectors` and `Asset types` summaries appear below the holding list when PDT provides that data.
+- Without holdings, the section reads `No holdings to show`.
 
 Allocation pressure can appear in `Pulse`, but the underlying allocation facts stay available even after you mark the attention item read.
 
@@ -59,7 +66,8 @@ The `Income` section is a calendar view you can browse. It also lists events tha
 - `Income window` summarizes upcoming events.
 - `Next income` highlights the next dividend or cash-flow event.
 - PDTBar groups later events into short buckets such as `This week` and `Later`.
-- Event rows show date, kind, confirmed/estimated state, amount, and change when that information is available.
+- An event opens to `Date`, `Kind` (such as `Ex-dividend date` or `Dividend payment date`), `State` (`Confirmed` or `Estimated`), `Amount`, and `Change`, when that information is available.
+- With nothing coming up, the section reads `No income events in the next window`.
 
 Only confirmed ex-dividend dates inside the current 30-day window become Pulse attention items. Other income events remain available in the Income section.
 
@@ -67,7 +75,7 @@ Only confirmed ex-dividend dates inside the current 30-day window become Pulse a
 
 The `Big movers` section summarizes recent price movement.
 
-When a holding crosses the 10% move line, PDTBar can show it in Pulse with the before/after price, the move size, and the source window. If no holding crosses the line, the section still shows how many price rows PDTBar checked.
+When a holding crosses the 10% move line, PDTBar can show it in Pulse with the before/after price, the move size, and the source window. If no holding crosses the line, the section still shows how many price rows PDTBar checked. Without any price history it reads `No price history to compare yet`.
 
 When a prior snapshot exists, PDTBar compares the current holding against that snapshot first. If prior data is missing, it falls back to PDT price history.
 
@@ -75,12 +83,18 @@ When a prior snapshot exists, PDTBar compares the current holding against that s
 
 The `Data` section tells you whether the numbers are current enough for a quick look.
 
-- `Prices` shows whether price data is current, stale, partial, or unknown.
+- `Prices` shows whether price data is current, stale, partial, or unknown. Without holdings it reads `No holdings to price`.
 - The `Prices` submenu lists each holding's last price from PDT with the day it is for, such as `EUR 1,376.80 on 2026-11-12`. That day can lag today by a day or more. A holding PDT has not priced reads `No price from PDT`. With `Show portfolio values` off, the price is hidden but its date stays.
-- Stale data can show the oldest price date and affected holdings.
-- Partial data can show the latest completed detail fill.
-- `Data health` appears when source health is degraded.
-- You can copy diagnostics when a refresh fails and you need to troubleshoot it.
+- Stale data shows `Stale holdings` and the `Oldest price` date.
+- Partial data can show the `Latest complete detail fill`.
+- `Data health` appears when source health is degraded, for example `Not fetched this session` before PDTBar has fetched from PDT. It opens to:
+  - `Source`, such as `PDT, read-only; not fetched this session`.
+  - `Access`, such as `Not checked this session`.
+  - `Cache`, with the day of the last sync.
+  - `Prices`, with the price freshness.
+  - `Detail fill`, such as `Not started`.
+  - `Read state`, with how many attention items you marked read.
+  - `Diagnostics`, which reads `None recorded` until a refresh fails. After a failure, `Copy diagnostics` copies the details so you can troubleshoot it.
 
 Cached data can keep the menu useful while PDTBar refreshes in the background, but the Data section tells you when that is happening.
 
