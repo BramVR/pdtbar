@@ -41,7 +41,7 @@ struct PortfolioValueVisibilityTests {
         #expect(hiddenAtAppChoke == hidden)
         #expect(hiddenAfterRoundTripText.contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
         #expect(
-            try leakedAmounts(in: hiddenAfterRoundTripText, snapshot: snapshot).isEmpty,
+            try leakedAmounts(in: hiddenAfterRoundTripText, snapshot: snapshot, model: model).isEmpty,
             "Decoded hidden \(fixtureName) descriptor leaked snapshot amounts"
         )
         #expect(
@@ -50,11 +50,11 @@ struct PortfolioValueVisibilityTests {
             ) == hidden
         )
         #expect(
-            try leakedAmounts(in: hiddenText, snapshot: snapshot).isEmpty,
+            try leakedAmounts(in: hiddenText, snapshot: snapshot, model: model).isEmpty,
             "Hidden \(fixtureName) descriptor leaked snapshot amounts"
         )
         #expect(
-            try leakedAmounts(in: descriptorJSON(hiddenAtAppChoke), snapshot: snapshot).isEmpty,
+            try leakedAmounts(in: descriptorJSON(hiddenAtAppChoke), snapshot: snapshot, model: model).isEmpty,
             "Hidden \(fixtureName) descriptor JSON leaked snapshot amounts"
         )
         #expect(!hiddenJSON.contains("\"portfolioValueDetail\""))
@@ -76,7 +76,7 @@ struct PortfolioValueVisibilityTests {
         )
         let surface = MenuBarSurfaceRenderer.render(descriptor: descriptor)
         let text = renderedText(in: descriptor) + renderedText(in: surface)
-        let leaked = try leakedAmounts(in: text + descriptorJSON(descriptor), snapshot: snapshot)
+        let leaked = try leakedAmounts(in: text + descriptorJSON(descriptor), snapshot: snapshot, model: model)
 
         #expect(text.contains("Total portfolio value"))
         #expect(text.contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
@@ -109,7 +109,7 @@ struct PortfolioValueVisibilityTests {
         #expect(pulse.model == hidden.model)
         #expect(hidden.model == restored.model)
         #expect(renderedText(in: hidden.descriptor).contains(PortfolioValueDisplaySettings.hiddenPlaceholder))
-        #expect(try leakedAmounts(in: renderedText(in: hidden.descriptor), snapshot: snapshot).isEmpty)
+        #expect(try leakedAmounts(in: renderedText(in: hidden.descriptor), snapshot: snapshot, model: hidden.model).isEmpty)
         #expect(
             try monetaryDisplays(in: snapshot).contains(where: renderedText(in: restored.descriptor).contains),
             "Restored \(fixtureName) descriptor did not render a snapshot monetary value"
@@ -133,11 +133,12 @@ struct PortfolioValueVisibilityTests {
                 changePercent: 0.2571
             ),
         ]
+        let model = PressureEngine.buildModel(from: snapshot)
         let descriptor = MenuDescriptorRenderer.render(
-            model: PressureEngine.buildModel(from: snapshot),
+            model: model,
             settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
         )
-        let leaked = try leakedAmounts(in: renderedText(in: descriptor), snapshot: snapshot)
+        let leaked = try leakedAmounts(in: renderedText(in: descriptor), snapshot: snapshot, model: model)
 
         #expect(leaked.isEmpty, "Hidden GBp descriptor leaked: \(leaked)")
     }
@@ -149,12 +150,17 @@ struct PortfolioValueVisibilityTests {
         let cash = try #require(snapshot.openHoldings.lastIndex { $0.name == "Cash" })
         snapshot.openHoldings[cash].weight = 0.12
         snapshot.openHoldings[cash].worth = Money(value: "6144.00", currency: "EUR")
+        let model = PressureEngine.buildModel(from: snapshot)
         let hidden = MenuDescriptorRenderer.render(
-            model: PressureEngine.buildModel(from: snapshot),
+            model: model,
             settings: PortfolioValueDisplaySettings(showPortfolioValues: false)
         )
         let cashDrag = try #require(row(withID: "allocation.cashDrag.glance", in: hidden))
-        let leaked = try leakedAmounts(in: renderedText(in: hidden) + descriptorJSON(hidden), snapshot: snapshot)
+        let leaked = try leakedAmounts(
+            in: renderedText(in: hidden) + descriptorJSON(hidden),
+            snapshot: snapshot,
+            model: model
+        )
 
         #expect(cashDrag.detail == "12.0%; \(PortfolioValueDisplaySettings.hiddenPlaceholder)")
         #expect(leaked.isEmpty, "Hidden cash drag descriptor leaked: \(leaked)")
@@ -646,10 +652,26 @@ private func monetaryDisplays(in snapshot: PortfolioSnapshot) throws -> Set<Stri
     Set(try snapshotMoney(in: snapshot).map(formattedMoney))
 }
 
-/// Snapshot amounts that `text` shows as whole numbers. Each amount is searched in every form code
-/// could print it: PDT's raw `value` (`6144.00`), and two decimals with and without grouping
-/// (`6,144.00`, `6144.00`). A form inside a longer number does not count.
-private func leakedAmounts(in text: String, snapshot: PortfolioSnapshot) throws -> [String] {
+/// Snapshot amounts that `text` shows. Each amount is searched in every form code could print it:
+/// PDT's raw `value` (`6144.00`), and two decimals with and without grouping (`6,144.00`,
+/// `6144.00`). A form counts unless a digit touches it, so `EUR 6144.00,12%` counts.
+///
+/// The severity scores `model` renders (`high; score 1.00`) are left out, each as its exact text. A
+/// score is not a portfolio value but can equal a small amount (worst-case-height's Cash unit price
+/// is EUR 1.00), and any other text with a score's shape still counts.
+private func leakedAmounts(
+    in text: String,
+    snapshot: PortfolioSnapshot,
+    model: PortfolioPulseModel
+) throws -> [String] {
+    let items = model.rankedAttentionItems + model.attentionItems
+        + model.facetSnapshots.allocation.allocationPressureItems
+    let scanned = items.reduce(text) { text, item in
+        text.replacingOccurrences(
+            of: "\(item.severity); score \(decimalStringForTest(String(item.score), places: 2))",
+            with: "\(item.severity); score"
+        )
+    }
     var values = try snapshotMoney(in: snapshot).map(\.value)
     values.append(contentsOf: snapshot.priceSeries.map(\.closeAdjusted))
     let forms = Set(values.flatMap { value in
@@ -661,13 +683,13 @@ private func leakedAmounts(in text: String, snapshot: PortfolioSnapshot) throws 
     })
     return forms.filter { form in
         let number = NSRegularExpression.escapedPattern(for: form)
-        return text.range(of: #"(?<![\d.,])\#(number)(?!\d|[.,]\d)"#, options: .regularExpression) != nil
+        return scanned.range(of: #"(?<!\d)\#(number)(?!\d)"#, options: .regularExpression) != nil
     }.sorted()
 }
 
-/// Descriptor JSON as `pdtbar-dev descriptor` prints it, with severity scores left out as in `renderedText`.
+/// Descriptor JSON as `pdtbar-dev descriptor` prints it.
 private func descriptorJSON(_ descriptor: MenuDescriptor) throws -> String {
-    withoutSeverityScores(try #require(String(data: stableJSONData(descriptor), encoding: .utf8)))
+    try #require(String(data: stableJSONData(descriptor), encoding: .utf8))
 }
 
 private func snapshotMoney(in snapshot: PortfolioSnapshot) throws -> [Money] {
@@ -719,18 +741,7 @@ private func renderedText(in descriptor: MenuDescriptor) -> String {
     ]
     values.append(contentsOf: descriptor.sections.map(\.title))
     values.append(contentsOf: descriptor.sections.flatMap { $0.rows.flatMap(renderedTextValues) })
-    return withoutSeverityScores(values.compactMap { $0 }.joined(separator: "\n"))
-}
-
-// A severity score ("high; score 1.00") is model output, not a portfolio value, but it can equal a
-// small snapshot amount (worst-case-height's Cash unit price is EUR 1.00) and trip the digit scan.
-// Only a score after a severity word is left out, so "######; score 6144.00" still counts.
-private func withoutSeverityScores(_ text: String) -> String {
-    text.replacingOccurrences(
-        of: #"\b(low|medium|high); score \d+\.\d{2}"#,
-        with: "$1; score",
-        options: .regularExpression
-    )
+    return values.compactMap { $0 }.joined(separator: "\n")
 }
 
 private func row(withID id: String, in descriptor: MenuDescriptor) -> MenuRow? {
@@ -773,7 +784,7 @@ private func renderedText(in surface: MenuBarSurface) -> String {
     ]
     values.append(contentsOf: surface.sections.map(\.title))
     values.append(contentsOf: surface.sections.flatMap { $0.rows.flatMap(renderedTextValues) })
-    return withoutSeverityScores(values.compactMap { $0 }.joined(separator: "\n"))
+    return values.compactMap { $0 }.joined(separator: "\n")
 }
 
 private func renderedTextValues(in row: MenuBarRowSurface) -> [String] {
