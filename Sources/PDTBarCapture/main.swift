@@ -5,9 +5,6 @@ import CoreGraphics
 import ImageIO
 import PDTBarSmokeProof
 
-// Opt-in visual proof for the verify-pdtbar skill. Never requests TCC access:
-// it only preflights Screen Recording and only drives the menu when AX is already trusted.
-
 struct CheckResult {
     let name: String
     let ok: Bool
@@ -70,8 +67,6 @@ func requireCapture() {
     }
 }
 
-// MARK: Windows
-
 struct ScreenWindow {
     let id: CGWindowID
     let ownerPID: pid_t
@@ -126,7 +121,6 @@ func waitFor(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
 }
 
 func captureRect(status: CGRect, menus: [ScreenWindow]) -> CGRect {
-    // Small pad keeps the menu's rounded edge but leaves neighboring windows out of frame.
     let union = menus.reduce(status) { $0.union($1.frame) }.insetBy(dx: -4, dy: -4)
     var displayID = CGMainDisplayID()
     var count: UInt32 = 0
@@ -134,8 +128,6 @@ func captureRect(status: CGRect, menus: [ScreenWindow]) -> CGRect {
     _ = CGGetDisplaysWithPoint(center, 1, &displayID, &count)
     return union.intersection(CGDisplayBounds(displayID)).integral
 }
-
-// MARK: Accessibility
 
 func axChildren(_ element: AXUIElement) -> [AXUIElement] {
     var elements: [AXUIElement] = []
@@ -237,8 +229,6 @@ struct StatusMenu {
     }
 }
 
-// MARK: Capture
-
 func screencapture(_ arguments: [String]) -> Process {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
@@ -309,7 +299,6 @@ func writePNG(_ image: CGImage, to url: URL) {
     guard CGImageDestinationFinalize(destination) else { fail("cannot write \(url.path)") }
 }
 
-/// Opens the menu (when AX allows) long enough to measure the status item + menu rect.
 func measure(pid: pid_t, wantMenu: Bool) -> (rect: CGRect, menu: StatusMenu?, note: String) {
     let menu = StatusMenu(pid: pid)
     guard let status = statusItemFrame(pid: pid, menu: menu) else {
@@ -381,8 +370,6 @@ func writePoster(movie out: URL) async {
     reportImage(poster)
 }
 
-// MARK: Menu walk
-
 struct WalkStep: Encodable {
     let name: String
     let opened: Bool
@@ -416,7 +403,6 @@ func element(_ identifier: String, under root: AXUIElement) -> AXUIElement? {
     findElement(in: root, limit: 5000) { axString($0, "AXIdentifier") == identifier }
 }
 
-/// A submenu has opened once the app owns more menu-level windows than before.
 func openSubmenu(_ opener: AXUIElement, pid: pid_t) -> String? {
     let baseline = menuWindows(pid: pid).count
     for action in [kAXPressAction, kAXShowMenuAction] {
@@ -441,9 +427,6 @@ func loadImage(_ url: URL) -> CGImage? {
     CGImageSourceCreateWithURL(url as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
 }
 
-/// Proof image on a flat grey ground: the status item cropped from the screen, and each PDTBar menu
-/// captured by window id, so neither desktop content nor neighboring menu bar items reach the PNG.
-/// Raw captures stay in a private temp dir; only the composite is published to `out`.
 func shoot(
     pid: pid_t, status: CGRect, statusItem: CGRect, minMenus: Int, out: URL, beforeCapture: (() -> Void)? = nil
 ) -> String? {
@@ -599,10 +582,6 @@ func walk(pid: pid_t, planName: String, fixture: String, outDir: URL) {
     if !report.ok { exit(1) }
 }
 
-// MARK: Menu measure
-
-/// Visible text of a row: its own title plus the static text inside a custom row view, without
-/// descending into a submenu's rows.
 func rowText(_ element: AXUIElement) -> String {
     var parts: [String] = []
     var stack = [element]
@@ -694,10 +673,6 @@ func measure(pid: pid_t, fixture: String, outDir: URL, allowSensitiveText: Bool)
     }
 }
 
-// MARK: Press
-
-/// Opens the status menu and presses `pdtbar.row.<row>`, found by identifier only. Exits 2 when this
-/// build's menu has no such enabled row, so a caller can record that instead of failing.
 func press(pid: pid_t, row: String) {
     guard AXIsProcessTrusted() else {
         fail("press cannot open the menu: Accessibility is not granted to this host process", code: 3)
@@ -728,8 +703,6 @@ func press(pid: pid_t, row: String) {
     if !closed { closeMenu(menu) }
     print("pressed: true (\(identifier))")
 }
-
-// MARK: CLI
 
 let usage = """
 usage:

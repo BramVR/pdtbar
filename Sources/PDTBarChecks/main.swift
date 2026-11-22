@@ -211,8 +211,6 @@ private func checkAPIClient(_ transport: ScriptedPDTHTTPTransport) -> PDTAPIClie
     )
 }
 
-/// Data Health over the PDT REST API: a saved copy, then a refresh PDT rate
-/// limits with a token, an account id, and a URL planted in its answer.
 private func checkPDTAPIDataHealth() throws {
     let token = "pdt_SENTINEL_TOKEN_0123456789abcdef0123456789abcdef"
     let planted = [token, "acct-SENTINEL-4242", "https://api.portfoliodividendtracker.com/v1/accounts/acct-SENTINEL-4242", "RAW_BODY_SENTINEL"]

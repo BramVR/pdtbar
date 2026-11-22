@@ -301,7 +301,6 @@ public struct AuthMeasureKeychain: Equatable, Sendable {
         domain == .login || build == .entitled
     }
 
-    /// True when the item exists. A login item this build did not write prompts once.
     private mutating func touch(_ domain: Domain) -> Bool {
         guard let item = items[domain] else {
             return false
