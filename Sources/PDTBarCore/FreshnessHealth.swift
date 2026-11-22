@@ -184,9 +184,6 @@ public enum FreshnessLedger {
         return caveats
     }
 
-    /// Staleness is judged against the later of the snapshot's own `asOf` and the
-    /// caller-supplied current day, so a cached snapshot from a prior day cannot
-    /// keep reporting day-one prices as fresh.
     static func staleReferenceDay(asOf: String, today: String?) -> String {
         guard let today, let todayDate = freshnessDate(from: today) else {
             return asOf
@@ -245,13 +242,10 @@ public enum FreshnessLedger {
 public enum DataHealthStatus: String, Codable, Equatable {
     case healthy
     case degraded
-    /// The connection is being checked. Set only by `DataHealth.snapshot(_:in:)`.
     case checking
-    /// A sync is running. Set only by `DataHealth.snapshot(_:in:)`.
     case refreshing
 }
 
-/// Why Data health needs attention, in the order `DataHealth.verdict(of:)` checks.
 enum DataHealthAttentionCause: CaseIterable, Equatable, Sendable {
     case notConnected
     case reconnectNeeded
@@ -266,7 +260,6 @@ enum DataHealthAttentionCause: CaseIterable, Equatable, Sendable {
     case detailFillIncomplete
     case failureRecorded
 
-    /// The Data health child row that names this cause.
     var rowID: String {
         switch self {
         case .notConnected, .reconnectNeeded, .subscriptionPaused, .keychainUnavailable, .accessNotChecked:
@@ -305,7 +298,6 @@ enum DataHealthAttentionCause: CaseIterable, Equatable, Sendable {
     }
 }
 
-/// `DataHealthStatus` with the cause kept, so attention cannot be shown without one.
 enum DataHealthVerdict: Equatable {
     case healthy
     case checking
@@ -379,8 +371,6 @@ public enum DataHealthAccess: Codable, Equatable, Sendable {
     case subscriptionPaused
     case keychainUnavailable
 
-    /// A pulse fetched in this run just read PDT with the credential; a saved
-    /// copy proves nothing about the connection.
     static func assumed(for pulseSource: PulseLifecycleSource?) -> DataHealthAccess {
         switch pulseSource {
         case .fetchedSnapshot, .refreshedSnapshot:
@@ -588,9 +578,6 @@ public enum DataHealth {
         return health
     }
 
-    /// "Copy diagnostics" text, or nil when no failure is recorded. Built only
-    /// from closed enums, Ints and a validated trace id: it has no dates and
-    /// reads none of the snapshot's `detail` strings, which can carry PDT text.
     static func diagnosticsText(for health: DataHealthSnapshot) -> String? {
         guard let failure = health.lastFailure else {
             return nil
@@ -604,16 +591,10 @@ public enum DataHealth {
         ] + failure.reportLines).joined(separator: "\n")
     }
 
-    /// The first failing check wins; every switch is exhaustive so a new access,
-    /// source, outcome or freshness case must name a cause before it compiles.
-    /// A saved copy is never healthy, whatever its prices say: nothing in this
-    /// run has read PDT yet.
     static func verdict(of health: DataHealthSnapshot) -> DataHealthVerdict {
         verdict(of: health, countingPriceFreshness: true)
     }
 
-    /// `verdict(of:)` with stale and unknown price dates set aside: what Data
-    /// health knows beyond what the Prices row already shows.
     static func verdictBeyondPriceFreshness(of health: DataHealthSnapshot) -> DataHealthVerdict {
         verdict(of: health, countingPriceFreshness: false)
     }
@@ -716,7 +697,6 @@ public enum DataHealth {
         case let .completed(asOf):
             snapshot.outcome = .completed
             snapshot.asOf = asOf
-            // `partial` here means the last complete fill predates this sync.
             snapshot.detail = freshness == .partial
                 ? asOf.map { "Incomplete; last complete \($0)" } ?? "Incomplete"
                 : asOf.map { "Completed \($0)" } ?? "Completed"
@@ -740,8 +720,6 @@ public enum DataHealth {
         return snapshot
     }
 
-    /// `partial` means the detail fill is incomplete, which is the Detail fill
-    /// row's fact; the prices themselves are current.
     private static func freshnessDetail(_ freshness: FreshnessSnapshot) -> String {
         let oldest = freshness.oldestPriceAsOf.map { "; oldest \($0)" } ?? ""
         switch freshness.status {

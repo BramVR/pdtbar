@@ -30,7 +30,7 @@ Sync commit: `cd4d474` (#307). Confirmed by the 2026-11-16 upkeep, which read ev
 
 ```bash
 formal/launch-runtime/check.sh        # model vs baseline, ~2 s
-formal/launch-runtime/mutations.sh    # proves each passing invariant can still fail, ~15 s
+formal/launch-runtime/mutations.sh    # proves each passing invariant can still fail, ~15 s; nonzero on a miss
 ```
 
 `check.sh` exits 0 when every invariant passes except the open findings it lists, and 1 otherwise. For the full trace, run `Scripts/formal/tlc.sh formal/launch-runtime/LaunchRuntime.tla`. Read every result with the `/statechart` skill. Requires a JDK 11+ on PATH; the runner downloads the pinned `tla2tools.jar` 1.7.4 once and checks its SHA-256.

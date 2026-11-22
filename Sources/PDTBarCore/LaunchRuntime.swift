@@ -96,7 +96,6 @@ public enum PDTBarLaunchOptionParser {
             )
         }
 
-        // A script or dev credential never runs against the user's real app state.
         let overridesStore = scriptedConnection != nil || credentialFile != nil
         guard snapshotDirectory == nil,
               scriptedConnection == nil || credentialFile == nil,
@@ -141,7 +140,6 @@ public enum PDTLaunchState: Equatable, Sendable {
         }
     }
 
-    /// States whose menu offers Sign in with PDT and the pasted-token fallback.
     var offersSignIn: Bool {
         switch self {
         case .notConnected, .needsReconnect, .subscriptionPaused: true
@@ -308,8 +306,6 @@ public enum PDTLaunchMenu {
         }
     }
 
-    /// Why PDT rejected the connection, worded to follow "Reconnect needed: "
-    /// in Data Health or, sentence-cased, to stand alone on the reconnect screen.
     static func reconnectReason(_ cause: PDTReconnectCause) -> String {
         switch cause {
         case .signInExpired: "your PDT sign-in has expired"
@@ -396,9 +392,6 @@ public enum PDTLaunchMenu {
         MenuRow(id: "pdtConnection.disconnect", role: .connectionDisconnect, title: "Disconnect from PDT")
     }
 
-    /// The one row that names a connection kept for this session only. Every
-    /// connected screen shows it beside how PDTBar is connected: the PDT
-    /// section without a pulse, the Data section after Data health with one.
     fileprivate static func notSavedRows(_ state: PDTLaunchState) -> [MenuRow] {
         guard case let .connected(_, .thisSessionOnly(problem)) = state else {
             return []
@@ -543,7 +536,6 @@ public enum PDTLaunchMenu {
         rowsFirst: Bool = false,
         rows: [MenuRow]
     ) -> MenuDescriptor {
-        // Above the pulse the notice rows name themselves; a heading is only needed below Actions.
         let fetchSection = MenuSection(
             id: "portfolioFetch",
             title: rowsFirst ? "" : "Portfolio",
@@ -630,9 +622,6 @@ private extension MenuDescriptor {
         MenuDescriptorRenderer.descriptorWithTopLevelActions(self, refreshState: state)
     }
 
-    /// What a connected pulse screen adds: the connection that is not saved
-    /// to Data, beside Data health, and Disconnect to Actions where the state
-    /// offers it.
     func withConnectionRows(for state: PDTLaunchState) -> MenuDescriptor {
         var descriptor = self
         let portfolioValueProtectionState = descriptor.portfolioValueProtectionState
@@ -706,8 +695,6 @@ public struct PDTConnectionAttempt: Equatable, Sendable {
     fileprivate let number: Int
 }
 
-/// The pulse the menu shows. `show` is the only way to set it, and it applies the
-/// read store's current state last, so no caller can display a worker's older copy.
 private struct DisplayedPulse {
     private let loadReadState: () -> PulseReadState?
     private(set) var pulse: PulseLifecycleResult?
@@ -716,7 +703,6 @@ private struct DisplayedPulse {
         self.loadReadState = loadReadState
     }
 
-    /// An unreadable store returns nil, and the pulse keeps the read state it was built with.
     mutating func show(_ pulse: PulseLifecycleResult?) {
         self.pulse = pulse.map { pulse in loadReadState().map(pulse.applyingReadState) ?? pulse }
     }
@@ -727,9 +713,6 @@ private struct DisplayedPulse {
 /// connection operation, a first fetch, and a background refresh each refuse to
 /// start while another runs, and the menu only offers actions that would start.
 public final class PDTLaunchRuntime {
-    /// What the menu shows around `currentPulse` once connected. The descriptor is
-    /// rendered from this on every update, so a pulse change such as a mark-read
-    /// keeps the surrounding rows.
     private enum Screen {
         case launchState(fetchingElapsedSeconds: Int?)
         case detailProgress(BackgroundDetailRefreshProgress)
@@ -737,9 +720,6 @@ public final class PDTLaunchRuntime {
         case refreshed
     }
 
-    /// A sync that ended without committing a snapshot, so no pulse carries its
-    /// record. It outlives connection screens and connection operations, so a
-    /// reconnect screen can still copy its trace id; the next sync replaces it.
     private struct UncommittedSync {
         var failure: PDTSyncFailure?
     }
@@ -905,8 +885,6 @@ public final class PDTLaunchRuntime {
         !cachedPulseLoading && !connectionOperationInFlight && !firstFetchInFlight && !backgroundDetailRefreshInFlight
     }
 
-    /// A connected result starts the one fetch that fits: a background refresh
-    /// over a pulse on screen, or a first fetch when there is none.
     private func apply(_ status: PDTConnectionStatus) -> PDTOnboardingUpdate {
         guard case let .connected(persistence) = status else {
             return update(state: PDTLaunchState(status))
@@ -918,10 +896,6 @@ public final class PDTLaunchRuntime {
         return startFirstFetch(persistence)
     }
 
-    /// A sync that committed a snapshot, with its pulse already shown: stay
-    /// connected the way the connection now says, or show the connection
-    /// screen that says why access is gone. The committed pulse carries the
-    /// failure that lost it.
     private func endCommitted(_ connection: PDTConnectionStatus, screen: Screen) -> PDTOnboardingUpdate {
         guard case let .connected(persistence) = connection else {
             return update(state: PDTLaunchState(connection))
@@ -931,8 +905,6 @@ public final class PDTLaunchRuntime {
         return currentUpdate()
     }
 
-    /// A sync that committed nothing: keep its record, then show the connection
-    /// state it found or the retryable failure.
     private func endUncommitted(_ fetchFailure: PDTFetchFailure, failure: PDTSyncFailure?) -> PDTOnboardingUpdate {
         uncommittedSync = UncommittedSync(failure: failure)
         switch fetchFailure {
@@ -988,8 +960,6 @@ public final class PDTLaunchRuntime {
     }
 
     private func descriptor() -> MenuDescriptor {
-        // The only pulse menu this function may use: every screen that keeps a
-        // pulse shows Data Health as this run knows it, never the pulse's own guess.
         guard let pulse = currentPulse else {
             return PDTLaunchMenu.descriptor(
                 for: state,

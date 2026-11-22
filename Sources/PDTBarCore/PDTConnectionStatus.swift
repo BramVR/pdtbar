@@ -79,7 +79,6 @@ public enum PDTFetchFailure: Equatable, Sendable {
 }
 
 extension PDTConnectionStatus {
-    /// `persistence` is the store's own answer, read only when nothing is stored.
     init(stored state: PDTConnectionState, signInWouldBe persistence: PDTCredentialPersistence) {
         switch state {
         case .disconnected:

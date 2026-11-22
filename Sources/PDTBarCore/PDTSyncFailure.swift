@@ -81,8 +81,6 @@ public struct PDTSyncFailure: Codable, Equatable, Sendable {
         case credentialStore
         case cancelled
 
-        /// Exhaustive over `PDTAPIError`, no `default`: a new API error does not
-        /// compile until someone decides what it means here.
         public init(_ error: any Error) {
             if error is PDTCredentialStoreError {
                 self = .credentialStore
@@ -184,7 +182,6 @@ public struct PDTSyncFailure: Codable, Equatable, Sendable {
         "\(phase.title): \(kind.menuDetail)"
     }
 
-    /// The failure's lines of the "Copy diagnostics" text.
     var reportLines: [String] {
         var lines = ["step: \(phase.title.lowercased())"]
         if let endpoint {
@@ -203,7 +200,6 @@ public struct PDTSyncFailure: Codable, Equatable, Sendable {
 }
 
 extension PDTSyncFailure.Kind {
-    /// What failed and the next action, lower-case to follow a step title.
     var menuDetail: String {
         switch self {
         case .reconnect:
@@ -260,7 +256,6 @@ extension PDTSyncFailure.Kind {
         }
     }
 
-    /// Fixed when the failure is recorded: the menu shows no live countdown.
     private static func waitCopy(_ retryAfterSeconds: Int?) -> String {
         guard let retryAfterSeconds, retryAfterSeconds > 0 else {
             return "later"

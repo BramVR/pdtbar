@@ -81,3 +81,25 @@ jobs:
 
       - name: Scripted API smoke matrix
         run: ./Scripts/api_smoke_matrix.sh
+
+  formal:
+    # TLA+ models replay past concurrency bugs (#269, #270, #275, #290, #301);
+    # each must pass and still catch every mutation. Linux: no Swift needed.
+    name: Formal models
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/tlaplus
+          key: tla2tools-1.7.4
+
+      - name: Models pass and catch every mutation
+        run: ./Scripts/check.sh formal

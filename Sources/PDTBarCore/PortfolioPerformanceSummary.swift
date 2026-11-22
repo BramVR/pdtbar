@@ -53,7 +53,6 @@ private func performanceFinite(_ value: Double?) -> Double? {
     return value
 }
 
-/// Annualizing less than roughly one quarter amplifies ordinary returns into misleading extremes.
 private let minimumCAGRElapsedDays = 90.0
 
 private func performanceCAGR(

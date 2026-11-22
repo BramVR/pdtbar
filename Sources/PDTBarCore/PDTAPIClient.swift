@@ -352,8 +352,6 @@ public struct ThreadPDTAPISleeper: PDTAPISleeper {
     }
 }
 
-/// Read-only PDT REST client: `GET` only, bearer token only to the PDT API
-/// origin, typed errors, bounded retries, pagination, and no response logging.
 /// A successful call and the HTTP requests it sent, retries and pages included.
 public struct PDTAPIResult<Value> {
     public let value: Value
@@ -373,6 +371,8 @@ public struct PDTAPIRequestFailure: Error, CustomStringConvertible {
     }
 }
 
+/// Read-only PDT REST client: `GET` only, bearer token only to the PDT API
+/// origin, typed errors, bounded retries, pagination, and no response logging.
 public struct PDTAPIClient: Sendable {
     public static let baseURL = URL(string: "https://api.portfoliodividendtracker.com/v1/")!
 
@@ -449,7 +449,6 @@ public struct PDTAPIClient: Sendable {
         }
     }
 
-    /// What one call has sent so far. `traceID` belongs to the latest request only.
     private struct RequestLog {
         var sent = 0
         var traceID: PDTTraceID?
