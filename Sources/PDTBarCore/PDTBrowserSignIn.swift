@@ -2,7 +2,6 @@ import Foundation
 import Network
 
 public enum PDTSignInError: Error, Equatable, Sendable {
-    /// Another process holds the registered loopback port.
     case portBusy(port: UInt16)
     case listenerFailed
     case browserUnavailable
@@ -15,10 +14,6 @@ public enum PDTSignInError: Error, Equatable, Sendable {
     case tokenExchange(PDTTokenEndpointError)
 }
 
-/// Browser sign-in: S256 PKCE, a random `state`, one callback on a loopback
-/// listener, then the code exchange. Opening the browser is injected. The
-/// listener answers requests that do not carry this sign-in's `state` with an
-/// error page and keeps waiting, so a stray or forged request cannot end it.
 public struct PDTBrowserSignIn {
     private let tokenEndpoint: PDTTokenEndpoint
     private let openBrowser: (URL) throws -> Void

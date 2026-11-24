@@ -1,12 +1,6 @@
 import Foundation
 
-/// What the menu may say about PDT access. A projection of the
-/// `PDTConnectionState` this process knows plus what PDT answered; it holds no
-/// secret.
 public enum PDTConnectionStatus: Equatable, Sendable {
-    /// Carries how the credential store says it would keep a sign-in made
-    /// now, so the menu can say before the sign-in that it will not outlive
-    /// PDTBar.
     case notConnected(signInWouldBe: PDTCredentialPersistence)
     case connected(PDTCredentialPersistence)
     case needsReconnect(PDTCredentialKind, PDTReconnectCause)
@@ -17,13 +11,8 @@ public enum PDTConnectionStatus: Equatable, Sendable {
     case keychainUnavailable(PDTKeychainProblem)
 }
 
-/// Whether a credential outlives the process: the one this process is
-/// connected with, or the one a sign-in now would give it.
 public enum PDTCredentialPersistence: Equatable, Sendable {
     case saved
-    /// The credential store refused it, or says beforehand that it will
-    /// (ADR-0003 decision 3). PDTBar uses it from memory until it quits and
-    /// tries the save again on every operation.
     case thisSessionOnly(PDTKeychainProblem)
 }
 
@@ -51,14 +40,12 @@ public enum PDTSignInFailure: Equatable, Sendable {
     case failed
 }
 
-/// A one-off message shown with the next connection screen.
 public enum PDTConnectionNotice: Equatable, Sendable {
     case signInFailed(PDTSignInFailure)
-    /// The credential was deleted. PDT has no revoke API for it, so the row opens this page.
+    /// PDT has no revoke API for the deleted credential, so the row opens this page.
     case disconnected(revokeAt: URL)
 }
 
-/// How every connection operation (check, sign-in, pasted token, disconnect) ends.
 public struct PDTConnectionOutcome: Equatable, Sendable {
     public var status: PDTConnectionStatus
     public var notice: PDTConnectionNotice?
@@ -69,10 +56,6 @@ public struct PDTConnectionOutcome: Equatable, Sendable {
     }
 }
 
-/// Why a fetch failed: a connection problem moves the menu to that connection
-/// state; anything else (network, 5xx, 429, decode) is retryable with the
-/// credential still connected, kept the way the connection says after the
-/// fetch.
 public enum PDTFetchFailure: Equatable, Sendable {
     case connection(PDTConnectionStatus)
     case unavailable(PDTCredentialPersistence)

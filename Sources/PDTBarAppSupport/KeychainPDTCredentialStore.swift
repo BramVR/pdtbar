@@ -2,15 +2,10 @@ import Foundation
 import PDTBarCore
 import Security
 
-/// The production PDT credential store (ADR-0002): one generic-password item
-/// scoped to PDTBar, readable after first unlock, never synced or migrated to
-/// another Mac. The Keychain has no cross-process mutex, so the store-wide
-/// lock is `pdt-connection.lock` in the given PDTBar-owned directory. Tests
-/// and smokes never construct it.
+/// The production PDT credential store (ADR-0002). The Keychain has no
+/// cross-process mutex, so the store-wide lock is `pdt-connection.lock` in
+/// `lockDirectory`.
 public struct KeychainPDTCredentialStore: PDTCredentialStore {
-    /// The Keychain as this build sees it: the `SecItem` calls the store
-    /// makes, and whether the build is signed to write there. Injectable so
-    /// tests check the queries without touching the real Keychain.
     public struct SecItemAPI: Sendable {
         public var copyMatching: @Sendable (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
         public var add: @Sendable (CFDictionary) -> OSStatus
@@ -43,11 +38,9 @@ public struct KeychainPDTCredentialStore: PDTCredentialStore {
             isEntitled: signatureHasKeychainAccessGroups()
         )
 
-        /// Reads this process's own code signature. It makes no Keychain call
-        /// and shows no prompt. An ad-hoc build cannot fake the entitlement:
-        /// macOS kills one that claims it without a provisioning profile. A
-        /// signature that cannot be read counts as entitled, so only a
-        /// measured gap is ever reported.
+        /// No Keychain call, no prompt. An ad-hoc build cannot fake the
+        /// entitlement: macOS kills one that claims it without a provisioning
+        /// profile.
         private static func signatureHasKeychainAccessGroups() -> Bool {
             guard let task = SecTaskCreateFromSelf(nil) else {
                 return true
@@ -66,7 +59,6 @@ public struct KeychainPDTCredentialStore: PDTCredentialStore {
         self.secItem = secItem
     }
 
-    /// Answered from the code signature alone, never by trying the Keychain.
     public var persistence: PDTCredentialPersistence {
         secItem.isEntitled ? .saved : .thisSessionOnly(.missingEntitlement)
     }

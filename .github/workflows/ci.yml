@@ -13,7 +13,6 @@ on:
       - "!**.md"
       # pdtbar-checks checks the code anchors in the formal-model skills.
       - ".claude/skills/verify-*/SKILL.md"
-      # pdtbar-checks checks that the feature guides quote the menu copy.
       - "docs/public/features.*.md"
       - "docs/features-menu-copy-allowlist.txt"
   pull_request:

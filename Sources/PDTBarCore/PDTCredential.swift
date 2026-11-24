@@ -1,7 +1,6 @@
 import CryptoKit
 import Foundation
 
-/// A refresh token from PDT's token endpoint. Redacted like `PDTAPIToken`.
 public struct PDTRefreshToken: Sendable, Equatable, Codable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     let secret: String
 
@@ -24,8 +23,7 @@ public struct PDTRefreshToken: Sendable, Equatable, Codable, CustomStringConvert
     public var customMirror: Mirror { Mirror(self, children: []) }
 }
 
-/// The only non-secret view of a secret: its SHA-256 and length. It names a
-/// token in stored state and diagnostics; `description` shows a prefix.
+/// The only non-secret view of a secret.
 public struct PDTSecretFingerprint: Sendable, Equatable, Codable, CustomStringConvertible {
     public let sha256: String
     public let length: Int
@@ -38,8 +36,8 @@ public struct PDTSecretFingerprint: Sendable, Equatable, Codable, CustomStringCo
     public var description: String { "sha256:\(sha256.prefix(8)) len=\(length)" }
 }
 
-/// What browser sign-in yields. PDT rotates both tokens on every refresh and
-/// revokes the previous access token at once.
+/// PDT rotates both tokens on every refresh and revokes the previous access
+/// token at once.
 public struct PDTBrowserSession: Sendable, Equatable, Codable {
     public let accessToken: PDTAPIToken
     public let refreshToken: PDTRefreshToken
@@ -86,26 +84,15 @@ public enum PDTReconnectReason: Sendable, Equatable, Codable {
     case tokenRejected(reason: String?)
 }
 
-/// The stored PDT connection. A credential store holds exactly one of these;
-/// `disconnected` is the absence of a stored item.
 public enum PDTConnectionState: Sendable, Equatable, Codable {
     case disconnected
     case connected(PDTCredential)
-    /// The stored credential no longer works. Its secrets are dropped; only
-    /// the kind remains so copy can offer the matching way back.
     case needsReconnect(PDTCredentialKind, PDTReconnectReason)
 }
 
-/// What a credential store holds: the connection, and how many sign-ins,
-/// pasted tokens, and disconnects have been stored over it. A token entered
-/// again counts although `state` stays the same. A disconnect that finds no
-/// connection stored writes nothing and does not count. A refresh or a
-/// rejection from PDT moves `state` inside one generation.
-///
-/// A `PDTConnection` holding a change the store refused reads the generation
-/// to see that another process has replaced the stored connection since, so
-/// the count has to outlive a disconnect: after one the store keeps a record
-/// with no credential in it. Only a store with no record reads as `empty`.
+/// `generation` counts the sign-ins, pasted tokens, and disconnects stored
+/// over the connection. A store must keep it across a disconnect: only a
+/// store with no record reads as `empty`.
 public struct PDTStoredConnection: Sendable, Equatable {
     public var state: PDTConnectionState
     public var generation: Int
@@ -167,8 +154,8 @@ public enum PDTPersonalTokenError: Error, Equatable, Sendable {
 }
 
 public extension PDTAPIToken {
-    /// Parses a pasted personal access token. Older tokens have no `pdt_`
-    /// prefix, so only blank or non-printable input is refused.
+    /// Older PDT tokens have no `pdt_` prefix, so only blank or non-printable
+    /// input is refused.
     static func personal(pasted: String) throws -> PDTAPIToken {
         let trimmed = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {

@@ -2,12 +2,8 @@ import Foundation
 import PDTBarCore
 import Security
 
-/// The app's one PDT connection: credential store, browser sign-in, pasted
-/// token, disconnect, and the API client over the same `PDTConnection`. Every
-/// method blocks (the store lock can wait on another process's refresh), so
-/// call them off the main queue. Every store and API error becomes a
-/// `PDTConnectionStatus` or `PDTFetchFailure` here; callers never see an
-/// `OSStatus`, `PDTCredentialStoreError`, or `PDTAPIError`.
+/// Every method blocks (the store lock can wait on another process's
+/// refresh), so call them off the main queue.
 public final class PDTAppConnection: @unchecked Sendable {
     public typealias SignIn = (PDTCancellation) throws -> PDTBrowserSession
 
@@ -33,8 +29,6 @@ public final class PDTAppConnection: @unchecked Sendable {
         self.log = log
     }
 
-    /// URLSession and browser sign-in over the Keychain store (lock in
-    /// `<appSupport>/pdtbar`), or over a dev file store when `credentialFile` is set.
     public static func production(
         appSupportDirectory: URL,
         credentialFile: URL? = nil,
@@ -114,8 +108,6 @@ public final class PDTAppConnection: @unchecked Sendable {
         PDTAPIClient(transport: apiTransport, tokenProvider: connection)
     }
 
-    /// Sorts a thrown fetch error. Only the fact a `PDTSyncFailure.Kind` drops
-    /// is read here: PDT's token-invalid reason.
     public func failure(for error: Error) -> PDTFetchFailure {
         let error = (error as? PDTAPIRequestFailure)?.underlyingError ?? error
         if case let .tokenInvalid(reason)? = error as? PDTAPIError {
@@ -124,11 +116,6 @@ public final class PDTAppConnection: @unchecked Sendable {
         return failure(for: PDTSyncFailure.Kind(error))
     }
 
-    /// What a failed request means for the connection, whichever phase it ran
-    /// in. `PDTConnection` has already stored or held `needsReconnect` for a
-    /// rejected refresh or token, so its status decides those. Every other
-    /// failure, a plain `403` included, is retryable while the connection
-    /// still says connected, and reports how the credential is kept.
     public func failure(for kind: PDTSyncFailure.Kind) -> PDTFetchFailure {
         switch kind {
         case .accessPaused:
@@ -154,11 +141,6 @@ public final class PDTAppConnection: @unchecked Sendable {
         return .connection(.needsReconnect(storedKind() ?? .personalToken, cause))
     }
 
-    /// What the connection is after a sync that committed a snapshot: the
-    /// state its ending failure names when an optional phase lost access,
-    /// else what `PDTConnection` says now. With `failure(for:)` this is where
-    /// every finished sync reports the connection, so a credential that is
-    /// not saved is never reported as saved.
     public func status(afterSyncEnding failure: PDTSyncFailure.Kind?) -> PDTConnectionStatus {
         if let failure, case let .connection(status) = self.failure(for: failure) {
             return status
@@ -175,11 +157,8 @@ public final class PDTAppConnection: @unchecked Sendable {
     }
 }
 
-/// `--scripted-pdt <file>`: an offline connection for smokes. It never builds
-/// the production store, URLSession, or browser: the credential lives in
-/// memory, or in the Keychain store over a fake SecItem API (`keychain`, or
-/// `keychainStatus` answered to every call), never the real Keychain. Sign-in
-/// is scripted, and each API reply in `api` answers the request it names.
+/// `--scripted-pdt <file>`: an offline connection for smokes. It never
+/// reaches PDT, a browser, or the real Keychain.
 public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
     public enum StoredConnection: String, Codable, Sendable {
         case notConnected, browserSession, personalToken, signInExpired, tokenRevoked
@@ -189,7 +168,6 @@ public struct ScriptedPDTConnection: Codable, Equatable, Sendable {
         case succeeds, denied, portBusy, timedOut, waitsForCancel
     }
 
-    /// The Keychain as a kind of build sees it. It starts empty, whatever `connection` says.
     public enum Keychain: String, Codable, Sendable {
         /// Measured on an ad-hoc signed build: a read finds nothing (-25300),
         /// every write is refused (-34018), and the signature has no

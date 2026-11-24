@@ -1,20 +1,12 @@
 import Foundation
 
-/// The PDT connection over one credential store, and the token provider the
-/// API client reads. Every operation holds the store's exclusive access from
-/// load through the token endpoint to save, so a refresh is single-flight
-/// across connections and processes: callers that arrive while it runs wait,
-/// then read the rotated pair from the store.
+/// Every operation holds the store's exclusive access from load through the
+/// token endpoint to save, so a refresh is single-flight across processes.
 ///
-/// A change the store refuses (a sign-in, a pasted token, a rotated pair, a
-/// rejection from PDT, a disconnect) stays in `refused`, and every later
-/// operation first tries to store it again. Until the store takes it, `status`,
-/// `state`, and every token hand-out answer from it, so a store that reads
-/// empty cannot sign the user out, and a credential the store refused works
-/// until this process ends (ADR-0003 decision 3). Once another process
-/// replaces what the store holds, the refused change is dropped and the store
-/// answers again. A refresh that got no answer sets `hold`, and callers inside
-/// it share that failure instead of each sending a refresh.
+/// A change the store refuses answers `status`, `state`, and every token
+/// hand-out, and every later operation tries to store it again, until the
+/// store takes it, another process replaces the stored connection, or this
+/// process ends (ADR-0003 decision 3).
 public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
     public static let refreshLeeway: TimeInterval = 300
     private static let refreshRetryBase: TimeInterval = 5
@@ -96,15 +88,10 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
         self.now = now
     }
 
-    /// The connection as this process knows it: the change the store refused,
-    /// else what the store holds.
     public func state() throws -> PDTConnectionState {
         try locked { try current() }
     }
 
-    /// What the menu may say. A change the store refused answers before the
-    /// store does, also when the store cannot be locked or read, so a
-    /// credential held here is never reported as not connected.
     public func status() -> PDTConnectionStatus {
         lock.lock()
         defer { lock.unlock() }
@@ -124,11 +111,8 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
         }
     }
 
-    /// Stores the session unless `cancellation` fired first. The check runs
-    /// inside the store lock, so a cancel that wins the race stores nothing.
-    /// Throws the store's error when it refused the session, which this
-    /// connection then holds and uses until the store takes it or the process
-    /// ends.
+    /// Stores nothing once `cancellation` has fired. Throws the store's error
+    /// when it refused the session.
     @discardableResult
     public func signedIn(_ session: PDTBrowserSession, unless cancellation: PDTCancellation? = nil) throws -> Bool {
         try replace(with: .signedIn(session), unless: cancellation)
@@ -138,17 +122,15 @@ public final class PDTConnection: PDTAPITokenProvider, @unchecked Sendable {
         _ = try replace(with: .personalTokenEntered(personalToken))
     }
 
-    /// Deletes the stored credential, and drops one this connection holds at
-    /// once. PDT has no API revoke for app tokens, so this returns the page
-    /// where the user revokes PDTBar's access. Throws while the credential is
-    /// still stored.
+    /// PDT has no API revoke for app tokens, so this returns the page where
+    /// the user revokes PDTBar's access. Throws while the credential is still
+    /// stored.
     @discardableResult
     public func disconnect() throws -> URL {
         _ = try replace(with: .disconnected)
         return PDTOAuthEndpoints.connectedApps
     }
 
-    /// Refreshes the browser session now, whatever its expiry.
     public func refresh() throws -> PDTBrowserSession {
         try locked {
             guard case let .browserSession(session) = try credential() else {

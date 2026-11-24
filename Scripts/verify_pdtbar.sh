@@ -93,8 +93,6 @@ launch() {
   exit 1
 }
 
-# The product path over a script. The copy's eventLog is <run>/events.log; ready means the
-# first connection check ran and its outcome had a moment to render.
 launch_scripted() {
   local script="${1:-}" seed="${2:-}"
   [[ -x "${APP}" ]] || fail "missing ${APP}; run: swift build --product pdtbar"
@@ -226,7 +224,6 @@ menu_walk() {
 menu_smoke() {
   local run
   (cd "${ROOT_DIR}" && swift build --product pdtbar && swift build --product pdtbar-capture) >&2 || fail "build failed"
-  # The walk proves the unfolded layout, so a small host display must not fold it (#296).
   run="$(PDTBAR_MENU_SCREEN_HEIGHT=100000 launch "${MENU_FIXTURE}" | sed -n 's/^ready: //p')"
   [[ -n "${run}" ]] || fail "launch did not report ready"
   # Expanded now: the EXIT trap runs after this function's locals are gone.
@@ -254,8 +251,6 @@ menu_measure() {
   printf 'evidence: %s/evidence/measure\n' "${run}"
 }
 
-# name connection keychain replies seeded-pulse presses. Presses run in order, comma-separated;
-# a|b presses the first row id this build's menu has.
 AUTH_STATES=(
   "fresh notConnected - none no -"
   "unentitled-signin notConnected unentitled ok no pdtConnection.signIn"
@@ -267,7 +262,6 @@ AUTH_STATES=(
   "fetch-failed browserSession - 503 no -"
 )
 
-# Settled once the event log and app log have not grown for 2s.
 settle() {
   local run="$1" last="" now quiet=0
   for _ in {1..100}; do
@@ -292,7 +286,6 @@ auth_states() {
   grep -q '^accessibility: granted' <<<"${line}" || fail "auth-states needs Accessibility already granted to press menu rows"
   mkdir -p "${out}/scripts" "${out}/seed"
   out="$(cd "${out}" && pwd -P)"
-  # The seed is the snapshot the fixture-mode pipeline writes, so the app loads it as a cached pulse.
   "${ROOT_DIR}/.build/debug/pdtbar-dev" run --fixture "${ROOT_DIR}/docs/pdt/fixtures/quiet-no-pressure.json" \
     --snapshot-dir "${out}/seed" > /dev/null || fail "could not build the seed snapshot"
   for spec in "${AUTH_STATES[@]}"; do
@@ -301,7 +294,6 @@ auth_states() {
 import json, sys
 root, path, connection, keychain, replies = sys.argv[1:]
 holdings = open(f"{root}/docs/pdt/fixtures/api/full/01-holdings.json").read()
-# Each reply names the request it answers; an unnamed request fails as unscripted.
 unavailable = {"request": "GET /v1/portfolio/holdings", "status": 503, "headers": {"Retry-After": "0"},
                "body": '{"error":{"code":"SERVICE_UNAVAILABLE","message":"m","details":{},"traceId":"t"}}'}
 responses = {"none": [], "ok": [{"request": "GET /v1/portfolio/holdings", "status": 200, "body": holdings}],
@@ -331,7 +323,6 @@ PY
         results+=("${step}=${line}")
       done
     fi
-    # The menu can close under the capture while the menu bar re-lays out after the previous state's app quit.
     for attempt in 1 2 3; do
       "${CAPTURE}" measure --pid "$(cat "${run}/pid")" --fixture "${state}" --out-dir "${run}/evidence/measure" \
         --allow-sensitive-text >&2 && break

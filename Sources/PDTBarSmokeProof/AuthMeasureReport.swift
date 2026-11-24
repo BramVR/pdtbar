@@ -1,13 +1,9 @@
 import Foundation
 
-/// One menu `pdtbar-smoke auth-measure` saw, reduced to its connection and fetch rows.
 public struct AuthMeasureScreen: Codable, Equatable, Sendable {
     public enum Kind: String, Codable, Sendable {
-        /// Checking, signing in, disconnecting, or fetching: the menu will change by itself.
         case transient
-        /// Connected with a current pulse: the goal of every scenario.
         case connectedCurrent
-        /// Any state that waits for the user.
         case waiting
     }
 
@@ -16,7 +12,6 @@ public struct AuthMeasureScreen: Codable, Equatable, Sendable {
         public var role: String
         public var title: String
         public var detail: String?
-        /// The app wires a click action to this row's role.
         public var enabled: Bool
 
         public init(id: String, role: String, title: String, detail: String? = nil, enabled: Bool) {
@@ -31,7 +26,6 @@ public struct AuthMeasureScreen: Codable, Equatable, Sendable {
     public var state: String
     public var kind: Kind
     public var statusTitle: String
-    /// Nothing was running when this menu was shown.
     public var idle: Bool
     public var rows: [Row]
 
@@ -43,35 +37,26 @@ public struct AuthMeasureScreen: Codable, Equatable, Sendable {
         self.rows = rows
     }
 
-    /// Row roles that move the user toward a connection.
     public static let nextActionRoles: Set<String> = [
         "connectionSignIn", "connectionToken", "connectionCheck", "connectionDisconnect", "fetchRetry",
     ]
 
     public var offersSignIn: Bool { rows.contains { $0.role == "connectionSignIn" } }
     public var offersNextAction: Bool { rows.contains { $0.enabled && Self.nextActionRoles.contains($0.role) } }
-    /// The first connection or fetch status row: what the menu says is going on.
     public var statusRow: Row? { rows.first { $0.role == "setupStatus" || $0.role == "fetchStatus" } }
     var namesAFailure: Bool { rows.contains { $0.role == "setupFailure" } }
 }
 
-/// One launch, relaunch, or click, with every menu it produced.
 public struct AuthMeasureStep: Codable, Equatable, Sendable {
     public enum Action: String, Codable, Sendable {
         case launch, relaunch, signIn, checkAgain, fetchRetry, disconnect
     }
 
     public var action: Action
-    /// A setup step puts the scenario in its starting state. It is shown, not scored.
     public var setup: Bool
-    /// Clicks this step cost the simulated user. Scripted clicks and launches cost 0.
     public var clicks: Int
-    /// After this step the user still expects to be connected: a credential was
-    /// stored or a sign-in was approved, and they have not clicked Disconnect since.
     public var causeOwed: Bool
-    /// The user approved a PDT sign-in in the browser during this step.
     public var approvedSignIn: Bool
-    /// `401`, `invalid_grant`, and `INSUFFICIENT_SCOPE` replies PDT gave during this step.
     public var pdtRejections: Int
     public var screens: [AuthMeasureScreen]
 
@@ -123,13 +108,10 @@ public struct AuthMeasureScenario: Codable, Equatable, Sendable {
     public var id: String
     public var goalReached: Bool
     public var measures: AuthMeasures
-    /// One line per counted silent sign-out, dead end, OS prompt, and unnamed state.
     public var findings: [String]
-    /// Set when the driver threw. The scenario is then scored as unreached.
     public var error: String?
     public var steps: [AuthMeasureStep]
 
-    /// `silentDetail` is the status detail of a fresh, never connected menu: copy that names no reason.
     public init(
         id: String, steps: [AuthMeasureStep], goalReached: Bool, osPrompts: Int, silentDetail: String, error: String? = nil
     ) {
@@ -197,7 +179,6 @@ public struct AuthMeasureScenario: Codable, Equatable, Sendable {
 
 public struct AuthMeasureReport: Codable, Equatable, Sendable {
     public var name = "auth-measure"
-    /// `passed` when no scenario's driver threw, else `errors`. The score is in `totals`.
     public var status: String
     public var scenarioCount: Int
     public var errorCount: Int
@@ -213,8 +194,6 @@ public struct AuthMeasureReport: Codable, Equatable, Sendable {
     }
 }
 
-/// The one PDT keychain item as two kinds of build see it, with no call to the real Keychain.
-///
 /// The data protection keychain answers are measured on an ad-hoc signed binary:
 /// a read finds nothing and every write is `errSecMissingEntitlement`. The login
 /// keychain answers are inferred from its ACL rules and were not probed: an item
@@ -222,9 +201,7 @@ public struct AuthMeasureReport: Codable, Equatable, Sendable {
 /// rebuild, and each rebuild's first use of an existing item shows one OS prompt.
 public struct AuthMeasureKeychain: Equatable, Sendable {
     public enum Build: Sendable {
-        /// Signed with the keychain access group entitlement and a stable identity.
         case entitled
-        /// `make start`: ad-hoc signed, no entitlement, rebuilt before every launch.
         case adHoc
     }
 
