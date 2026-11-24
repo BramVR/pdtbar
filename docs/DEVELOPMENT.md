@@ -63,6 +63,7 @@ maintainer explicitly allowlists them. The Pages workflow builds and
 smoke-tests the site on PRs and `main`, then deploys only from `main` when
 GitHub Pages is enabled for the repository. Each run attempt uploads its own
 `github-pages-<attempt>` artifact, so re-running a failed deploy is safe.
+A failed deploy step is retried once after 30 seconds inside the same job.
 
 The generator is `Scripts/build-docs-site.mjs`. It renders each language's home
 page with the hero, and every other page as a doc page with a contents list.
