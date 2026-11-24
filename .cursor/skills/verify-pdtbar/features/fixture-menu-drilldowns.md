@@ -2,16 +2,16 @@
 
 The status icon is the Concentration Stack. The center bar is always full height. The number of filled bars is the attention count, capped at 3. The menu shows, top to bottom: the summary figure (one row, no header), Pulse, Allocation (the chart row and its `Full allocation list` submenu of holdings, sectors, and asset types), Income, Big movers, Data (the `Prices` submenu, then a `Data health` row when it has something to report), and Actions. On a screen too short for the menu, rows fold into submenus step by step (#304).
 
-Proof that it works: in fixture mode the app stays running and writes `latest-portfolio-snapshot.json` to the run's snapshot dir. With AX, the open menu contains the fixture's identifiers, such as `pdtbar.section.allocation`, `pdtbar.section.bigMovers`, `pdtbar.row.freshness.summary`, and `pdtbar.row.actions.settings`. `pdtbar.row.income.next` needs a fixture with an upcoming payment (`income-event.json`, `worst-case-height.json`).
+Proof that it works: in fixture mode the app stays running and writes `latest-portfolio-snapshot.json` to the run's snapshot dir. The fixture's descriptor, and with AX the open menu, contains its identifiers, such as `pdtbar.section.allocation`, `pdtbar.section.bigMovers`, `pdtbar.row.freshness.summary`, and `pdtbar.row.actions.settings`. `pdtbar.row.income.next` needs a fixture with an upcoming payment (`income-event.json`, `worst-case-height.json`).
 
 ## Sub-features
 
-- Status icon fill and tooltip.
+- Status icon fill, dimming while prices are not fresh (`statusVisual.isDimmed`), and tooltip `PDTBar <statusCopy>`.
 - Pulse (quiet or pressure).
 - Summary figure, allocation, and income sections.
 - Big movers, including the sign of each move (#302).
 - Data: `Prices` lists each holding's last price with its own date (#307); `Data health` names why it needs attention (#298).
-- Small-screen fit (#304): Big movers into a submenu, the income list folded, the chart into `Full allocation list`, then whole sections collapsed to one row. Actions never folds.
+- Small-screen fit (#304), in order: Big movers into a submenu, the income list folded, the chart into `Full allocation list`, spilled attention items into `N more attention items`, each section's tail into `N more`, then whole sections collapsed to one row. Actions never folds.
 - Copy holding identifier (`copy-holding-identifier-action`, isolated pasteboard).
 
 ## How to get to it (user POV)
@@ -29,7 +29,7 @@ swift run pdtbar-smoke fixture-proof --fixture docs/pdt/fixtures/big-mover.json 
 Scripts/verify_pdtbar.sh stop "$RUN"
 ```
 
-`ready-launch` opens the real pulse menu through AX after a scripted PDT first fetch. Setup and retryable-error menus are covered by `logged-out-launch`, `scripted-setup-retry`, and `scripted-first-fetch`. No prompt-free smoke opens the Data/Prices or Data health submenus through AX; read their rows from the descriptor above, minus Data health (see Gotchas). None of these captures the screen. The opt-in `Scripts/verify_pdtbar.sh menu-smoke` opens the allocation overview submenu and captures it (see Visual proof).
+`ready-launch` opens the real pulse menu through AX after a scripted PDT first fetch. Setup and retryable-error menus are covered by `logged-out-launch`, `scripted-setup-retry`, and `scripted-first-fetch`. No prompt-free smoke opens the Data/Prices or Data health submenus through AX; read their rows from the descriptor above, minus Data health (see Gotchas). None of these captures the screen. Only the opt-in `capture` and `menu-walk` look at the `verify_pdtbar.sh launch` instance itself. The opt-in `Scripts/verify_pdtbar.sh menu-smoke` opens the `Full allocation list` and `Prices` submenus and captures them (see Visual proof).
 
 Opt-in pixel proof captures the screen, so ask the user first: `swift run pdtbar-smoke real-user-pulse --fixture <f> --snapshot-dir "$RUN/real-user-pulse" --artifacts "$RUN/evidence" --peekaboo /opt/homebrew/bin/peekaboo`.
 
