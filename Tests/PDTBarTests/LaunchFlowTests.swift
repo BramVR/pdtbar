@@ -899,7 +899,6 @@ struct PDTLaunchRuntimeTests {
     }
 }
 
-/// Runs launch through the cached pulse load and the connection check.
 @discardableResult
 private func launched(
     _ runtime: PDTLaunchRuntime,

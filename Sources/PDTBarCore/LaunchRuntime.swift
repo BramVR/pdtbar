@@ -125,9 +125,8 @@ public enum PDTLaunchState: Equatable, Sendable {
     case needsReconnect(PDTCredentialKind, PDTReconnectCause)
     case subscriptionPaused
     case keychainUnavailable(PDTKeychainProblem)
-    /// How the credential is kept is what the connection said when the last
-    /// connection operation or sync ended, so a connection that is not saved
-    /// says so on every connected screen.
+    /// The persistence the connection reported when the last connection
+    /// operation or sync ended.
     case connected(PDTPortfolioSync, PDTCredentialPersistence)
 
     init(_ status: PDTConnectionStatus) {
@@ -230,8 +229,8 @@ public struct BackgroundDetailRefreshProgress: Codable, Equatable, Sendable {
     }
 }
 
-/// Menus for every launch state. Connection screens put their rows above a
-/// visible pulse; `notConnected` shows setup only.
+/// Connection screens put their rows above a visible pulse; `notConnected`
+/// shows setup only.
 public enum PDTLaunchMenu {
     public static func descriptor(
         for state: PDTLaunchState,
@@ -675,10 +674,8 @@ public enum PDTLaunchFetchResult: Equatable {
 
 public enum PDTLaunchBackgroundDetailRefreshResult: Equatable {
     /// The snapshot was committed. `connection` is what the connection says
-    /// after the sync (`PDTAppConnection.status(afterSyncEnding:)`), and it has
-    /// no default: an optional phase that lost access after the base holdings
-    /// succeeded leaves a committed pulse and a connection that is gone, and a
-    /// connection that is not saved must not read as saved.
+    /// after the sync (`PDTAppConnection.status(afterSyncEnding:)`); it may be
+    /// gone or not saved.
     case succeeded(
         PulseLifecycleResult,
         outcome: PDTBackgroundDetailRefreshOutcome,
@@ -687,9 +684,8 @@ public enum PDTLaunchBackgroundDetailRefreshResult: Equatable {
     case failed(PDTFetchFailure, failure: PDTSyncFailure? = nil)
 }
 
-/// One connection operation (check, sign-in, pasted token, disconnect). Only
-/// `PDTLaunchRuntime` makes these, and every outcome must name the attempt it
-/// answers. An attempt from another runtime never matches.
+/// One connection operation (check, sign-in, pasted token, disconnect). Every
+/// outcome must name the attempt it answers.
 public struct PDTConnectionAttempt: Equatable, Sendable {
     fileprivate let runtime: UUID
     fileprivate let number: Int
@@ -708,10 +704,8 @@ private struct DisplayedPulse {
     }
 }
 
-/// The launch state machine. Every call runs on the main queue and returns the
-/// menu plus at most one effect for the app to run. Work never overlaps: a
-/// connection operation, a first fetch, and a background refresh each refuse to
-/// start while another runs, and the menu only offers actions that would start.
+/// The launch state machine. Call it on the main queue; every call returns the
+/// menu plus at most one effect for the app to run.
 public final class PDTLaunchRuntime {
     private enum Screen {
         case launchState(fetchingElapsedSeconds: Int?)
@@ -741,8 +735,6 @@ public final class PDTLaunchRuntime {
         displayed = DisplayedPulse(loadReadState: loadReadState)
     }
 
-    /// The cached pulse loads first, then the connection check starts, so a
-    /// connected result always knows whether a pulse is on screen.
     public func launch() -> PDTOnboardingUpdate {
         cachedPulseLoading = true
         return update(state: .checkingConnection, effect: .loadCachedPulse)
@@ -804,7 +796,6 @@ public final class PDTLaunchRuntime {
         return beginConnectionOperation(.disconnecting, effect: .disconnect)
     }
 
-    /// Accepted only while connected, so no fetch runs behind a connection screen.
     public func retryFirstFetch() -> PDTOnboardingUpdate? {
         guard case let .connected(_, persistence) = state, isIdle else {
             return nil

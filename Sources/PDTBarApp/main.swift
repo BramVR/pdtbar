@@ -22,7 +22,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     private lazy var launchRuntime = PDTLaunchRuntime { [unowned self] in
         try? PulseReadStore(directory: self.currentSnapshotDirectory()).load()
     }
-    /// One connection per store for the whole process (ADR-0002 "one connection per store").
     private var pdtConnection: PDTAppConnection?
     private var statusItem: NSStatusItem?
     private var activeRefreshCancellation: PDTCancellation?
@@ -412,7 +411,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         }
     }
 
-    /// Height the root menu may use before macOS clamps it and scrolls Actions off screen (#296).
     private func menuHeightBudget(for item: NSStatusItem) -> Double {
         // macOS stops a status menu about 7 pt short of the visible frame's height (measured:
         // 1130 pt visible, menu clamped at 1123 pt), so leave 8 pt.

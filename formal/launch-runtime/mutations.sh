@@ -18,10 +18,6 @@ while read -r name expect drop; do
   [[ "$got" == "Invariant $expect is violated" ]] || failures=$((failures + 1))
 done <<'LIST'
 # Mutations set                                  invariant expected to catch it  dropped for this row
-# The menu never offers an action while work runs, so the retry guard is only reachable
-# through a menu that does; that row pairs the guard break with a menu break. Sign-in,
-# Check again, and Disconnect also check the state, and no state that offers them has
-# work behind it, so their idle guard is pinned by LaunchFlowTests, not here.
 "fetchingOffersSignIn"                           OfferedActionsAreLive
 "fetchingOffersDisconnect"                       OfferedActionsAreLive
 "fetchingOffersRefresh"                          OfferedActionsAreLive

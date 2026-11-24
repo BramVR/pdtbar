@@ -26,26 +26,22 @@ CONSTANTS
     Mutations     \* {} for the real code; names replay one-line code breaks (see mutations.sh)
 
 \* The connected states are flattened: fetching, fetchFailed, current = .connected(.fetching/.failed/.current, kept).
-\* notConnected drops its signInWouldBe payload: a fact about the build that only changes the status row's detail.
 ConnectionStates == {"notConnected", "needsReconnect", "subscriptionPaused", "keychainUnavailable"}
 States == {"checkingConnection", "connecting", "disconnecting", "fetching", "fetchFailed", "current"} \cup ConnectionStates
-\* How a connected credential is kept (PDTCredentialPersistence .saved / .thisSessionOnly).
+\* PDTCredentialPersistence .saved / .thisSessionOnly
 Persistences == {"saved", "session"}
-\* What a connection operation or a finished sync can report (PDTConnectionStatus).
+\* PDTConnectionStatus
 ConnectedStatuses == {"connected:saved", "connected:session"}
 Statuses == ConnectedStatuses \cup ConnectionStates
 Persistence(s) == IF s = "connected:session" THEN "session" ELSE "saved"
 OpKinds == {"check", "signIn", "token", "disconnect"}
-\* What PDTConnection knows (#301, ADR-0003 decision 3). "none": nothing stored and nothing
-\* held. "saved": the store holds a credential or a reconnect state. "session": PDT gave a
-\* credential (a sign-in, a pasted token, a rotated pair) and the store refused it, so it
-\* lives in PDTConnection.refused and is used from there until the process ends.
+\* What PDTConnection knows. "session": the credential in PDTConnection.refused.
 Creds == {"none", "saved", "session"}
 
 VARIABLES
     \* PDTLaunchRuntime
     state, pulse, opInFlight, attemptID, cacheLoading, ffInFlight, bgInFlight,
-    \* the PDTCredentialPersistence payload of .connected; "saved" while not connected
+    \* the PDTCredentialPersistence payload of .connected
     kept,
     \* last menu installed by installMenuBarItem (what the user sees and can click)
     menu,
@@ -55,14 +51,11 @@ VARIABLES
     ffWorkers,    \* running first fetches (App startFirstPortfolioFetch)
     bgWorkers,    \* running background detail refreshes (App startBackgroundPortfolioRefresh)
     opsStarted, retries,
-    \* PDTLaunchRuntime.uncommittedSync: "kept" while the record of a sync that committed
-    \* nothing is shown in Data Health (Copy diagnostics), "none" otherwise.
+    \* PDTLaunchRuntime.uncommittedSync
     record,
-    \* ghosts (#191): the last finished sync committed nothing, and no sync started since
+    \* ghosts
     uncommitted,
-    \* ghost (#191): a committed refresh reported lost access, and no connection result since
     lostAccess,
-    \* ghost (#301): what PDTConnection knows, one of Creds
     cred
 
 vars == <<state, pulse, opInFlight, attemptID, cacheLoading, ffInFlight, bgInFlight, kept,
@@ -79,8 +72,7 @@ Idle(cl, op, ff, bg) == ~cl /\ ~op /\ ~ff /\ ~bg
 Connected(st) == st \in {"fetching", "fetchFailed", "current"}
 
 ---------------------------------------------------------------------------------
-(* Menu descriptors (PDTLaunchMenu.descriptor + PDTLaunchRuntime.descriptor), abstracted
-   to what the user can see and click. Every runtime update re-renders the menu. *)
+(* PDTLaunchMenu.descriptor + PDTLaunchRuntime.descriptor *)
 Desc(st, p, k) ==
     [ kind       |-> IF p = "none" \/ (st = "notConnected" /\ "notConnectedShowsPulse" \notin Mutations)
                         \/ (st = "needsReconnect" /\ "reconnectHidesPulse" \in Mutations)
@@ -88,22 +80,17 @@ Desc(st, p, k) ==
       st         |-> st,
       signIn     |-> OffersSignIn(st) \/ ("fetchingOffersSignIn" \in Mutations /\ st = "fetching"),
       checkAgain |-> OffersCheckAgain(st),
-      \* No state that offers Disconnect has work running behind it (a fetch is "fetching").
       disconnect |-> OffersDisconnect(st) \/ ("fetchingOffersDisconnect" \in Mutations /\ st = "fetching"),
-      \* fetchFailed: "Try again" / "Fill details again"; current with a pulse: "Refresh now".
-      \* Connection screens over a pulse render "Refresh now" as waitingForSetup (not clickable).
+      \* "Try again" / "Fill details again" / "Refresh now"; waitingForSetup is not clickable.
       refresh    |-> IF st = "fetchFailed" \/ (st = "current" /\ p # "none") THEN "available"
                      ELSE IF st = "fetching" THEN IF "fetchingOffersRefresh" \in Mutations THEN "available" ELSE "inProgress"
                      ELSE IF ("connectionScreenOffersRefresh" \in Mutations /\ p # "none") THEN "available"
                      ELSE "none",
-      \* The "Connection not saved" row (pdtConnection.notSaved): on every connected screen,
-      \* also the ones that do not offer Disconnect. With a pulse it sits in Data after Data
-      \* health (withConnectionRows, #306); without one, in the PDT section (notSavedRows).
-      \* The model tracks only whether the row is present, not where.
+      \* The "Connection not saved" row (pdtConnection.notSaved), wherever it sits.
       notSaved   |-> Connected(st) /\ k = "session"
                      /\ ~("fetchingHidesNotSaved" \in Mutations /\ st = "fetching") ]
 
-\* Re-render from the next state. Use inside an action after every runtime variable is primed.
+\* Put after every runtime variable is primed: TLC must know each value Desc reads.
 Render == menu' = Desc(state', pulse', kept')
 
 CanSignIn == menu.signIn
@@ -113,7 +100,7 @@ CanRetry == menu.refresh = "available"
 
 ---------------------------------------------------------------------------------
 Init ==
-    \* launch(): .checkingConnection, effect .loadCachedPulse (Core launch, App launch)
+    \* PDTLaunchRuntime.launch + AppDelegate.launch
     /\ state = "checkingConnection"
     /\ pulse = "none"
     /\ opInFlight = FALSE
@@ -132,10 +119,9 @@ Init ==
     /\ record = "none"
     /\ uncommitted = FALSE
     /\ lostAccess = FALSE
-    \* A new process holds nothing: a credential the store refused died with the last one.
     /\ cred \in {"none", "saved"}
 
-\* beginConnectionOperation: new attempt, operation slot taken, effect runs it.
+\* beginConnectionOperation
 BeginOp(st, kind) ==
     /\ record' = IF "connectionOpDropsRecord" \in Mutations THEN "none" ELSE record
     /\ attemptID' = attemptID + 1
@@ -145,10 +131,10 @@ BeginOp(st, kind) ==
     /\ ops' = ops \cup {[id |-> attemptID + 1, kind |-> kind]}
     /\ opsStarted' = opsStarted + 1
 
-\* startBackgroundDetailRefresh (Core) + startBackgroundPortfolioRefresh (App)
-\* Every sync start clears the uncommitted record (startFirstFetch / startBackgroundDetailRefresh).
+\* startFirstFetch / startBackgroundDetailRefresh
 SyncStarts == record' = "none" /\ uncommitted' = FALSE
 
+\* startBackgroundDetailRefresh (Core) + startBackgroundPortfolioRefresh (App)
 StartBg ==
     /\ SyncStarts
     /\ bgInFlight' = TRUE
@@ -161,9 +147,7 @@ StartFirstFetch ==
     /\ ffWorkers' = ffWorkers + 1
     /\ state' = "fetching"
 
-\* apply(status): connected starts the one fetch that fits, kept the way the status says;
-\* anything else is shown.
-\* The guards in apply were removed with the parked readiness slot: nothing else runs here.
+\* apply(status)
 Apply(s, p) ==
     IF s \in ConnectedStatuses
     THEN /\ kept' = Persistence(s)
@@ -174,8 +158,7 @@ Apply(s, p) ==
          /\ UNCHANGED <<ffInFlight, ffWorkers, bgInFlight, bgWorkers, uncommitted>>
          /\ record' = IF "connectionScreenDropsRecord" \in Mutations THEN "none" ELSE record
 
-\* startCachedPulseLoad main-queue block + completeCachedPulseLoad: install the pulse,
-\* then begin the connection check (no check runs before the cache load returns).
+\* startCachedPulseLoad main-queue block + completeCachedPulseLoad
 CacheLoadReturns ==
     /\ cacheLoad = "running"
     /\ cacheLoad' = "done"
@@ -188,15 +171,7 @@ CacheLoadReturns ==
     /\ UNCHANGED <<ffInFlight, bgInFlight, ffWorkers, bgWorkers, retries, uncommitted, lostAccess, cred>>
     /\ Render
 
-\* What an operation can report, and what PDTConnection knows afterwards (c).
-\* PDTConnection.status: a credential held for the session answers before the store: connected
-\* for this session only, connected and saved once the retried save lands, or the reconnect
-\* state PDT's rejection of it left. It gives way only to a sign-in, token, or disconnect
-\* another process stored after it (PDTConnection.Change.applied: the store's generation
-\* moved): the held credential is dropped and the store answers, which after a disconnect
-\* there is not connected, and Keychain unavailable when the store stops reading right
-\* after. Otherwise the store answers, and another process may have stored or deleted a
-\* credential since.
+\* PDTConnection.status and PDTConnection.Change.applied; c is cred afterwards.
 CheckAnswers(s, c) ==
     IF cred = "session" /\ "checkReadsStoreOnly" \notin Mutations
     THEN \/ s = "connected:session" /\ c = "session"
@@ -208,40 +183,31 @@ CheckAnswers(s, c) ==
          \/ s \in {"connected:saved", "needsReconnect", "subscriptionPaused"} /\ c = "saved"
          \/ s = "keychainUnavailable" /\ c = cred
 
-\* PDTAppConnection.signIn / connect(token:): stored, or refused by the store and used for
-\* the session. A sign-in that was declined, timed out, or cancelled changes nothing and
-\* reports like a check.
+\* PDTAppConnection.signIn / connect(token:)
 SignInAnswers(s, c) ==
     \/ s = "connected:saved" /\ c = "saved"
     \/ s = "connected:session" /\ c = "session"
     \/ CheckAnswers(s, c)
 
-\* PDTAppConnection.disconnect: a held credential is dropped at once. A delete the store
-\* refused over a stored credential is never reported as removed.
+\* PDTAppConnection.disconnect
 DisconnectAnswers(s, c) ==
     \/ s = "notConnected" /\ c = "none"
     \/ s = "keychainUnavailable" /\ c = "saved"
 
-\* How a finished sync reports the connection (PDTAppConnection.failure(for:) and
-\* status(afterSyncEnding:), both over PDTConnection.status). r is the result, k how the
-\* credential is kept when the sync leaves it connected: a rotated pair the store refused
-\* during the sync is held, and a held credential the store took is saved. A sync finds
-\* the store not connected or unreadable past a held credential only after another process
-\* stored a sign-in, token, or disconnect, which drops the held credential: nothing is held
-\* afterwards, and an unreadable store holds what that process stored.
+\* PDTAppConnection.failure(for:) / status(afterSyncEnding:) over PDTConnection.status.
+\* r: the reported state; k: the persistence if the sync leaves it connected.
 CredsAfterSync(r, k) ==
     CASE r \in {"ok", "unavailable"} -> {k}
       [] cred = "session" /\ "checkReadsStoreOnly" \in Mutations -> {"session"}
       [] r = "notConnected" -> {"none"}
       [] r = "keychainUnavailable" /\ cred = "session" -> {"none", "saved"}
       [] OTHER -> {cred}
-\* What the runtime shows as kept after a sync that leaves it connected.
 KeptAfterSync(k) ==
     IF "syncEndKeepsOldPersistence" \in Mutations THEN kept
     ELSE IF "syncEndReportsSaved" \in Mutations THEN "saved"
     ELSE k
 
-\* runConnectionOperation result on the main queue + completeConnection (stale attempts dropped).
+\* runConnectionOperation result on the main queue + completeConnection
 OpReturns ==
     \E op \in ops, s \in Statuses, c \in Creds :
         /\ CASE op.kind = "disconnect" -> DisconnectAnswers(s, c)
@@ -259,7 +225,7 @@ OpReturns ==
                 /\ Apply(s, pulse)
                 /\ Render
 
-\* signIn(): Sign in with PDT -> .connecting, effect .signIn
+\* signIn()
 ClickSignIn ==
     /\ CanSignIn /\ opsStarted < MaxOps
     /\ Idle(cacheLoading, opInFlight, ffInFlight, bgInFlight)
@@ -269,7 +235,7 @@ ClickSignIn ==
                    uncommitted, lostAccess, cred>>
     /\ Render
 
-\* connect(token:): Use a PDT token -> .checkingConnection, effect .connectToken
+\* connect(token:)
 ClickToken ==
     /\ CanSignIn /\ opsStarted < MaxOps
     /\ Idle(cacheLoading, opInFlight, ffInFlight, bgInFlight)
@@ -299,8 +265,7 @@ ClickDisconnect ==
                    uncommitted, lostAccess, cred>>
     /\ Render
 
-\* retryFirstFetch(): accepted only while connected and idle. The new sync starts with the
-\* persistence the state carries.
+\* retryFirstFetch()
 ClickRetry ==
     /\ CanRetry /\ retries < MaxRetries
     /\ retries' = retries + 1
@@ -313,19 +278,15 @@ ClickRetry ==
     /\ UNCHANGED <<pulse, opInFlight, attemptID, cacheLoading, ops, cacheLoad, opsStarted, lostAccess, cred>>
     /\ Render
 
-\* A committed sync that found access gone ("lost:<state>", #191): an optional phase lost it,
-\* or the connection read after the sync says so. The pulse is published and the menu moves
-\* to that connection state.
 LostResults == {"lost:notConnected", "lost:needsReconnect", "lost:subscriptionPaused", "lost:keychainUnavailable"}
 LostState(r) == CASE r = "lost:notConnected" -> "notConnected"
                   [] r = "lost:needsReconnect" -> "needsReconnect"
                   [] r = "lost:subscriptionPaused" -> "subscriptionPaused"
                   [] OTHER -> "keychainUnavailable"
-\* The connection state a sync result names, if any.
 ReportedState(r) == IF r \in LostResults THEN LostState(r) ELSE r
 
-\* finishFirstPortfolioFetch (App) + completeFirstFetch (Core). Success publishes the
-\* persisted pulse, then the App asks for the background detail refresh in the same block.
+\* finishFirstPortfolioFetch (App) + completeFirstFetch (Core); on success the App starts
+\* the background detail refresh in the same main-queue block.
 FirstFetchReturns ==
     /\ ffWorkers > 0
     /\ ffWorkers' = ffWorkers - 1
@@ -352,7 +313,7 @@ FirstFetchReturns ==
     /\ UNCHANGED <<opInFlight, attemptID, cacheLoading, ops, cacheLoad, opsStarted, retries>>
     /\ Render
 
-\* backgroundDetailRefreshProgress: re-renders progress while the refresh runs
+\* backgroundDetailRefreshProgress
 BackgroundProgress ==
     /\ bgWorkers > 0 /\ bgInFlight /\ pulse # "none"
     /\ state' = "fetching"
@@ -360,10 +321,7 @@ BackgroundProgress ==
                    ops, cacheLoad, ffWorkers, bgWorkers, opsStarted, retries, record, uncommitted, lostAccess, cred>>
     /\ Render
 
-\* finishBackgroundPortfolioRefresh (App) + completeBackgroundDetailRefresh (Core).
-\* A base failure commits nothing: it keeps the pulse and its record, and a connection
-\* failure moves to that connection state. A committed refresh that found access gone
-\* publishes the pulse and moves to that connection state.
+\* finishBackgroundPortfolioRefresh (App) + completeBackgroundDetailRefresh (Core)
 BackgroundReturns ==
     /\ bgWorkers > 0
     /\ bgWorkers' = bgWorkers - 1
@@ -388,9 +346,6 @@ BackgroundReturns ==
                          /\ uncommitted' = TRUE /\ lostAccess' = FALSE
     /\ UNCHANGED <<opInFlight, attemptID, cacheLoading, ffInFlight, ops, cacheLoad, ffWorkers, opsStarted, retries>>
     /\ Render
-
-\* cancelSignIn(): the worker keeps the slot until it reports back, so nothing changes here.
-\* markPulseItemRead + pulseReadStateDidChange: re-render only. Neither changes tracked state.
 
 Next ==
     \/ CacheLoadReturns
@@ -417,14 +372,9 @@ TypeOK ==
     /\ kept \in Persistences
     /\ ffWorkers \in 0..3 /\ bgWorkers \in 0..3
 
-\* At most one piece of work runs at once: the cache load, one connection operation,
-\* a first fetch, or a background refresh. Two fetches race on the same SnapshotStore;
-\* a disconnect or sign-in under a fetch swaps the credential the fetch is reading with.
 OneWorkAtATime ==
     Cardinality(ops) + ffWorkers + bgWorkers + (IF cacheLoad = "running" THEN 1 ELSE 0) <= 1
 
-\* The runtime's in-flight flags describe real work. A flag left TRUE with no worker
-\* refuses every later action and leaves progress rows up forever.
 FirstFetchFlagMatchesWork == ffInFlight <=> ffWorkers > 0
 BackgroundFlagMatchesWork == bgInFlight <=> bgWorkers > 0
 OperationFlagMatchesWork == opInFlight <=> ops # {}
@@ -432,25 +382,19 @@ OperationFlagMatchesWork == opInFlight <=> ops # {}
 \* A returning user with a cached pulse never pays for a full first fetch.
 NoFullFetchOverCache == ffInFlight => pulse = "none"
 
-\* Portfolio requests only run while the connection is connected.
 FetchOnlyWhenConnected == (ffWorkers + bgWorkers > 0) => state = "fetching"
 
-\* "Checking", "Signing in", "Disconnecting" mean an operation (or the cache load before
-\* the first check) is really running; "Fetching"/"Refreshing" means a fetch is.
 ConnectionMenuTellsTruth ==
     menu.st \in {"checkingConnection", "connecting", "disconnecting"} => (ops # {} \/ cacheLoad = "running")
 FetchingMenuTellsTruth == menu.st = "fetching" => ffWorkers + bgWorkers > 0
 MenuTellsTruth == ConnectionMenuTellsTruth /\ FetchingMenuTellsTruth
 
-\* ADR-0002 item 8: a reconnect or paused subscription keeps the cached pulse visible.
 ProblemKeepsPulseVisible ==
     (menu.st \in {"needsReconnect", "subscriptionPaused", "keychainUnavailable"} /\ pulse # "none")
         => menu.kind = "pulse"
 
-\* After a disconnect the menu is setup only: no portfolio is shown as if connected.
 NotConnectedShowsSetup == menu.st = "notConnected" => menu.kind = "setup"
 
-\* Every clickable connection or refresh row is accepted by the runtime; none is dead.
 OfferedActionsAreLive ==
     LET idle == Idle(cacheLoading, opInFlight, ffInFlight, bgInFlight) IN
     /\ (CanSignIn => idle /\ OffersSignIn(state))
@@ -458,24 +402,14 @@ OfferedActionsAreLive ==
     /\ (CanDisconnect => idle /\ OffersDisconnect(state))
     /\ (CanRetry => idle /\ Connected(state))
 
-\* #191: a committed sync that found access gone never leaves the menu saying connected
-\* until a connection result says so again.
 AccessLossLeavesConnected == lostAccess => ~Connected(state)
 
-\* #191: the record of a sync that committed nothing stays copyable on every screen,
-\* connection screens and connection operations included, until the next sync starts.
 UncommittedRecordKept == uncommitted => record = "kept"
 
-\* #301: only PDT or the user signs out. While PDTConnection holds a credential the store
-\* refused, no check, failed sign-in, or sync turns the menu to Not connected.
 SignedOutOnlyWithoutCredential == state = "notConnected" => cred = "none"
 
-\* ADR-0003 decision 3: a credential the store refused is used for the session, and every
-\* connected menu says so: the "Connection not saved" row is shown exactly while the
-\* credential in use lives in this process only.
 NotSavedRowTellsTruth == Connected(state) => (menu.notSaved <=> cred = "session")
 
-\* The user is never stranded: something is running or the menu offers a way forward.
 NeverStranded ==
     \/ ops # {} \/ ffWorkers > 0 \/ bgWorkers > 0 \/ cacheLoad = "running"
     \/ CanSignIn \/ CanCheckAgain \/ CanRetry \/ CanDisconnect

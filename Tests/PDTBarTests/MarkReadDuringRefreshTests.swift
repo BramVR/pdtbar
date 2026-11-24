@@ -105,7 +105,6 @@ private struct ConcentrationFixture {
     }
 }
 
-/// A returning launch with a cached concentration pulse, a connected check, and a background refresh in flight.
 private struct ReturningLaunch {
     let readStore: PulseReadStore
     let cachedPulse: PulseLifecycleResult
