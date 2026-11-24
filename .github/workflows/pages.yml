@@ -129,7 +129,7 @@ jobs:
 
       # deploy-pages looks the artifact up once, and right after upload the
       # listing can still be empty. Pages can also answer "Deployment failed,
-      # try again later". Both are transient on GitHub's side.
+      # try again later".
       - name: Deploy
         if: steps.pages.outputs.enabled == 'true'
         id: deployment
