@@ -288,7 +288,6 @@ public struct PulseLifecycleResult: Codable, Equatable {
         )
     }
 
-    /// This pulse's menu with Data Health as the running app sees it.
     public func descriptor(in runtime: DataHealthRuntime) -> MenuDescriptor {
         MenuDescriptorRenderer.descriptorByReplacingDataHealth(
             in: descriptor,
@@ -669,8 +668,6 @@ public struct SnapshotStore: Sendable {
         try commitCurrentSnapshot(snapshot)
     }
 
-    /// The last PDT API sync failure. An unreadable file, or one written by
-    /// another build with a kind or endpoint this build does not know, is no failure.
     public func lastSyncFailure() -> PDTSyncFailure? {
         let target = syncFailureFile
         guard let data = try? Data(contentsOf: target) else {
@@ -680,7 +677,6 @@ public struct SnapshotStore: Sendable {
         return try? JSONDecoder().decode(PDTSyncFailure.self, from: data)
     }
 
-    /// Nil removes the file. Write errors are dropped: a diagnostic never fails a sync.
     public func setLastSyncFailure(_ failure: PDTSyncFailure?) {
         guard let failure, let data = try? stableJSONData(failure) else {
             try? FileManager.default.removeItem(at: syncFailureFile)

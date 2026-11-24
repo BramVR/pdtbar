@@ -155,9 +155,6 @@ private struct BackgroundRun {
     var snapshots: SnapshotStore
 }
 
-/// Seeds a saved snapshot, launches over it, and runs the refresh the way
-/// `AppDelegate.startBackgroundPortfolioRefresh` does: a thrown error and the
-/// store's record, or a committed result and what its last failure means for access.
 private func backgroundRefresh(replies: KeyValuePairs<ScriptedPDTHTTPTransport.Request, ScriptedPDTHTTPTransport.Reply>) throws -> BackgroundRun {
     let snapshots = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-191-background")
     let seed = appConnection(exchanges: try fullBackgroundReplies())
@@ -199,7 +196,6 @@ private func appConnection(exchanges: [(ScriptedPDTHTTPTransport.Request, Script
     )
 }
 
-/// What the app does for `.startFirstFetch`.
 private func runFirstFetch(_ connection: PDTAppConnection, snapshots: SnapshotStore) -> PDTLaunchFetchResult {
     snapshots.setLastSyncFailure(nil)
     do {
@@ -226,8 +222,6 @@ private func connectedLaunch(_ runtime: PDTLaunchRuntime) -> PDTOnboardingUpdate
 
 private let holdingsRequest: ScriptedPDTHTTPTransport.Request = "GET /v1/portfolio/holdings"
 
-/// The `full` fixture's replies, each keyed by its request. The background
-/// refresh never asks for symbol quotes, so they stay unused.
 private func fullBackgroundReplies() throws -> [(ScriptedPDTHTTPTransport.Request, ScriptedPDTHTTPTransport.Reply)] {
     try ScriptedPDTHTTPTransport.fixtureReplies(scenario: "full", apiFixtures: packageRoot.appending(path: "docs/pdt/fixtures/api"))
         .map { ($0.request, .response(status: 200, body: $0.body)) }

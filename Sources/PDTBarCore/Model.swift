@@ -11,9 +11,6 @@ public struct Money: Codable, Equatable {
 }
 
 public struct PortfolioPulseModel: Codable, Equatable {
-    /// 2: attention `detail` and explanation fact `value` encode as `PortfolioValueText` objects.
-    /// 1 stored them as strings, which still decode (`docs/architecture.md`). A decoded model has the
-    /// current shape whatever version it came from, so encoding always writes this one.
     public static let currentSchemaVersion = 2
 
     public var asOf: String
@@ -498,8 +495,6 @@ public struct AttentionItem: Codable, Equatable {
         }
     }
 
-    // The severity slot restates the item's own severity and score. Of the fact passed in, only its
-    // label survives, and whether it was a severity fact with a score; its number never does.
     private static func normalizedExplanation(
         _ explanation: AttentionExplanation,
         severity: String,

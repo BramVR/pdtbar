@@ -377,7 +377,6 @@ private func makeClient(
 
 private let onePage = #"{"data":[],"meta":{"currentPage":1,"lastPage":1,"perPage":100,"total":0}}"#
 
-/// A transport whose only scripted request is `GET /v1/me`, answered with `replies` in order.
 private func me(_ replies: ScriptedPDTHTTPTransport.Reply...) -> ScriptedPDTHTTPTransport {
     me(replies)
 }

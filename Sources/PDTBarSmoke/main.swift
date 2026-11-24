@@ -194,7 +194,6 @@ private func scriptedHoldingsResponse() throws -> ScriptedPDTAPIConfiguration.Re
     return ScriptedPDTAPIConfiguration.Response(request: .holdings, body: String(decoding: try Data(contentsOf: holdings), as: UTF8.self))
 }
 
-/// An error answer to the holdings request.
 private func scriptedAPIError(_ status: Int, _ code: String, headers: [String: String]? = nil) -> ScriptedPDTAPIConfiguration.Response {
     ScriptedPDTAPIConfiguration.Response(
         request: .holdings,

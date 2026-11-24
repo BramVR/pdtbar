@@ -4,7 +4,6 @@ import Testing
 
 @Suite("Menu overflow fit")
 struct MenuOverflowFitTests {
-    /// Screen heights from #296: a 1440x900 display and a 1470x956 notched display, less the app's 8 pt margin.
     static let budgets: [Double] = [876 - 8, 919 - 8]
     static let existingFixtures = [
         "concentration-pressure.json", "quiet-no-pressure.json", "income-event.json", "big-mover.json",
@@ -113,7 +112,6 @@ struct MenuOverflowFitTests {
             from: overflowPackageRoot.appending(path: "docs/pdt/fixtures/\(fixture)")
         )
         var model = PressureEngine.buildModel(from: snapshot)
-        // Render as the fixture-mode app does: a pulse fetched this session.
         model.facetSnapshots.dataHealth = DataHealth.build(
             .default(freshness: model.facetSnapshots.freshness, pulseSource: .fetchedSnapshot, snapshotAsOf: snapshot.asOf)
         )
@@ -126,7 +124,6 @@ private func rowIDs(_ surface: MenuBarSurface) -> Set<String> {
     return Set(surface.sections.flatMap { $0.rows.flatMap(ids) })
 }
 
-/// Row heights PDTBar's real menu draws at the default text size, read from `menu-measure` captures.
 private func estimatedHeight(_ surface: MenuBarSurface) -> Double {
     let menuPadding = 10.0, heading = 28.0, separator = 11.0, quit = 24.0
     return menuPadding + quit + surface.sections.reduce(0) { total, section in

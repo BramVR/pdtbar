@@ -240,8 +240,6 @@ struct AttentionExplanationTests {
         return PressureEngine.buildModel(from: snapshot, priorSnapshot: prior)
     }
 
-    /// The model as main's `pdtbar-dev model` printed it: schema version 1, each attention `detail`
-    /// and fact `value` as the string it shows.
     private func schemaVersion1JSON(_ model: PortfolioPulseModel) throws -> Data {
         func downgrade(_ json: Any) throws -> Any {
             if let array = json as? [Any] {

@@ -85,9 +85,7 @@ public enum PDTAPIResource: Equatable, Sendable {
     }
 }
 
-/// A PDT REST endpoint with no request data: the raw value is the path under
-/// `/v1/`. `PDTAPIResource.path` is derived from it, so the endpoint a
-/// diagnostic names and the path requested cannot drift.
+/// A PDT REST endpoint with no request data: the raw value is the path under `/v1/`.
 public enum PDTAPIEndpoint: String, Codable, Equatable, Sendable, CaseIterable {
     case holdings = "portfolio/holdings"
     case distributions = "portfolio/distributions"
@@ -127,8 +125,7 @@ public struct PDTAPIToken: Sendable, Equatable, Codable, CustomStringConvertible
     public var customMirror: Mirror { Mirror(self, children: []) }
 }
 
-/// Supplies the bearer token per request. Production backs this with
-/// `PDTConnection` (ADR-0002); tests and smokes may use `InMemoryPDTAPITokenProvider`.
+/// Supplies the bearer token per request.
 public protocol PDTAPITokenProvider: Sendable {
     func currentToken() throws -> PDTAPIToken
     /// PDT answered `401 TOKEN_INVALID` for `token`. Return true to resend the
@@ -246,7 +243,6 @@ public enum PDTAPIError: Error, Equatable, Sendable {
         return formatter.date(from: value).map { max(0, $0.timeIntervalSince(now)) }
     }
 
-    /// The trace id of an error response: `X-Request-Id`, else `error.traceId`.
     static func traceID(body: Data, headers: [String: String]) -> PDTTraceID? {
         PDTTraceID(headers["x-request-id"])
             ?? PDTTraceID((try? JSONDecoder().decode(ErrorEnvelope.self, from: body))?.error.traceId)
@@ -363,7 +359,6 @@ public struct PDTAPIResult<Value> {
 public struct PDTAPIRequestFailure: Error, CustomStringConvertible {
     public let underlyingError: any Error
     public let attemptCount: Int
-    /// The trace id of the response that failed the call, when PDT sent one.
     public let traceID: PDTTraceID?
 
     public var description: String {

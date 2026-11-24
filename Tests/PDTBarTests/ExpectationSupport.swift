@@ -17,7 +17,6 @@ extension Sequence {
 }
 
 extension PortfolioValueText {
-    /// The text with portfolio values shown, as the menu renders it by default.
     var shown: String {
         rendered(settings: PortfolioValueDisplaySettings())
     }

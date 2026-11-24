@@ -14,7 +14,6 @@ struct PDTAPIBackgroundDetailRefreshTests {
 
         let result = try refresh(transport, store: store).refresh(cancellation: nil, progress: recorder.record)
 
-        // The script holds every background facet reply and no symbol-quote lookup.
         #expect(transport.scriptErrors.isEmpty)
         #expect(transport.unusedReplies.isEmpty)
         #expect(!transport.requests.contains { $0.url?.path == "/v1/symbol-quotes" })
@@ -133,7 +132,6 @@ struct PDTAPIBackgroundDetailRefreshTests {
 
         let result = try refresh(transport, store: store, maxAttempts: 3).refresh(cancellation: nil, progress: { _ in })
 
-        // The rate-limited request is the sync's last: no retry, no later phase.
         #expect(transport.requests.filter { $0.url?.path == "/v1/x-ray" }.count == 1)
         #expect(transport.requests.last?.url?.path == "/v1/x-ray")
         #expect(result.outcome == .degraded)
@@ -148,7 +146,6 @@ struct PDTAPIBackgroundDetailRefreshTests {
     func shortRateLimitRetries() throws {
         let store = try temporaryStore()
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        // The distributions key answers the 429 first, then the fixture reply.
         let transport = ScriptedPDTHTTPTransport(exchanges: [("GET /v1/portfolio/distributions", rateLimited(retryAfter: "1"))] + (try fullScript()))
 
         let result = try refresh(transport, store: store, maxAttempts: 3)
@@ -189,7 +186,6 @@ struct PDTAPIBackgroundDetailRefreshTests {
             store: store,
             asOf: seededAsOf
         ).refresh(cancellation: nil, progress: { _ in })
-        // Both batches answer 401, so whichever goes first is the outage.
         let transport = ScriptedPDTHTTPTransport(
             exchanges: syntheticScript(quoteIDs: quoteIDs) + [priceBatch(firstQuoteID: 1, apiError(401, "TOKEN_INVALID")), priceBatch(firstQuoteID: 51, apiError(401, "TOKEN_INVALID"))]
         )
@@ -556,8 +552,6 @@ private func temporaryStore() throws -> SnapshotStore {
     try SnapshotStore.temporaryTestStore(prefix: "pdtbar-api-background-refresh-test")
 }
 
-/// A store holding one complete refresh of the `full` fixture as of
-/// `seededAsOf`, optionally edited so a test can tell last-good facets apart.
 private func seededStore(_ edit: (inout PortfolioSnapshot) -> Void = { _ in }) throws -> SnapshotStore {
     let store = try temporaryStore()
     _ = try refresh(ScriptedPDTHTTPTransport(exchanges: try fullScript()), store: store, asOf: seededAsOf)
@@ -572,9 +566,6 @@ private typealias Exchange = (ScriptedPDTHTTPTransport.Request, ScriptedPDTHTTPT
 
 private let holdingsRequest: ScriptedPDTHTTPTransport.Request = "GET /v1/portfolio/holdings"
 
-/// The `full` fixture's background-refresh replies, each keyed by its request.
-/// Symbol-quote lookups belong to the first fetch only, so they are left out.
-/// `overrides` answer their keys instead of the fixture, in order.
 private func fullScript(_ overrides: KeyValuePairs<ScriptedPDTHTTPTransport.Request, ScriptedPDTHTTPTransport.Reply> = [:]) throws -> [Exchange] {
     let overridden = Set(overrides.map(\.key))
     return try ScriptedPDTHTTPTransport.fixtureReplies(scenario: "full", apiFixtures: packageRoot.appending(path: "docs/pdt/fixtures/api"))
@@ -583,7 +574,6 @@ private func fullScript(_ overrides: KeyValuePairs<ScriptedPDTHTTPTransport.Requ
         + overrides.map { ($0.key, $0.value) }
 }
 
-/// Holdings plus empty optional facets, ready for price-batch replies.
 private func syntheticScript(quoteIDs: [Int] = [], weights: [String]? = nil, holdingsJSON: String? = nil) -> [Exchange] {
     let weight = String(1.0 / Double(max(1, quoteIDs.count)))
     let rows = quoteIDs.enumerated().map { index, quoteID in
@@ -599,7 +589,6 @@ private func syntheticScript(quoteIDs: [Int] = [], weights: [String]? = nil, hol
     ]
 }
 
-/// The reply to the price batch that carries `firstQuoteID`, its chunk's first id.
 private func priceBatch(firstQuoteID: Int, _ reply: ScriptedPDTHTTPTransport.Reply) -> Exchange {
     (ScriptedPDTHTTPTransport.Request(parsing: "GET /v1/prices/batch?symbolQuoteIds[]=\(firstQuoteID)")!, reply)
 }

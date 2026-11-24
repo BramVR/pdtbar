@@ -875,7 +875,6 @@ public enum MenuDescriptorRenderer {
         settings: PortfolioValueDisplaySettings
     ) -> [MenuRow] {
         let explanation = item.explanation
-        // The score is the item's own. A fact's number can be money: a big mover's Current is its price.
         var severity = explanation.severity
         if severity.numericValue != nil {
             severity.value.components.append(.literal("; score \(decimalString(String(item.score), places: 2))"))
