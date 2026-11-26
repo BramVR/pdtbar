@@ -628,16 +628,7 @@ private func checkCommentCounts() throws {
         case "sh", "py", "yml": marker = "#"
         default: continue
         }
-        var inBlock = false
-        counts[path] = try readRepoText(path).components(separatedBy: "\n").filter { line in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            let startsBlock = marker == "//" && trimmed.hasPrefix("/*")
-            let counted = inBlock || startsBlock || (trimmed.hasPrefix(marker) && !trimmed.hasPrefix("#!"))
-            if inBlock || startsBlock {
-                inBlock = !trimmed.contains("*/")
-            }
-            return counted
-        }.count
+        counts[path] = fullLineCommentCount(try readRepoText(path), marker: marker)
     }
     var grew: [String] = []
     var dropped: [String] = []
@@ -659,6 +650,23 @@ private func checkCommentCounts() throws {
         """
     )
     try check(dropped.isEmpty, "comments were deleted; lower \(baselinePath) to match: \(dropped.joined(separator: ", "))")
+}
+
+private func fullLineCommentCount(_ text: String, marker: String) -> Int {
+    let hasBlockComments = marker == "//"
+    var count = 0
+    var inBlock = false
+    for line in text.components(separatedBy: "\n") {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let startsBlock = hasBlockComments && trimmed.hasPrefix("/*")
+        if inBlock || startsBlock {
+            count += 1
+            inBlock = !trimmed.contains("*/")
+        } else if trimmed.hasPrefix(marker) && !trimmed.hasPrefix("#!") {
+            count += 1
+        }
+    }
+    return count
 }
 
 private func checkVerifySkillNamesEveryCommand() throws {
@@ -707,9 +715,56 @@ private func checkVerifySkillNamesEveryCommand() throws {
 
 private func checkCIRunsWhenCheckInputsChange() throws {
     let workflowPath = ".github/workflows/ci.yml"
+    let filters = workflowPathFilters(try readRepoText(workflowPath))
+    try check(filters.count == 2, "\(workflowPath): expected `paths` filters under push and pull_request, found \(filters.count)")
+    let globs = try filters.map { list in
+        try list.map { pattern in
+            let negated = pattern.hasPrefix("!")
+            return (negated: negated, regex: try githubPathRegex(negated ? String(pattern.dropFirst()) : pattern))
+        }
+    }
+    func ciRuns(on path: String) -> Bool {
+        globs.allSatisfy { list in
+            list.reduce(false) { included, glob in path.wholeMatch(of: glob.regex) != nil ? !glob.negated : included }
+        }
+    }
+
+    let interpolationAsGlob = try Regex(#"\\\([^)]*\)|\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*"#)
+    let repoPath = try Regex(#"(?:^|[^A-Za-z0-9_.-])((?:docs|\.claude|\.cursor)/[A-Za-z0-9_./*-]+)"#)
+    var problems = Set<String>()
+    for file in try repoFiles(under: ["Sources", "Tests", "Scripts"]) where ["swift", "sh", "py"].contains(URL(fileURLWithPath: file).pathExtension) {
+        for (index, line) in try readRepoText(file).components(separatedBy: "\n").enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("//") || trimmed.hasPrefix("#") {
+                continue
+            }
+            let globbed = line.replacing(interpolationAsGlob, with: "*")
+            for match in globbed.matches(of: repoPath) {
+                guard var named = match.output[1].substring.map(String.init) else {
+                    continue
+                }
+                while named.hasSuffix(".") || named.hasSuffix("/") {
+                    named.removeLast()
+                }
+                for path in try pathsToCheck(named: named) where !ciRuns(on: path) {
+                    problems.insert("\(path) (named in \(file):\(index + 1))")
+                }
+            }
+        }
+    }
+    try check(
+        problems.isEmpty,
+        """
+        CI never runs when only these gate inputs change; add a pattern for each to both `paths` lists in \(workflowPath):
+        \(problems.sorted().joined(separator: "\n"))
+        """
+    )
+}
+
+private func workflowPathFilters(_ workflow: String) -> [[String]] {
     var filters: [[String]] = []
     var current: [String]?
-    for line in try readRepoText(workflowPath).components(separatedBy: "\n") {
+    for line in workflow.components(separatedBy: "\n") {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         if trimmed == "paths:" {
             current.map { filters.append($0) }
@@ -726,53 +781,10 @@ private func checkCIRunsWhenCheckInputsChange() throws {
             current = nil
         }
     }
-    try check(filters.count == 2, "\(workflowPath): expected `paths` filters under push and pull_request, found \(filters.count)")
-    let globs = try filters.map { list in
-        try list.map { pattern in
-            let negated = pattern.hasPrefix("!")
-            return (negated: negated, regex: try globRegex(negated ? String(pattern.dropFirst()) : pattern))
-        }
-    }
-    func ciRuns(on path: String) -> Bool {
-        globs.allSatisfy { list in
-            list.reduce(false) { included, glob in path.wholeMatch(of: glob.regex) != nil ? !glob.negated : included }
-        }
-    }
-
-    let interpolation = try Regex(#"\\\([^)]*\)|\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*"#)
-    let repoPath = try Regex(#"(?:^|[^A-Za-z0-9_.-])((?:docs|\.claude|\.cursor)/[A-Za-z0-9_./*-]+)"#)
-    var problems = Set<String>()
-    for file in try repoFiles(under: ["Sources", "Tests", "Scripts"]) where ["swift", "sh", "py"].contains(URL(fileURLWithPath: file).pathExtension) {
-        for (index, line) in try readRepoText(file).components(separatedBy: "\n").enumerated() {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("//") || trimmed.hasPrefix("#") {
-                continue
-            }
-            let code = line.replacing(interpolation, with: "*")
-            for match in code.matches(of: repoPath) {
-                guard var named = match.output[1].substring.map(String.init) else {
-                    continue
-                }
-                while named.hasSuffix(".") || named.hasSuffix("/") {
-                    named.removeLast()
-                }
-                for path in try repoFiles(named: named) where !ciRuns(on: path) {
-                    problems.insert("\(path) (named in \(file):\(index + 1))")
-                }
-            }
-        }
-    }
-    try check(
-        problems.isEmpty,
-        """
-        CI never runs when only these gate inputs change; add a pattern for each to both `paths` lists in \(workflowPath):
-        \(problems.sorted().joined(separator: "\n"))
-        """
-    )
+    return filters
 }
 
-/// GitHub Actions path glob: `*` stops at `/`, `**` does not.
-private func globRegex(_ glob: String) throws -> Regex<AnyRegexOutput> {
+private func githubPathRegex(_ glob: String) throws -> Regex<AnyRegexOutput> {
     try check(
         !glob.contains(where: "?+[]".contains),
         "ci.yml path `\(glob)` uses `?`, `+`, or `[...]`, which checkCIRunsWhenCheckInputsChange does not model; write it with `*` and `**`"
@@ -810,7 +822,7 @@ private func readRepoText(_ path: String) throws -> String {
     try String(contentsOf: packageRoot.appending(path: path), encoding: .utf8).replacingOccurrences(of: "\r\n", with: "\n")
 }
 
-private func repoFiles(named path: String) throws -> [String] {
+private func pathsToCheck(named path: String) throws -> [String] {
     var isDirectory: ObjCBool = false
     if FileManager.default.fileExists(atPath: packageRoot.appending(path: path).path, isDirectory: &isDirectory) {
         return isDirectory.boolValue ? try repoFiles(under: [path]) : [path]
@@ -822,7 +834,7 @@ private func repoFiles(named path: String) throws -> [String] {
     guard FileManager.default.fileExists(atPath: packageRoot.appending(path: root).path) else {
         return [path]
     }
-    let pattern = try globRegex(path)
+    let pattern = try githubPathRegex(path)
     let matches = try repoFiles(under: [root]).filter { $0.wholeMatch(of: pattern) != nil }
     return matches.isEmpty ? [path] : matches
 }
