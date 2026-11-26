@@ -58,5 +58,6 @@ When the operator corrects an agent: fix it, add the rule here. A rule already h
 | Menu copy gives no advice | `pdtbar-checks` `assertInformationalCopy` |
 | A regression test fails on the pre-fix code; say how you checked in the PR | nothing (judgment) |
 | Fixed menu copy is quoted in both `docs/public/features.{en,nl}.md` in the same PR (#311 trailed #307) | `swift run pdtbar-checks` (`checkFeatureGuidesQuoteMenuCopy`, exceptions in `docs/features-menu-copy-allowlist.txt`), CI |
+| A file the gate reads runs CI when it changes, even under `docs/` or as `.md` (#312 left out `docs/smoke/*.svg`, #318 `docs/unchecked-sendable-baseline.txt`) | `pdtbar-checks` `checkCIRunsWhenCheckInputsChange`: every docs or skill path the gate's code names must pass both `ci.yml` `paths` filters |
 | Live PDT proofs leave the dev store and grant connected; revoke only in a revoke test, then sign in again | `pdtbar-dev pdt-disconnect` refuses without `--revoke-test` and says why |
 | `main` needs one approving review; agents never `--admin` merge | GitHub branch protection |

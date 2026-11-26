@@ -15,6 +15,8 @@ on:
       - ".claude/skills/verify-*/SKILL.md"
       - "docs/public/features.*.md"
       - "docs/features-menu-copy-allowlist.txt"
+      - "docs/unchecked-sendable-baseline.txt"
+      - "docs/smoke/*.svg"
   pull_request:
     paths:
       - "**"
@@ -24,6 +26,8 @@ on:
       - ".claude/skills/verify-*/SKILL.md"
       - "docs/public/features.*.md"
       - "docs/features-menu-copy-allowlist.txt"
+      - "docs/unchecked-sendable-baseline.txt"
+      - "docs/smoke/*.svg"
 
 permissions:
   contents: read

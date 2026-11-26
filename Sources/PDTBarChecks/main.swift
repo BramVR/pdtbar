@@ -21,6 +21,7 @@ try checkFormalCodeAnchors()
 try checkNoEmptySafeExpectations()
 try checkConcurrencyEscapeHatches()
 try checkFeatureGuidesQuoteMenuCopy(fixtures)
+try checkCIRunsWhenCheckInputsChange()
 
 print("pdtbar-checks: passed")
 
@@ -618,6 +619,104 @@ private func visibleMenuText(_ rows: [MenuRow]) -> [String] {
 private func containsAdviceLikeLanguage(_ value: String) -> Bool {
     let pattern = #"\b(buy|sell|rebalance|trim|reduce|recommend|should)\b"#
     return value.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+}
+
+/// CI skips a change that touches only `!docs/**` or `!**.md` paths, so each file
+/// the gate reads there needs its own `paths` entry. #312 (docs/smoke/*.svg) and
+/// #318 (docs/unchecked-sendable-baseline.txt) missed theirs. Every docs or skill
+/// path the gate's code names must be one ci.yml's push and pull_request filters run on.
+private func checkCIRunsWhenCheckInputsChange() throws {
+    let workflowPath = ".github/workflows/ci.yml"
+    var filters: [[String]] = []
+    var current: [String]?
+    for line in try readRepoText(workflowPath).components(separatedBy: "\n") {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed == "paths:" {
+            current.map { filters.append($0) }
+            current = []
+        } else if current != nil, trimmed.hasPrefix("- ") {
+            current?.append(trimmed.dropFirst(2).trimmingCharacters(in: CharacterSet(charactersIn: "\"' ")))
+        } else if let list = current, !trimmed.isEmpty, !trimmed.hasPrefix("#") {
+            filters.append(list)
+            current = nil
+        }
+    }
+    try check(filters.count == 2, "\(workflowPath): expected `paths` filters under push and pull_request, found \(filters.count)")
+    let globs = try filters.map { list in
+        try list.map { pattern in
+            let negated = pattern.hasPrefix("!")
+            return (negated: negated, regex: try globRegex(negated ? String(pattern.dropFirst()) : pattern))
+        }
+    }
+    func ciRuns(on path: String) -> Bool {
+        globs.allSatisfy { list in
+            list.reduce(false) { included, glob in path.wholeMatch(of: glob.regex) != nil ? !glob.negated : included }
+        }
+    }
+
+    let interpolation = try Regex(#"\\\([^)]*\)|\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*"#)
+    let repoPath = try Regex(#"(?:^|[^A-Za-z0-9_.-])((?:docs|\.claude|\.cursor)/[A-Za-z0-9_./*-]+)"#)
+    var problems = Set<String>()
+    for file in try repoFiles(under: ["Sources", "Tests", "Scripts"]) where ["swift", "sh", "py"].contains(URL(fileURLWithPath: file).pathExtension) {
+        for (index, line) in try readRepoText(file).components(separatedBy: "\n").enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("//") || trimmed.hasPrefix("#") {
+                continue
+            }
+            let code = line.replacing(interpolation, with: "x")
+            for match in code.matches(of: repoPath) {
+                guard var named = match.output[1].substring.map(String.init) else {
+                    continue
+                }
+                while named.hasSuffix(".") || named.hasSuffix("/") {
+                    named.removeLast()
+                }
+                var isDirectory: ObjCBool = false
+                let isDirectoryPath = FileManager.default.fileExists(atPath: packageRoot.appending(path: named).path, isDirectory: &isDirectory) && isDirectory.boolValue
+                for path in isDirectoryPath ? try repoFiles(under: [named]) : [named] where !ciRuns(on: path) {
+                    problems.insert("\(path) (named in \(file):\(index + 1))")
+                }
+            }
+        }
+    }
+    try check(
+        problems.isEmpty,
+        """
+        CI never runs when only these gate inputs change; add a pattern for each to both `paths` lists in \(workflowPath):
+        \(problems.sorted().joined(separator: "\n"))
+        """
+    )
+}
+
+/// A GitHub Actions path glob: `**` crosses directories, `*` and `?` do not.
+private func globRegex(_ glob: String) throws -> Regex<AnyRegexOutput> {
+    var pattern = ""
+    var rest = Substring(glob)
+    while let character = rest.first {
+        if rest.hasPrefix("**") {
+            pattern += ".*"
+            rest = rest.dropFirst(2)
+            continue
+        }
+        pattern += character == "*" ? "[^/]*" : character == "?" ? "[^/]" : NSRegularExpression.escapedPattern(for: String(character))
+        rest = rest.dropFirst()
+    }
+    return try Regex(pattern)
+}
+
+private func readRepoText(_ path: String) throws -> String {
+    try String(contentsOf: packageRoot.appending(path: path), encoding: .utf8)
+}
+
+private func repoFiles(under roots: [String]) throws -> [String] {
+    try roots.flatMap { root in
+        try FileManager.default.subpathsOfDirectory(atPath: packageRoot.appending(path: root).path).sorted().compactMap { subpath in
+            var isDirectory: ObjCBool = false
+            let path = "\(root)/\(subpath)"
+            FileManager.default.fileExists(atPath: packageRoot.appending(path: path).path, isDirectory: &isDirectory)
+            return isDirectory.boolValue ? nil : path
+        }
+    }
 }
 
 private func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
