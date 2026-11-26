@@ -16,6 +16,7 @@ on:
       - "docs/public/features.*.md"
       - "docs/features-menu-copy-allowlist.txt"
       - "docs/unchecked-sendable-baseline.txt"
+      - "docs/comment-baseline.txt"
       - "docs/smoke/*.svg"
   pull_request:
     paths:
@@ -27,6 +28,7 @@ on:
       - "docs/public/features.*.md"
       - "docs/features-menu-copy-allowlist.txt"
       - "docs/unchecked-sendable-baseline.txt"
+      - "docs/comment-baseline.txt"
       - "docs/smoke/*.svg"
 
 permissions:

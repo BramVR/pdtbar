@@ -21,6 +21,7 @@ try checkFormalCodeAnchors()
 try checkNoEmptySafeExpectations()
 try checkConcurrencyEscapeHatches()
 try checkFeatureGuidesQuoteMenuCopy(fixtures)
+try checkCommentRatchet()
 try checkCIRunsWhenCheckInputsChange()
 
 print("pdtbar-checks: passed")
@@ -477,13 +478,7 @@ private func checkConcurrencyEscapeHatches() throws {
         }
     }
 
-    var baseline: [String: Int] = [:]
-    let baselineText = try String(contentsOf: packageRoot.appending(path: baselinePath), encoding: .utf8)
-    for line in baselineText.components(separatedBy: "\n") where !line.hasPrefix("#") && !line.isEmpty {
-        let fields = line.split(separator: " ", maxSplits: 1).map(String.init)
-        let count = try require(fields.count == 2 ? Int(fields[0]) : nil, "\(baselinePath): expected `<count> <path>`, got `\(line)`")
-        baseline[fields[1]] = count
-    }
+    let baseline = try readCountBaseline(baselinePath)
     for path in Set(counts.keys).union(baseline.keys).sorted() {
         let count = counts[path] ?? 0
         let allowed = baseline[path] ?? 0
@@ -621,6 +616,39 @@ private func containsAdviceLikeLanguage(_ value: String) -> Bool {
     return value.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
 }
 
+/// Agents kept adding comments that restate code. #315 deleted them, then 15
+/// PRs added 672 comment lines that #323 had to trim. A file may not have more
+/// full-line comments than its count in docs/comment-baseline.txt.
+private func checkCommentRatchet() throws {
+    let baselinePath = "docs/comment-baseline.txt"
+    let baseline = try readCountBaseline(baselinePath)
+    var problems: [String] = []
+    for path in try repoFiles(under: ["Sources", "Tests", "Scripts", ".github/workflows"]) {
+        let marker: String
+        switch URL(fileURLWithPath: path).pathExtension {
+        case "swift", "mjs", "js": marker = "//"
+        case "sh", "py", "yml": marker = "#"
+        default: continue
+        }
+        let count = try readRepoText(path).components(separatedBy: "\n").filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed.hasPrefix(marker) && !trimmed.hasPrefix("#!")
+        }.count
+        let allowed = baseline[path] ?? 0
+        if count > allowed {
+            problems.append("\(path): \(count) comment lines, baseline \(allowed)")
+        }
+    }
+    try check(
+        problems.isEmpty,
+        """
+        comment lines grew. Delete the new comments. Keep one only if it states a contract or a fact about code \
+        outside this repo, and then raise that file's count in \(baselinePath) in the same change.
+        \(problems.joined(separator: "\n"))
+        """
+    )
+}
+
 /// CI skips a change that touches only `!docs/**` or `!**.md` paths, so each file
 /// the gate reads there needs its own `paths` entry. #312 (docs/smoke/*.svg) and
 /// #318 (docs/unchecked-sendable-baseline.txt) missed theirs. Every docs or skill
@@ -702,6 +730,16 @@ private func globRegex(_ glob: String) throws -> Regex<AnyRegexOutput> {
         rest = rest.dropFirst()
     }
     return try Regex(pattern)
+}
+
+private func readCountBaseline(_ path: String) throws -> [String: Int] {
+    var baseline: [String: Int] = [:]
+    for line in try readRepoText(path).components(separatedBy: "\n") where !line.hasPrefix("#") && !line.isEmpty {
+        let fields = line.split(separator: " ", maxSplits: 1).map(String.init)
+        let count = try require(fields.count == 2 ? Int(fields[0]) : nil, "\(path): expected `<count> <path>`, got `\(line)`")
+        baseline[fields[1]] = count
+    }
+    return baseline
 }
 
 private func readRepoText(_ path: String) throws -> String {
