@@ -84,48 +84,51 @@ check_formal() {
   return "${failed}"
 }
 
+# The gate CI runs, in CI's order. ci.yml calls `./Scripts/check.sh <step>` for
+# each step, and check_gate_matches_ci fails when the two lists differ.
+GATE=(lint scripts build tests checks proofs smoke-api formal)
+
+check_gate_matches_ci() {
+  local ci_steps gate_steps
+  ci_steps="$(grep -oE '\./Scripts/check\.sh [a-z-]+' "${ROOT_DIR}/.github/workflows/ci.yml" | awk '{print $2}' | sort -u)"
+  gate_steps="$(printf '%s\n' "${GATE[@]}" | sort -u)"
+  if [[ "${ci_steps}" != "${gate_steps}" ]]; then
+    printf 'ERROR: .github/workflows/ci.yml runs check.sh steps [%s] but GATE in Scripts/check.sh is [%s]. CI and ./Scripts/check.sh must run one gate: add the step to both.\n' \
+      "$(tr '\n' ' ' <<<"${ci_steps}")" "$(tr '\n' ' ' <<<"${gate_steps}")" >&2
+    return 1
+  fi
+}
+
+run_step() {
+  case "$1" in
+    lint) log "Linting"; run "${ROOT_DIR}/Scripts/lint.sh" ;;
+    scripts) check_scripts; check_gate_matches_ci ;;
+    build) log "Building Swift package"; run swift build ;;
+    tests) log "Running Swift tests"; run "${ROOT_DIR}/Scripts/test.sh" ;;
+    checks) log "Running deterministic PDTBar checks"; run swift run pdtbar-checks ;;
+    proofs) check_proofs ;;
+    smoke-api) log "Running scripted API smoke matrix"; run "${ROOT_DIR}/Scripts/api_smoke_matrix.sh" ;;
+    formal) check_formal ;;
+    *) return 2 ;;
+  esac
+}
+
 usage() {
-  printf 'Usage: %s [all|scripts|build|checks|tests|proofs|formal]\n' "$(basename "$0")" >&2
+  printf 'Usage: %s [all|%s]\n' "$(basename "$0")" "$(IFS='|'; printf '%s' "${GATE[*]}")" >&2
 }
 
 cmd="${1:-all}"
 
 cd "${ROOT_DIR}"
 
-case "${cmd}" in
-  all)
-    check_scripts
-    log "Building Swift package"
-    run swift build
-    log "Running deterministic PDTBar checks"
-    run swift run pdtbar-checks
-    check_proofs
-    log "Running Swift tests"
-    run "${ROOT_DIR}/Scripts/test.sh"
-    ;;
-  proofs)
-    check_proofs
-    ;;
-  formal)
-    check_formal
-    ;;
-  scripts)
-    check_scripts
-    ;;
-  build)
-    log "Building Swift package"
-    run swift build
-    ;;
-  checks)
-    log "Running deterministic PDTBar checks"
-    run swift run pdtbar-checks
-    ;;
-  tests)
-    log "Running Swift tests"
-    run "${ROOT_DIR}/Scripts/test.sh"
-    ;;
-  *)
-    usage
-    exit 2
-    ;;
-esac
+if [[ "${cmd}" == all ]]; then
+  for step in "${GATE[@]}"; do
+    run_step "${step}"
+  done
+  log "Gate passed: ${GATE[*]}"
+elif [[ " ${GATE[*]} " == *" ${cmd} "* ]]; then
+  run_step "${cmd}"
+else
+  usage
+  exit 2
+fi

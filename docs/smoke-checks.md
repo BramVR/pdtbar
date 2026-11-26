@@ -60,14 +60,15 @@ dim the whole icon.
 Smoke proof should check the Codable `StatusVisualState`/surface state or
 sanitized rendered SVG, not private screenshots or raw portfolio payloads.
 
-Normal deterministic gate:
+Normal deterministic gate, the same one CI runs:
 
 ```bash
 make check
-swift build
-swift test
-swift run pdtbar-checks
-make smoke-api
+```
+
+Focused scripted smokes:
+
+```bash
 swift run pdtbar-smoke scripted-api-client
 swift run pdtbar-smoke scripted-api-snapshot
 swift run pdtbar-smoke scripted-api-auth
@@ -79,9 +80,9 @@ swift run pdtbar-smoke scripted-first-fetch
 swift run pdtbar-smoke scripted-returning-launch
 ```
 
-`make check` is bounded to local deterministic checks: script syntax, Swift
-build, `pdtbar-checks`, and the sharded Swift test runner. It does not run
-`make smoke-api`. The checks executable keeps command-style proof: the scenario
+`make check` runs `Scripts/check.sh`'s `GATE`: lint, script syntax, Swift
+build, the sharded Swift test runner, `pdtbar-checks`, committed proofs,
+`make smoke-api`, and the formal models. The checks executable keeps command-style proof: the scenario
 fixture corpus, REST fixture provenance (below), the coalesced API first fetch,
 a degraded-then-repaired API background refresh, PDT API Data health over an
 in-memory script (a saved copy is never healthy, last sync stays apart from

@@ -32,14 +32,16 @@ swift test
 ./Scripts/test.sh
 ```
 
-`make check` is the default deterministic handoff gate. It delegates to
-`Scripts/check.sh`, which checks script syntax, builds the Swift package, runs
-`pdtbar-checks`, and runs the sharded Swift test runner. `pdtbar-checks` is now
+`make check` is the handoff gate, and it is the gate CI runs. It delegates to
+`Scripts/check.sh`, whose `GATE` list runs lint, script syntax, the Swift build,
+the sharded Swift test runner, `pdtbar-checks`, the committed proofs, the
+scripted API matrix (`make smoke-api`), and the formal models (needs a JDK).
+`./Scripts/check.sh <step>` runs one of them. CI calls the same steps, and the
+`scripts` step fails when `ci.yml` and `GATE` disagree. `pdtbar-checks` is now
 kept to command-style fixture, PDT API, and tooling-contract proof; core model,
 parser, runner, normalization, and rendering regressions live in
 `Tests/PDTBarTests` and run under `swift test`. It does not run live PDT,
-Keychain, 1Password, Accessibility, or packaged-app flows, or the sandboxed
-scripted API matrix (`make smoke-api`, see `docs/smoke-checks.md`).
+Keychain, 1Password, Accessibility, or packaged-app flows.
 
 `Scripts/test.sh` runs Swift Testing suites through the PDTBar sharder. Useful knobs:
 
