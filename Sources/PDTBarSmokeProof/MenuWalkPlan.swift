@@ -61,8 +61,6 @@ public struct MenuWalkPlan: Equatable, Sendable {
         ]
     )
 
-    /// Issue #191: a returning launch whose holdings request PDT rejects with `401`. The reconnect
-    /// screen keeps the failure record, so Data health still offers Diagnostics with its copy row.
     public static let syncFailureReconnect = MenuWalkPlan(
         fixture: "sync-failure-base-401.json",
         topLevel: [

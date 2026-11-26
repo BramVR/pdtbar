@@ -1,14 +1,11 @@
 import Foundation
 
-/// Holds the one PDT connection. Saving `.empty` deletes the item.
-/// Production uses the Keychain store in PDTBarAppSupport; tests and smokes
-/// use `InMemoryPDTCredentialStore`, and dev proof uses `FilePDTCredentialStore`.
+/// Saving `.empty` deletes the item.
 ///
-/// `withExclusiveAccess` is the store-wide mutex every `PDTConnection` holds
-/// from load through the token endpoint to save, across processes where the
-/// store is shared. PDT rotates the refresh token on every refresh, so two
-/// refreshes of one stored pair leave the loser with a dead token. The lock
-/// is not reentrant.
+/// `withExclusiveAccess` is a store-wide mutex, across processes where the
+/// store is shared, and not reentrant. PDT rotates the refresh token on every
+/// refresh, so two refreshes of one stored pair leave the loser with a dead
+/// token.
 public protocol PDTCredentialStore: Sendable {
     /// How this store would keep a credential saved now, answered without
     /// reading or writing it. `.thisSessionOnly` when the store already knows
@@ -26,7 +23,6 @@ public enum PDTCredentialStoreError: Error, Equatable, Sendable {
     case keychain(status: Int32)
     /// `errSecMissingEntitlement` (-34018): this build is not signed with the
     /// keychain access entitlement the data protection keychain requires.
-    /// Never answered by falling back to the login keychain (ADR-0002).
     case missingKeychainEntitlement
 }
 
@@ -60,9 +56,8 @@ public final class InMemoryPDTCredentialStore: PDTCredentialStore, @unchecked Se
     }
 }
 
-/// Dev-only store at an explicit path, written with mode 0600 so live proof
-/// never touches the Keychain (a re-signed dev build would prompt). The
-/// sibling `<name>.lock` file carries the `flock`.
+/// Dev-only, so live proof never touches the Keychain: a re-signed dev build
+/// would prompt.
 public struct FilePDTCredentialStore: PDTCredentialStore {
     /// POSIX `write(2)`: may write fewer bytes than asked, or fail with `EINTR`.
     public typealias Write = @Sendable (_ descriptor: Int32, _ bytes: UnsafeRawPointer, _ count: Int) -> Int

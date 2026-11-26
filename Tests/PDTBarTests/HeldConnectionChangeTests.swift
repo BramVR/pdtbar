@@ -3,10 +3,6 @@ import os
 import Testing
 @testable import PDTBarCore
 
-/// A change the store refused is held and applied when the store takes a
-/// save again. However it is held, it must leave the store where replaying
-/// its events one by one through the event table would. It gives way once
-/// another process has stored a sign-in, pasted token, or disconnect since.
 @Suite("Held connection change")
 struct HeldConnectionChangeTests {
     @Test("A held change leaves every stored state where replaying its events one by one would")
@@ -273,17 +269,14 @@ struct HeldConnectionChangeTests {
     }
 }
 
-/// An hour before `pair(0)` runs out, so no `pair` is due for a refresh.
 private let clock = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
 
-/// The stored pair both processes start from. Its access token has run out, so the next token request refreshes it.
 private let expired = PDTBrowserSession(
     accessToken: PDTAPIToken("access-expired"),
     refreshToken: PDTRefreshToken("refresh-expired"),
     accessExpiresAt: clock - 1
 )
 
-/// What PDT's token endpoint answers `tokenReply(rotated)` with at `clock`.
 private let rotated = PDTBrowserSession(
     accessToken: PDTAPIToken("access-rotated"),
     refreshToken: PDTRefreshToken("refresh-rotated"),
@@ -330,8 +323,6 @@ private final class TestClock: Sendable {
     }
 }
 
-/// What another process can record over `stored` without replacing it: PDT
-/// rejecting its refresh token or its access token.
 private func recordedElsewhere(over stored: PDTConnectionState) -> [PDTConnectionState] {
     guard case let .connected(credential) = stored else {
         return []
@@ -343,13 +334,10 @@ private func recordedElsewhere(over stored: PDTConnectionState) -> [PDTConnectio
     return events.map { stored.applying($0) }
 }
 
-/// One stored item as one of two PDTBar processes sees it: both read the same
-/// item under the same lock, and this one's saves can fail.
 private final class ProcessStore: PDTCredentialStore, @unchecked Sendable {
     enum Saves {
         case taken
         case refused
-        /// The save lands and reports an error, and the item cannot be read until `takeSaves()`.
         case landUnanswered
     }
 
@@ -400,7 +388,6 @@ private final class ProcessStore: PDTCredentialStore, @unchecked Sendable {
     }
 }
 
-/// A store whose next loads fail in the order given, and whose saves can be refused or land unanswered.
 private final class FlakyLoadStore: PDTCredentialStore, @unchecked Sendable {
     enum Saves {
         case taken
@@ -452,9 +439,6 @@ private func pair(_ index: Int) -> PDTBrowserSession {
 
 private let pasted = PDTAPIToken("pdt_pasted")
 
-/// Every event over three pairs and one pasted token: each replacement, the
-/// refreshes that chain the pairs and one that skips a pair, and a rejection
-/// of every token.
 private let alphabet: [PDTConnectionEvent] = [
     .signedIn(pair(0)),
     .personalTokenEntered(pasted),
@@ -480,10 +464,6 @@ private func histories(upTo length: Int) -> [[PDTConnectionEvent]] {
     return all + longest
 }
 
-/// Every stored state the event table tells apart for those events, and one
-/// it does not know for each kind: the table compares a stored session's
-/// refresh token and access token separately, a rejected refresh token by
-/// fingerprint, and a stored token by value.
 private let storedStates: [PDTConnectionState] = {
     let foreign = PDTBrowserSession(
         accessToken: PDTAPIToken("access-elsewhere"),

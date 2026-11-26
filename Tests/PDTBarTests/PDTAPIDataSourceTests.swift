@@ -109,7 +109,6 @@ struct PDTAPIDataSourceTests {
         let quoteIDs = Array(1...120)
         let holdings = quoteIDs.map { holdingRow(quoteId: $0, symbolId: $0 + 1000) }.joined(separator: ",")
         let priceGroup = { (id: Int) in #"[{"date":"2026-06-22","closeAdjusted":"1.00","closeCurrency":"EUR","symbolQuoteId":\#(id)}]"# }
-        // Each chunk's reply is keyed by an id only that chunk carries.
         let batches = [Array(1...50), Array(51...100), Array(101...120)].map { chunk in
             (
                 ScriptedPDTHTTPTransport.Request(parsing: "GET /v1/prices/batch?symbolQuoteIds[]=\(chunk[0])")!,
@@ -219,7 +218,6 @@ struct PDTAPIDataSourceTests {
 
         let snapshot = try dataSource(transport, recorder: recorder).snapshot(asOf: "2026-06-22")
 
-        // Nothing is asked after the 401, and nothing unscripted is asked at all.
         #expect(transport.requests.last?.url?.path == "/v1/x-ray")
         #expect(transport.scriptErrors.isEmpty)
         #expect(snapshot.openHoldings.map(\.quoteId) == [1])

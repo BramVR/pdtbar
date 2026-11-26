@@ -140,7 +140,6 @@ private let authMeasureScenarios: [AuthScenario] = [
 ]
 
 private struct AuthMeasureFixtures {
-    /// Each reply body keyed by the request `provenance.json` says it answers.
     private let replies: [(request: ScriptedPDTHTTPTransport.Request, body: Data)]
 
     init(apiFixtures: URL, scenario: String) throws {

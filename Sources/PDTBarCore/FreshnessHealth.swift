@@ -355,9 +355,7 @@ private extension PriorSnapshotLoadStatus {
     }
 }
 
-/// What PDTBar knows about its PDT connection. No secret, no identifier.
 public enum DataHealthAccess: Codable, Equatable, Sendable {
-    /// Nothing checked this session: all a pulse built from a saved copy can claim.
     case unverified
     /// Checking, signing in, or disconnecting.
     case checking
@@ -413,7 +411,6 @@ public struct DataHealthRuntime: Equatable, Sendable {
 }
 
 public enum DataHealthSync: Equatable, Sendable {
-    /// The pulse's own detail fill and failure stand.
     case idle
     /// The pulse's last failure stays visible until the sync ends.
     case running(BackgroundDetailRefreshProgress)
@@ -421,8 +418,6 @@ public enum DataHealthSync: Equatable, Sendable {
     case failed(PDTSyncFailure?)
 }
 
-/// What a pulse knows about its own health when it is built. `default` is the
-/// only way to make one, so every pulse derives access from how it was built.
 public struct DataHealthInput: Equatable {
     public var access: DataHealthAccess
     public var pulseSource: PulseLifecycleSource?
@@ -558,10 +553,6 @@ public enum DataHealth {
         return health
     }
 
-    /// The pulse's health as the running app sees it. Replaces `access`, and
-    /// `detailFill` and `lastFailure` per `sync`. Source, cache, freshness and
-    /// read state stay the pulse's own: a sync that did not commit a snapshot
-    /// cannot move a date.
     public static func snapshot(_ pulse: DataHealthSnapshot, in runtime: DataHealthRuntime) -> DataHealthSnapshot {
         var health = pulse
         health.access = accessSnapshot(runtime.access)

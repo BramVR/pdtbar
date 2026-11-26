@@ -140,7 +140,6 @@ struct BigMoverPressureTests {
         #expect(item.moveSize == 0.2222)
     }
 
-    // #104 flagged recent move ordering same-day closes as strings ("10.20" < "9.50"); #178 fixed only big movers.
     @Test(
         "Big mover, recent move, and max move pick the same same-day close",
         arguments: [

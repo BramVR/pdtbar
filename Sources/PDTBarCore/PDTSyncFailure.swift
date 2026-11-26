@@ -1,11 +1,8 @@
 import Foundation
 
-/// A PDT request trace id that is safe to show and copy. The only way to make
-/// one is `init?`, which accepts a canonical UUID or 32 hex digits and nothing
-/// else. Decoding runs the same check, so an edited file cannot inject text.
-///
-/// Shape cannot tell a trace id from another UUID: PDT documents `X-Request-Id`
-/// and `error.traceId` as trace ids, and those are the only two fields read.
+/// A PDT request trace id that is safe to show and copy: `init?` and decoding accept only a
+/// canonical UUID or 32 hex digits. Shape cannot tell a trace id from another UUID, so read it
+/// only from `X-Request-Id` or `error.traceId`, the two fields PDT documents as trace ids.
 public struct PDTTraceID: Codable, Equatable, Sendable {
     public let value: String
 
@@ -54,9 +51,6 @@ public struct PDTTraceID: Codable, Equatable, Sendable {
     }
 }
 
-/// Why one PDT request of a sync failed. Every stored property is a closed
-/// enum, an Int, or a `PDTTraceID`. No initializer accepts text, so a token,
-/// account id, URL or response body has no way in.
 public struct PDTSyncFailure: Codable, Equatable, Sendable {
     public enum Kind: Codable, Equatable, Sendable {
         /// `401`, or no usable credential.
@@ -120,9 +114,6 @@ public struct PDTSyncFailure: Codable, Equatable, Sendable {
             }
         }
 
-        /// Every later request of this sync would fail the same way, so the
-        /// remaining phases are skipped: access is gone, or PDT asked PDTBar to
-        /// wait longer than the client retries.
         public var endsSync: Bool {
             switch self {
             case .reconnect, .readAccessMissing, .accessPaused, .forbidden, .credentialStore, .rateLimited:
@@ -163,9 +154,6 @@ public struct PDTSyncFailure: Codable, Equatable, Sendable {
         self.traceID = traceID
     }
 
-    /// From a thrown error. A `PDTAPIRequestFailure` supplies the request count
-    /// and trace id; a bare error counts as one request with no trace. Only the
-    /// error's case and numbers are read, never its text.
     public init(_ error: any Error, resource: PDTAPIResource?, phase: BackgroundDetailRefreshPhase) {
         let requestFailure = error as? PDTAPIRequestFailure
         self.init(
@@ -177,7 +165,6 @@ public struct PDTSyncFailure: Codable, Equatable, Sendable {
         )
     }
 
-    /// Menu detail: the step that failed, why, and what to do about it.
     public var menuDetail: String {
         "\(phase.title): \(kind.menuDetail)"
     }

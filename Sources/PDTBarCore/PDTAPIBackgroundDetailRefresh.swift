@@ -15,14 +15,6 @@ public struct PDTBackgroundDetailRefreshResult: Equatable {
 }
 
 /// Background detail refresh over the read-only PDT REST API (ADR-0002).
-///
-/// Phases run in order and fill one in-memory snapshot. The store is written
-/// once, by `PressureRunner.refreshedPulse` after the last phase, so a cancel,
-/// a quit, or a failed required base leaves the last good snapshot on disk.
-/// A failed optional phase keeps the prior snapshot's facet and degrades the
-/// outcome. Once a failure ends the sync (lost access, or a rate limit that
-/// outlasts the client's retries), every later phase is skipped, price
-/// history included.
 public final class PDTAPIBackgroundDetailRefresh: @unchecked Sendable {
     private let client: PDTAPIClient
     private let snapshotStore: SnapshotStore
@@ -126,8 +118,6 @@ public final class PDTAPIBackgroundDetailRefresh: @unchecked Sendable {
             let dividends = try fetch(dividendsResource, phase: .income, cancellation: cancellation) {
                 try client.getAllReportingAttempts(dividendsResource, as: APIDividend.self, cancellation: cancellation)
             }
-            // REST holdings carry symbolId, so income events join to open
-            // holdings without the per-holding symbol-quote scan.
             let openQuoteIDSet = Set(openQuoteIDs)
             let quoteIDsBySymbolID = Dictionary(
                 rows.compactMap { row in
@@ -190,8 +180,6 @@ public final class PDTAPIBackgroundDetailRefresh: @unchecked Sendable {
             }
         }
 
-        // REST performance and gains shapes are not mapped yet (#246 scope),
-        // so this phase reports unavailable without degrading the outcome.
         progress(BackgroundDetailRefreshProgress(phase: .performance, detail: "Performance unavailable"))
         try throwIfCancelled(cancellation)
 
@@ -273,9 +261,7 @@ public final class PDTAPIBackgroundDetailRefresh: @unchecked Sendable {
 }
 
 /// Offline API replies for the app's `--scripted-pdt` connection
-/// (`ScriptedPDTConnection.api`). Each response names the request it answers
-/// (`"GET /v1/portfolio/holdings"`); see `ScriptedPDTHTTPTransport.Request`.
-/// A request no response names fails as an unscripted request.
+/// (`ScriptedPDTConnection.api`).
 public struct ScriptedPDTAPIConfiguration: Codable, Equatable, Sendable {
     public struct Response: Codable, Equatable, Sendable {
         public var request: ScriptedPDTHTTPTransport.Request

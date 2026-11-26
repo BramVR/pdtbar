@@ -6,9 +6,8 @@ import PDTBarAppSupport
 import PDTBarCore
 
 /// #301 and ADR-0003 decision 3: on a build without the keychain access
-/// entitlement the data protection keychain reads as empty (-25300) and refuses
-/// every write (-34018). A sign-in there works until PDTBar quits, says it is
-/// not saved, and is never signed out by a check.
+/// entitlement, a sign-in works until PDTBar quits, says it is not saved, and
+/// is never signed out by a check.
 @Suite("Sign-in persistence")
 struct SignInPersistenceTests {
     @Test("Check again after sign-in never signs out, whether or not the Keychain can store the session")
@@ -22,7 +21,6 @@ struct SignInPersistenceTests {
             try #require(driver.signIn(), "\(keychain): sign-in is offered at launch")
             #expect(driver.runtime.state == .connected(.fetching, persistence), "\(keychain)")
 
-            // The first fetch finds the subscription paused, which is a screen that offers Check again.
             driver.endFirstFetch(driver.connection.failure(for: PDTSyncFailure.Kind.accessPaused))
             #expect(driver.runtime.state == .subscriptionPaused, "\(keychain)")
             try #require(driver.checkAgain(), "\(keychain)")
@@ -158,7 +156,6 @@ struct SignInPersistenceTests {
         try #require(pasted.connect(token: PDTAPIToken("pdt_pasted")))
 
         for (driver, page) in [(signedIn, PDTOAuthEndpoints.connectedApps), (pasted, PDTOAuthEndpoints.integrations)] {
-            // Disconnect is offered once the fetch is over; a failed one keeps the not-saved row beside it.
             driver.endFirstFetch(driver.connection.failure(for: PDTAPIError.transport(code: URLError.timedOut.rawValue)))
             #expect(driver.rows.map(\.id).suffix(2) == ["pdtConnection.notSaved", "pdtConnection.disconnect"])
             try #require(driver.disconnect())
@@ -299,10 +296,6 @@ private func temporaryDirectory() throws -> URL {
     return directory
 }
 
-/// Runs `PDTLaunchRuntime` effects synchronously against a real `PDTAppConnection`
-/// over the Keychain store and a fake SecItem API, or over another store. Fetch
-/// effects are left unstarted: a test sends its own requests through the
-/// connection and ends the first fetch with `endFirstFetch`.
 private final class LaunchDriver {
     let runtime = PDTLaunchRuntime()
     let connection: PDTAppConnection
@@ -361,7 +354,6 @@ private final class LaunchDriver {
         run(runtime.disconnect())
     }
 
-    /// The first fetch the last sign-in, token, or check started ends this way.
     func endFirstFetch(_ failure: PDTFetchFailure) {
         run(runtime.completeFirstFetch(.failed(failure)))
     }
@@ -401,9 +393,6 @@ private final class LaunchDriver {
     }
 }
 
-/// The Keychain as an unentitled build sees it (measured with an ad-hoc signed
-/// probe: reads -25300, writes -34018, no `keychain-access-groups` in the
-/// signature), or as an entitled one.
 private enum FakeKeychain: CustomStringConvertible {
     case unentitled
     case entitled
@@ -462,8 +451,6 @@ private final class KeychainItem: Sendable {
     }
 }
 
-/// An in-memory store whose saves, or whose lock, can be switched off and
-/// back on: a store that is unwritable for a while.
 private final class SwitchableStore: PDTCredentialStore, @unchecked Sendable {
     private let backing: InMemoryPDTCredentialStore
     private let lock = NSLock()
@@ -474,7 +461,6 @@ private final class SwitchableStore: PDTCredentialStore, @unchecked Sendable {
         backing = InMemoryPDTCredentialStore(state)
     }
 
-    /// With no argument the store works again.
     func refuse(saves: Bool = false, lock refusesLock: Bool = false) {
         lock.lock()
         refusesSaves = saves

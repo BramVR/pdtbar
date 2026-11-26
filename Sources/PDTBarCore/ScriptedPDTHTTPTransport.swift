@@ -1,15 +1,9 @@
 import Foundation
 import os
 
-/// Offline transport for tests and scripted smokes. It answers each request
-/// with the reply scripted for that request, never with a reply meant for
-/// another one, and records every request it receives. It never touches the
-/// network.
-///
-/// A request nothing in the script answers throws
-/// `ScriptError.unscriptedRequest` instead of succeeding, so a wrong, extra,
-/// or repeated request fails the way it would against PDT. A key scripted more
-/// than once answers its requests in script order (a `429` then a `200`).
+/// Offline transport for tests and scripted smokes. A request nothing in the script answers
+/// throws `ScriptError.unscriptedRequest`. A key scripted more than once answers its requests
+/// in script order.
 public final class ScriptedPDTHTTPTransport: PDTHTTPTransport, Sendable {
     public enum Reply: Sendable {
         case response(status: Int, body: Data, headers: [String: String] = [:])
@@ -131,8 +125,7 @@ public final class ScriptedPDTHTTPTransport: PDTHTTPTransport, Sendable {
 
     private let state: OSAllocatedUnfairLock<State>
 
-    /// `initialDelaySeconds` holds the first request, so scripted smokes can
-    /// observe the app while a refresh is in flight. Cancellation ends the wait.
+    /// `initialDelaySeconds` holds the first request; cancellation ends the wait.
     public convenience init(_ script: KeyValuePairs<Request, Reply>, initialDelaySeconds: TimeInterval = 0) {
         self.init(exchanges: script.map { ($0.key, $0.value) }, initialDelaySeconds: initialDelaySeconds)
     }
@@ -153,13 +146,10 @@ public final class ScriptedPDTHTTPTransport: PDTHTTPTransport, Sendable {
         state.withLock { $0.recorded }
     }
 
-    /// Every `ScriptError` thrown so far. A client turns a thrown one into a
-    /// transport failure, so tests read it here.
     public var scriptErrors: [ScriptError] {
         state.withLock { $0.errors }
     }
 
-    /// Scripted replies no request asked for, one key per reply.
     public var unusedReplies: [Request] {
         state.withLock { state in
             state.script.flatMap { entry in Array(repeating: entry.request, count: entry.replies.count) }

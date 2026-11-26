@@ -1,11 +1,5 @@
 import Foundation
 
-/// One quote's price history reduced to its first and last close.
-///
-/// Big-mover pressure, a holding's recent move, and the Big movers summary all read this, so they agree
-/// on which rows count. A window exists only when every row of the quote has a day date and a positive
-/// close, and the rows span at least two days. Rows on the same day order by close, so `first` is the
-/// lowest close on the first day and `last` the highest close on the last day.
 struct PriceWindow {
     struct Close {
         let point: PricePoint
@@ -38,7 +32,6 @@ struct PriceWindow {
         self.last = last
     }
 
-    /// Signed fractional change from `first` to `last`, unrounded.
     var change: Decimal {
         (last.value - first.value) / first.value
     }

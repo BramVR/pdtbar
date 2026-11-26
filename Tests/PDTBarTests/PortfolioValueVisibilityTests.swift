@@ -143,7 +143,6 @@ struct PortfolioValueVisibilityTests {
         #expect(leaked.isEmpty, "Hidden GBp descriptor leaked: \(leaked)")
     }
 
-    // No fixture crosses the cash drag line, so the scans above never saw this row (a31cbba leaked it).
     @Test("Hidden mode hides the cash drag value in Pulse and its explanation")
     func hiddenModeHidesCashDragValue() throws {
         var snapshot = try visibilitySnapshot("quiet-no-pressure.json")
@@ -166,8 +165,6 @@ struct PortfolioValueVisibilityTests {
         #expect(leaked.isEmpty, "Hidden cash drag descriptor leaked: \(leaked)")
     }
 
-    // A fact's key is data, so a decoded Current fact that calls itself "severity" cannot print its
-    // numeric value next to the placeholder.
     @Test("A decoded fact's key cannot unmask its numeric value")
     func decodedFactKeyCannotUnmaskNumericValue() throws {
         var snapshot = try visibilitySnapshot("quiet-no-pressure.json")
@@ -190,8 +187,6 @@ struct PortfolioValueVisibilityTests {
         #expect(!json.contains("123.45"))
     }
 
-    // A fact's number can be money, so the severity row shows the item's own score or none. A decoded
-    // Severity fact that is not a severity fact shows none.
     @Test(
         "A decoded Severity fact never shows its own number",
         arguments: [
@@ -512,8 +507,6 @@ struct PortfolioValueVisibilityTests {
         #expect(!((second.detail ?? "").contains("GBp 111.11")))
     }
 
-    // PDT can list an estimate, which has no amount, before the confirmed event for the same quote
-    // and date. The menu describes the first one listed (copy taken from main at 3dfed5b).
     @Test(
         "Income attention describes the first ex-dividend event PDT lists for its quote and date",
         arguments: [true, false]
@@ -535,8 +528,6 @@ struct PortfolioValueVisibilityTests {
         #expect(attention.detail == "Helix Pharma A/S has an ex-dividend date on 2026-06-24.")
     }
 
-    // An event whose symbol maps to no held quote matched no event in main's renderer, which then
-    // hid the whole copy with portfolio values (copy taken from main at 3dfed5b).
     @Test("Income attention without a quote hides its whole copy with portfolio values")
     func incomeAttentionWithoutQuoteHidesWholeCopy() throws {
         let snapshot = try incomeEventSnapshot { events in
@@ -630,7 +621,6 @@ private func visibilitySnapshot(_ fixtureName: String) throws -> PortfolioSnapsh
     )
 }
 
-/// income-event.json with its PDT calendar events edited, read through the same normalizer as live data.
 private func incomeEventSnapshot(
     editingCalendarEvents edit: (inout [[String: Any]]) throws -> Void
 ) throws -> PortfolioSnapshot {
@@ -652,13 +642,6 @@ private func monetaryDisplays(in snapshot: PortfolioSnapshot) throws -> Set<Stri
     Set(try snapshotMoney(in: snapshot).map(formattedMoney))
 }
 
-/// Snapshot amounts that `text` shows. Each amount is searched in every form code could print it:
-/// PDT's raw `value` (`6144.00`), and two decimals with and without grouping (`6,144.00`,
-/// `6144.00`). A form counts unless a digit touches it, so `EUR 6144.00,12%` counts.
-///
-/// The severity scores `model` renders (`high; score 1.00`) are left out, each as its exact text. A
-/// score is not a portfolio value but can equal a small amount (worst-case-height's Cash unit price
-/// is EUR 1.00), and any other text with a score's shape still counts.
 private func leakedAmounts(
     in text: String,
     snapshot: PortfolioSnapshot,
@@ -687,7 +670,6 @@ private func leakedAmounts(
     }.sorted()
 }
 
-/// Descriptor JSON as `pdtbar-dev descriptor` prints it.
 private func descriptorJSON(_ descriptor: MenuDescriptor) throws -> String {
     try #require(String(data: stableJSONData(descriptor), encoding: .utf8))
 }

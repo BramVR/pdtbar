@@ -1,11 +1,8 @@
 import Foundation
 
-/// The order PDTBar gives up menu height when the menu would overflow the screen (#296).
-///
-/// Each step only moves rows under a parent row, so every row stays reachable through a
-/// submenu. Steps apply cumulatively in declaration order; a step that finds nothing to
-/// fold leaves the surface unchanged. The order gives up the least first: a summary of a move
-/// Pulse usually shows, then the income list, then the chart, and attention items last.
+/// The order PDTBar gives up menu height when the menu would overflow the screen. Steps apply
+/// cumulatively in declaration order. Each only moves rows under a parent row, so every row
+/// stays reachable through a submenu.
 public enum MenuOverflowStep: Int, CaseIterable, Sendable {
     /// Big movers loses its heading; its row moves into one `Big movers` submenu row.
     case foldBigMovers

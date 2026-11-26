@@ -448,7 +448,6 @@ private func healthDetail(_ row: String, in descriptor: MenuDescriptor) -> Strin
     healthRow(in: descriptor)?.children.first { $0.id == "dataHealth.\(row)" }?.detail
 }
 
-/// `dataHealth` as builds before the PDT API path wrote it.
 private let legacyDataHealthJSON = #"""
 {
   "status": "degraded",

@@ -339,13 +339,11 @@ private func appConnection(
     PDTAppConnection(
         store: store,
         tokenEndpoint: PDTTokenEndpoint(transport: ScriptedPDTHTTPTransport(exchanges: tokenReplies.map { ("POST https://auth.portfoliodividendtracker.com/oauth/token", $0) })),
-        // The first fetch reads holdings only; any other request is unscripted.
         apiTransport: ScriptedPDTHTTPTransport(exchanges: replies.map { ("GET /v1/portfolio/holdings", $0) }),
         signIn: { _ in throw PDTSignInError.accessDenied }
     )
 }
 
-/// What the app does for `.startFirstFetch`: the coalesced fetch persists, then returns the pulse.
 private func runFirstFetch(_ connection: PDTAppConnection, snapshots: SnapshotStore) -> PDTLaunchFetchResult {
     do {
         let pulse = try PDTCoalescedFirstPortfolioFetch(
@@ -380,7 +378,6 @@ private func temporaryDirectory() throws -> URL {
     return directory
 }
 
-/// Answers every SecItem call with one status and records each query.
 private final class RecordingSecItems: @unchecked Sendable {
     private let lock = NSLock()
     private let status: OSStatus

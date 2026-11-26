@@ -366,9 +366,7 @@ public struct PortfolioValueDisplaySettings: Codable, Equatable, Sendable {
 }
 
 /// Text that may hold portfolio values. Money stays typed until `rendered(settings:)`, the only
-/// place that formats it. Only `PDTBarCore` can build one: other modules get it from the model or
-/// by decoding. A `.literal` that interpolates money still compiles here, and
-/// `PortfolioValueVisibilityTests` fails on any amount it finds in hidden output.
+/// place that formats it.
 public struct PortfolioValueText: Codable, Equatable {
     enum Component: Codable, Equatable {
         case literal(String)
@@ -382,7 +380,6 @@ public struct PortfolioValueText: Codable, Equatable {
         self.components = components
     }
 
-    /// Model JSON from before this type stored plain strings; their sensitivity is unknown.
     public init(from decoder: Decoder) throws {
         if let legacy = try? decoder.singleValueContainer().decode(String.self) {
             self.init([.unresolvedSensitive(legacy)])
@@ -392,7 +389,6 @@ public struct PortfolioValueText: Codable, Equatable {
         self.init(try container.decode([Component].self, forKey: .components))
     }
 
-    // `@usableFromInline` lets public default arguments use it; other modules cannot call it.
     @usableFromInline
     static func literal(_ text: String) -> PortfolioValueText {
         PortfolioValueText([.literal(text)])

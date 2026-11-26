@@ -150,7 +150,6 @@ struct DataHealthRedactionTests {
     }
 }
 
-/// Values a PDT answer could echo back. None may leave the client.
 private enum Planted {
     static let token = "pdt_SENTINEL_TOKEN_0123456789abcdef0123456789abcdef"
     static let accountID = "acct-SENTINEL-4242"
@@ -194,7 +193,6 @@ enum FailedRequest: String, CaseIterable, Sendable {
     }
 }
 
-/// Where in the sync the failed request sits: the required base, or an optional phase.
 enum FailedStep: String, CaseIterable, Sendable {
     case baseHoldings, allocation
 
@@ -227,7 +225,6 @@ private let everyKind: [PDTSyncFailure.Kind] = [
     .unexpected(status: 404), .unexpected(status: nil), .credentialStore, .cancelled,
 ]
 
-/// No `default`: a new kind does not compile until it is added here and to `everyKind`.
 private func ordinal(_ kind: PDTSyncFailure.Kind) -> String {
     switch kind {
     case .reconnect: "reconnect"
@@ -246,8 +243,6 @@ private func ordinal(_ kind: PDTSyncFailure.Kind) -> String {
     }
 }
 
-/// Paths of stored values that could hold arbitrary text. `PDTTraceID` is the
-/// one allowed string, because it validates its shape.
 private func freeTextProperties(in value: Any, path: String) -> [String] {
     if value is PDTTraceID {
         return []
@@ -273,14 +268,12 @@ private func refresh(_ replies: [ScriptedPDTHTTPTransport.Request: ScriptedPDTHT
     )
 }
 
-/// A store holding one complete sync, so a failed base still has a saved copy to show.
 private func seededStore() throws -> SnapshotStore {
     let store = try SnapshotStore.temporaryTestStore(prefix: "pdtbar-data-health-redaction-test")
     _ = try refresh(syncReplies(), store: store).refresh(cancellation: nil, progress: { _ in })
     return store
 }
 
-/// One complete sync, each reply keyed by the request it answers.
 private func syncReplies() -> [ScriptedPDTHTTPTransport.Request: ScriptedPDTHTTPTransport.Reply] {
     let holding = #"{"symbolName":"Holding 1","symbolQuoteId":1,"symbolId":1001,"currentPriceDate":"2026-06-22T23:59:59+00:00","portfolioWeight":"1","closedAt":null,"currentWorthLocal":{"value":"100.00","currency":"EUR"}}"#
     let emptyPage = #"{"data":[],"meta":{"currentPage":1,"lastPage":1}}"#
@@ -295,8 +288,6 @@ private func syncReplies() -> [ScriptedPDTHTTPTransport.Request: ScriptedPDTHTTP
     return bodies.mapValues { .response(status: 200, body: Data($0.utf8)) }
 }
 
-/// Data health as the app shows it after this sync: the degraded pulse the sync
-/// returned, or the saved copy under a failed sync when the base failed.
 private func shownHealth(
     result: PDTBackgroundDetailRefreshResult?,
     store: SnapshotStore,

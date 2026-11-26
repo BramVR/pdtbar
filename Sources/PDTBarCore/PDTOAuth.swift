@@ -21,8 +21,7 @@ public struct PDTOAuthClient: Sendable, Equatable {
     public static let pdtbar = PDTOAuthClient(id: "01a1c518-271d-73cb-b279-9d2207283ce2", redirectPort: 47245)
 
     public let id: String
-    /// PDT matches the registered redirect exactly. `0` binds any free port
-    /// and exists for tests and smokes only.
+    /// PDT matches the registered redirect exactly. `0` binds any free port.
     public let redirectPort: UInt16
 
     public init(id: String, redirectPort: UInt16) {
@@ -90,13 +89,10 @@ public enum PDTTokenEndpointError: Error, Equatable, Sendable {
     case invalidGrant
     /// Another OAuth error response. `error` is the OAuth error code, never a description.
     case rejected(status: Int, error: String?)
-    /// The request did not complete: transport failure, rate limit, server error, or cancel.
     case unavailable(PDTAPIError)
     case invalidResponse
 }
 
-/// Exchanges codes and refresh tokens at PDT's token endpoint over the same
-/// `PDTHTTPTransport` as the API client.
 public struct PDTTokenEndpoint {
     let client: PDTOAuthClient
     private let transport: any PDTHTTPTransport

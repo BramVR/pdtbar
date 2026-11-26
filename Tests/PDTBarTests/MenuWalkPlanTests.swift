@@ -74,7 +74,6 @@ private func renderedSurface(fixture: String) throws -> MenuBarSurface {
     return MenuBarSurfaceRenderer.render(descriptor: run.descriptor(in: DataHealthRuntime(access: .connected)))
 }
 
-/// The runtime after a returning launch whose background refresh got `401` on holdings.
 private func reconnectAfterBaseFailure() throws -> MenuDescriptor {
     let root = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()

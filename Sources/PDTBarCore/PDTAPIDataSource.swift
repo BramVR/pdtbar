@@ -38,8 +38,8 @@ public struct PDTAPIDataSourceOptions: Equatable, Sendable {
 
 /// `PortfolioDataSource` over the read-only PDT REST API (ADR-0002). Holdings are
 /// required; every other facet is optional and degrades the snapshot on failure.
-/// Requests run sequentially in a fixed order. `onSyncFailure` gets the typed
-/// record of every failed request, holdings included, before holdings rethrows.
+/// `onSyncFailure` gets the typed record of every failed request, holdings included,
+/// before holdings rethrows.
 public struct PDTAPIDataSource: PortfolioDataSource {
     public var client: PDTAPIClient
     public var options: PDTAPIDataSourceOptions

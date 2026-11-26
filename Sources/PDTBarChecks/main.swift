@@ -453,14 +453,7 @@ private func checkNoEmptySafeExpectations() throws {
     )
 }
 
-/// Shared mutable state hidden from the concurrency checker kept coming back in
-/// review (#59, #183, #306, #310) and once raced for real (768ab93).
-/// `nonisolated(unsafe)` and the unchecked `OSAllocatedUnfairLock` calls are
-/// banned outright. `@unchecked Sendable` may not exceed the per-file counts in
-/// docs/unchecked-sendable-baseline.txt, and that file must drop with the code,
-/// so the count only goes down.
 private func checkConcurrencyEscapeHatches() throws {
-    // Split so this file does not match its own patterns.
     let unchecked = "@unchecked" + " Sendable"
     let banned = ["nonisolated" + "(unsafe)", "withLock" + "Unchecked", "unchecked" + "State:"]
     let fix = "hold mutable state in `OSAllocatedUnfairLock<State>` (`init(initialState:)` + `withLock`, compiler-checked) or an actor; see #310"
@@ -503,9 +496,6 @@ private func checkConcurrencyEscapeHatches() throws {
     try check(problems.isEmpty, problems.joined(separator: "\n"))
 }
 
-/// The public feature guides fell behind the menu: of eight menu changes
-/// (#286 to #307) only #307 reached them, and in a follow-up (#311). Every
-/// fixed label the menu draws over the fixture corpus is quoted in both guides.
 private func checkFeatureGuidesQuoteMenuCopy(_ fixtures: [URL]) throws {
     let guides = ["docs/public/features.en.md", "docs/public/features.nl.md"]
     let guideTexts = try guides.map { try String(contentsOf: packageRoot.appending(path: $0), encoding: .utf8) }
@@ -525,7 +515,6 @@ private func checkFeatureGuidesQuoteMenuCopy(_ fixtures: [URL]) throws {
     for fixture in fixtures {
         let names = try namesFromPDT(in: fixture)
         let snapshot = try PDTFixtureDataSource.snapshot(from: fixture)
-        // No fixture has a holding PDT has not priced, which the menu draws with its own copy.
         var unpriced = snapshot
         unpriced.openHoldings.indices.first.map { unpriced.openHoldings[$0].price = nil }
         for snapshot in [snapshot, unpriced] {
@@ -556,7 +545,6 @@ private func checkFeatureGuidesQuoteMenuCopy(_ fixtures: [URL]) throws {
     try check(problems.isEmpty, problems.joined(separator: "\n"))
 }
 
-/// The text a person reads in the menu. The summary card draws its metrics, not its row title.
 private func drawnMenuText(_ descriptor: MenuDescriptor) -> [String] {
     func walk(_ rows: [MenuRow]) -> [String] {
         rows.flatMap { row in
@@ -568,7 +556,6 @@ private func drawnMenuText(_ descriptor: MenuDescriptor) -> [String] {
     return descriptor.sections.map(\.title) + walk(descriptor.sections.flatMap(\.rows))
 }
 
-/// Holding, ticker, sector, asset-type, and exchange names from a fixture, in `normalizedWords` form.
 private func namesFromPDT(in fixture: URL) throws -> [String] {
     let nameKeys: Set<String> = ["symbolName", "categoryName", "exchangeName", "code", "isin"]
     var names: [String] = []
@@ -585,8 +572,6 @@ private func namesFromPDT(in fixture: URL) throws -> [String] {
     return names.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
 }
 
-/// Fixed copy has words, no number (amounts, dates, counts), and no name PDT supplied,
-/// which the menu may restyle (`health-care` reads `Health Care`).
 private func isFixedCopy(_ text: String, names: [String]) -> Bool {
     let words = normalizedWords(text)
     return text.contains(where: \.isLetter)
@@ -594,7 +579,6 @@ private func isFixedCopy(_ text: String, names: [String]) -> Bool {
         && !names.contains { words.contains($0) }
 }
 
-/// Lowercased words separated and wrapped by single spaces, so `contains` matches whole words.
 private func normalizedWords(_ text: String) -> String {
     let words = text.lowercased().split { !$0.isLetter && !$0.isNumber }
     return " \(words.joined(separator: " ")) "

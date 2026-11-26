@@ -1,5 +1,3 @@
-# `@unchecked Sendable` per file; `swift run pdtbar-checks` fails above a count and when a count drops without this file.
-# Lower a line (or remove it at 0) with the code change. Never raise one: use `OSAllocatedUnfairLock<State>` or an actor.
 2 Sources/PDTBarApp/main.swift
 2 Sources/PDTBarAppSupport/PDTAppConnection.swift
 1 Sources/PDTBarCore/PDTAPIBackgroundDetailRefresh.swift

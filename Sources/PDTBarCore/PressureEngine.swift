@@ -781,8 +781,7 @@ public enum PressureEngine {
     }
 
     /// PDT can list an estimate, which has no amount, before the confirmed event for the same quote
-    /// and date. The copy describes the first event listed, as the menu always has. An event without
-    /// a quote matches none, and its whole copy hides with portfolio values.
+    /// and date. The copy describes the first event listed.
     private static func incomeDetail(
         for event: IncomeEventSummary,
         upcomingEvents: [IncomeEventSummary]

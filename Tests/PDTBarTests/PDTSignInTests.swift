@@ -368,7 +368,6 @@ struct PDTConnectionTests {
         clock.advance(by: 3600)
         #expect(try connection.currentToken() == PDTAPIToken("access-3"))
 
-        // The first rotated pair's save landed while the store could not be read back, and another process then saw PDT reject it.
         store.recover()
         let middle = try store.load()
         #expect(middle.state == .connected(.browserSession(session("access-2", "refresh-2", expiresAt: testNow + 3600))))
@@ -792,7 +791,6 @@ struct PDTCredentialStorageTests {
 
 private let tokenRequest: ScriptedPDTHTTPTransport.Request = "POST https://auth.portfoliodividendtracker.com/oauth/token"
 
-/// PDT's token endpoint, answering `replies` in order.
 private func scriptedTokens(_ replies: ScriptedPDTHTTPTransport.Reply...) -> ScriptedPDTHTTPTransport {
     scriptedTokens(replies)
 }
@@ -801,7 +799,6 @@ private func scriptedTokens(_ replies: [ScriptedPDTHTTPTransport.Reply], initial
     ScriptedPDTHTTPTransport(exchanges: replies.map { (tokenRequest, $0) }, initialDelaySeconds: initialDelaySeconds)
 }
 
-/// The PDT API, answering `GET /v1/me` with `replies` in order.
 private func scriptedMe(_ replies: ScriptedPDTHTTPTransport.Reply...) -> ScriptedPDTHTTPTransport {
     scriptedMe(replies)
 }
@@ -1002,7 +999,6 @@ private final class FailingSaveStore: PDTCredentialStore, @unchecked Sendable {
     private let lock = NSLock()
     private let backing: InMemoryPDTCredentialStore
     private var failures: Int
-    /// A failed save lands anyway, and the store cannot be read until `recover()`.
     private let failedSavesLandUnreadable: Bool
     private var unreadable = false
 
@@ -1023,7 +1019,6 @@ private final class FailingSaveStore: PDTCredentialStore, @unchecked Sendable {
         return try backing.load()
     }
 
-    /// Ends the failures early: the store takes writes again.
     func recover() {
         lock.lock()
         failures = 0
@@ -1050,8 +1045,6 @@ private final class FailingSaveStore: PDTCredentialStore, @unchecked Sendable {
     }
 }
 
-/// A store whose exclusive access excludes nothing, like two processes whose
-/// lock files do not meet. Only the transition rules protect the pair.
 private final class UnlockedStore: PDTCredentialStore, @unchecked Sendable {
     private let backing: InMemoryPDTCredentialStore
 
@@ -1074,8 +1067,6 @@ private final class UnlockedStore: PDTCredentialStore, @unchecked Sendable {
     }
 }
 
-/// The first caller gets the first reply after its delay, even when a later
-/// caller is answered first.
 private final class ArrivalOrderTransport: PDTHTTPTransport, @unchecked Sendable {
     private let lock = NSLock()
     private let replies: [(delay: TimeInterval, reply: ScriptedPDTHTTPTransport.Reply)]
@@ -1168,7 +1159,6 @@ private final class FakeSecItems: @unchecked Sendable {
         )
     }
 
-    /// `status` answers every call instead of the in-memory item.
     init(status: OSStatus? = nil) {
         forcedStatus = status
     }
