@@ -22,6 +22,7 @@ try checkNoEmptySafeExpectations()
 try checkConcurrencyEscapeHatches()
 try checkFeatureGuidesQuoteMenuCopy(fixtures)
 try checkCommentRatchet()
+try checkVerifySkillNamesEveryCommand()
 try checkCIRunsWhenCheckInputsChange()
 
 print("pdtbar-checks: passed")
@@ -647,6 +648,40 @@ private func checkCommentRatchet() throws {
         \(problems.joined(separator: "\n"))
         """
     )
+}
+
+/// New verify commands landed without the verify-pdtbar skill naming them
+/// (`launch-scripted` and `menu-measure` until #309, `auth-measure` and
+/// `--no-menu-checks` until #322), so agents verifying a change never ran them.
+private func checkVerifySkillNamesEveryCommand() throws {
+    let skillRoot = ".cursor/skills/verify-pdtbar"
+    let skillText = try repoFiles(under: [skillRoot]).filter { $0.hasSuffix(".md") }.map(readRepoText).joined(separator: "\n")
+    let smokeSource = "Sources/PDTBarSmoke/main.swift"
+    let verifyScript = "Scripts/verify_pdtbar.sh"
+    let smokeText = try readRepoText(smokeSource)
+    let verifyText = try readRepoText(verifyScript)
+    let verifyDispatch = verifyText.components(separatedBy: "case \"${1:-}\" in").last ?? ""
+
+    func captures(_ pattern: String, in text: String) throws -> [String] {
+        try text.matches(of: Regex(pattern)).compactMap { $0.output[1].substring.map(String.init) }
+    }
+    let commands: [(name: String, source: String)] =
+        try captures(#"SmokeCommand\(name: "([a-z0-9-]+)""#, in: smokeText).map { ($0, smokeSource) }
+        + captures(#"case "(--[a-z-]+)""#, in: smokeText).map { ($0, smokeSource) }
+        + captures(#"(?m)^  ([a-z][a-z-]*)\)"#, in: verifyDispatch).map { ($0, verifyScript) }
+
+    var problems: [String] = []
+    for (name, source) in commands where !skillText.contains(try Regex("(?m)(?:^|[^A-Za-z0-9-])\(name)(?![A-Za-z0-9-])")) {
+        problems.append("`\(name)` from \(source) is not in \(skillRoot); say when to run it and whether it can prompt")
+    }
+    let known = Set(commands.map(\.name))
+    let fenced = try captures(#"(?s)```[a-z]*\n(.*?)```"#, in: skillText)
+    let inline = try captures(#"`([^`\n]+)`"#, in: skillText)
+    let codeText = (fenced + inline).joined(separator: "\n")
+    for name in try Set(captures(#"(?:pdtbar-smoke|verify_pdtbar\.sh) ([a-z][a-z0-9-]*)"#, in: codeText)).sorted() where !known.contains(name) {
+        problems.append("\(skillRoot) runs `\(name)`, which neither \(smokeSource) nor \(verifyScript) has")
+    }
+    try check(problems.isEmpty, problems.joined(separator: "\n"))
 }
 
 /// CI skips a change that touches only `!docs/**` or `!**.md` paths, so each file

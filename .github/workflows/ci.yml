@@ -18,6 +18,7 @@ on:
       - "docs/unchecked-sendable-baseline.txt"
       - "docs/comment-baseline.txt"
       - "docs/smoke/*.svg"
+      - ".cursor/skills/verify-pdtbar/**"
   pull_request:
     paths:
       - "**"
@@ -30,6 +31,7 @@ on:
       - "docs/unchecked-sendable-baseline.txt"
       - "docs/comment-baseline.txt"
       - "docs/smoke/*.svg"
+      - ".cursor/skills/verify-pdtbar/**"
 
 permissions:
   contents: read

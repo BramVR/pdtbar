@@ -24,7 +24,7 @@
 1 Sources/PDTBarAppSupport/PortfolioSummaryGridLayout.swift
 17 Sources/PDTBarAppSupport/StatusMenuHost.swift
 10 Sources/PDTBarCapture/main.swift
-30 Sources/PDTBarChecks/main.swift
+33 Sources/PDTBarChecks/main.swift
 2 Sources/PDTBarCore/BaseHoldingNormalization.swift
 2 Sources/PDTBarCore/Formatting.swift
 22 Sources/PDTBarCore/FreshnessHealth.swift

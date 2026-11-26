@@ -65,7 +65,7 @@ Doctor does not check the PDT connection, and it should not. Fixture and scripte
 
 PDTBar has no in-process automation port. The repo's driver is `swift run pdtbar-smoke <scenario>` (`Sources/PDTBarSmoke/main.swift`). It launches the real app binary with isolated state, scripts external boundaries only, and opens the real status menu through macOS Accessibility when the calling process is already trusted. It finds elements by the `pdtbar.*` identifiers above, never by coordinates. Each scenario prints a JSON report `{name,status,detail,artifacts}`. It exits 1 only on `failed`. `skipped` means a missing permission or setup, and the `detail` field names it.
 
-Pass `--artifacts <run-dir>/evidence` (and `--app-support-dir <run-dir>/smoke-app-support` where accepted) so proof lands in the run dir.
+Pass `--artifacts <run-dir>/evidence` (and `--app-support-dir <run-dir>/smoke-app-support` where accepted) so proof lands in the run dir. Scenarios that launch the app also take `--app <path>` (default `.build/debug/pdtbar`) and `--timeout <seconds>` (default 2).
 
 Prompt-free scenarios. None of these captures the screen. They open the menu through AX only if AX is already granted, and otherwise skip that part cleanly:
 - No app launch: `scripted-api-client`, `scripted-api-snapshot`, `scripted-api-auth`, `auth-measure` (scores the sign-in and connection menus from descriptors), `scripted-pulse-mark-read`, `copy-holding-identifier-action`, `fixture-proof`, `menu-polish-proof`.
