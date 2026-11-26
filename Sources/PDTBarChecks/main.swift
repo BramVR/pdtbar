@@ -617,10 +617,6 @@ private func containsAdviceLikeLanguage(_ value: String) -> Bool {
     return value.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
 }
 
-/// Agents kept adding comments that restate code. #315 deleted them, then 15
-/// PRs added 672 comment lines that #323 had to trim. Each file's full-line
-/// comments must equal its count in docs/comment-baseline.txt, so a new comment
-/// is a reviewed baseline edit and a deletion lowers the count for good.
 private func checkCommentCounts() throws {
     let baselinePath = "docs/comment-baseline.txt"
     let baseline = try readCountBaseline(baselinePath)
@@ -659,9 +655,6 @@ private func checkCommentCounts() throws {
     try check(dropped.isEmpty, "comments were deleted; lower \(baselinePath) to match: \(dropped.joined(separator: ", "))")
 }
 
-/// New verify commands landed without the verify-pdtbar skill naming them
-/// (`launch-scripted` and `menu-measure` until #309, `auth-measure` and
-/// `--no-menu-checks` until #322), so agents verifying a change never ran them.
 private func checkVerifySkillNamesEveryCommand() throws {
     let skillRoot = ".cursor/skills/verify-pdtbar"
     let skillText = try repoFiles(under: [skillRoot]).filter { $0.hasSuffix(".md") }.map(readRepoText).joined(separator: "\n")
@@ -693,10 +686,6 @@ private func checkVerifySkillNamesEveryCommand() throws {
     try check(problems.isEmpty, problems.joined(separator: "\n"))
 }
 
-/// CI skips a change that touches only `!docs/**` or `!**.md` paths, so each file
-/// the gate reads there needs its own `paths` entry. #312 (docs/smoke/*.svg) and
-/// #318 (docs/unchecked-sendable-baseline.txt) missed theirs. Every docs or skill
-/// path the gate's code names must be one ci.yml's push and pull_request filters run on.
 private func checkCIRunsWhenCheckInputsChange() throws {
     let workflowPath = ".github/workflows/ci.yml"
     var filters: [[String]] = []
@@ -760,8 +749,12 @@ private func checkCIRunsWhenCheckInputsChange() throws {
     )
 }
 
-/// A GitHub Actions path glob: `**` crosses directories, `*` and `?` do not.
+/// GitHub Actions path glob: `*` stops at `/`, `**` does not.
 private func globRegex(_ glob: String) throws -> Regex<AnyRegexOutput> {
+    try check(
+        !glob.contains(where: "?+[]".contains),
+        "ci.yml path `\(glob)` uses `?`, `+`, or `[...]`, which checkCIRunsWhenCheckInputsChange does not model; write it with `*` and `**`"
+    )
     var pattern = ""
     var rest = Substring(glob)
     while let character = rest.first {
@@ -770,7 +763,7 @@ private func globRegex(_ glob: String) throws -> Regex<AnyRegexOutput> {
             rest = rest.dropFirst(2)
             continue
         }
-        pattern += character == "*" ? "[^/]*" : character == "?" ? "[^/]" : NSRegularExpression.escapedPattern(for: String(character))
+        pattern += character == "*" ? "[^/]*" : NSRegularExpression.escapedPattern(for: String(character))
         rest = rest.dropFirst()
     }
     return try Regex(pattern)

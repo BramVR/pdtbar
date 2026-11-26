@@ -84,8 +84,6 @@ check_formal() {
   return "${failed}"
 }
 
-# The gate CI runs, in CI's order. ci.yml calls `./Scripts/check.sh <step>` for
-# each step, and check_gate_matches_ci fails when the two lists differ.
 GATE=(lint scripts build tests checks proofs smoke-api formal)
 
 check_gate_matches_ci() {
