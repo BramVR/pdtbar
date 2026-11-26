@@ -21,7 +21,7 @@ try checkFormalCodeAnchors()
 try checkNoEmptySafeExpectations()
 try checkConcurrencyEscapeHatches()
 try checkFeatureGuidesQuoteMenuCopy(fixtures)
-try checkCommentRatchet()
+try checkCommentCounts()
 try checkVerifySkillNamesEveryCommand()
 try checkCIRunsWhenCheckInputsChange()
 
@@ -618,12 +618,13 @@ private func containsAdviceLikeLanguage(_ value: String) -> Bool {
 }
 
 /// Agents kept adding comments that restate code. #315 deleted them, then 15
-/// PRs added 672 comment lines that #323 had to trim. A file may not have more
-/// full-line comments than its count in docs/comment-baseline.txt.
-private func checkCommentRatchet() throws {
+/// PRs added 672 comment lines that #323 had to trim. Each file's full-line
+/// comments must equal its count in docs/comment-baseline.txt, so a new comment
+/// is a reviewed baseline edit and a deletion lowers the count for good.
+private func checkCommentCounts() throws {
     let baselinePath = "docs/comment-baseline.txt"
     let baseline = try readCountBaseline(baselinePath)
-    var problems: [String] = []
+    var counts: [String: Int] = [:]
     for path in try repoFiles(under: ["Sources", "Tests", "Scripts", ".github/workflows"]) {
         let marker: String
         switch URL(fileURLWithPath: path).pathExtension {
@@ -631,23 +632,31 @@ private func checkCommentRatchet() throws {
         case "sh", "py", "yml": marker = "#"
         default: continue
         }
-        let count = try readRepoText(path).components(separatedBy: "\n").filter { line in
+        counts[path] = try readRepoText(path).components(separatedBy: "\n").filter { line in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             return trimmed.hasPrefix(marker) && !trimmed.hasPrefix("#!")
         }.count
+    }
+    var grew: [String] = []
+    var dropped: [String] = []
+    for path in Set(counts.keys).union(baseline.keys).sorted() {
+        let count = counts[path] ?? 0
         let allowed = baseline[path] ?? 0
         if count > allowed {
-            problems.append("\(path): \(count) comment lines, baseline \(allowed)")
+            grew.append("\(path): \(count) comment lines, baseline \(allowed)")
+        } else if count < allowed {
+            dropped.append(count == 0 ? "remove \(path)" : "set \(path) to \(count)")
         }
     }
     try check(
-        problems.isEmpty,
+        grew.isEmpty,
         """
         comment lines grew. Delete the new comments. Keep one only if it states a contract or a fact about code \
         outside this repo, and then raise that file's count in \(baselinePath) in the same change.
-        \(problems.joined(separator: "\n"))
+        \(grew.joined(separator: "\n"))
         """
     )
+    try check(dropped.isEmpty, "comments were deleted; lower \(baselinePath) to match: \(dropped.joined(separator: ", "))")
 }
 
 /// New verify commands landed without the verify-pdtbar skill naming them
