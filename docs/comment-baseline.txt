@@ -5,7 +5,7 @@
 1 Scripts/build-docs-site.mjs
 4 Scripts/check.sh
 25 Scripts/ci_swift_test_by_suite.py
-1 Scripts/docs-list.mjs
+2 Scripts/docs-list.mjs
 3 Scripts/docs-site/graphics.mjs
 2 Scripts/docs-site/menu-capture.mjs
 1 Scripts/docs-site/site.js

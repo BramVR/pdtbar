@@ -88,10 +88,10 @@ GATE=(lint scripts build tests checks proofs smoke-api formal)
 
 check_gate_matches_ci() {
   local ci_steps gate_steps
-  ci_steps="$(grep -oE '\./Scripts/check\.sh [a-z-]+' "${ROOT_DIR}/.github/workflows/ci.yml" | awk '{print $2}' | sort -u)"
-  gate_steps="$(printf '%s\n' "${GATE[@]}" | sort -u)"
+  ci_steps="$(ruby -ryaml -e 'YAML.load_file(ARGV[0])["jobs"].each_value { |job| (job["steps"] || []).each { |step| step["run"].to_s.scan(%r{^\./Scripts/check\.sh (\S+)$}) { |m| puts m[0] } } }' "${ROOT_DIR}/.github/workflows/ci.yml")"
+  gate_steps="$(printf '%s\n' "${GATE[@]}")"
   if [[ "${ci_steps}" != "${gate_steps}" ]]; then
-    printf 'ERROR: .github/workflows/ci.yml runs check.sh steps [%s] but GATE in Scripts/check.sh is [%s]. CI and ./Scripts/check.sh must run one gate: add the step to both.\n' \
+    printf 'ERROR: .github/workflows/ci.yml runs check.sh steps [%s] but GATE in Scripts/check.sh is [%s]. CI and ./Scripts/check.sh must run one gate, in the same order: change both.\n' \
       "$(tr '\n' ' ' <<<"${ci_steps}")" "$(tr '\n' ' ' <<<"${gate_steps}")" >&2
     return 1
   fi

@@ -628,9 +628,15 @@ private func checkCommentCounts() throws {
         case "sh", "py", "yml": marker = "#"
         default: continue
         }
+        var inBlock = false
         counts[path] = try readRepoText(path).components(separatedBy: "\n").filter { line in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            return trimmed.hasPrefix(marker) && !trimmed.hasPrefix("#!")
+            let startsBlock = marker == "//" && trimmed.hasPrefix("/*")
+            let counted = inBlock || startsBlock || (trimmed.hasPrefix(marker) && !trimmed.hasPrefix("#!"))
+            if inBlock || startsBlock {
+                inBlock = !trimmed.contains("*/")
+            }
+            return counted
         }.count
     }
     var grew: [String] = []
@@ -667,22 +673,35 @@ private func checkVerifySkillNamesEveryCommand() throws {
     func captures(_ pattern: String, in text: String) throws -> [String] {
         try text.matches(of: Regex(pattern)).compactMap { $0.output[1].substring.map(String.init) }
     }
-    let commands: [(name: String, source: String)] =
-        try captures(#"SmokeCommand\(name: "([a-z0-9-]+)""#, in: smokeText).map { ($0, smokeSource) }
-        + captures(#"case "(--[a-z-]+)""#, in: smokeText).map { ($0, smokeSource) }
-        + captures(#"(?m)^  ([a-z][a-z-]*)\)"#, in: verifyDispatch).map { ($0, verifyScript) }
+    let smokes = try captures(#"SmokeCommand\(\s*name:\s*"([a-z0-9-]+)""#, in: smokeText)
+    let smokeFlags = try captures(#"case "(--[a-z-]+)""#, in: smokeText)
+    let verifyCommands = try captures(#"(?m)^  ([a-z][a-z-]*)\)"#, in: verifyDispatch)
+    let verifyFlags = try captures(#""(--[a-z-]+)""#, in: verifyText)
 
     var problems: [String] = []
-    for (name, source) in commands where !skillText.contains(try Regex("(?m)(?:^|[^A-Za-z0-9-])\(name)(?![A-Za-z0-9-])")) {
+    let documented = (smokes + smokeFlags).map { ($0, smokeSource) } + verifyCommands.map { ($0, verifyScript) }
+    for (name, source) in documented where !skillText.contains(try Regex("(?m)(?:^|[^A-Za-z0-9-])\(name)(?![A-Za-z0-9-])")) {
         problems.append("`\(name)` from \(source) is not in \(skillRoot); say when to run it and whether it can prompt")
     }
-    let known = Set(commands.map(\.name))
     let fenced = try captures(#"(?s)```[a-z]*\n(.*?)```"#, in: skillText)
     let inline = try captures(#"`([^`\n]+)`"#, in: skillText)
     let codeText = (fenced + inline).joined(separator: "\n")
-    for name in try Set(captures(#"(?:pdtbar-smoke|verify_pdtbar\.sh) ([a-z][a-z0-9-]*)"#, in: codeText)).sorted() where !known.contains(name) {
-        problems.append("\(skillRoot) runs `\(name)`, which neither \(smokeSource) nor \(verifyScript) has")
+    let invocation = try Regex(#"(pdtbar-smoke|verify_pdtbar\.sh) ([a-z][a-z0-9-]*)([^\n|;&`]*)"#)
+    let flag = try Regex(#"--[a-z][a-z-]*"#)
+    var wrong = Set<String>()
+    for match in codeText.matches(of: invocation) {
+        let isSmoke = match.output[1].substring == "pdtbar-smoke"
+        let (tool, names, flags) = isSmoke ? (smokeSource, smokes, smokeFlags) : (verifyScript, verifyCommands, verifyFlags)
+        let name = String(match.output[2].substring ?? "")
+        if !names.contains(name) {
+            wrong.insert("\(skillRoot) runs `\(match.output[1].substring ?? "") \(name)`, which \(tool) does not have")
+        }
+        let tail = match.output[3].substring ?? ""
+        for used in tail.matches(of: flag).map({ String(tail[$0.range]) }) where !flags.contains(used) {
+            wrong.insert("\(skillRoot) passes `\(used)` to `\(name)`, which \(tool) does not parse")
+        }
     }
+    problems += wrong.sorted()
     try check(problems.isEmpty, problems.joined(separator: "\n"))
 }
 
@@ -696,7 +715,12 @@ private func checkCIRunsWhenCheckInputsChange() throws {
             current.map { filters.append($0) }
             current = []
         } else if current != nil, trimmed.hasPrefix("- ") {
-            current?.append(trimmed.dropFirst(2).trimmingCharacters(in: CharacterSet(charactersIn: "\"' ")))
+            let item = trimmed.dropFirst(2).trimmingCharacters(in: .whitespaces)
+            if let quote = item.first, quote == "\"" || quote == "'" {
+                current?.append(String(item.dropFirst().prefix { $0 != quote }))
+            } else {
+                current?.append(item.components(separatedBy: " #")[0].trimmingCharacters(in: .whitespaces))
+            }
         } else if let list = current, !trimmed.isEmpty, !trimmed.hasPrefix("#") {
             filters.append(list)
             current = nil
@@ -724,7 +748,7 @@ private func checkCIRunsWhenCheckInputsChange() throws {
             if trimmed.hasPrefix("//") || trimmed.hasPrefix("#") {
                 continue
             }
-            let code = line.replacing(interpolation, with: "x")
+            let code = line.replacing(interpolation, with: "*")
             for match in code.matches(of: repoPath) {
                 guard var named = match.output[1].substring.map(String.init) else {
                     continue
@@ -732,9 +756,7 @@ private func checkCIRunsWhenCheckInputsChange() throws {
                 while named.hasSuffix(".") || named.hasSuffix("/") {
                     named.removeLast()
                 }
-                var isDirectory: ObjCBool = false
-                let isDirectoryPath = FileManager.default.fileExists(atPath: packageRoot.appending(path: named).path, isDirectory: &isDirectory) && isDirectory.boolValue
-                for path in isDirectoryPath ? try repoFiles(under: [named]) : [named] where !ciRuns(on: path) {
+                for path in try repoFiles(named: named) where !ciRuns(on: path) {
                     problems.insert("\(path) (named in \(file):\(index + 1))")
                 }
             }
@@ -758,6 +780,11 @@ private func globRegex(_ glob: String) throws -> Regex<AnyRegexOutput> {
     var pattern = ""
     var rest = Substring(glob)
     while let character = rest.first {
+        if rest.hasPrefix("**/") {
+            pattern += "(?:.*/)?"
+            rest = rest.dropFirst(3)
+            continue
+        }
         if rest.hasPrefix("**") {
             pattern += ".*"
             rest = rest.dropFirst(2)
@@ -780,7 +807,24 @@ private func readCountBaseline(_ path: String) throws -> [String: Int] {
 }
 
 private func readRepoText(_ path: String) throws -> String {
-    try String(contentsOf: packageRoot.appending(path: path), encoding: .utf8)
+    try String(contentsOf: packageRoot.appending(path: path), encoding: .utf8).replacingOccurrences(of: "\r\n", with: "\n")
+}
+
+private func repoFiles(named path: String) throws -> [String] {
+    var isDirectory: ObjCBool = false
+    if FileManager.default.fileExists(atPath: packageRoot.appending(path: path).path, isDirectory: &isDirectory) {
+        return isDirectory.boolValue ? try repoFiles(under: [path]) : [path]
+    }
+    guard let star = path.firstIndex(of: "*"), let slash = path[..<star].lastIndex(of: "/") else {
+        return [path]
+    }
+    let root = String(path[..<slash])
+    guard FileManager.default.fileExists(atPath: packageRoot.appending(path: root).path) else {
+        return [path]
+    }
+    let pattern = try globRegex(path)
+    let matches = try repoFiles(under: [root]).filter { $0.wholeMatch(of: pattern) != nil }
+    return matches.isEmpty ? [path] : matches
 }
 
 private func repoFiles(under roots: [String]) throws -> [String] {
