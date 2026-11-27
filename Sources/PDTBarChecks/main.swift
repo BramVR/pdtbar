@@ -21,6 +21,9 @@ try checkFormalCodeAnchors()
 try checkNoEmptySafeExpectations()
 try checkConcurrencyEscapeHatches()
 try checkFeatureGuidesQuoteMenuCopy(fixtures)
+try checkCommentCounts()
+try checkVerifySkillNamesEveryCommand()
+try checkCIRunsWhenCheckInputsChange()
 
 print("pdtbar-checks: passed")
 
@@ -476,13 +479,7 @@ private func checkConcurrencyEscapeHatches() throws {
         }
     }
 
-    var baseline: [String: Int] = [:]
-    let baselineText = try String(contentsOf: packageRoot.appending(path: baselinePath), encoding: .utf8)
-    for line in baselineText.components(separatedBy: "\n") where !line.hasPrefix("#") && !line.isEmpty {
-        let fields = line.split(separator: " ", maxSplits: 1).map(String.init)
-        let count = try require(fields.count == 2 ? Int(fields[0]) : nil, "\(baselinePath): expected `<count> <path>`, got `\(line)`")
-        baseline[fields[1]] = count
-    }
+    let baseline = try readCountBaseline(baselinePath)
     for path in Set(counts.keys).union(baseline.keys).sorted() {
         let count = counts[path] ?? 0
         let allowed = baseline[path] ?? 0
@@ -618,6 +615,239 @@ private func visibleMenuText(_ rows: [MenuRow]) -> [String] {
 private func containsAdviceLikeLanguage(_ value: String) -> Bool {
     let pattern = #"\b(buy|sell|rebalance|trim|reduce|recommend|should)\b"#
     return value.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+}
+
+private func checkCommentCounts() throws {
+    let baselinePath = "docs/comment-baseline.txt"
+    let baseline = try readCountBaseline(baselinePath)
+    var counts: [String: Int] = [:]
+    for path in try repoFiles(under: ["Sources", "Tests", "Scripts", ".github/workflows"]) {
+        let marker: String
+        switch URL(fileURLWithPath: path).pathExtension {
+        case "swift", "mjs", "js": marker = "//"
+        case "sh", "py", "yml": marker = "#"
+        default: continue
+        }
+        counts[path] = fullLineCommentCount(try readRepoText(path), marker: marker)
+    }
+    var grew: [String] = []
+    var dropped: [String] = []
+    for path in Set(counts.keys).union(baseline.keys).sorted() {
+        let count = counts[path] ?? 0
+        let allowed = baseline[path] ?? 0
+        if count > allowed {
+            grew.append("\(path): \(count) comment lines, baseline \(allowed)")
+        } else if count < allowed {
+            dropped.append(count == 0 ? "remove \(path)" : "set \(path) to \(count)")
+        }
+    }
+    try check(
+        grew.isEmpty,
+        """
+        comment lines grew. Delete the new comments. Keep one only if it states a contract or a fact about code \
+        outside this repo, and then raise that file's count in \(baselinePath) in the same change.
+        \(grew.joined(separator: "\n"))
+        """
+    )
+    try check(dropped.isEmpty, "comments were deleted; lower \(baselinePath) to match: \(dropped.joined(separator: ", "))")
+}
+
+private func fullLineCommentCount(_ text: String, marker: String) -> Int {
+    let hasBlockComments = marker == "//"
+    var count = 0
+    var inBlock = false
+    for line in text.components(separatedBy: "\n") {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let startsBlock = hasBlockComments && trimmed.hasPrefix("/*")
+        if inBlock || startsBlock {
+            count += 1
+            inBlock = !trimmed.contains("*/")
+        } else if trimmed.hasPrefix(marker) && !trimmed.hasPrefix("#!") {
+            count += 1
+        }
+    }
+    return count
+}
+
+private func checkVerifySkillNamesEveryCommand() throws {
+    let skillRoot = ".cursor/skills/verify-pdtbar"
+    let skillText = try repoFiles(under: [skillRoot]).filter { $0.hasSuffix(".md") }.map(readRepoText).joined(separator: "\n")
+    let smokeSource = "Sources/PDTBarSmoke/main.swift"
+    let verifyScript = "Scripts/verify_pdtbar.sh"
+    let smokeText = try readRepoText(smokeSource)
+    let verifyText = try readRepoText(verifyScript)
+    let verifyDispatch = verifyText.components(separatedBy: "case \"${1:-}\" in").last ?? ""
+
+    func captures(_ pattern: String, in text: String) throws -> [String] {
+        try text.matches(of: Regex(pattern)).compactMap { $0.output[1].substring.map(String.init) }
+    }
+    let smokes = try captures(#"SmokeCommand\(\s*name:\s*"([a-z0-9-]+)""#, in: smokeText)
+    let smokeFlags = try captures(#"case "(--[a-z-]+)""#, in: smokeText)
+    let verifyCommands = try captures(#"(?m)^  ([a-z][a-z-]*)\)"#, in: verifyDispatch)
+    let verifyFlags = try captures(#""(--[a-z-]+)""#, in: verifyText)
+
+    var problems: [String] = []
+    let documented = (smokes + smokeFlags).map { ($0, smokeSource) } + verifyCommands.map { ($0, verifyScript) }
+    for (name, source) in documented where !skillText.contains(try Regex("(?m)(?:^|[^A-Za-z0-9-])\(name)(?![A-Za-z0-9-])")) {
+        problems.append("`\(name)` from \(source) is not in \(skillRoot); say when to run it and whether it can prompt")
+    }
+    let fenced = try captures(#"(?s)```[a-z]*\n(.*?)```"#, in: skillText)
+    let inline = try captures(#"`([^`\n]+)`"#, in: skillText)
+    let codeText = (fenced + inline).joined(separator: "\n")
+    let invocation = try Regex(#"(pdtbar-smoke|verify_pdtbar\.sh) ([a-z][a-z0-9-]*)([^\n|;&`]*)"#)
+    let flag = try Regex(#"--[a-z][a-z-]*"#)
+    var wrong = Set<String>()
+    for match in codeText.matches(of: invocation) {
+        let isSmoke = match.output[1].substring == "pdtbar-smoke"
+        let (tool, names, flags) = isSmoke ? (smokeSource, smokes, smokeFlags) : (verifyScript, verifyCommands, verifyFlags)
+        let name = String(match.output[2].substring ?? "")
+        if !names.contains(name) {
+            wrong.insert("\(skillRoot) runs `\(match.output[1].substring ?? "") \(name)`, which \(tool) does not have")
+        }
+        let tail = match.output[3].substring ?? ""
+        for used in tail.matches(of: flag).map({ String(tail[$0.range]) }) where !flags.contains(used) {
+            wrong.insert("\(skillRoot) passes `\(used)` to `\(name)`, which \(tool) does not parse")
+        }
+    }
+    problems += wrong.sorted()
+    try check(problems.isEmpty, problems.joined(separator: "\n"))
+}
+
+private func checkCIRunsWhenCheckInputsChange() throws {
+    let workflowPath = ".github/workflows/ci.yml"
+    let filters = workflowPathFilters(try readRepoText(workflowPath))
+    try check(filters.count == 2, "\(workflowPath): expected `paths` filters under push and pull_request, found \(filters.count)")
+    let globs = try filters.map { list in
+        try list.map { pattern in
+            let negated = pattern.hasPrefix("!")
+            return (negated: negated, regex: try githubPathRegex(negated ? String(pattern.dropFirst()) : pattern))
+        }
+    }
+    func ciRuns(on path: String) -> Bool {
+        globs.allSatisfy { list in
+            list.reduce(false) { included, glob in path.wholeMatch(of: glob.regex) != nil ? !glob.negated : included }
+        }
+    }
+
+    let interpolationAsGlob = try Regex(#"\\\([^)]*\)|\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*"#)
+    let repoPath = try Regex(#"(?:^|[^A-Za-z0-9_.-])((?:docs|\.claude|\.cursor)/[A-Za-z0-9_./*-]+)"#)
+    var problems = Set<String>()
+    for file in try repoFiles(under: ["Sources", "Tests", "Scripts"]) where ["swift", "sh", "py"].contains(URL(fileURLWithPath: file).pathExtension) {
+        for (index, line) in try readRepoText(file).components(separatedBy: "\n").enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("//") || trimmed.hasPrefix("#") {
+                continue
+            }
+            let globbed = line.replacing(interpolationAsGlob, with: "*")
+            for match in globbed.matches(of: repoPath) {
+                guard var named = match.output[1].substring.map(String.init) else {
+                    continue
+                }
+                while named.hasSuffix(".") || named.hasSuffix("/") {
+                    named.removeLast()
+                }
+                for path in try pathsToCheck(named: named) where !ciRuns(on: path) {
+                    problems.insert("\(path) (named in \(file):\(index + 1))")
+                }
+            }
+        }
+    }
+    try check(
+        problems.isEmpty,
+        """
+        CI never runs when only these gate inputs change; add a pattern for each to both `paths` lists in \(workflowPath):
+        \(problems.sorted().joined(separator: "\n"))
+        """
+    )
+}
+
+private func workflowPathFilters(_ workflow: String) -> [[String]] {
+    var filters: [[String]] = []
+    var current: [String]?
+    for line in workflow.components(separatedBy: "\n") {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed == "paths:" {
+            current.map { filters.append($0) }
+            current = []
+        } else if current != nil, trimmed.hasPrefix("- ") {
+            let item = trimmed.dropFirst(2).trimmingCharacters(in: .whitespaces)
+            if let quote = item.first, quote == "\"" || quote == "'" {
+                current?.append(String(item.dropFirst().prefix { $0 != quote }))
+            } else {
+                current?.append(item.components(separatedBy: " #")[0].trimmingCharacters(in: .whitespaces))
+            }
+        } else if let list = current, !trimmed.isEmpty, !trimmed.hasPrefix("#") {
+            filters.append(list)
+            current = nil
+        }
+    }
+    return filters
+}
+
+private func githubPathRegex(_ glob: String) throws -> Regex<AnyRegexOutput> {
+    try check(
+        !glob.contains(where: "?+[]".contains),
+        "ci.yml path `\(glob)` uses `?`, `+`, or `[...]`, which checkCIRunsWhenCheckInputsChange does not model; write it with `*` and `**`"
+    )
+    var pattern = ""
+    var rest = Substring(glob)
+    while let character = rest.first {
+        if rest.hasPrefix("**/") {
+            pattern += "(?:.*/)?"
+            rest = rest.dropFirst(3)
+            continue
+        }
+        if rest.hasPrefix("**") {
+            pattern += ".*"
+            rest = rest.dropFirst(2)
+            continue
+        }
+        pattern += character == "*" ? "[^/]*" : NSRegularExpression.escapedPattern(for: String(character))
+        rest = rest.dropFirst()
+    }
+    return try Regex(pattern)
+}
+
+private func readCountBaseline(_ path: String) throws -> [String: Int] {
+    var baseline: [String: Int] = [:]
+    for line in try readRepoText(path).components(separatedBy: "\n") where !line.hasPrefix("#") && !line.isEmpty {
+        let fields = line.split(separator: " ", maxSplits: 1).map(String.init)
+        let count = try require(fields.count == 2 ? Int(fields[0]) : nil, "\(path): expected `<count> <path>`, got `\(line)`")
+        baseline[fields[1]] = count
+    }
+    return baseline
+}
+
+private func readRepoText(_ path: String) throws -> String {
+    try String(contentsOf: packageRoot.appending(path: path), encoding: .utf8).replacingOccurrences(of: "\r\n", with: "\n")
+}
+
+private func pathsToCheck(named path: String) throws -> [String] {
+    var isDirectory: ObjCBool = false
+    if FileManager.default.fileExists(atPath: packageRoot.appending(path: path).path, isDirectory: &isDirectory) {
+        return isDirectory.boolValue ? try repoFiles(under: [path]) : [path]
+    }
+    guard let star = path.firstIndex(of: "*"), let slash = path[..<star].lastIndex(of: "/") else {
+        return [path]
+    }
+    let root = String(path[..<slash])
+    guard FileManager.default.fileExists(atPath: packageRoot.appending(path: root).path) else {
+        return [path]
+    }
+    let pattern = try githubPathRegex(path)
+    let matches = try repoFiles(under: [root]).filter { $0.wholeMatch(of: pattern) != nil }
+    return matches.isEmpty ? [path] : matches
+}
+
+private func repoFiles(under roots: [String]) throws -> [String] {
+    try roots.flatMap { root in
+        try FileManager.default.subpathsOfDirectory(atPath: packageRoot.appending(path: root).path).sorted().compactMap { subpath in
+            var isDirectory: ObjCBool = false
+            let path = "\(root)/\(subpath)"
+            FileManager.default.fileExists(atPath: packageRoot.appending(path: path).path, isDirectory: &isDirectory)
+            return isDirectory.boolValue ? nil : path
+        }
+    }
 }
 
 private func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {

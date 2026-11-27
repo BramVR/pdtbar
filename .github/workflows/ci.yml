@@ -15,6 +15,10 @@ on:
       - ".claude/skills/verify-*/SKILL.md"
       - "docs/public/features.*.md"
       - "docs/features-menu-copy-allowlist.txt"
+      - "docs/unchecked-sendable-baseline.txt"
+      - "docs/comment-baseline.txt"
+      - "docs/smoke/*.svg"
+      - ".cursor/skills/verify-pdtbar/**"
   pull_request:
     paths:
       - "**"
@@ -24,6 +28,10 @@ on:
       - ".claude/skills/verify-*/SKILL.md"
       - "docs/public/features.*.md"
       - "docs/features-menu-copy-allowlist.txt"
+      - "docs/unchecked-sendable-baseline.txt"
+      - "docs/comment-baseline.txt"
+      - "docs/smoke/*.svg"
+      - ".cursor/skills/verify-pdtbar/**"
 
 permissions:
   contents: read
@@ -54,32 +62,32 @@ jobs:
           swift --version
 
       - name: Lint
-        run: ./Scripts/lint.sh
+        run: ./Scripts/check.sh lint
 
       - name: Script syntax
         run: ./Scripts/check.sh scripts
 
       - name: Build
-        run: swift build
+        run: ./Scripts/check.sh build
 
       - name: Test
         # Raw parallel `swift test` is flaky on shared CI runners: timing-
         # sensitive suites (e.g. background detail refresh) hit internal
         # timeouts under contention. Use the repo's bounded suite runner
         # (swift test --no-parallel per suite) with the pre-#188 CI knobs.
-        run: |
-          PDTBAR_TEST_GROUP_SIZE=1 \
-            PDTBAR_TEST_SUITE_TIMEOUT=120 \
-            ./Scripts/test.sh
+        env:
+          PDTBAR_TEST_GROUP_SIZE: "1"
+          PDTBAR_TEST_SUITE_TIMEOUT: "120"
+        run: ./Scripts/check.sh tests
 
       - name: Deterministic checks
-        run: swift run pdtbar-checks
+        run: ./Scripts/check.sh checks
 
       - name: Committed proofs match the code
         run: ./Scripts/check.sh proofs
 
       - name: Scripted API smoke matrix
-        run: ./Scripts/api_smoke_matrix.sh
+        run: ./Scripts/check.sh smoke-api
 
   formal:
     # TLA+ models replay past concurrency bugs (#269, #270, #275, #290, #301);
